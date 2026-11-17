@@ -19,6 +19,11 @@ thinking = "medium"
 [subagents]
 model = { provider = "anthropic", model = "claude-sonnet-5-5" }
 
+# The orchestrator's memory: every message is summarized into a line by this model.
+[memory]
+compactor = { provider = "anthropic", model = "claude-haiku-5-5" }
+thinking = "high"
+
 # External harnesses driven over ACP (planned; see TODO.md).
 # [harnesses.claude]
 # command = "claude-agent-acp"

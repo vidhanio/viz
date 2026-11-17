@@ -86,6 +86,8 @@ in
             model = { provider = "anthropic"; model = "claude-opus-5-5"; };
             thinking = "high";
           };
+          subagents.model = { provider = "anthropic"; model = "claude-sonnet-5-5"; };
+          memory.compactor = { provider = "anthropic"; model = "claude-haiku-5-5"; };
           backend = {
             listen = "100.100.1.2:7420";
             token.file = config.sops.secrets."viz/token".path;

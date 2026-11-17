@@ -26,7 +26,7 @@ const shutdown = async (signal: string) => {
   stopping = true;
   console.log(`${signal}: shutting down`);
   await server.stop();
-  await viz.harness.close(context);
+  await viz.close(context);
   process.exit(0);
 };
 process.on("SIGINT", () => void shutdown("SIGINT"));

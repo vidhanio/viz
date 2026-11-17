@@ -20,22 +20,33 @@ Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Ex
 | `listen` | `"host:port"` | unset                               | TCP listener for remote clients; requires `token` |
 | `token`  | Secret        | unset                               | Bearer token for TCP clients                      |
 
-## `[orchestrator]` (backend)
+## `[orchestrator]` (backend, required)
 
-| Key            | Type                                          | Default                                                 |
-| -------------- | --------------------------------------------- | ------------------------------------------------------- |
-| `model`        | `{ provider, model }`                         | `{ provider = "anthropic", model = "claude-opus-5-5" }` |
-| `thinking`     | `off`/`minimal`/`low`/`medium`/`high`/`xhigh` | `medium`                                                |
-| `instructions` | string                                        | unset                                                   |
-| `cwd`          | path                                          | `$HOME`                                                 |
+| Key            | Type                                          | Default                |
+| -------------- | --------------------------------------------- | ---------------------- |
+| `model`        | `{ provider, model }`                         | required               |
+| `thinking`     | `off`/`minimal`/`low`/`medium`/`high`/`xhigh` | unset: the model's own |
+| `instructions` | string                                        | unset                  |
+| `cwd`          | path                                          | `$HOME`                |
 
-Applied to the root conversation on every backend start. Provider credentials come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...; see `docs/findings/pi-durable.md`, Q5); with Home Manager use `programs.viz.environmentFile`.
+Applied to the root conversation on every backend start. There is no default model anywhere: the backend refuses to start until `[orchestrator]`, `[subagents]` and `[memory]` name theirs. Provider credentials come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...; see `docs/findings/pi-durable.md`, Q5); with Home Manager use `programs.viz.environmentFile`.
 
-## `[subagents]` (backend)
+## `[subagents]` (backend, required)
 
-| Key     | Type                  | Default                  |
-| ------- | --------------------- | ------------------------ |
-| `model` | `{ provider, model }` | the orchestrator's model |
+| Key     | Type                  | Default  |
+| ------- | --------------------- | -------- |
+| `model` | `{ provider, model }` | required |
+
+## `[memory]` (backend, required)
+
+The orchestrator's uniichat memory (`docs/architecture.md`, "Memory").
+
+| Key         | Type                                          | Default                |
+| ----------- | --------------------------------------------- | ---------------------- |
+| `compactor` | `{ provider, model }`                         | required               |
+| `thinking`  | `off`/`minimal`/`low`/`medium`/`high`/`xhigh` | unset: the model's own |
+
+The compactor writes every summary line, so pick a cheap, fast model (uniichat uses Haiku with high thinking). A turn waits until every message before it is summarized; a compactor that keeps failing (bad credentials, unknown model) is retried every 60 s and stalls turns, with each failure logged by `viz-backend`.
 
 ## `[harnesses.<name>]` (backend, planned)
 
@@ -72,6 +83,9 @@ ACP agents viz may drive: `command` (string), `args` (string array), `env` (tabl
     enable = true;
     environmentFile = config.sops.templates."viz.env".path; # ANTHROPIC_API_KEY=...
     settings = {
+      orchestrator.model = { provider = "anthropic"; model = "claude-opus-5-5"; };
+      subagents.model = { provider = "anthropic"; model = "claude-sonnet-5-5"; };
+      memory.compactor = { provider = "anthropic"; model = "claude-haiku-5-5"; };
       backend = { listen = "100.64.0.1:7420"; token.file = config.sops.secrets."viz/token".path; };
       connectors.discord = {
         bot_token.file = config.sops.secrets."viz/discord".path;

@@ -6,7 +6,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 
 - [x] Flake: dev shell (nightly Rust, Bun + bun2nix, Swift 6.4 + xtool from `nixpkgs-xtool`, Rune libs, treefmt), packages, checks, `homeModules.default`
 - [x] Layered XDG TOML config in Rust (`viz-config`) and TS (`backend/src/config.ts`), secrets as inline/file/env
-- [x] Backend: pi-durable harness on SQLite (Bun `node:sqlite`), orchestrator root conversation, `subagent` tool, JSON-RPC/WebSocket server on Unix socket + token-authenticated TCP, connector reply routing, tests with pi-ai's faux provider
+- [x] Backend: pi-durable harness on SQLite (Bun `node:sqlite`), orchestrator root conversation, `subagent` tool, JSON-RPC/WebSocket server on Unix socket + token-authenticated TCP, connector reply routing
 - [x] `viz-client` (Rust), `viz` CLI (`config`, `status`, `send`)
 - [x] `viz-discord` connector (DMs + mentions from allowed users → orchestrator → reply in place)
 - [x] Home Manager module: `settings`, `mutableSettings` (upstream impure merger), `environmentFile`, services for backend and connectors
@@ -16,7 +16,8 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 ## Backend
 
 - [ ] **Durable connector outbox.** Replies to connectors are routed in memory and dropped if the connector is offline or the backend restarts mid-run. Persist pending replies (pi-durable document keyed by connector), deliver on reconnect, let connectors ack; dedupe by submission id.
-- [ ] **uniichat memory** (`docs/findings/uniichat.md`): extension that summarizes every message into a ≤512-byte line in the background with a cheap model, merges lines pairwise into a binary tree (pi-durable document), renders the orchestrator's context as a 128 KB view of the tree (`beforeRequest` hook, prompt-cache-friendly blocks), and gives the model `zoom`/`date` tools to expand any node down to the original message. Decide how it coexists with pi-durable compaction (likely: replaces it for the root conversation).
+- [x] **uniichat memory** for the orchestrator (`backend/src/memory/`, `docs/architecture.md` "Memory"): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
+- [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
 - [ ] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): list/read/search conversations, send to a conversation (`queue`/`steer`), background subagents that report back as messages, abort, schedule tasks (pi-durable timers).
 - [ ] **ACP harness manager** (`docs/findings/acp.md`): spawn `[harnesses.<name>]` with `@agentclientprotocol/sdk` (already a dependency), one ACP session per viz conversation; map `session/update` to custom entries so UIs render it; route `session/request_permission` to approvals in the UI; `session/cancel` on abort; `session/load`/`resume` after restart. Tools: start/send/status/cancel a harness session. Capability flags per harness, never name checks.
 - [ ] **MCP endpoint** for spawned harnesses (`mcpServers` in `session/new`): expose viz's orchestrator tools to them, deferred listing via a `tool_search` tool (t3code pattern).
@@ -62,7 +63,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 
 ## Nix / ops
 
-- [ ] NixOS VM test for the Home Manager module (services start, socket reachable, connector connects)
+- [ ] Deploy the Home Manager module on a real host (services start, socket reachable, connector connects)
 - [ ] CI: GitHub Actions running `nix flake check`
 - [ ] Drop `nixpkgs-xtool` once NixOS/nixpkgs#548520 merges; drop the bun2nix fork once nix-community/bun2nix#110 merges
 - [ ] `cargo deny` config and check

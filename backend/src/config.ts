@@ -52,6 +52,8 @@ const ModelRef = obj({
   model: str({ description: "Model id within the provider" }),
 });
 
+const Thinking = oneOf(["off", "minimal", "low", "medium", "high", "xhigh"]);
+
 /** Sections the backend owns. Other sections (`[client]`, `[connectors.*]`) belong to the Rust components. */
 export const BackendConfig = obj(
   {
@@ -62,15 +64,17 @@ export const BackendConfig = obj(
         token: opt(Secret),
       }),
     ),
-    orchestrator: opt(
-      obj({
-        model: opt(ModelRef),
-        thinking: opt(oneOf(["off", "minimal", "low", "medium", "high", "xhigh"])),
-        instructions: opt(str({ description: "Extra instructions appended to the orchestrator's system prompt" })),
-        cwd: opt(str({ description: "Working directory for the orchestrator's tools; default $HOME" })),
-      }),
-    ),
-    subagents: opt(obj({ model: opt(ModelRef) })),
+    orchestrator: obj({
+      model: ModelRef,
+      thinking: opt(Thinking),
+      instructions: opt(str({ description: "Extra instructions appended to the orchestrator's system prompt" })),
+      cwd: opt(str({ description: "Working directory for the orchestrator's tools; default $HOME" })),
+    }),
+    subagents: obj({ model: ModelRef }),
+    memory: obj({
+      compactor: ModelRef,
+      thinking: opt(Thinking),
+    }),
     harnesses: opt(
       map(
         obj({

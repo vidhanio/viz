@@ -119,11 +119,11 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       const content = origin
         ? `[${[origin.connector, `#${origin.channel}`, origin.author && `@${origin.author}`].filter(Boolean).join(" ")}] ${text}`
         : text;
-      const submission = await target.submit(
+      const submission = await viz.submit(
+        target,
         {
           type: "input",
           content,
-          whenBusy: "followUp",
           ...(requestId && { requestId }),
           ...(origin && { entry: { kind: "viz.input", data: { origin } } }),
         },

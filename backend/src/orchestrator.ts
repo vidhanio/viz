@@ -19,10 +19,7 @@ import {
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 
-const ORCHESTRATOR_PROMPT = `You are viz, the user's personal agent. This is your main thread: it never ends, and every
-connector (Discord, iMessage, ...) feeds into it. Inputs from a connector start with a bracketed origin tag, e.g.
-"[discord #general @alice]"; your answer is delivered back to that origin automatically, so answer as if replying there.
-Delegate self-contained work to subagents instead of doing long tasks inline, so this thread stays responsive.`;
+import { TURNS_PROMPT } from "./memory/prompt.ts";
 
 export async function answerText(api: ToolExecutionApi, answer: EntryId, context: Context): Promise<string> {
   const entry = await api.commit((tx) => tx.entry(AssistantEntry, answer), context);
@@ -30,7 +27,8 @@ export async function answerText(api: ToolExecutionApi, answer: EntryId, context
   return message?.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("") ?? "";
 }
 
-export function subagentExtension(model: ModelRef | undefined): Extension {
+/** `rootOnly`: the orchestrator's own extensions (its prompt, its memory), which a subagent doesn't get. */
+export function subagentExtension(model: ModelRef, rootOnly: readonly Extension[]): Extension {
   const Subagent: Extension = defineExtension({
     name: "viz.subagent",
     tools: [
@@ -45,10 +43,8 @@ export function subagentExtension(model: ModelRef | undefined): Extension {
             const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
             if (existing !== undefined) return existing.id;
             const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-            await configure(tx, created.id, {
-              extensions: { remove: [Subagent, Orchestrator] },
-              ...(model && { model }),
-            });
+            // Starts as a copy of the orchestrator's agent; drop what is the orchestrator's own.
+            await configure(tx, created.id, { extensions: { remove: [Subagent, ...rootOnly] }, model });
             return created.id;
           }, context);
           await api.details({ conversationId: child }, context);
@@ -70,5 +66,5 @@ export function subagentExtension(model: ModelRef | undefined): Extension {
 
 export const Orchestrator: Extension = defineExtension({
   name: "viz.orchestrator",
-  sections: [section("viz", () => ORCHESTRATOR_PROMPT)],
+  sections: [section("turns", () => TURNS_PROMPT, { tag: false })],
 });
