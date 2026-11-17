@@ -51,8 +51,7 @@ let
     };
 
   connectorModule =
-    name:
-    _:
+    { name, ... }:
     {
       options = {
         enable = mkEnableOption "the viz ${name} connector service";
@@ -155,7 +154,7 @@ in
     };
 
     connectors = mkOption {
-      type = types.attrsOf (types.submodule ({ name, ... }: connectorModule name));
+      type = types.attrsOf (types.submodule connectorModule);
       default = { };
       example = lib.literalExpression "{ discord.enable = true; }";
       description = ''
