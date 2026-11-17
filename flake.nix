@@ -95,6 +95,23 @@
             nativeBuildInputs = [ pkgs.pkg-config ];
             buildInputs = desktopBuildInputs ++ [ pkgs.dbus ];
             cargoExtraArgs = "--locked --workspace";
+            cargoVendorDir = craneLib.vendorCargoDeps {
+              inherit src;
+              # Crane lists each git crate's files with `cargo package -l`, which rejects Rune's
+              # checkout: its vendored crates ship upstream's `Cargo.toml.orig`, and `spikes/` holds
+              # a manifest outside Rune's workspace.
+              overrideVendorGitCheckout =
+                ps: drv:
+                if lib.any (p: lib.hasPrefix "git+https://github.com/anomalyco/rune" (p.source or "")) ps then
+                  drv.overrideAttrs {
+                    preInstall = ''
+                      find . -name Cargo.toml.orig -delete
+                      rm -rf spikes
+                    '';
+                  }
+                else
+                  drv;
+            };
           };
           cargoArtifacts = craneLib.buildDepsOnly commonArgs;
 
@@ -125,6 +142,8 @@
               packageJson = ./backend/package.json;
               src = ./backend;
               bunDeps = pkgs.bun2nix.fetchBunDeps { bunNix = ./backend/bun.nix; };
+              # `--bytecode` compiles to CommonJS, which has no top-level await.
+              bunCompileToBytecode = false;
               meta.mainProgram = "viz-backend";
             };
             viz = crate "viz" { };
