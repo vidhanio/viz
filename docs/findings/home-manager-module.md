@@ -2,14 +2,14 @@
 
 ## 0. Checkouts / versions actually read
 
-| Thing | Path / rev |
-|---|---|
-| Home Manager checkout | `/home/vidhanio/Projects/home-manager` (fork `git@github.com:vidhanio/home-manager.git`, branch `agents-skills`, HEAD `4f870bed211d615a89551fa7b3bec39b3b8b3c89`; upstream `nix-community/home-manager`) |
-| HM rev pinned by vidhanix | `nix-community/home-manager` `9d7ba6bef3904a018d38b92f83132eaf01eb8ef3` (`vidhanix/flake.lock:575-594`) |
-| sops-nix rev pinned by vidhanix | `Mic92/sops-nix` `7c637afdccdf9bcf35c4a2d67b58a77c1fd843a4` (`vidhanix/flake.lock:1530-1548`) |
-| nixpkgs formats | `nixpkgs/pkgs/pkgs-lib/formats.nix:105,123` → `json`, `toml = (import ./formats/toml/default.nix ...).format` |
-| agentcord | `/home/vidhanio/Projects/agentcord` (flake-parts + crane Rust project) |
-| vidhanix | `/home/vidhanio/Projects/vidhanix` (flake-parts + import-tree) |
+| Thing                           | Path / rev                                                                                                                                                                                               |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Home Manager checkout           | `/home/vidhanio/Projects/home-manager` (fork `git@github.com:vidhanio/home-manager.git`, branch `agents-skills`, HEAD `4f870bed211d615a89551fa7b3bec39b3b8b3c89`; upstream `nix-community/home-manager`) |
+| HM rev pinned by vidhanix       | `nix-community/home-manager` `9d7ba6bef3904a018d38b92f83132eaf01eb8ef3` (`vidhanix/flake.lock:575-594`)                                                                                                  |
+| sops-nix rev pinned by vidhanix | `Mic92/sops-nix` `7c637afdccdf9bcf35c4a2d67b58a77c1fd843a4` (`vidhanix/flake.lock:1530-1548`)                                                                                                            |
+| nixpkgs formats                 | `nixpkgs/pkgs/pkgs-lib/formats.nix:105,123` → `json`, `toml = (import ./formats/toml/default.nix ...).format`                                                                                            |
+| agentcord                       | `/home/vidhanio/Projects/agentcord` (flake-parts + crane Rust project)                                                                                                                                   |
+| vidhanix                        | `/home/vidhanio/Projects/vidhanix` (flake-parts + import-tree)                                                                                                                                           |
 
 `lib.hm.generators.mkImpureConfigMerger` / `mkImpureConfigCleanup` are **present in upstream HM at the vidhanix-pinned rev**, not just the local fork:
 `https://github.com/nix-community/home-manager/blob/9d7ba6bef3904a018d38b92f83132eaf01eb8ef3/modules/lib/generators.nix` (lines 1007, 1065, 1088, 1284, 1307).
@@ -20,6 +20,7 @@ Local docs call the API **experimental** (`generators.nix:1007-1012`, `1266-1268
 Three upstream modules:
 
 **`home-manager/modules/services/listenbrainz-mpd.nix:16,25-37,54-57`** — closest template (TOML + user service):
+
 ```nix
 tomlFormat = pkgs.formats.toml { };
 settings = mkOption {
@@ -35,11 +36,13 @@ xdg.configFile."listenbrainz-mpd/config.toml" = mkIf (cfg.settings != { }) {
 ```
 
 **`home-manager/modules/programs/atuin.nix:11,67-100,193-200`** — custom setting type but same shape; adds `force = cfg.forceOverwriteSettings`:
+
 ```nix
 "atuin/config.toml" = { source = tomlFormat.generate "atuin-config" cfg.settings; force = cfg.forceOverwriteSettings; };
 ```
 
 **`home-manager/modules/programs/herdr.nix:12-14,62-70,120-127`** — TOML + mutable/immutable split:
+
 ```nix
 tomlFormat = pkgs.formats.toml { };
 generatedSettings = tomlFormat.generate "herdr-settings.toml" cfg.settings;
@@ -52,6 +55,7 @@ xdg.configFile."herdr/config.toml" = mkIf (!cfg.mutableSettings && cfg.settings 
 ```
 
 Mechanics:
+
 - `xdg.configFile` is a `fileType` submodule (`modules/misc/xdg/default.nix:70-81`, `modules/lib/file-type.nix:31-160`): fields `enable`, `target`, `text`, `source`, `executable`, `recursive`, `ignorelinks`, `onChange`, `force`.
 - `xdg.configFile.<name>` is merged into `home.file."${config.xdg.configHome}/<name>"` (`modules/misc/xdg/default.nix:187-205`), i.e. it creates a **symlink into the Nix store**.
 - `xdg.configHome` default `~/.config`, `xdg.stateHome` default `~/.local/state` (`modules/misc/xdg/default.nix:79-90,138-146`).
@@ -62,16 +66,19 @@ Mechanics:
 ### 2.1 Generic helper (best fit for viz)
 
 `home-manager/modules/lib/generators.nix:1000-1183`:
+
 ```
 mkImpureConfigMerger :: { pkgs, format, empty, jqOperation, path,
   staticSettings, mode ? null, reader ? null, verboseMsg ? null } -> String
 ```
+
 - `format` ∈ `"json" | "yaml" | "toml" | "cbor"`; `empty` e.g. `"{}"`; `jqOperation` e.g. `"$dynamic * $static"` (recursive object merge, declared wins).
 - Runs inside `home.activation`; reads existing file with `jaq` (`jaq -c '.'` for JSON, `jaq --from toml -c '.'` otherwise), refuses to replace a path resolving into the Nix store, snapshots, writes a candidate temp file, detects concurrent modification, `mv -fT` (falls back to in-place write on `EBUSY`), preserves existing mode, applies `DRY_RUN`/`VERBOSE`, and never clobbers on a failed parse/merge.
 - `mode` applies only to a newly created file; docs recommend `"600"` for token-bearing files.
 - Limitation: TOML date/time values unsupported by `jaq` 3.1.1 → activation fails without modifying the file (`generators.nix:1000-1010`).
 
 **Herdr is the cleanest complete TOML example** (`modules/programs/herdr.nix:15-30,99-127`):
+
 ```nix
 settingsSource = pkgs.runCommand "herdr-config.toml" { } ''
   settings="$(${lib.getExe pkgs.jaq} --from toml --to toml '.' ${generatedSettings})"
@@ -94,6 +101,7 @@ home.activation.herdrImmutableSettings = mkIf (!cfg.mutableSettings && cfg.setti
   )
 );
 ```
+
 The `jaq --from toml --to toml` normalization exists so that when switching back to immutable, `mkImpureConfigCleanup` can byte-compare the user file with the generation’s copy.
 
 `mkImpureConfigCleanup` (`generators.nix:1284-1340`) removes only a regular, byte-identical, unchanged file (never symlinks/store sources) before `linkGeneration`, allowing HM to link over it.
@@ -102,34 +110,37 @@ DAG semantics: `entryBetween before after` = “run before these, after those”
 
 ### 2.2 Other real examples
 
-| Module | Mechanism |
-|---|---|
-| `modules/programs/codex/default.nix:187-230,363-377` | TOML merger with a custom `jqOperation` that strips conflicting MCP transport keys; `mode = "600"`; same immutable cleanup. |
-| `modules/programs/t3code.nix:200-247` | Three JSON mergers (`settings.json`, `keybindings.json`, `client-settings.json`), JSON5 `reader = "${lib.getExe json5} --as-json"`, array merge via `$dynamic + $static \| group_by([...]) \| map(reduce ...)`. |
-| `modules/programs/github-copilot-cli.nix:470-532` | `mode = "600"`, JSON5 reader because the app writes a comment header; custom `jqOperation` appending trusted folders. |
-| `modules/programs/vscode/mutableSettings.nix:1-160` + `vscode/mkVscodeModule.nix:94-116` | Older hand-rolled `vscodeMutableSettings` shell function: JSON5 parse, snapshot, `jq -n '$dynamic * $static'`, temp+rename, conflict detection. Predecessor of the generic helper. |
-| `modules/programs/zed-editor.nix:316-366` | Four `mkImpureConfigMerger` activations (settings/keymap/tasks/debug), JSON5 reader, array merges via `group_by`+`reduce`. |
-| `modules/programs/mise.nix:11-13,72-95,185-195` | **True `config.d` drop-in**: declarative config goes to `$XDG_CONFIG_HOME/mise/conf.d/50-home-manager.toml` when `mutableSettings = true`, leaving `mise/config.toml` app-owned; activation just `touch`es an empty mutable main file because mise otherwise rewrites the read-only fragment. |
-| `modules/programs/opencode.nix:20-40,173-186` | **Separate read-only layer via env**: when `mutableSettings`, config is written to `opencode/home-manager.json` and exported as `OPENCODE_CONFIG` (plus `OPENCODE_TUI_CONFIG`), leaving app files writable. No activation merge. |
-| `modules/services/syncthing.nix:129-200,924-940` | Runtime merge through the app’s REST API from a `syncthing-init` oneshot user unit (`ExecStart = updateConfig`, `RuntimeDirectory = "syncthing-init"`), not activation. |
+| Module                                                                                   | Mechanism                                                                                                                                                                                                                                                                                     |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `modules/programs/codex/default.nix:187-230,363-377`                                     | TOML merger with a custom `jqOperation` that strips conflicting MCP transport keys; `mode = "600"`; same immutable cleanup.                                                                                                                                                                   |
+| `modules/programs/t3code.nix:200-247`                                                    | Three JSON mergers (`settings.json`, `keybindings.json`, `client-settings.json`), JSON5 `reader = "${lib.getExe json5} --as-json"`, array merge via `$dynamic + $static \| group_by([...]) \| map(reduce ...)`.                                                                               |
+| `modules/programs/github-copilot-cli.nix:470-532`                                        | `mode = "600"`, JSON5 reader because the app writes a comment header; custom `jqOperation` appending trusted folders.                                                                                                                                                                         |
+| `modules/programs/vscode/mutableSettings.nix:1-160` + `vscode/mkVscodeModule.nix:94-116` | Older hand-rolled `vscodeMutableSettings` shell function: JSON5 parse, snapshot, `jq -n '$dynamic * $static'`, temp+rename, conflict detection. Predecessor of the generic helper.                                                                                                            |
+| `modules/programs/zed-editor.nix:316-366`                                                | Four `mkImpureConfigMerger` activations (settings/keymap/tasks/debug), JSON5 reader, array merges via `group_by`+`reduce`.                                                                                                                                                                    |
+| `modules/programs/mise.nix:11-13,72-95,185-195`                                          | **True `config.d` drop-in**: declarative config goes to `$XDG_CONFIG_HOME/mise/conf.d/50-home-manager.toml` when `mutableSettings = true`, leaving `mise/config.toml` app-owned; activation just `touch`es an empty mutable main file because mise otherwise rewrites the read-only fragment. |
+| `modules/programs/opencode.nix:20-40,173-186`                                            | **Separate read-only layer via env**: when `mutableSettings`, config is written to `opencode/home-manager.json` and exported as `OPENCODE_CONFIG` (plus `OPENCODE_TUI_CONFIG`), leaving app files writable. No activation merge.                                                              |
+| `modules/services/syncthing.nix:129-200,924-940`                                         | Runtime merge through the app’s REST API from a `syncthing-init` oneshot user unit (`ExecStart = updateConfig`, `RuntimeDirectory = "syncthing-init"`), not activation.                                                                                                                       |
 
 ### 2.3 Documented semantics / caveats from herdr’s option text
+
 - Declared values (including arrays) take precedence; undeclared runtime values are preserved.
 - Removing a declaration does **not** remove it from the file.
 - Comments and formatting are lost.
 - New files get `0600`; existing files retain mode.
 - Switching to immutable only replaces a byte-identical file; changed files use HM’s normal collision/backup handling.
 - Empty `settings` leaves the file unmanaged.
-(`modules/programs/herdr.nix:36-58`)
+  (`modules/programs/herdr.nix:36-58`)
 
 ## 3. Secrets
 
 ### 3.1 sops-nix HM module (pinned rev)
 
 `https://github.com/Mic92/sops-nix/blob/7c637afdccdf9bcf35c4a2d67b58a77c1fd843a4/modules/home-manager/sops.nix`
+
 - `sops.secrets.<name>` submodule: `name`, `key`, `path` (default `${sops.defaultSymlinkPath}/<name>`), `format` (`yaml|json|binary|ini|dotenv`), `mode` (default `"0400"`), `sopsFile`.
 - `sops.defaultSymlinkPath = "${config.xdg.configHome}/sops-nix/secrets"`; `sops.defaultSecretsMountPoint = "%r/secrets.d"`; `keepGenerations = 1`.
 - Runs `sops-install-secrets -ignore-passwd <manifest>` via a **oneshot user unit**:
+
 ```nix
 systemd.user.services.sops-nix = {
   Unit.Description = "sops-nix activation";
@@ -138,15 +149,18 @@ systemd.user.services.sops-nix = {
 };
 home.activation.sops-nix = ''... ${systemctl} restart --user sops-nix ...'';
 ```
+
 - Key sources required by assertion: one of `sops.age.keyFile`, `age.sshKeyFile`, `age.sshKeyCmd`, `age.sshKeyPaths`, `gnupg.home`, `gnupg.sshKeyPaths`, Qubes split-gpg.
 
 `https://github.com/Mic92/sops-nix/blob/.../modules/home-manager/templates.nix`
+
 - `sops.templates.<name>`: `content` (or `file`), `path` default `${xdg.configHome}/sops-nix/secrets/rendered/<name>`, `mode` default `"0400"`.
 - `sops.placeholder.<secret>` = `"<SOPS:sha256:...:PLACEHOLDER>"`; the installer substitutes these into rendered templates, so secret values never enter the Nix store.
 
 ### 3.2 vidhanix wiring
 
 `vidhanix/modules/flake/sops-nix.nix` (full file):
+
 ```nix
 profiles.base = let
   mkSopsConfig = key: {
@@ -165,9 +179,11 @@ in {
   };
 }
 ```
+
 Note: the HM side points age at the **user’s** SSH key, and `SOPS_AGE_SSH_PRIVATE_KEY_FILE` is set in `sops.environment`.
 
 Secret usage examples:
+
 - HM, `token_file` style: `modules/programs/noctalia/calendar.nix` →
   `password_file = config.sops.secrets.apple.path;` (`sops.secrets.apple = {}`).
 - HM, activation reads secret: `modules/programs/wakatime/default.nix`:
@@ -193,6 +209,7 @@ Secret usage examples:
 - `secrets.yaml` keys present include `passwords`, `networks`, `tailscale`, `apple`, `wakatime`, `opencode`, `searxng`, `vane`, `netrc` (values encrypted; `.sops.yaml` age recipients = vortex/voyager user+root SSH keys).
 
 ### 3.3 `environmentFile` / `*_FILE` conventions in HM
+
 - `services/cachix-agent.nix:42-48,64-67`: `credentialsFile` option, default `~/.config/cachix-agent.token`, passed as `Service.EnvironmentFile`, content `CACHIX_AGENT_TOKEN=...`.
 - `programs/opencode.nix:327-346,890-900`: `web.environmentFile` (nullOr path, example `/run/secrets/opencode-web`) → `EnvironmentFile`; docs say recommended way to set `OPENCODE_SERVER_PASSWORD`.
 - `programs/t3code.nix:200-213,280-288`: same pattern for `t3 serve`.
@@ -201,6 +218,7 @@ Secret usage examples:
 - `services/listenbrainz-mpd.nix:33-35`: example `submission.token_file = "/run/secrets/listenbrainz-mpd"` — the app-owned setting points at the secret file.
 
 ### 3.4 `LoadCredential`
+
 - Not used anywhere in HM `modules/` (grep for `LoadCredential` returns only a TODO comment in `services/mpdscribble.nix:220`).
 - HM’s freeform unit type (`modules/systemd.nix:96-108`) passes any systemd key, so `Service.LoadCredential = "token:/path"` is possible.
 - `systemd.exec(5)` documents per-user manager support, including credstore search paths:
@@ -209,20 +227,24 @@ Secret usage examples:
 - Exact systemd version on the target is UNVERIFIED (no command execution performed).
 
 ### 3.5 agentcord’s `${NAME}` pattern
+
 `agentcord/src/config.rs:162-190,295-340` expands `${NAME}` recursively in every string after TOML parsing via `std::env::var`; missing vars are preserved literally (test at `config.rs:484`). `config.example.toml` documents `bot_token = "${DISCORD_TOKEN}"`. This is why its HM module can keep the token out of the store while the config file itself remains declarative.
 
 ## 4. systemd user service conventions in HM
 
 Type (`modules/systemd.nix:96-215`):
+
 ```nix
 freeformType = attrsOf (attrsOf (either primitive (listOf primitive)));   # Unit/Service/Install arbitrary keys
 options.Unit = { Description; Documentation; };
 options.Service = { Environment; ExecStart; };
 # plus X-Reload-Triggers, X-Restart-Triggers, X-SwitchMethod
 ```
+
 `Install.WantedBy` etc. are freeform; recursion/Capitalization follows systemd names.
 
 Observed conventions:
+
 - `Install.WantedBy = [ "default.target" ]` for daemons (`listenbrainz-mpd.nix:50`, `spotifyd.nix:36`, `cachix-agent.nix:79`, `agentcord/flake.nix:87`); `[ "graphical-session.target" ]` for GUI/desktop (`vidhanix/modules/programs/valent/default.nix:9`, HM `programs/numlock.nix`, many services).
 - `Unit.After = [ "network.target" ]` is the HM norm (`listenbrainz-mpd.nix:41`, `syncthing.nix:889`, `agentcord/flake.nix:74`, `opencode.nix:888`). **No HM module uses `network-online.target`** (grep over `home-manager/modules` returned 0); for GUI, `After`/`PartOf = [ "graphical-session.target" ]`.
 - `Restart = "on-failure"` is common (`listenbrainz-mpd`, `syncthing`, `cachix-agent`); `"always"` used for daemons that should never stay down (`spotifyd`, `opencode-web`, `agentcord`). `RestartSec = 5`/`12`.
@@ -230,6 +252,7 @@ Observed conventions:
 - HM start/stop of new/changed units is handled by `systemd.user.startServices` (default `true`, implemented with `sd-switch`; `modules/systemd.nix:335-360`). `X-Restart-Triggers`/`X-Reload-Triggers`/`X-SwitchMethod` control reload/restart behavior (`modules/systemd.nix:139-176`).
 
 State/runtime directories (user units):
+
 - `systemd.exec(5)` table: for **user units**, `StateDirectory=` → `$XDG_STATE_HOME`, env `$STATE_DIRECTORY`; `RuntimeDirectory=` → `$XDG_RUNTIME_DIR`, `$RUNTIME_DIRECTORY`; `CacheDirectory=` → `$XDG_CACHE_HOME`; `LogsDirectory=` → `$XDG_STATE_HOME/log`; `ConfigurationDirectory=` → `$XDG_CONFIG_HOME`.
   `https://man7.org/linux/man-pages/man5/systemd.exec.5.html` (Table 2).
 - `%S` = state-directory root (`$XDG_STATE_HOME` for user managers); `%t` = `$XDG_RUNTIME_DIR`; `%h` = home:
@@ -250,6 +273,7 @@ State/runtime directories (user units):
 ## 5. agentcord’s Nix module / flake outputs
 
 `agentcord/flake.nix:21-94`: only one Nix re-export:
+
 ```nix
 flake.homeManagerModules.default = { config, lib, pkgs, ... }: {
   options.programs.agentcord = {
@@ -271,6 +295,7 @@ flake.homeManagerModules.default = { config, lib, pkgs, ... }: {
   };
 };
 ```
+
 - No `nixosModules` / `homeModules` alias (grep over the whole repo: only `homeManagerModules`).
 - README `:65-90` shows the install snippet (`imports = [ inputs.agentcord.homeManagerModules.default ];`) and states `environmentFile` should contain `KEY=VALUE` lines, referenced from `settings` as `"${DISCORD_TOKEN}"`.
 - Build system: flake-parts `perSystem` with crane (`flake.nix:97-300+`), `packages.default` with `meta.mainProgram = "agentcord"`, checks clippy/doc/fmt/deny/nextest, treefmt with `nixfmt`, `statix`, `deadnix`, `rustfmt`, `taplo`.

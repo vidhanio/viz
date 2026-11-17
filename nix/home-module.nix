@@ -52,7 +52,7 @@ let
 
   connectorModule =
     name:
-    { ... }:
+    _:
     {
       options = {
         enable = mkEnableOption "the viz ${name} connector service";

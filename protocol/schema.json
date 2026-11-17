@@ -24,10 +24,7 @@
           "description": "Human-readable author, shown to the model"
         }
       },
-      "required": [
-        "connector",
-        "channel"
-      ],
+      "required": ["connector", "channel"],
       "additionalProperties": false
     }
   },
@@ -43,27 +40,17 @@
             "type": "object",
             "properties": {
               "kind": {
-                "enum": [
-                  "app",
-                  "connector",
-                  "cli"
-                ]
+                "enum": ["app", "connector", "cli"]
               },
               "name": {
                 "type": "string"
               }
             },
-            "required": [
-              "kind",
-              "name"
-            ],
+            "required": ["kind", "name"],
             "additionalProperties": false
           }
         },
-        "required": [
-          "protocol",
-          "client"
-        ],
+        "required": ["protocol", "client"],
         "additionalProperties": false
       },
       "result": {
@@ -81,11 +68,7 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": [
-          "protocol",
-          "version",
-          "root"
-        ],
+        "required": ["protocol", "version", "root"],
         "additionalProperties": false
       }
     },
@@ -102,9 +85,7 @@
             "description": "ConversationRecord[] from pi-durable: id, parent?, owner?"
           }
         },
-        "required": [
-          "conversations"
-        ],
+        "required": ["conversations"],
         "additionalProperties": false
       }
     },
@@ -123,9 +104,7 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": [
-          "conversation"
-        ],
+        "required": ["conversation"],
         "additionalProperties": false
       }
     },
@@ -168,16 +147,11 @@
                 "description": "Human-readable author, shown to the model"
               }
             },
-            "required": [
-              "connector",
-              "channel"
-            ],
+            "required": ["connector", "channel"],
             "additionalProperties": false
           }
         },
-        "required": [
-          "text"
-        ],
+        "required": ["text"],
         "additionalProperties": false
       },
       "result": {
@@ -189,9 +163,7 @@
             "description": "pi-durable SubmissionId"
           }
         },
-        "required": [
-          "submission"
-        ],
+        "required": ["submission"],
         "additionalProperties": false
       }
     },
@@ -205,9 +177,7 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": [
-          "conversation"
-        ],
+        "required": ["conversation"],
         "additionalProperties": false
       },
       "result": {
@@ -217,9 +187,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "watching"
-        ],
+        "required": ["watching"],
         "additionalProperties": false
       }
     },
@@ -233,9 +201,7 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": [
-          "conversation"
-        ],
+        "required": ["conversation"],
         "additionalProperties": false
       },
       "result": {
@@ -245,9 +211,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "watching"
-        ],
+        "required": ["watching"],
         "additionalProperties": false
       }
     }
@@ -264,9 +228,7 @@
         "value": {},
         "ops": {}
       },
-      "required": [
-        "conversation"
-      ],
+      "required": ["conversation"],
       "additionalProperties": false
     },
     "reply": {
@@ -295,10 +257,7 @@
               "description": "Human-readable author, shown to the model"
             }
           },
-          "required": [
-            "connector",
-            "channel"
-          ],
+          "required": ["connector", "channel"],
           "additionalProperties": false
         },
         "conversation": {
@@ -312,10 +271,7 @@
           "description": "pi-durable SubmissionId"
         },
         "status": {
-          "enum": [
-            "done",
-            "unanswered"
-          ]
+          "enum": ["done", "unanswered"]
         },
         "text": {
           "anyOf": [
@@ -328,13 +284,7 @@
           ]
         }
       },
-      "required": [
-        "origin",
-        "conversation",
-        "submission",
-        "status",
-        "text"
-      ],
+      "required": ["origin", "conversation", "submission", "status", "text"],
       "additionalProperties": false
     }
   }

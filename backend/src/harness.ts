@@ -37,8 +37,7 @@ export async function openHarness(
   const database = options.database ?? join(paths.stateDir, "viz.sqlite");
   if (database !== ":memory:") await mkdir(paths.stateDir, { recursive: true, mode: 0o700 });
 
-  const toRef = (m: { provider: string; model: string } | undefined) =>
-    m && { provider: m.provider, modelId: m.model };
+  const toRef = (m: { provider: string; model: string } | undefined) => m && { provider: m.provider, modelId: m.model };
   const orchestrator = config.orchestrator ?? {};
   const Subagent = subagentExtension(toRef(config.subagents?.model));
 

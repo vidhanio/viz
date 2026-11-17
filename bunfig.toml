@@ -1,4 +1,9 @@
 [fmt]
 printWidth = 120
 trailingComma = "all"
-ignorePatterns = ["**/node_modules/", "backend/bun.nix", "target/", "ios/.build/"]
+ignorePatterns = [
+  "**/node_modules/",
+  "backend/bun.nix",
+  "target/",
+  "ios/.build/",
+]

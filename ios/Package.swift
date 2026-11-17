@@ -3,21 +3,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "Viz",
-    platforms: [
-        .iOS(.v17),
-        .macOS(.v14),
-    ],
-    products: [
-        // An xtool project contains exactly one library product: the app.
-        .library(
-            name: "Viz",
-            targets: ["Viz"]
-        ),
-    ],
-    targets: [
-        .target(
-            name: "Viz"
-        ),
-    ]
+  name: "Viz",
+  platforms: [
+    .iOS(.v17),
+    .macOS(.v14),
+  ],
+  products: [
+    // An xtool project contains exactly one library product: the app.
+    .library(
+      name: "Viz",
+      targets: ["Viz"]
+    )
+  ],
+  targets: [
+    .target(
+      name: "Viz"
+    )
+  ]
 )

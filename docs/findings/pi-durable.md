@@ -1,32 +1,31 @@
 # Pi Durable — API research (for the viz Bun backend)
 
-
 _Research snapshot 2026-11-17 (scout), against `@earendil-works/pi-durable@1.5.2`._
 Read-only investigation. No files created/modified; no commands executed (remote sources only).
 
 ## Sources read
 
-| Source | URL |
-|---|---|
-| durable pkg + exports | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/package.json` |
-| durable README (1160 lines) | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/README.md` |
-| durable CHANGELOG | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/CHANGELOG.md` |
-| durable root exports | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/index.ts` |
-| Harness/conversation/tool types | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/harness/types.ts` |
-| Conversation view | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/harness/view.ts` |
-| Harness.open | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/harness/harness.ts` |
-| Documents | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/documents.ts` |
-| SQLite storage | `.../packages/durable/src/storage/sqlite/{index,node,storage}.ts` |
-| Subagent example | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/test/examples/21-subagent-foreground.ts` |
-| Remoting example | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/test/examples/36-durable-views.ts` |
-| chord sqlite facade/Node adapter | `.../packages/chord/src/sqlite/{database,node}.ts`, `.../chord/src/sqlite/index.ts` |
-| chord delta/ops | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/chord/src/delta/README.md` |
-| chord sync | `.../packages/chord/src/sync/index.ts`, `client.ts` |
-| pi-ai README/types/oauth | `.../packages/ai/README.md`, `.../packages/ai/src/types.ts:148`, `.../packages/ai/src/auth/oauth/load.ts`, `.../packages/ai/src/bun-oauth.ts` |
-| coding-agent RPC | `.../packages/coding-agent/docs/rpc.md` |
-| npm registry | `https://registry.npmjs.org/@earendil-works/pi-durable`, `.../pi-ai`, `.../chord`, `https://registry.npmjs.org/pi-acp/latest` |
-| pi-acp | `https://raw.githubusercontent.com/svkozak/pi-acp/main/README.md` |
-| Bun sqlite | `https://bun.com/blog/bun-v1.4`, `https://bun.com/docs/runtime/sqlite` |
+| Source                           | URL                                                                                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| durable pkg + exports            | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/package.json`                                                      |
+| durable README (1160 lines)      | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/README.md`                                                         |
+| durable CHANGELOG                | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/CHANGELOG.md`                                                      |
+| durable root exports             | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/index.ts`                                                      |
+| Harness/conversation/tool types  | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/harness/types.ts`                                              |
+| Conversation view                | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/harness/view.ts`                                               |
+| Harness.open                     | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/harness/harness.ts`                                            |
+| Documents                        | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/src/documents.ts`                                                  |
+| SQLite storage                   | `.../packages/durable/src/storage/sqlite/{index,node,storage}.ts`                                                                             |
+| Subagent example                 | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/test/examples/21-subagent-foreground.ts`                           |
+| Remoting example                 | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/durable/test/examples/36-durable-views.ts`                                 |
+| chord sqlite facade/Node adapter | `.../packages/chord/src/sqlite/{database,node}.ts`, `.../chord/src/sqlite/index.ts`                                                           |
+| chord delta/ops                  | `https://raw.githubusercontent.com/earendil-works/pi/main/packages/chord/src/delta/README.md`                                                 |
+| chord sync                       | `.../packages/chord/src/sync/index.ts`, `client.ts`                                                                                           |
+| pi-ai README/types/oauth         | `.../packages/ai/README.md`, `.../packages/ai/src/types.ts:148`, `.../packages/ai/src/auth/oauth/load.ts`, `.../packages/ai/src/bun-oauth.ts` |
+| coding-agent RPC                 | `.../packages/coding-agent/docs/rpc.md`                                                                                                       |
+| npm registry                     | `https://registry.npmjs.org/@earendil-works/pi-durable`, `.../pi-ai`, `.../chord`, `https://registry.npmjs.org/pi-acp/latest`                 |
+| pi-acp                           | `https://raw.githubusercontent.com/svkozak/pi-acp/main/README.md`                                                                             |
+| Bun sqlite                       | `https://bun.com/blog/bun-v1.4`, `https://bun.com/docs/runtime/sqlite`                                                                        |
 
 ## Summary
 
@@ -80,7 +79,7 @@ interface SqliteDatabase extends SqliteExecutor {
 }
 ```
 
-Contract details (same file): run/exec/all/get are one statement + positional bindings (never interpolate); adapters may cache prepared statements by SQL; unrelated ops and other transactions must queue until a transaction finishes; calling the DB inside a transaction callback must never settle; on callback rejection roll back first, and if rollback fails reject with a *different* error. `runCounted` returns SQLite `changes()` (triggers/index writes excluded). Bun equivalents: `db.exec`, `db.prepare(sql).{run,get,all}(...p)`, `stmt.run().changes`, `db.transaction(fn)`, `db.close()`; enable `safeIntegers` only if you want bigint round-trips. `SqliteValue` includes `bigint`.
+Contract details (same file): run/exec/all/get are one statement + positional bindings (never interpolate); adapters may cache prepared statements by SQL; unrelated ops and other transactions must queue until a transaction finishes; calling the DB inside a transaction callback must never settle; on callback rejection roll back first, and if rollback fails reject with a _different_ error. `runCounted` returns SQLite `changes()` (triggers/index writes excluded). Bun equivalents: `db.exec`, `db.prepare(sql).{run,get,all}(...p)`, `stmt.run().changes`, `db.transaction(fn)`, `db.close()`; enable `safeIntegers` only if you want bigint round-trips. `SqliteValue` includes `bigint`.
 
 Portability statement, `packages/durable/README.md:1020-1080`: the portable cores `/storage/sqlite` and `/storage/jsonl` “run without Node APIs, for example on Bun or in Cloudflare Durable Objects, given an asynchronous `SqliteDatabase` facade”. Bun 1.4 changelog: `node:sqlite` implemented, `DatabaseSync`/`StatementSync`, passes 319/319 Node 26.3 sqlite subtests; docs note Bun’s `Database`/`DatabaseSync` are distinguishable via `db[Symbol.for("sqlite-type")]`.
 
@@ -92,7 +91,7 @@ Portability statement, `packages/durable/README.md:1020-1080`: the portable core
 - No built-in durable HTTP/WS server, no durable client package, no `attach` protocol module. Closest primitives:
   - `harness.observeConversation(id, observer, ctx, window?)`, `observeTaskGraph`, `observeDoc` — synchronous, atomic with memory adoption, intended “for adapters, such as a Chord source over a view”.
   - `StoreStorage` (`storage/store`) puts a Harness inside a Chord host store; `self.follow((observer, ctx) => harness.value.observeConversation(...))` turns a Durable view into a Chord watchable/member/derive (`test/examples/36-durable-views.ts`, full pattern incl. one frame per commit with ops).
-  - Chord `./sync` is *session-log replication* (outbox, `encodeBatch`/`encodeSnapshot`/`decodeBatch`, `uploadSession`, `pullSession`, filesystem remote), not a view subscription. Chord `./http` is the generic plugin-host HTTP/WS-upgrade server.
+  - Chord `./sync` is _session-log replication_ (outbox, `encodeBatch`/`encodeSnapshot`/`decodeBatch`, `uploadSession`, `pullSession`, filesystem remote), not a view subscription. Chord `./http` is the generic plugin-host HTTP/WS-upgrade server.
   - Client-side transcript reassembly is provided: `ConversationTranscript` (`merge`, `loadEarlier`, `fillGap`, `resume`) + `conversation.entries(...)`; example 31.
 - Practical viz design: one writer process; WebSocket per client; server subscribes via `watch()`, sends `{seq, value?, ops}` frames (initial snapshot = first value; reconnect via `{from: lastEntryId}`); client applies ops with `apply`/`applyImmutable` from `@earendil-works/chord/delta` and reconciles with `ConversationTranscript`. For read-only replicas, open a second Harness with `readOnly: true` (`HarnessOptions.readOnly`; all writes reject `ReadOnlySession`, `kick`/scheduling off).
 
@@ -111,7 +110,7 @@ Portability statement, `packages/durable/README.md:1020-1080`: the portable core
 - `createModels(options?)`: `{ credentials?: CredentialStore; modelsStore?: ModelsStore; authContext?: AuthContext; identity?: ClientIdentity }`; `createModels()` defaults to **in-memory** credential and model stores (`src/models.ts`, CreateModelsOptions). `MutableModels`: `setProvider`, `deleteProvider`, `clearProviders`. `Models`: `getAuth`, `checkAuth`, `getAvailableOfType`, `login(providerId, type, interaction, options?)`, `logout`, `stream`, `complete`, `streamSimple`, `generateImages`, `classify`, `refresh`.
 - Providers (README `:62-100`): OpenAI, Ant Ling, Azure OpenAI, OpenAI Codex, Radius, TypeSafe, DeepSeek, NVIDIA NIM, Anthropic, Google, Vertex AI, Mistral, Groq, Cerebras, Cloudflare AI Gateway/Workers AI, xAI, OpenRouter, Vercel AI Gateway, ZAI, MiniMax, Together, Baseten, Hugging Face, Moonshot, GitHub Copilot, Amazon Bedrock, OpenCode Zen/Go, Fireworks, Kimi For Coding, Meta, Qwen Token Plan, Xiaomi MiMo, plus any OpenAI-compatible endpoint (Ollama/vLLM/LM Studio).
 - Env auth table (README `:494-525`, source `packages/ai/src/env-ai-keys.ts`): `OPENAI_API_KEY`, `ANTHROPIC_API_KEY` **or** `ANTHROPIC_OAUTH_TOKEN`, `GEMINI_API_KEY`, `GOOGLE_CLOUD_API_KEY`/ADC, `OPENROUTER_API_KEY`, `XAI_API_KEY`, `GROQ_API_KEY`, `DEEPSEEK_API_KEY`, `MISTRAL_API_KEY`, `TOGETHER_API_KEY`, `FIREWORKS_API_KEY`, `OPENCODE_API_KEY`, `KIMI_API_KEY`, `META_API_KEY`, plus Bedrock’s `AWS_PROFILE`/`AWS_ACCESS_KEY_ID`+`AWS_SECRET_ACCESS_KEY`/`AWS_BEARER_TOKEN_BEDROCK`/ECS/IRSA env. Anthropic auth helper builds headers from `ANTHROPIC_OAUTH_TOKEN`, `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_SERVICE_ACCOUNT_ID`, `ANTHROPIC_WORKSPACE_ID` etc.
-- OAuth (`README.md:1802-1893`, `src/auth/oauth/load.ts`, `src/bun-oauth.ts`): providers with `OAuthAuth` on `provider.auth.oauth`: **Anthropic** (Claude Pro/Max), **OpenAI (Sign in with ChatGPT)**, **OpenAI Codex**, **GitHub Copilot**, **OpenRouter** (PKCE→API key); loader also bundles kimiCoding, meta, xai, radius. API: `OAuthAuth.login(interaction)`, `refresh(credential, signal)`, `toAuth(credential)`; `AuthInteraction.prompt()` types `text|secret|select|manual_code`, `notify()` events `info|auth_url|device_code|progress`. Refresh is automatic + lock-protected inside `CredentialStore.modify`. `CredentialStore` contract: `read(providerId)`, `list()` (metadata only), `modify(providerId, fn)`, `delete(providerId)`. Stored credential *owns* its provider (env fallback is not used for it). For single-file Bun binaries, call `registerBunOAuthFlows()` from `@earendil-works/pi-ai/bun-oauth` after bundling.
+- OAuth (`README.md:1802-1893`, `src/auth/oauth/load.ts`, `src/bun-oauth.ts`): providers with `OAuthAuth` on `provider.auth.oauth`: **Anthropic** (Claude Pro/Max), **OpenAI (Sign in with ChatGPT)**, **OpenAI Codex**, **GitHub Copilot**, **OpenRouter** (PKCE→API key); loader also bundles kimiCoding, meta, xai, radius. API: `OAuthAuth.login(interaction)`, `refresh(credential, signal)`, `toAuth(credential)`; `AuthInteraction.prompt()` types `text|secret|select|manual_code`, `notify()` events `info|auth_url|device_code|progress`. Refresh is automatic + lock-protected inside `CredentialStore.modify`. `CredentialStore` contract: `read(providerId)`, `list()` (metadata only), `modify(providerId, fn)`, `delete(providerId)`. Stored credential _owns_ its provider (env fallback is not used for it). For single-file Bun binaries, call `registerBunOAuthFlows()` from `@earendil-works/pi-ai/bun-oauth` after bundling.
 - `Transport = "sse" | "websocket" | "websocket-cached" | "auto"` (`src/types.ts:148`); Codex WebSocket pooling keyed by `sessionId`, expires after 5 min idle; `cleanupSessionResources(sessionId)`.
 
 ## Q6 — ACP
@@ -119,7 +118,7 @@ Portability statement, `packages/durable/README.md:1020-1080`: the portable core
 - **No official ACP package/module in `earendil-works/pi`**: `packages/` = agent, ai, chord, codemode, coding-agent, durable, env, evals, mcp, schema, telemetry, tui. No `acp` docs (`packages/coding-agent/docs/acp.md` → HTTP 404); coding-agent README advertises interactive/print/JSON/**RPC**/SDK only.
 - `packages/coding-agent/docs/rpc.md`: `pi --mode rpc` = **JSONL over stdin/stdout**, strict framing (LF only, don’t use Node `readline`), command/response with `id` correlation, session events, `agent_settled` as idle signal, extension UI records; exported `RpcClient` for subprocess integrations. SDK for in-process Node/Bun.
 - Third-party ACP: `pi-acp@0.0.34` (Sergii Kozak, MIT, 2026-09), deps `@agentclientprotocol/sdk ^0.26.0`; “communicates **ACP JSON-RPC 2.0 over stdio** … and spawns `pi --mode rpc`”, maps assistant chunks, tool_call/tool_call_update (locations, edit diffs), session load via `~/.pi/pi-acp/session-map.json`; requires pi’s `get_session_stats` with `contextUsage`; MVP, Zed-centric.
-- For viz: no pi-side ACP adapter to reuse for a *Durable* harness. viz must implement the ACP **client** in Bun (`@agentclientprotocol/sdk`; latest version UNVERIFIED — only 0.26.0 confirmed via pi-acp) and bridge an external harness session into a durable conversation (custom entry kinds + tool results / a task that proxies prompts). `pi-acp` is only useful if viz spawns the plain pi coding agent as an external harness.
+- For viz: no pi-side ACP adapter to reuse for a _Durable_ harness. viz must implement the ACP **client** in Bun (`@agentclientprotocol/sdk`; latest version UNVERIFIED — only 0.26.0 confirmed via pi-acp) and bridge an external harness session into a durable conversation (custom entry kinds + tool results / a task that proxies prompts). `pi-acp` is only useful if viz spawns the plain pi coding agent as an external harness.
 
 ## Q7 — Minimal Bun bootstrap (SQLite + subagent tool)
 
@@ -131,8 +130,16 @@ import { createModels } from "@earendil-works/pi-ai/models";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { obj, str } from "@earendil-works/pi-schema";
 import {
-  AssistantEntry, Harness, configure, createRegistry, defineExtension, defineTool,
-  type AssistantMessage, type ConversationId, type EntryId, type Extension,
+  AssistantEntry,
+  Harness,
+  configure,
+  createRegistry,
+  defineExtension,
+  defineTool,
+  type AssistantMessage,
+  type ConversationId,
+  type EntryId,
+  type Extension,
   type ToolExecutionApi,
 } from "@earendil-works/pi-durable";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
@@ -147,32 +154,37 @@ async function answerText(api: ToolExecutionApi, answer: EntryId): Promise<strin
 
 const Subagent: Extension = defineExtension({
   name: "subagent",
-  tools: [defineTool({
-    name: "subagent",
-    description: "Delegate a self-contained task to a subagent and get its answer back.",
-    parameters: obj({ task: str() }),
-    replay: "safe", // rerun after crash finds the same child + submission
-    execute: async (args, api) => {
-      const child = await api.commit(async (tx) => {
-        const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
-        if (existing) return existing.id;
-        const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
-        await configure(tx as any, created.id, { extensions: { remove: [Subagent] } });
-        return created.id;
-      }, context);
-      await api.details({ conversationId: child }, context);
-      const handle = (await api.conversation(child, context))!;
-      const settled = await (await handle.submit(
-        { type: "input", content: args.task, requestId: `subagent:${api.taskId}` }, context,
-      )).wait(context);
-      if (settled.status !== "done" || settled.type !== "input") throw new Error(`subagent ${settled.status}`);
-      return { output: [{ type: "text", text: await answerText(api, settled.answer) }], details: { conversationId: child } };
-    },
-  })],
+  tools: [
+    defineTool({
+      name: "subagent",
+      description: "Delegate a self-contained task to a subagent and get its answer back.",
+      parameters: obj({ task: str() }),
+      replay: "safe", // rerun after crash finds the same child + submission
+      execute: async (args, api) => {
+        const child = await api.commit(async (tx) => {
+          const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
+          if (existing) return existing.id;
+          const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
+          await configure(tx as any, created.id, { extensions: { remove: [Subagent] } });
+          return created.id;
+        }, context);
+        await api.details({ conversationId: child }, context);
+        const handle = (await api.conversation(child, context))!;
+        const settled = await (
+          await handle.submit({ type: "input", content: args.task, requestId: `subagent:${api.taskId}` }, context)
+        ).wait(context);
+        if (settled.status !== "done" || settled.type !== "input") throw new Error(`subagent ${settled.status}`);
+        return {
+          output: [{ type: "text", text: await answerText(api, settled.answer) }],
+          details: { conversationId: child },
+        };
+      },
+    }),
+  ],
 });
 
 const models = createModels();
-models.setProvider(anthropicProvider());               // ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN
+models.setProvider(anthropicProvider()); // ANTHROPIC_API_KEY or ANTHROPIC_OAUTH_TOKEN
 const registry = createRegistry();
 registry.install(Subagent);
 
@@ -197,8 +209,8 @@ await harness.close(context);
 - Streaming progress commits default ≤100 ms and are persisted together at phase boundaries or `settings.progress.persistWithinMs` (default 1,000 ms) → crash can lose ~1 s of text/tool output (`README.md:578-630`).
 - `HarnessOptions.onWake`/`setTimer` exist for hibernating hosts; with systemd, normal timers are fine, but `onWake` is the hook for wake-on-sleep semantics.
 - npm 1.5.2 vs `main`: CHANGELOG `[Unreleased]` has breaking changes (`ToolExecutionResult | ToolPark`, `pi.tool` v4, `HookTask` rename, codemode namespaces from extensions). Pin 1.5.2 until viz deliberately tracks main.
-- Prompt-cache/durability rationale: images are fitted *before* storage so transcripts/prompt cache never change later (`images/fit`, `README.md:300-330`).
-- Registry is host-owned and not stored; conversations store extension *names*. After restart reinstall identical names, else tasks block (`missing_task`).
+- Prompt-cache/durability rationale: images are fitted _before_ storage so transcripts/prompt cache never change later (`images/fit`, `README.md:300-330`).
+- Registry is host-owned and not stored; conversations store extension _names_. After restart reinstall identical names, else tasks block (`missing_task`).
 - `Harness.open` requires built-in tasks, i.e. `createRegistry()` (or an equivalent registry that includes them).
 - Tool API gives `api.commit`, `api.details` (UI-visible, e.g. child conversation id), `api.conversation(id)`, `api.executeTool` (nested calls, optional `wait:false` + park), `api.createTask`, `defineSignal`/`harness.signal` for external events (webhooks, Discord replies), `SubmissionDraft.notify` for park-until-subagent-answers (`README.md`, examples 38-46).
 - `README.md:1020-1080` also: `storage/sqlite/cloudflare` for DO SQLite; JSONL grows memory with full history (avoid for long-running agent); portable SQLite/JSONL cores run on Bun given the async facade.

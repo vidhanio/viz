@@ -6,19 +6,19 @@ Read `docs/architecture.md` before changing anything structural. `TODO.md` is th
 
 ## Layout
 
-| Path                    | What                                                         | Language                  |
-| ----------------------- | ------------------------------------------------------------ | ------------------------- |
-| `backend/`              | `viz-backend`: pi-durable harness + HTTP/WebSocket server    | TypeScript on Bun         |
-| `protocol/schema.json`  | Generated JSON Schema of the client protocol                 | generated (`bun run schema`) |
-| `crates/viz-config`     | Layered XDG TOML config, `Secret` type                       | Rust                      |
-| `crates/viz-client`     | Protocol types + JSON-RPC/WebSocket client                   | Rust                      |
-| `crates/viz`            | `viz` CLI (`config`, `status`, `send`)                       | Rust                      |
-| `crates/viz-discord`    | Discord connector                                            | Rust (serenity)           |
-| `crates/viz-imessage`   | iMessage connector (scaffold, BlueBubbles)                   | Rust                      |
-| `crates/viz-desktop`    | Desktop app                                                  | Rust (Rune)               |
-| `ios/`                  | iOS app, built on Linux with xtool                           | Swift/SwiftUI             |
-| `nix/home-module.nix`   | Home Manager module (`homeModules.default`)                  | Nix                       |
-| `flake.nix`             | Packages, checks, dev shell, treefmt                         | Nix                       |
+| Path                   | What                                                      | Language                     |
+| ---------------------- | --------------------------------------------------------- | ---------------------------- |
+| `backend/`             | `viz-backend`: pi-durable harness + HTTP/WebSocket server | TypeScript on Bun            |
+| `protocol/schema.json` | Generated JSON Schema of the client protocol              | generated (`bun run schema`) |
+| `crates/viz-config`    | Layered XDG TOML config, `Secret` type                    | Rust                         |
+| `crates/viz-client`    | Protocol types + JSON-RPC/WebSocket client                | Rust                         |
+| `crates/viz`           | `viz` CLI (`config`, `status`, `send`)                    | Rust                         |
+| `crates/viz-discord`   | Discord connector                                         | Rust (serenity)              |
+| `crates/viz-imessage`  | iMessage connector (scaffold, BlueBubbles)                | Rust                         |
+| `crates/viz-desktop`   | Desktop app                                               | Rust (Rune)                  |
+| `ios/`                 | iOS app, built on Linux with xtool                        | Swift/SwiftUI                |
+| `nix/home-module.nix`  | Home Manager module (`homeModules.default`)               | Nix                          |
+| `flake.nix`            | Packages, checks, dev shell, treefmt                      | Nix                          |
 
 Everything is Rust except the backend (TypeScript, because pi-durable is a TS library) and the iOS app (Swift). New connectors are new crates `crates/viz-<name>` reading `[connectors.<name>]`.
 

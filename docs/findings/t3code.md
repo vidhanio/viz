@@ -4,15 +4,15 @@ Not cloned (no shell tool available in this session); everything below was read 
 
 ## 0. Stack summary
 
-| Piece | Tech |
-|---|---|
-| Monorepo | pnpm workspace (`packageManager: pnpm@12.14.0`), TS everywhere, `vite-plus` (`vp`) build/test, oxc transform, vitest |
+| Piece                                                         | Tech                                                                                                                                                                                               |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Monorepo                                                      | pnpm workspace (`packageManager: pnpm@12.14.0`), TS everywhere, `vite-plus` (`vp`) build/test, oxc transform, vitest                                                                               |
 | Server (`apps/server`, pkg name **`t3`**, bin `dist/bin.mjs`) | Node (**engines `^22.16 \|\| ^23.11 \|\| >=24.10`**), **Effect** (`effect`, `effect/cli`, `effect/http`, `effect/sql`, `effect/ai`), `node-pty`, `playwright-core`, `undici`, `ws` via Effect HTTP |
-| Web (`apps/web`, `@t3tools/web`) | React + TanStack Router + Tailwind 4 + TipTap + zustand + `@effect/atom-react`, clerk-js, i18n via `gt` |
-| Desktop (`apps/desktop`) | **Electron 44.10.1** (`main: dist-electron/boot.cjs`), electron-builder, electron-updater, `electron-store`, keyring, `dbus-next`, `ffi-rs`, playwright-core |
-| Mobile (`apps/mobile`) | Expo/React Native **[UNVERIFIED]** — evidence: `apps/server` script `generate:expo-schema`, `docs/internals/mobile-*.md`, `apps/mobile` in tree |
-| Infra | `infra/relay` = Cloudflare Worker + Durable Objects (T3 Connect), Clerk identity |
-| DB | SQLite at `<stateDir>/statev2.sqlite` via **`node:sqlite`** wrapped as `@t3tools/shared/nodeSqliteClient` + Effect `SqlClient` |
+| Web (`apps/web`, `@t3tools/web`)                              | React + TanStack Router + Tailwind 4 + TipTap + zustand + `@effect/atom-react`, clerk-js, i18n via `gt`                                                                                            |
+| Desktop (`apps/desktop`)                                      | **Electron 44.10.1** (`main: dist-electron/boot.cjs`), electron-builder, electron-updater, `electron-store`, keyring, `dbus-next`, `ffi-rs`, playwright-core                                       |
+| Mobile (`apps/mobile`)                                        | Expo/React Native **[UNVERIFIED]** — evidence: `apps/server` script `generate:expo-schema`, `docs/internals/mobile-*.md`, `apps/mobile` in tree                                                    |
+| Infra                                                         | `infra/relay` = Cloudflare Worker + Durable Objects (T3 Connect), Clerk identity                                                                                                                   |
+| DB                                                            | SQLite at `<stateDir>/statev2.sqlite` via **`node:sqlite`** wrapped as `@t3tools/shared/nodeSqliteClient` + Effect `SqlClient`                                                                     |
 
 ## 1. Repo layout
 
@@ -41,12 +41,29 @@ Shared client domain/connection logic lives in `packages/client-runtime` (connec
 ```ts
 export const ORCHESTRATION_V2_WS_METHODS = {
   dispatchCommand: "orchestration.dispatchCommand",
-  getTurnDiff, getFullThreadDiff, searchThreads, searchThread, searchThreadStream,
-  getArchivedShellSnapshot, getThreadFamily, getThreadTitles, getThreadLinkMetadata,
-  getWorktreeThreadIds, getOlderSettledThreads, getThreadProjection, getWorkflowScript,
-  getNativeChildWork, stopWorkflow, forceStopThread, getTurnItem, launchThread,
-  subscribeShell, subscribeThread, subscribeCommandOutput, subscribePromptSuggestion,
-}
+  getTurnDiff,
+  getFullThreadDiff,
+  searchThreads,
+  searchThread,
+  searchThreadStream,
+  getArchivedShellSnapshot,
+  getThreadFamily,
+  getThreadTitles,
+  getThreadLinkMetadata,
+  getWorktreeThreadIds,
+  getOlderSettledThreads,
+  getThreadProjection,
+  getWorkflowScript,
+  getNativeChildWork,
+  stopWorkflow,
+  forceStopThread,
+  getTurnItem,
+  launchThread,
+  subscribeShell,
+  subscribeThread,
+  subscribeCommandOutput,
+  subscribePromptSuggestion,
+};
 ```
 
 - **State delivery = snapshot + cursor subscriptions**, per thread/shell, so a client watching one thread doesn't pay for all history (`subscribeThread`, `subscribeShell`, `subscribeCommandOutput` tail frames `{kind: replace|append, text, truncated, running}`, `subscribePromptSuggestion`).
@@ -81,9 +98,9 @@ Env equivalents: `T3CODE_MODE/PORT/HOST/HOME`, `T3CODE_LAN`, `T3CODE_TAILSCALE_S
 ## 4. Remote access (`docs/internals/remote.md`, `docs/user/remote-access.md`, `docs/internals/t3-connect.md`)
 
 - **Identity is separate from route.** Environment keeps a stable `environmentId` (`environment/ServerEnvironment.ts`); a client stores an **ordered route list** and connects over the first working one, preflighting earlier routes and swapping the session (`packages/client-runtime/src/connection/{driver,supervisor}.ts`). Routes: direct LAN/tailnet, Tailscale Serve HTTPS, SSH, T3 Connect tunnel.
-- **LAN mode** = listen on all IPv4 interfaces but reject peers whose *both* addresses aren't loopback/private/tailnet v4 (keeps a VPS public IP closed). `--lan` ≡ `T3CODE_LAN`.
+- **LAN mode** = listen on all IPv4 interfaces but reject peers whose _both_ addresses aren't loopback/private/tailnet v4 (keeps a VPS public IP closed). `--lan` ≡ `T3CODE_LAN`.
 - **Tailscale**: `t3 pair --tailscale` runs `tailscale serve --https=<port> --bg <local-url>`; dedicated errors for no MagicDNS, no HTTPS certs, non‑operator (`sudo tailscale set --operator=$USER`), port already fronting another environment, target not loopback.
-- **T3 Connect** = cloud relay for *discovery/bootstrap only*: Clerk identity, relay mints a one‑time credential bound to the client's DPoP key, client redeems it **directly** with the environment; app traffic then rides the managed tunnel hostname, relay does not proxy HTTP/WS. Optional device approval keyed by DPoP thumbprint; links/sessions last **30 days**; `t3 connect unlink|logout`.
+- **T3 Connect** = cloud relay for _discovery/bootstrap only_: Clerk identity, relay mints a one‑time credential bound to the client's DPoP key, client redeems it **directly** with the environment; app traffic then rides the managed tunnel hostname, relay does not proxy HTTP/WS. Optional device approval keyed by DPoP thumbprint; links/sessions last **30 days**; `t3 connect unlink|logout`.
 - **Peers / "Linked environments"** (beta): env A signs into env B's `/mcp` as an outside OAuth client with a pairing code, stores the token in its own secret store; `delegate_task` with `target.environmentId` runs the task there. Gated by `linkedEnvironmentsEnabled`.
 
 ## 5. Driving other harnesses (provider abstraction)

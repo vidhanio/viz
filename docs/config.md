@@ -2,11 +2,11 @@
 
 Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Example: `config.example.toml`.
 
-| Location | Default | Override |
-| --- | --- | --- |
-| Config | `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml` | `$VIZ_CONFIG_DIR` |
-| State (database) | `$XDG_STATE_HOME/viz/viz.sqlite` | `$STATE_DIRECTORY` (systemd) |
-| Socket | `$XDG_RUNTIME_DIR/viz/backend.sock` (state dir if unset) | `[backend].socket` |
+| Location         | Default                                                  | Override                     |
+| ---------------- | -------------------------------------------------------- | ---------------------------- |
+| Config           | `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml`   | `$VIZ_CONFIG_DIR`            |
+| State (database) | `$XDG_STATE_HOME/viz/viz.sqlite`                         | `$STATE_DIRECTORY` (systemd) |
+| Socket           | `$XDG_RUNTIME_DIR/viz/backend.sock` (state dir if unset) | `[backend].socket`           |
 
 `viz config` prints the resolved locations and the merged document.
 
@@ -14,27 +14,27 @@ Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Ex
 
 ## `[backend]` (backend, Rust clients)
 
-| Key | Type | Default | |
-| --- | --- | --- | --- |
-| `socket` | path | `$XDG_RUNTIME_DIR/viz/backend.sock` | Local listener, mode 0600 |
-| `listen` | `"host:port"` | unset | TCP listener for remote clients; requires `token` |
-| `token` | Secret | unset | Bearer token for TCP clients |
+| Key      | Type          | Default                             |                                                   |
+| -------- | ------------- | ----------------------------------- | ------------------------------------------------- |
+| `socket` | path          | `$XDG_RUNTIME_DIR/viz/backend.sock` | Local listener, mode 0600                         |
+| `listen` | `"host:port"` | unset                               | TCP listener for remote clients; requires `token` |
+| `token`  | Secret        | unset                               | Bearer token for TCP clients                      |
 
 ## `[orchestrator]` (backend)
 
-| Key | Type | Default |
-| --- | --- | --- |
-| `model` | `{ provider, model }` | `{ provider = "anthropic", model = "claude-opus-5-5" }` |
-| `thinking` | `off`/`minimal`/`low`/`medium`/`high`/`xhigh` | `medium` |
-| `instructions` | string | unset |
-| `cwd` | path | `$HOME` |
+| Key            | Type                                          | Default                                                 |
+| -------------- | --------------------------------------------- | ------------------------------------------------------- |
+| `model`        | `{ provider, model }`                         | `{ provider = "anthropic", model = "claude-opus-5-5" }` |
+| `thinking`     | `off`/`minimal`/`low`/`medium`/`high`/`xhigh` | `medium`                                                |
+| `instructions` | string                                        | unset                                                   |
+| `cwd`          | path                                          | `$HOME`                                                 |
 
 Applied to the root conversation on every backend start. Provider credentials come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...; see `docs/findings/pi-durable.md`, Q5); with Home Manager use `programs.viz.environmentFile`.
 
 ## `[subagents]` (backend)
 
-| Key | Type | Default |
-| --- | --- | --- |
+| Key     | Type                  | Default                  |
+| ------- | --------------------- | ------------------------ |
 | `model` | `{ provider, model }` | the orchestrator's model |
 
 ## `[harnesses.<name>]` (backend, planned)
@@ -43,24 +43,24 @@ ACP agents viz may drive: `command` (string), `args` (string array), `env` (tabl
 
 ## `[client]` (Rust clients)
 
-| Key | Type | Default |
-| --- | --- | --- |
-| `url` | `http://host:port` | unset: use the local socket |
-| `token` | Secret | `[backend].token` |
+| Key     | Type               | Default                     |
+| ------- | ------------------ | --------------------------- |
+| `url`   | `http://host:port` | unset: use the local socket |
+| `token` | Secret             | `[backend].token`           |
 
 ## `[connectors.discord]` (`viz-discord`)
 
-| Key | Type | |
-| --- | --- | --- |
-| `bot_token` | Secret | Bot token; enable the Message Content intent in the developer portal |
+| Key             | Type          |                                                                            |
+| --------------- | ------------- | -------------------------------------------------------------------------- |
+| `bot_token`     | Secret        | Bot token; enable the Message Content intent in the developer portal       |
 | `allowed_users` | integer array | Discord user ids whose DMs and mentions are forwarded; required, non-empty |
 
 ## `[connectors.imessage]` (`viz-imessage`, scaffold)
 
-| Key | Type | |
-| --- | --- | --- |
-| `server_url` | URL | BlueBubbles server |
-| `password` | Secret | BlueBubbles server password |
+| Key               | Type         |                                                        |
+| ----------------- | ------------ | ------------------------------------------------------ |
+| `server_url`      | URL          | BlueBubbles server                                     |
+| `password`        | Secret       | BlueBubbles server password                            |
 | `allowed_handles` | string array | Phone numbers / Apple IDs whose messages are forwarded |
 
 ## Home Manager
