@@ -9,6 +9,10 @@ license = "MIT"
 repository = "https://github.com/vidhanio/viz"
 publish = false
 
+# Name for crane's workspace-wide derivations (dependency artifacts, clippy, tests).
+[workspace.metadata.crane]
+name = "viz"
+
 [workspace.dependencies]
 viz-client = { path = "crates/viz-client" }
 viz-config = { path = "crates/viz-config" }
