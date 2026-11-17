@@ -1,0 +1,21 @@
+# nix / direnv
+.direnv/
+result
+result-*
+
+# rust
+target/
+
+# bun
+node_modules/
+backend/dist/
+
+# swift / xtool
+ios/.build/
+ios/.swiftpm/
+ios/xtool/
+
+# local state when running from the repo
+.env
+*.sqlite
+*.sqlite-*

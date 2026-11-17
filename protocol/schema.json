@@ -1,0 +1,341 @@
+{
+  "protocol": 1,
+  "definitions": {
+    "Origin": {
+      "type": "object",
+      "properties": {
+        "connector": {
+          "type": "string",
+          "description": "Connector name, matching its `hello` name, e.g. discord"
+        },
+        "channel": {
+          "type": "string",
+          "description": "Connector-specific channel/chat id the reply goes to"
+        },
+        "thread": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string",
+          "description": "Connector-specific id of the message being answered"
+        },
+        "author": {
+          "type": "string",
+          "description": "Human-readable author, shown to the model"
+        }
+      },
+      "required": [
+        "connector",
+        "channel"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "methods": {
+    "hello": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "const": 1
+          },
+          "client": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "enum": [
+                  "app",
+                  "connector",
+                  "cli"
+                ]
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "protocol",
+          "client"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "protocol": {
+            "const": 1
+          },
+          "version": {
+            "type": "string"
+          },
+          "root": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": [
+          "protocol",
+          "version",
+          "root"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conversations.list": {
+      "params": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "conversations": {
+            "description": "ConversationRecord[] from pi-durable: id, parent?, owner?"
+          }
+        },
+        "required": [
+          "conversations"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conversation.create": {
+      "params": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conversation.submit": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Default: the root (orchestrator) conversation"
+          },
+          "text": {
+            "type": "string"
+          },
+          "requestId": {
+            "type": "string",
+            "description": "Idempotency key: a retry with the same id returns the same submission"
+          },
+          "origin": {
+            "type": "object",
+            "properties": {
+              "connector": {
+                "type": "string",
+                "description": "Connector name, matching its `hello` name, e.g. discord"
+              },
+              "channel": {
+                "type": "string",
+                "description": "Connector-specific channel/chat id the reply goes to"
+              },
+              "thread": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string",
+                "description": "Connector-specific id of the message being answered"
+              },
+              "author": {
+                "type": "string",
+                "description": "Human-readable author, shown to the model"
+              }
+            },
+            "required": [
+              "connector",
+              "channel"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "submission": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable SubmissionId"
+          }
+        },
+        "required": [
+          "submission"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conversation.watch": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "watching": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "watching"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conversation.unwatch": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "watching": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "watching"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "notifications": {
+    "conversation.view": {
+      "type": "object",
+      "properties": {
+        "conversation": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "pi-durable ConversationId"
+        },
+        "value": {},
+        "ops": {}
+      },
+      "required": [
+        "conversation"
+      ],
+      "additionalProperties": false
+    },
+    "reply": {
+      "type": "object",
+      "properties": {
+        "origin": {
+          "type": "object",
+          "properties": {
+            "connector": {
+              "type": "string",
+              "description": "Connector name, matching its `hello` name, e.g. discord"
+            },
+            "channel": {
+              "type": "string",
+              "description": "Connector-specific channel/chat id the reply goes to"
+            },
+            "thread": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string",
+              "description": "Connector-specific id of the message being answered"
+            },
+            "author": {
+              "type": "string",
+              "description": "Human-readable author, shown to the model"
+            }
+          },
+          "required": [
+            "connector",
+            "channel"
+          ],
+          "additionalProperties": false
+        },
+        "conversation": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "pi-durable ConversationId"
+        },
+        "submission": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "pi-durable SubmissionId"
+        },
+        "status": {
+          "enum": [
+            "done",
+            "unanswered"
+          ]
+        },
+        "text": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "origin",
+        "conversation",
+        "submission",
+        "status",
+        "text"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

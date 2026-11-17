@@ -1,0 +1,40 @@
+# viz configuration. Copy to ~/.config/viz/config.toml (or set programs.viz.settings in Home Manager).
+# Overrides can go in ~/.config/viz/config.d/*.toml. Reference: docs/config.md.
+#
+# Secrets accept: "inline" | { file = "/run/secrets/x" } | { env = "NAME" }.
+
+[backend]
+# Unix socket for local clients. Default: $XDG_RUNTIME_DIR/viz/backend.sock
+# socket = "/run/user/1000/viz/backend.sock"
+# TCP listener for remote clients (iOS, connectors on other machines). Use a tailnet or LAN address.
+# listen = "100.64.0.1:7420"
+# token = { file = "/run/secrets/viz-token" }
+
+[orchestrator]
+model = { provider = "anthropic", model = "claude-opus-5-5" }
+thinking = "medium"
+# instructions = "Prefer short answers on Discord."
+# cwd = "/home/me"
+
+[subagents]
+model = { provider = "anthropic", model = "claude-sonnet-5-5" }
+
+# External harnesses driven over ACP (planned; see TODO.md).
+# [harnesses.claude]
+# command = "claude-agent-acp"
+# [harnesses.codex]
+# command = "codex-acp"
+
+# How Rust clients reach a remote backend. Unset: the local socket above.
+# [client]
+# url = "http://viz-host.tailnet.ts.net:7420"
+# token = { file = "/run/secrets/viz-token" }
+
+[connectors.discord]
+bot_token = { env = "DISCORD_TOKEN" }
+allowed_users = [123456789012345678]
+
+# [connectors.imessage]
+# server_url = "http://mac.tailnet.ts.net:1234"
+# password = { file = "/run/secrets/bluebubbles" }
+# allowed_handles = ["+15555550123"]
