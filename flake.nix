@@ -205,6 +205,7 @@
               swiftPkgs.swift-format
               swiftPkgs.sourcekit-lsp
               swiftPkgs.xtool
+              pkgs.libimobiledevice # idevicesyslog, idevicedebug, idevicecrashreport, idevicescreenshot
               # nix
               pkgs.nil
               config.treefmt.build.wrapper
@@ -216,6 +217,10 @@
             shellHook = ''
               repo_root=$(git rev-parse --show-toplevel)
               (cd "$repo_root/backend" && bun install --frozen-lockfile --silent)
+              if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
+                && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
+                echo "viz: no Darwin SDK for iOS builds; run 'xtool setup' (see docs/findings/ios-on-linux.md)" >&2
+              fi
             '';
           };
 

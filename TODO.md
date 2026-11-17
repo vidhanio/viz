@@ -43,14 +43,19 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 
 ## Desktop (Rune)
 
-- [ ] Skeleton: sidebar + transcript + input, live view via delta ops (in progress)
+- [x] Skeleton: sidebar + transcript + input, live view via delta ops (headless snapshots verified; live submit untested)
 - [ ] Subagents nested under their tool calls (`details.conversationId`), tool output, diffs, approvals
 - [ ] Settings UI writing `config.d/` drop-ins
 - [ ] Tray/notifications (Rune `dbus` feature), global shortcut to summon
 
 ## iOS
 
-- [ ] `xtool setup` on Linux (Darwin SDK from Xcode .xip), first device build, document the flow
+- [ ] `xtool setup` (Apple ID or App Store Connect key, Xcode 27.1 .xip) → `swift sdk list` shows `darwin`; keep `programs.xtool.sdk.enable` off (its link targets `~/.swiftpm`, xtool reads `$XDG_CONFIG_HOME/swiftpm`)
+- [ ] First USB device build: Developer Mode, trust the profile, record the installed bundle id prefix; document in AGENTS.md
+- [ ] `tailscale serve` HTTPS in front of `[backend].listen` (ATS); or an `Info.plist` ATS exception via `xtool.yml: infoPath`
+- [ ] App icon (`xtool.yml: iconPath`, 1024×1024 PNG)
+- [ ] Release path: paid account + GitHub macOS runner or Xcode Cloud (Linux-only upload conflicts with the Xcode license)
+- [ ] Evaluate isim (kolabs-dev/isim) for simulator runs / rendering `#Preview` on Linux
 - [ ] Watch conversations: Chord delta apply in Swift, transcript rendering, sidebar from `conversations.list`
 - [ ] Pairing (QR from desktop/CLI), token in Keychain instead of `@AppStorage`
 - [ ] Push notifications (needs a relay; out of scope until remote auth exists)

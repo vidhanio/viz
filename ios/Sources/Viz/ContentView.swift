@@ -3,7 +3,9 @@ import SwiftUI
 /// Sidebar of conversations (the orchestrator first) and the selected conversation's chat.
 struct ContentView: View {
   @Environment(Backend.self) private var backend
-  @AppStorage("backendURL") private var backendURL = "http://viz.tailnet.ts.net:7420"
+  // HTTPS: App Transport Security blocks cleartext to non-local hosts. Front the backend with
+  // `tailscale serve` (docs/decisions/0001-remote-transport.md).
+  @AppStorage("backendURL") private var backendURL = "https://viz.tailnet.ts.net"
   @AppStorage("backendToken") private var backendToken = ""
   @State private var draft = ""
   @State private var sent: [String] = []
