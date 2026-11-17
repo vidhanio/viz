@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/vidhanio/viz"
+publish = false
+
+[workspace.dependencies]
+viz-client = { path = "crates/viz-client" }
+viz-config = { path = "crates/viz-config" }
+
+# Rune is unpublished: pin a `dev` revision and replicate its `[patch.crates-io]` below at the same rev.
+rune = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
+
+[workspace.lints.clippy]
+cargo = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+allow_attributes_without_reason = "warn"
+multiple_crate_versions = "allow"
+undocumented_unsafe_blocks = "warn"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unsafe_code = "deny"
+
+# Cargo doesn't inherit `[patch]` from dependencies: mirror Rune's root `Cargo.toml` at the pinned rev.
+# Update every `rev` together with `workspace.dependencies.rune`.
+[patch.crates-io]
+accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
+parley_engine = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
+winit = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }

@@ -1,0 +1,20 @@
+[package]
+name = "viz"
+description = "Command-line client for viz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+toml = "0.9"
+viz-client.workspace = true
+viz-config.workspace = true
+
+[lints]
+workspace = true

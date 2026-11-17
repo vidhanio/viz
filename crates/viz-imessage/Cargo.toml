@@ -1,0 +1,20 @@
+[package]
+name = "viz-imessage"
+description = "iMessage connector for viz (via a BlueBubbles server)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+viz-client.workspace = true
+viz-config.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "viz-config"
+description = "Layered XDG/TOML configuration shared by viz's Rust components"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+toml = "0.9"
+
+[lints]
+workspace = true

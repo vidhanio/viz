@@ -1,0 +1,19 @@
+[package]
+name = "viz-desktop"
+description = "viz desktop app (Rune)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+rune.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
+viz-client.workspace = true
+viz-config.workspace = true
+
+[lints]
+workspace = true
