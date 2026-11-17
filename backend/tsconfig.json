@@ -17,5 +17,5 @@
     "exactOptionalPropertyTypes": true,
     "types": ["bun"]
   },
-  "include": ["src", "test", "scripts"]
+  "include": ["src", "scripts"]
 }

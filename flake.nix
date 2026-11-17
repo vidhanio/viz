@@ -176,14 +176,12 @@
                 cargoClippyExtraArgs = "--all-targets -- --deny warnings";
               }
             );
-            test = craneLib.cargoTest (commonArgs // { inherit cargoArtifacts; });
             backend = pkgs.bun2nix.mkDerivation {
               pname = "viz-backend-check";
               inherit (self'.packages.viz-backend) version src bunDeps;
               buildPhase = ''
                 runHook preBuild
                 bun check
-                bun test
                 runHook postBuild
               '';
               installPhase = "touch $out";

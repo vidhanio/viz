@@ -17,7 +17,7 @@ Clients differ in where they run: the desktop app and most connectors run on the
 
 ## Consequences
 
-- Bun serves both listeners from the same `fetch`/`websocket` handlers (`backend/src/server.ts`), so local and remote behave identically; tests cover both.
+- Bun serves both listeners from the same `fetch`/`websocket` handlers (`backend/src/server.ts`), so local and remote behave identically.
 - WebSocket gives the push channel every UI needs (pi-durable `watch()` frames are small delta ops), and JSON-RPC matches ACP's framing, so tooling and mental model are shared.
 - A single shared token is coarse. t3code's pairing codes, per-client tokens, and scopes are the model for later (`TODO.md`).
 - The iOS app requires `listen` to be configured; it can't use the socket.

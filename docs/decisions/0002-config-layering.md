@@ -10,7 +10,7 @@ viz must be configurable with and without Nix, from one file that connectors can
 
 - Format: TOML. Location: `$VIZ_CONFIG_DIR` or `$XDG_CONFIG_HOME/viz` (`~/.config/viz`).
 - Layers, later wins: `config.toml`, then `config.d/*.toml` in lexical order. Tables merge recursively; other values (including arrays) replace.
-- Both loaders (`crates/viz-config`, `backend/src/config.ts`) implement this independently, with mirrored tests. Each component validates only the sections it owns and ignores the rest.
+- Both loaders (`crates/viz-config`, `backend/src/config.ts`) implement this independently. Each component validates only the sections it owns and ignores the rest.
 - Secrets are `"inline"`, `{ file = "/path" }` (sops-nix, agenix, systemd credentials), or `{ env = "NAME" }`; resolved at use, never copied into the store.
 - Home Manager module: `programs.viz.settings` generates `config.toml`. Default: read-only link. `mutableSettings = true`: merged into a writable `config.toml` with upstream's `mkImpureConfigMerger` (`$dynamic * $static`, declared values win), plus `mkImpureConfigCleanup` when switching back, exactly like upstream's herdr module. `config.d/` is never managed by Home Manager, so hand-written or app-written overrides survive either mode.
 - State goes to `$XDG_STATE_HOME/viz` (`StateDirectory=viz` under systemd), sockets to `$XDG_RUNTIME_DIR/viz`.
@@ -19,5 +19,5 @@ viz must be configurable with and without Nix, from one file that connectors can
 
 - Without Nix: write `~/.config/viz/config.toml` (start from `config.example.toml`).
 - With Nix: declarative by default; local experiments go in `config.d/` without fighting the store link.
-- Two loader implementations must stay in sync; the tests (`backend/test/config.test.ts`, `crates/viz-config` unit tests) pin the shared rules.
+- Two loader implementations must stay in sync: change both in the same commit.
 - `mutableSettings` inherits the merger's limits: no TOML datetimes, comments not preserved, removed declarations linger in the file.
