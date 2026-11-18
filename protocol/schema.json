@@ -82,7 +82,31 @@
         "type": "object",
         "properties": {
           "conversations": {
-            "description": "ConversationRecord[] from pi-durable: id, parent?, owner?"
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "pi-durable ConversationId"
+                },
+                "title": {
+                  "type": "string",
+                  "description": "Set by the backend: fixed for the orchestrator, a subagent's task, a chat's first message; empty until known"
+                },
+                "kind": {
+                  "enum": ["orchestrator", "chat", "subagent"]
+                },
+                "parent": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "For a subagent: the conversation whose tool call owns it"
+                }
+              },
+              "required": ["id", "title", "kind"],
+              "additionalProperties": false
+            }
           }
         },
         "required": ["conversations"],

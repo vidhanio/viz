@@ -9,6 +9,7 @@
  * apps (`client.kind = "app"`) watch whole conversations instead.
  */
 import {
+  arr,
   bool,
   compile,
   int,
@@ -50,7 +51,17 @@ export const Methods = {
   "conversations.list": {
     params: obj({}),
     result: obj({
-      conversations: unknown({ description: "ConversationRecord[] from pi-durable: id, parent?, owner?" }),
+      conversations: arr(
+        obj({
+          id: ConversationId,
+          title: str({
+            description:
+              "Set by the backend: fixed for the orchestrator, a subagent's task, a chat's first message; empty until known",
+          }),
+          kind: oneOf(["orchestrator", "chat", "subagent"]),
+          parent: opt(int({ minimum: 1, description: "For a subagent: the conversation whose tool call owns it" })),
+        }),
+      ),
     }),
   },
   "conversation.create": {

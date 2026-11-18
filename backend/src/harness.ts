@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import type { Context } from "@earendil-works/chord/context";
 import type { WatchHandle } from "@earendil-works/chord/watch";
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai";
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
@@ -21,12 +22,13 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
-import type { LoadedConfig } from "./config.ts";
+import { type LoadedConfig, resolveSecret, stateDir } from "./config.ts";
 import { type MemoryBinding, memoryExtension } from "./memory/extension.ts";
 import { type Compactor, Memory } from "./memory/memory.ts";
 import { MEMORY_PROMPT } from "./memory/prompt.ts";
 import { Sync } from "./memory/sync.ts";
 import { Orchestrator, subagentExtension } from "./orchestrator.ts";
+import { ORCHESTRATOR_TITLE, TitleDoc, titleFrom } from "./titles.ts";
 
 export type VizHarness = {
   readonly harness: Harness;
@@ -46,13 +48,17 @@ export type OpenOptions = {
   readonly models?: MutableModels;
 };
 
-export async function openHarness(
-  { paths, config }: LoadedConfig,
-  options: OpenOptions,
-  context: Context,
-): Promise<VizHarness> {
-  await mkdir(paths.stateDir, { recursive: true, mode: 0o700 });
-  const models = options.models ?? builtinModels();
+export async function openHarness(loaded: LoadedConfig, options: OpenOptions, context: Context): Promise<VizHarness> {
+  const { config } = loaded;
+  const dir = stateDir(loaded);
+  await mkdir(dir, { recursive: true, mode: 0o700 });
+  // `[providers.<id>].api_key` first; pi-ai falls back to each provider's environment variable.
+  const credentials = new InMemoryCredentialStore();
+  for (const [provider, { api_key }] of Object.entries(config.providers ?? {})) {
+    const key = await resolveSecret(api_key);
+    await credentials.modify(provider, async () => ({ type: "api_key", key }));
+  }
+  const models = options.models ?? builtinModels({ credentials });
   const ref = ({ provider, model }: { provider: string; model: string }): ModelRef => ({ provider, modelId: model });
 
   const { orchestrator, memory: memoryConfig } = config;
@@ -78,7 +84,7 @@ export async function openHarness(
     return { ok: true, text: answer.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("") };
   };
 
-  const memory = new Memory(join(paths.stateDir, "memory.sqlite"), compactor);
+  const memory = new Memory(join(dir, "memory.sqlite"), compactor);
   const binding: MemoryBinding = {};
   const Memorize = memoryExtension(memory, binding);
   const Subagent = subagentExtension(ref(config.subagents.model), [Orchestrator, Memorize]);
@@ -90,7 +96,7 @@ export async function openHarness(
   registry.install(Subagent);
 
   const harness = await Harness.open(
-    await openNodeSqliteStorage(join(paths.stateDir, "viz.sqlite")),
+    await openNodeSqliteStorage(join(dir, "viz.sqlite")),
     { models, registry, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? homedir() }) },
     context,
   );
@@ -106,6 +112,10 @@ export async function openHarness(
     },
     context,
   );
+  await harness.commit(async (tx) => {
+    const doc = await tx.doc(TitleDoc, root.id);
+    if (doc.title !== ORCHESTRATOR_TITLE) doc.title = ORCHESTRATOR_TITLE;
+  }, context);
 
   const sync = new Sync(memory, root, context);
   binding.sync = sync;
@@ -121,7 +131,16 @@ export async function openHarness(
     harness,
     root,
     submit: async (target, draft, context) => {
-      if (target.id !== root.id) return target.submit({ ...draft, whenBusy: "followUp" }, context);
+      if (target.id !== root.id) {
+        if (typeof draft.content === "string") {
+          const title = titleFrom(draft.content);
+          await harness.commit(async (tx) => {
+            const doc = await tx.doc(TitleDoc, target.id);
+            if (doc.title === "" && title !== "") doc.title = title;
+          }, context);
+        }
+        return target.submit({ ...draft, whenBusy: "followUp" }, context);
+      }
       // One at a time, so no input starts a turn between the idle check and the reset.
       const turn = lock.then(async () => {
         const live = await harness.snapshot(LiveDoc, root.id, context);

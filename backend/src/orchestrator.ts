@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-durable";
 
 import { TURNS_PROMPT } from "./memory/prompt.ts";
+import { TitleDoc, titleFrom } from "./titles.ts";
 
 export async function answerText(api: ToolExecutionApi, answer: EntryId, context: Context): Promise<string> {
   const entry = await api.commit((tx) => tx.entry(AssistantEntry, answer), context);
@@ -45,6 +46,7 @@ export function subagentExtension(model: ModelRef, rootOnly: readonly Extension[
             const created = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
             // Starts as a copy of the orchestrator's agent; drop what is the orchestrator's own.
             await configure(tx, created.id, { extensions: { remove: [Subagent, ...rootOnly] }, model });
+            (await tx.doc(TitleDoc, created.id)).title = titleFrom(task);
             return created.id;
           }, context);
           await api.details({ conversationId: child }, context);

@@ -2,8 +2,9 @@
  * viz configuration: XDG locations, layered TOML loading, and the backend's sections.
  *
  * Layers (later wins): `$VIZ_CONFIG_DIR/config.toml` (default `$XDG_CONFIG_HOME/viz/config.toml`), then
- * `config.d/*.toml` in lexical order. Tables merge recursively; other values replace. Mirrors
- * `crates/viz-config`; keep the two in sync.
+ * `config.d/*.toml` in lexical order. Tables merge recursively; other values replace. `$VIZ_CONFIG` names one file
+ * that replaces all layers (e.g. the repo's gitignored `viz.local.toml` for development). Mirrors `crates/viz-config`;
+ * keep the two in sync.
  */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -13,9 +14,11 @@ import { compile, map, obj, oneOf, opt, type Static, str, union, arr } from "@ea
 export type Env = Readonly<Record<string, string | undefined>>;
 
 export type Paths = {
+  /** `$VIZ_CONFIG`: the one config file to read instead of the layers. */
+  readonly configFile: string | undefined;
   /** `$VIZ_CONFIG_DIR`, default `$XDG_CONFIG_HOME/viz`. */
   readonly configDir: string;
-  /** `$STATE_DIRECTORY` (systemd `StateDirectory=`), default `$XDG_STATE_HOME/viz`. */
+  /** `$STATE_DIRECTORY` (systemd `StateDirectory=`), default `$XDG_STATE_HOME/viz`; `[backend].state_dir` wins. */
   readonly stateDir: string;
   /** `$XDG_RUNTIME_DIR/viz`, falling back to the state dir. */
   readonly runtimeDir: string;
@@ -31,7 +34,7 @@ export function resolvePaths(env: Env = process.env): Paths {
   const configDir = get("VIZ_CONFIG_DIR") ?? join(xdg("XDG_CONFIG_HOME", ".config"), "viz");
   const stateDir = get("STATE_DIRECTORY") ?? join(xdg("XDG_STATE_HOME", ".local/state"), "viz");
   const runtime = get("XDG_RUNTIME_DIR");
-  return { configDir, stateDir, runtimeDir: runtime ? join(runtime, "viz") : stateDir };
+  return { configFile: get("VIZ_CONFIG"), configDir, stateDir, runtimeDir: runtime ? join(runtime, "viz") : stateDir };
 }
 
 /** A secret inline, from a file (sops-nix, agenix, systemd credentials), or from an environment variable. */
@@ -62,6 +65,7 @@ export const BackendConfig = obj(
         socket: opt(str({ description: "Unix socket path; default $XDG_RUNTIME_DIR/viz/backend.sock" })),
         listen: opt(str({ description: "TCP host:port for remote clients (tailnet/LAN); requires token" })),
         token: opt(Secret),
+        state_dir: opt(str({ description: "Where the databases live; default $XDG_STATE_HOME/viz" })),
       }),
     ),
     orchestrator: obj({
@@ -75,6 +79,11 @@ export const BackendConfig = obj(
       compactor: ModelRef,
       thinking: opt(Thinking),
     }),
+    providers: opt(
+      map(obj({ api_key: Secret }), {
+        description: "Credentials by pi-ai provider id, e.g. [providers.anthropic]; else the provider's env var",
+      }),
+    ),
     harnesses: opt(
       map(
         obj({
@@ -99,13 +108,9 @@ export type LoadedConfig = {
 
 export async function loadConfig(env: Env = process.env): Promise<LoadedConfig> {
   const paths = resolvePaths(env);
-  const layers = [join(paths.configDir, "config.toml")];
-  const dropins = join(paths.configDir, "config.d");
-  try {
-    const names = (await readdir(dropins)).filter((name) => name.endsWith(".toml")).sort();
-    layers.push(...names.map((name) => join(dropins, name)));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  const layers = paths.configFile === undefined ? await configLayers(paths.configDir) : [paths.configFile];
+  if (paths.configFile !== undefined && !(await Bun.file(paths.configFile).exists())) {
+    throw new Error(`$VIZ_CONFIG: no file ${paths.configFile}`);
   }
 
   const doc: Record<string, unknown> = {};
@@ -129,6 +134,22 @@ export async function loadConfig(env: Env = process.env): Promise<LoadedConfig> 
     throw new Error(`invalid config (${loaded.join(", ") || "no files"}):\n${lines}`);
   }
   return { paths, layers: loaded, config: doc as BackendConfig };
+}
+
+async function configLayers(dir: string): Promise<string[]> {
+  const layers = [join(dir, "config.toml")];
+  const dropins = join(dir, "config.d");
+  try {
+    const names = (await readdir(dropins)).filter((name) => name.endsWith(".toml")).sort();
+    layers.push(...names.map((name) => join(dropins, name)));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return layers;
+}
+
+export function stateDir({ paths, config }: LoadedConfig): string {
+  return config.backend?.state_dir ?? paths.stateDir;
 }
 
 function isTable(value: unknown): value is Record<string, unknown> {

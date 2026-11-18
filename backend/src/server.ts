@@ -32,6 +32,7 @@ import {
   PROTOCOL_VERSION,
   type Result,
 } from "./protocol.ts";
+import { TitleDoc } from "./titles.ts";
 
 export type ServeOptions = {
   readonly socket: string;
@@ -108,7 +109,20 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     },
     "conversations.list": async () => {
       const page = await harness.commit((tx) => tx.scanConversations({}, 1000), context);
-      return { conversations: page.items };
+      const conversations = await Promise.all(
+        page.items.map(async (record) => ({
+          id: record.id,
+          title: (await harness.snapshot(TitleDoc, record.id, context))?.title ?? "",
+          kind:
+            record.id === root.id
+              ? ("orchestrator" as const)
+              : record.owner
+                ? ("subagent" as const)
+                : ("chat" as const),
+          ...(record.owner && { parent: record.owner.conversationId }),
+        })),
+      );
+      return { conversations };
     },
     "conversation.create": async () => {
       const created = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
@@ -125,7 +139,8 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
           type: "input",
           content,
           ...(requestId && { requestId }),
-          ...(origin && { entry: { kind: "viz.input", data: { origin } } }),
+          // `text` is what the user wrote, for UIs; the model gets it behind the origin tag.
+          ...(origin && { entry: { kind: "viz.input", data: { origin, text } } }),
         },
         context,
       );

@@ -78,6 +78,32 @@ pub struct Submit {
     pub origin: Option<Origin>,
 }
 
+/// What a conversation is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationKind {
+    /// The orchestrator: the root conversation.
+    Orchestrator,
+    /// A chat started from an app.
+    Chat,
+    /// A subagent, owned by a tool call of `parent`.
+    Subagent,
+}
+
+/// A `conversations.list` item.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ConversationSummary {
+    /// Its id.
+    pub id: ConversationId,
+    /// Set by the backend; empty until known.
+    pub title: String,
+    /// What it is.
+    pub kind: ConversationKind,
+    /// For a subagent: the conversation whose tool call owns it.
+    #[serde(default)]
+    pub parent: Option<ConversationId>,
+}
+
 /// How a submission settled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "lowercase")]

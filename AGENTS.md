@@ -32,6 +32,10 @@ Use the dev shell (`direnv allow`, or `nix develop`); run tools by plain name. I
 - Rune is unpublished and pinned by git rev; when bumping, update `workspace.dependencies.rune` **and** every `[patch.crates-io]` rev in `Cargo.toml` together (see `docs/findings/rune.md`).
 - iOS (details: `docs/findings/ios-on-linux.md`): one-time `xtool setup` (Apple ID or App Store Connect key, then the Xcode .xip; `swift sdk list` must show `darwin`); the shell warns while the SDK is missing. `cd ios && xtool dev` builds, signs and installs on a USB-paired device but doesn't launch it (tap the icon or `xtool launch`; the installed bundle id may be prefixed, e.g. `XTL-….io.vidhan.viz`). No simulator or SwiftUI previews on Linux: test on the device; logs via `idevicesyslog`/`idevicedebug run`. Free accounts re-sign every 7 days; push and TestFlight need a paid account and, for release, a macOS runner. Only `swiftc -typecheck` of non-SwiftUI files works in CI. iOS enforces ATS: reach the backend over HTTPS (`tailscale serve`).
 
+## Local config
+
+For running viz from the repo, put a config in `viz.local.toml` (gitignored, with its state in `.viz/`, also gitignored): `.envrc` exports `VIZ_CONFIG` pointing at it, so the backend, `viz` CLI and desktop app in this shell all use it instead of `~/.config/viz`. It should set `[backend].socket` and `[backend].state_dir` under `.viz/`, `[providers.<id>].api_key`, and the three required models. Then: `bun backend/src/main.ts`, `cargo run -p viz -- send "..."`, `cargo run -p viz-desktop`. Never commit it or print its key.
+
 ## Verification
 
 **No tests.** Don't write, keep, or run tests of any kind (unit, integration, `bun test`, `cargo test`, `#[cfg(test)]`, test fixtures, faux-model harnesses). A test is a second, worse copy of the logic; read the invariants from the code and get it right there. If a change needs explaining, write it into the code's comments or `docs/`.

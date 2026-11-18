@@ -8,9 +8,11 @@
 //! 2. `$VIZ_CONFIG_DIR/config.d/*.toml`, in lexical order: hand-written or
 //!    app-written overrides that survive a Home Manager switch.
 //!
-//! Tables merge recursively; any other value replaces the one below it. The
-//! backend (TypeScript) implements the same layering in
-//! `backend/src/config.ts`; keep the two in sync.
+//! Tables merge recursively; any other value replaces the one below it.
+//! `$VIZ_CONFIG` names one file that replaces all layers (e.g. the repo's
+//! gitignored `viz.local.toml` for development). The backend (TypeScript)
+//! implements the same layering in `backend/src/config.ts`; keep the two in
+//! sync.
 //!
 //! Each component deserializes only the sections it owns. Connectors read
 //! `[connectors.<name>]` through [`Config::connector`] into their own types.
@@ -63,6 +65,8 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Filesystem locations viz uses, following the XDG base directory spec.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
+    /// `$VIZ_CONFIG`: the one config file to read instead of the layers.
+    pub config_override: Option<PathBuf>,
     /// `$VIZ_CONFIG_DIR`, default `$XDG_CONFIG_HOME/viz`.
     pub config_dir: PathBuf,
     /// `$XDG_STATE_HOME/viz`: databases and logs.
@@ -100,16 +104,19 @@ impl Paths {
         let runtime_dir =
             var("XDG_RUNTIME_DIR").map_or_else(|| state_dir.clone(), |dir| dir.join("viz"));
         Ok(Self {
+            config_override: var("VIZ_CONFIG"),
             config_dir,
             state_dir,
             runtime_dir,
         })
     }
 
-    /// The base layer, `config.toml`.
+    /// The base layer: `$VIZ_CONFIG`, else `config.toml`.
     #[must_use]
     pub fn config_file(&self) -> PathBuf {
-        self.config_dir.join("config.toml")
+        self.config_override
+            .clone()
+            .unwrap_or_else(|| self.config_dir.join("config.toml"))
     }
 
     /// The drop-in directory, `config.d`.
@@ -303,6 +310,15 @@ fn section_from<T: DeserializeOwned>(doc: &toml::Table, name: &str) -> Result<T>
 }
 
 fn layers(paths: &Paths) -> Result<Vec<PathBuf>> {
+    if let Some(file) = &paths.config_override {
+        if !file.is_file() {
+            return Err(Error::Read {
+                path: file.clone(),
+                source: io::Error::new(io::ErrorKind::NotFound, "$VIZ_CONFIG names no file"),
+            });
+        }
+        return Ok(vec![file.clone()]);
+    }
     let mut layers = vec![paths.config_file()];
     let dropins = paths.config_dropins();
     match fs::read_dir(&dropins) {
