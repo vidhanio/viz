@@ -76,7 +76,8 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
           { role: "user", content: blocks.map((b) => ({ type: "text", text: b.text })), timestamp: Date.now() },
         ],
       },
-      { signal, ...(reasoning && { reasoning }) },
+      // A stable session: providers that route or cache by session (OpenCode requires one) see one memory.
+      { signal, sessionId: "viz-memory", ...(reasoning && { reasoning }) },
     );
     if (answer.stopReason === "error" || answer.stopReason === "aborted") {
       return { ok: false, error: answer.errorMessage ?? answer.stopReason };
