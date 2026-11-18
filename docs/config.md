@@ -14,12 +14,15 @@ Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Ex
 
 ## `[backend]` (backend, Rust clients)
 
-| Key         | Type          | Default                             |                                                   |
-| ----------- | ------------- | ----------------------------------- | ------------------------------------------------- |
-| `socket`    | path          | `$XDG_RUNTIME_DIR/viz/backend.sock` | Local listener, mode 0600                         |
-| `listen`    | `"host:port"` | unset                               | TCP listener for remote clients; requires `token` |
-| `token`     | Secret        | unset                               | Bearer token for TCP clients                      |
-| `state_dir` | path          | `$XDG_STATE_HOME/viz`               | Backend databases                                 |
+| Key               | Type          | Default                             |                                                           |
+| ----------------- | ------------- | ----------------------------------- | --------------------------------------------------------- |
+| `socket`          | path          | `$XDG_RUNTIME_DIR/viz/backend.sock` | Local listener, mode 0600                                 |
+| `listen`          | `"host:port"` | unset                               | TCP listener for remote clients; requires `token`         |
+| `token`           | Secret        | unset                               | Bearer token for TCP clients                              |
+| `state_dir`       | path          | `$XDG_STATE_HOME/viz`               | Backend databases                                         |
+| `default_harness` | string        | the sole configured harness, if any | Named ACP runner for new app chats and default delegation |
+
+With several `[harnesses.<name>]` entries, set `default_harness` to start new default chats or subagents. Existing chats can keep their bound runner, and an explicit `harness` argument to `subagent` overrides the default. Subagents never run natively. Without any configured harness, the orchestrator still works, but creating an app chat fails and the `subagent` tool is unavailable.
 
 ## `[providers.<id>]` (backend)
 
@@ -36,13 +39,9 @@ Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Ex
 | `instructions` | string                                        | unset                  |
 | `cwd`          | path                                          | `$HOME`                |
 
-Applied to the root conversation on every backend start. There is no default model anywhere: the backend refuses to start until `[orchestrator]`, `[subagents]` and `[memory]` name theirs. Provider credentials come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...; see `docs/findings/pi-durable.md`, Q5); with Home Manager use `programs.viz.environmentFile`.
+Applied to the root conversation on every backend start. `[orchestrator].model` and `[memory].compactor` must be set explicitly. Provider credentials come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...; see `docs/findings/pi-durable.md`, Q5); with Home Manager use `programs.viz.environmentFile`.
 
-## `[subagents]` (backend, required)
-
-| Key     | Type                  | Default  |
-| ------- | --------------------- | -------- |
-| `model` | `{ provider, model }` | required |
+When upgrading, remove the old `[subagents].model` setting and configure ACP runners instead. Legacy native app chats keep their visible transcript, but their next input starts an ACP session without transferring their native history. If you use Home Manager's `mutableSettings`, remove the old setting from the writable TOML as well as from `programs.viz.settings`.
 
 ## `[memory]` (backend, required)
 
@@ -55,9 +54,16 @@ The orchestrator's uniichat memory (`docs/architecture.md`, "Memory").
 
 The compactor writes every summary line, so pick a cheap, fast model (uniichat uses Haiku with high thinking). A turn waits until every message before it is summarized; a compactor that keeps failing (bad credentials, unknown model) is retried every 60 s and stalls turns, with each failure logged by `viz-backend`.
 
-## `[harnesses.<name>]` (backend, planned)
+## `[harnesses.<name>]` (backend, optional)
 
-ACP agents viz may drive: `command` (string), `args` (string array), `env` (table). Parsed and validated now; not used yet.
+Defines a named ACP runner for app chats and the `subagent` tool. A configured harness runs under the backend's OS account. Permission policy only covers requests the ACP harness sends to viz; it is not a sandbox.
+
+| Key           | Type                   | Default                                                              |
+| ------------- | ---------------------- | -------------------------------------------------------------------- |
+| `command`     | string                 | Required; executable on `PATH` or absolute path                      |
+| `args`        | array of strings       | `[]`                                                                 |
+| `env`         | table of Secret values | `{}`; provider keys are not automatically inherited from the backend |
+| `permissions` | `reject` or `allow`    | `reject`; applies to ACP permission requests                         |
 
 ## `[client]` (Rust clients)
 
@@ -91,9 +97,16 @@ ACP agents viz may drive: `command` (string), `args` (string array), `env` (tabl
     environmentFile = config.sops.templates."viz.env".path; # ANTHROPIC_API_KEY=...
     settings = {
       orchestrator.model = { provider = "anthropic"; model = "claude-opus-5-5"; };
-      subagents.model = { provider = "anthropic"; model = "claude-sonnet-5-5"; };
+      harnesses.claude = {
+        command = "claude-agent-acp";
+        env.ANTHROPIC_API_KEY.env = "ANTHROPIC_API_KEY";
+      };
       memory.compactor = { provider = "anthropic"; model = "claude-haiku-5-5"; };
-      backend = { listen = "100.64.0.1:7420"; token.file = config.sops.secrets."viz/token".path; };
+      backend = {
+        listen = "100.64.0.1:7420";
+        token.file = config.sops.secrets."viz/token".path;
+        default_harness = "claude";
+      };
       connectors.discord = {
         bot_token.file = config.sops.secrets."viz/discord".path;
         allowed_users = [ 123456789012345678 ];

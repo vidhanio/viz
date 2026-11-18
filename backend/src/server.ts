@@ -19,6 +19,7 @@ import {
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Server, ServerWebSocket } from "bun";
 
+import { TurnEntry } from "./agents/model.ts";
 import type { VizHarness } from "./harness.ts";
 import {
   ErrorCode,
@@ -88,9 +89,14 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     const settled = await handle!.wait(context);
     let text: string | null = null;
     if (settled.status === "done" && settled.type === "input") {
-      const entry = await harness.commit((tx) => tx.entry(AssistantEntry, settled.answer), context);
-      const message = entry?.model?.[0] as AssistantMessage | undefined;
-      text = message?.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("") ?? null;
+      const answer = settled.answer;
+      text = await harness.commit(async (tx) => {
+        const external = await tx.entry(TurnEntry, answer);
+        if (external !== undefined) return external.data.answer ?? null;
+        const entry = await tx.entry(AssistantEntry, answer);
+        const message = entry?.model?.[0] as AssistantMessage | undefined;
+        return message?.content.flatMap((c) => (c.type === "text" ? [c.text] : [])).join("") ?? null;
+      }, context);
     }
     // TODO(durable-outbox): replies to disconnected connectors are dropped; see TODO.md.
     for (const ws of connectors.get(origin.connector) ?? []) {
@@ -136,11 +142,10 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       const submission = await viz.submit(
         target,
         {
-          type: "input",
           content,
-          ...(requestId && { requestId }),
-          // `text` is what the user wrote, for UIs; the model gets it behind the origin tag.
-          ...(origin && { entry: { kind: "viz.input", data: { origin, text } } }),
+          text,
+          ...(requestId !== undefined && { requestId }),
+          ...(origin && { origin }),
         },
         context,
       );

@@ -10,10 +10,11 @@ import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   type Conversation,
+  configure,
   type ConversationView,
   createRegistry,
   Harness,
-  type InputSubmissionDraft,
+  ROOT_CONVERSATION_ID,
   LiveDoc,
   type ModelRef,
   type Submission,
@@ -22,13 +23,16 @@ import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
+import { type ChatInput, chatScheduler } from "./agents/chat.ts";
+import { Runners } from "./agents/runners.ts";
+import { AgentSessions } from "./agents/sessions.ts";
 import { type LoadedConfig, resolveSecret, stateDir } from "./config.ts";
 import { type MemoryBinding, memoryExtension } from "./memory/extension.ts";
 import { type Compactor, Memory } from "./memory/memory.ts";
 import { MEMORY_PROMPT } from "./memory/prompt.ts";
 import { Sync } from "./memory/sync.ts";
 import { Orchestrator, subagentExtension } from "./orchestrator.ts";
-import { ORCHESTRATOR_TITLE, TitleDoc, titleFrom } from "./titles.ts";
+import { ORCHESTRATOR_TITLE, TitleDoc } from "./titles.ts";
 
 export type VizHarness = {
   readonly harness: Harness;
@@ -39,8 +43,8 @@ export type VizHarness = {
    * (steered in between tool calls); one while it is idle starts a new turn from a fresh context, whose past reaches
    * the model only through the memory's view. Other conversations queue inputs as follow-ups.
    */
-  submit(target: Conversation, draft: InputSubmissionDraft, context: Context): Promise<Submission>;
-  /** A new ownerless chat: the orchestrator's model, thinking and cwd, with tools and subagents but no memory. */
+  submit(target: Conversation, input: ChatInput, context: Context): Promise<Submission>;
+  /** A new ownerless chat bound to the default ACP harness. */
   createChat(context: Context): Promise<Conversation>;
   close(context: Context): Promise<void>;
 };
@@ -48,10 +52,12 @@ export type VizHarness = {
 export type OpenOptions = {
   /** Model access; default every built-in pi-ai provider, authenticated from the environment. */
   readonly models?: MutableModels;
+  readonly version: string;
 };
 
 export async function openHarness(loaded: LoadedConfig, options: OpenOptions, context: Context): Promise<VizHarness> {
   const { config } = loaded;
+  const runners = new Runners(config);
   const dir = stateDir(loaded);
   await mkdir(dir, { recursive: true, mode: 0o700 });
   // `[providers.<id>].api_key` first; pi-ai falls back to each provider's environment variable.
@@ -90,17 +96,38 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   const memory = new Memory(join(dir, "memory.sqlite"), compactor);
   const binding: MemoryBinding = {};
   const Memorize = memoryExtension(memory, binding);
-  const Subagent = subagentExtension(ref(config.subagents.model), [Orchestrator, Memorize]);
+  const cwd = orchestrator.cwd ?? homedir();
+  const sessions = new AgentSessions(options.version);
+  const chats = chatScheduler(runners, sessions, cwd);
+  const Subagent = subagentExtension(runners, sessions);
 
   const registry = createRegistry();
   registry.install(CodingTools);
   registry.install(Memorize);
   registry.install(Orchestrator);
   registry.install(Subagent);
+  registry.install(chats.extension);
 
   const harness = await Harness.open(
     await openNodeSqliteStorage(join(dir, "viz.sqlite")),
-    { models, registry, env: ({ cwd }) => new NodeExecutionEnv({ cwd: cwd ?? homedir() }) },
+    {
+      models,
+      registry,
+      env: (target) =>
+        target.conversationId === ROOT_CONVERSATION_ID ? new NodeExecutionEnv({ cwd: target.cwd ?? cwd }) : undefined,
+      conversationCreated: async (tx, { id }) => {
+        if (id !== ROOT_CONVERSATION_ID) {
+          // pi-durable task-owned children otherwise inherit the root's native agent.
+          await configure(tx, id, {
+            model: null,
+            extensions: null,
+            instructions: null,
+            tools: null,
+            thinkingLevel: null,
+          });
+        }
+      },
+    },
     context,
   );
   const root = await harness.root(context);
@@ -110,7 +137,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       model: ref(orchestrator.model),
       thinkingLevel: orchestrator.thinking ?? null,
       instructions: orchestrator.instructions ?? null,
-      cwd: orchestrator.cwd ?? homedir(),
+      cwd,
       extensions: [CodingTools, Memorize, Orchestrator, Subagent],
     },
     context,
@@ -120,6 +147,14 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     if (doc.title !== ORCHESTRATOR_TITLE) doc.title = ORCHESTRATOR_TITLE;
   }, context);
 
+  // A previous version could leave native non-root tasks in storage. Mark them before starting the scheduler.
+  const { tasks } = await harness.inspect(context);
+  for (const { record } of tasks) {
+    if (record.conversationId !== root.id && record.kind.startsWith("pi.")) {
+      await harness.abortTask(record.id, context);
+    }
+  }
+
   const sync = new Sync(memory, root, context);
   binding.sync = sync;
   binding.root = root.id;
@@ -127,28 +162,30 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   // Every commit to the orchestrator feeds the memory as it comes, so its summaries build ahead of the next turn.
   const watch: WatchHandle<ConversationView> = await root.watch(context);
   watch.start(async () => void sync.run().catch((error: unknown) => console.error("memory sync:", error)));
+  if (runners.names.length !== 0) sessions.start();
   harness.resume();
 
   let lock = Promise.resolve();
   return {
     harness,
     root,
-    submit: async (target, draft, context) => {
-      if (target.id !== root.id) {
-        if (typeof draft.content === "string") {
-          const title = titleFrom(draft.content);
-          await harness.commit(async (tx) => {
-            const doc = await tx.doc(TitleDoc, target.id);
-            if (doc.title === "" && title !== "") doc.title = title;
-          }, context);
-        }
-        return target.submit({ ...draft, whenBusy: "followUp" }, context);
-      }
+    submit: async (target, { text, content, requestId, origin }, context) => {
+      const input = { content, text, ...(requestId !== undefined && { requestId }), ...(origin && { origin }) };
+      if (target.id !== root.id) return chats.submit(harness, target.id, input, context);
       // One at a time, so no input starts a turn between the idle check and the reset.
       const turn = lock.then(async () => {
         const live = await harness.snapshot(LiveDoc, root.id, context);
         if (live?.run === undefined) await root.reset(undefined, context);
-        return root.submit({ ...draft, whenBusy: "steer" }, context);
+        return root.submit(
+          {
+            type: "input",
+            content,
+            whenBusy: "steer",
+            ...(requestId !== undefined && { requestId }),
+            ...(origin && { entry: { kind: "viz.input", data: { origin, text } } }),
+          },
+          context,
+        );
       });
       lock = turn.then(
         () => {},
@@ -156,23 +193,12 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       );
       return turn;
     },
-    createChat: (context) =>
-      harness.createConversation(
-        {
-          ownership: { kind: "ownerless" },
-          agent: {
-            model: ref(orchestrator.model),
-            thinkingLevel: orchestrator.thinking ?? null,
-            cwd: orchestrator.cwd ?? homedir(),
-            extensions: [CodingTools, Subagent],
-          },
-        },
-        context,
-      ),
+    createChat: (context) => chats.create(harness, context),
     close: async (context) => {
       await watch.stop();
       memory.stop();
       await harness.close(context);
+      sessions.close();
       memory.close();
     },
   };

@@ -57,6 +57,19 @@ const ModelRef = obj({
 
 const Thinking = oneOf(["off", "minimal", "low", "medium", "high", "xhigh"]);
 
+/** An ACP agent program (`docs/findings/acp.md`), e.g. `claude-agent-acp`, `codex-acp`, `opencode acp`. */
+const Harness = obj({
+  command: str({ description: "Executable, looked up on PATH when not absolute" }),
+  args: opt(arr(str())),
+  env: opt(map(Secret, { description: "Extra environment; values are secrets, e.g. API keys" })),
+  permissions: opt(
+    oneOf(["allow", "reject"], {
+      description: "How viz answers the agent's permission requests; default reject",
+    }),
+  ),
+});
+export type Harness = Static<typeof Harness>;
+
 /** Sections the backend owns. Other sections (`[client]`, `[connectors.*]`) belong to the Rust components. */
 export const BackendConfig = obj(
   {
@@ -66,6 +79,9 @@ export const BackendConfig = obj(
         listen: opt(str({ description: "TCP host:port for remote clients (tailnet/LAN); requires token" })),
         token: opt(Secret),
         state_dir: opt(str({ description: "Where the databases live; default $XDG_STATE_HOME/viz" })),
+        default_harness: opt(
+          str({ description: "Default ACP runner for chats and delegations; implicit if only one is configured" }),
+        ),
       }),
     ),
     orchestrator: obj({
@@ -74,7 +90,6 @@ export const BackendConfig = obj(
       instructions: opt(str({ description: "Extra instructions appended to the orchestrator's system prompt" })),
       cwd: opt(str({ description: "Working directory for the orchestrator's tools; default $HOME" })),
     }),
-    subagents: obj({ model: ModelRef }),
     memory: obj({
       compactor: ModelRef,
       thinking: opt(Thinking),
@@ -85,13 +100,9 @@ export const BackendConfig = obj(
       }),
     ),
     harnesses: opt(
-      map(
-        obj({
-          command: str({ description: "ACP agent executable, e.g. claude-agent-acp, codex-acp, opencode" }),
-          args: opt(arr(str())),
-          env: opt(map(str())),
-        }),
-      ),
+      map(Harness, {
+        description: "Named ACP programs for chats and subagents",
+      }),
     ),
   },
   { open: true },

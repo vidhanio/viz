@@ -9,6 +9,9 @@
 # TCP listener for remote clients (iOS, connectors on other machines). Use a tailnet or LAN address.
 # listen = "100.64.0.1:7420"
 # token = { file = "/run/secrets/viz-token" }
+# Required for new default chats and delegations when several ACP runners are configured.
+# A single configured runner is implicit. With none, only the orchestrator is available.
+# default_harness = "claude"
 
 [orchestrator]
 model = { provider = "anthropic", model = "claude-opus-5-5" }
@@ -16,19 +19,20 @@ thinking = "medium"
 # instructions = "Prefer short answers on Discord."
 # cwd = "/home/me"
 
-[subagents]
-model = { provider = "anthropic", model = "claude-sonnet-5-5" }
-
 # The orchestrator's memory: every message is summarized into a line by this model.
 [memory]
 compactor = { provider = "anthropic", model = "claude-haiku-5-5" }
 thinking = "high"
 
-# External harnesses driven over ACP (planned; see TODO.md).
+# Optional ACP runners for app chats and subagents. Only configure programs you trust.
 # [harnesses.claude]
 # command = "claude-agent-acp"
+# env.ANTHROPIC_API_KEY = { env = "ANTHROPIC_API_KEY" }
 # [harnesses.codex]
 # command = "codex-acp"
+# [harnesses.omp]
+# command = "omp"
+# args = ["acp"]
 
 # How Rust clients reach a remote backend. Unset: the local socket above.
 # [client]

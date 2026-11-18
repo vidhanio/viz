@@ -19,8 +19,12 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 - [x] **uniichat memory** for the orchestrator (`backend/src/memory/`, `docs/architecture.md` "Memory"): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
 - [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
 - [ ] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): list/read/search conversations, send to a conversation (`queue`/`steer`), background subagents that report back as messages, abort, schedule tasks (pi-durable timers).
-- [ ] **ACP harness manager** (`docs/findings/acp.md`): spawn `[harnesses.<name>]` with `@agentclientprotocol/sdk` (already a dependency), one ACP session per viz conversation; map `session/update` to custom entries so UIs render it; route `session/request_permission` to approvals in the UI; `session/cancel` on abort; `session/load`/`resume` after restart. Tools: start/send/status/cancel a harness session. Capability flags per harness, never name checks.
-- [ ] **MCP endpoint** for spawned harnesses (`mcpServers` in `session/new`): expose viz's orchestrator tools to them, deferred listing via a `tool_search` tool (t3code pattern).
+- [x] **ACP delegation** (`docs/findings/acp.md`): run a named harness via `subagent`, store its child transcript, map updates for the desktop, and cancel with the owning tool.
+- [x] **Scoped MCP progress** for ACP delegations: loopback HTTP or stdio bridge, per-turn token, no access to unrelated conversations.
+- [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
+- [ ] **Long-lived ACP subagents**: explicit start/send/status/cancel controls for multistep delegation.
+- [ ] **ACP approvals**: route ACP permission requests to approvals in the UI.
+- [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
 - [ ] Conversation metadata document (title, origin, pinned/archived/unread) for the sidebar; title generation.
 - [ ] Approvals: `beforeTool` hook + memo for dangerous tools, surfaced as protocol requests.
 - [ ] Credentials: persist pi-ai `CredentialStore` in the state dir; OAuth login (Claude Pro/Max, ChatGPT, Copilot) driven from a UI.

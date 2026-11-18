@@ -86,17 +86,20 @@ in
             model = { provider = "anthropic"; model = "claude-opus-5-5"; };
             thinking = "high";
           };
-          subagents.model = { provider = "anthropic"; model = "claude-sonnet-5-5"; };
           memory.compactor = { provider = "anthropic"; model = "claude-haiku-5-5"; };
           backend = {
             listen = "100.100.1.2:7420";
             token.file = config.sops.secrets."viz/token".path;
+            default_harness = "claude";
           };
           connectors.discord = {
             bot_token.file = config.sops.secrets."viz/discord".path;
             allowed_users = [ 123456789012345678 ];
           };
-          harnesses.claude.command = "claude-agent-acp";
+          harnesses.claude = {
+            command = "claude-agent-acp";
+            env.ANTHROPIC_API_KEY.env = "ANTHROPIC_API_KEY";
+          };
         }
       '';
       description = ''

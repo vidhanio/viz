@@ -58,6 +58,7 @@ pub struct Desktop {
     pub selected: Option<ConversationId>,
     /// Its transcript and live state, once its view arrives.
     pub thread: Thread,
+    thread_ready: bool,
     /// Timeline rows the user opened (tool calls, thinking), by key.
     pub expanded: HashSet<String>,
     /// The composer's text.
@@ -82,6 +83,7 @@ impl Desktop {
             conversations: Vec::new(),
             selected: None,
             thread: Thread::default(),
+            thread_ready: false,
             expanded: HashSet::new(),
             draft,
             sidebar: PaneState::new(248.0).range(200.0, 400.0),
@@ -106,6 +108,7 @@ impl Desktop {
         if self.selected != Some(conversation) {
             self.selected = Some(conversation);
             self.thread = Thread::default();
+            self.thread_ready = false;
             self.expanded.clear();
         }
     }
@@ -114,6 +117,7 @@ impl Desktop {
     pub fn set_thread(&mut self, conversation: ConversationId, thread: Thread) {
         if self.selected == Some(conversation) {
             self.thread = thread;
+            self.thread_ready = true;
         }
     }
 
@@ -141,13 +145,21 @@ impl Desktop {
         self.send(Command::Reconnect, tx);
     }
 
+    /// Whether the selected conversation is known to accept input.
+    pub const fn can_compose(&self) -> bool {
+        self.thread_ready && !self.thread.read_only
+    }
+
     /// Whether the composer has something to send and somewhere to send it.
     pub fn can_send(&self) -> bool {
-        self.connected() && self.selected.is_some() && !self.draft.text.trim().is_empty()
+        self.connected() && self.can_compose() && !self.draft.text.trim().is_empty()
     }
 
     /// Sends the composer's text to the selected conversation.
     pub fn submit(&mut self, tx: &mut Tx) {
+        if !self.can_compose() {
+            return;
+        }
         let text = self.draft.text.trim().to_owned();
         if text.is_empty() {
             return;

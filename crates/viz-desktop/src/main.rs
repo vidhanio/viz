@@ -35,8 +35,12 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .h_full()
         .min_h(0.0)
         .child(el().key("header-rule").w_full().h(1.0).fill(t.hairline))
-        .child(timeline::timeline(s, t))
-        .child(composer::composer(s, t));
+        .child(timeline::timeline(s, t));
+    let main = if s.can_compose() {
+        main.child(composer::composer(s, t))
+    } else {
+        main
+    };
     // The kit's shell, flat: no inset frame, the main pane square against
     // the sidebar, which sits on the deeper backdrop.
     let split = SplitView::new(main)

@@ -4,14 +4,19 @@ import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import pkg from "../package.json" with { type: "json" };
 import { backendSocket, loadConfig, resolveSecret } from "./config.ts";
 import { openHarness } from "./harness.ts";
+import { runBridge } from "./mcp/bridge.ts";
 import { serve } from "./server.ts";
+
+if (Bun.argv[2] === "mcp-bridge" || (Bun.main.startsWith("/$bunfs/") && Bun.argv[1] === "mcp-bridge")) {
+  await runBridge();
+}
 
 const context = BACKGROUND_CONTEXT;
 const loaded = await loadConfig();
 const { backend } = loaded.config;
 console.log(`viz-backend ${pkg.version}: config ${loaded.layers.join(", ") || "(none)"}`);
 
-const viz = await openHarness(loaded, {}, context);
+const viz = await openHarness(loaded, { version: pkg.version }, context);
 const server = await serve(viz, {
   socket: backendSocket(loaded),
   ...(backend?.listen && { listen: backend.listen }),

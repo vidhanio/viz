@@ -1,6 +1,6 @@
 # AGENTS.md
 
-viz is an all-in-one personal agent and meta-harness. One **orchestrator** conversation with unbounded history (pi-durable root conversation + compaction) receives everything: messages from connectors (Discord, iMessage, ...) and from full UIs (desktop, iOS). It delegates work to subagent conversations and, via ACP, to other harnesses (Claude Code, Codex, OpenCode, pi, ...).
+viz is an all-in-one personal agent and meta-harness. The **orchestrator** is the only conversation that runs viz's native agent (pi-durable root with unbounded history and compaction). Connectors send to it by default. App chats and all delegations use external harnesses over ACP; pi-durable stores their transcripts and schedules work without running their models.
 
 Read `docs/architecture.md` before changing anything structural. `TODO.md` is the roadmap; `docs/` holds everything else (see "Where things go").
 
@@ -34,7 +34,9 @@ Use the dev shell (`direnv allow`, or `nix develop`); run tools by plain name. I
 
 ## Local config
 
-For running viz from the repo, put a config in `viz.local.toml` (gitignored, with its state in `.viz/`, also gitignored): `.envrc` exports `VIZ_CONFIG` pointing at it, so the backend, `viz` CLI and desktop app in this shell all use it instead of `~/.config/viz`. It should set `[backend].socket` and `[backend].state_dir` under `.viz/`, `[providers.<id>].api_key`, and the three required models. Then: `bun backend/src/main.ts`, `cargo run -p viz -- send "..."`, `cargo run -p viz-desktop`. Never commit it or print its key.
+Use gitignored `viz.local.toml` and `.viz/` for local development. `.envrc` sets `VIZ_CONFIG` for the backend, CLI, and desktop. Set `[backend].socket` and `[backend].state_dir` under `.viz/`, `[providers.<id>].api_key`, `[orchestrator].model`, and `[memory].compactor`. Start with `bun backend/src/main.ts`, `cargo run -p viz -- send "..."`, and `cargo run -p viz-desktop`. Never commit the local config or print its keys.
+
+For app chats and delegation, configure a real ACP executable under `[harnesses.<name>]` (for example `command = "omp"`, `args = ["acp"]`). With several configured runners, set `[backend].default_harness`; with only one, it is implicit. Configure the runner's credentials separately; only explicitly configured `[harnesses.<name>].env` credentials are passed from viz. Exercise ACP changes with a real runner and isolated `.viz/` state, without replacing an active backend or touching its SQLite files.
 
 ## Verification
 
@@ -55,7 +57,7 @@ After changing `backend/src/protocol.ts`: `cd backend && bun run schema`, then u
 - Config: one TOML document from `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml` (later wins, tables merge). Both loaders (`crates/viz-config`, `backend/src/config.ts`) implement the same layering and XDG rules; change them together. Each component parses only its own sections. Secrets are `"inline" | { file = "..." } | { env = "..." }`. Reference: `docs/config.md`.
 - State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); sockets in `$XDG_RUNTIME_DIR/viz`. Only `viz-backend` writes `viz.sqlite` (pi-durable is single-writer).
 - pi-durable extensions and tools are identified by name in storage: never rename an installed extension/tool/task without a migration.
-- Commit with lowercase Conventional Commit subjects; only validated changes.
+- Commit often, as soon as a coherent change passes verification. Each commit must stand on its own: keep an API or config change with its callers, generated artifacts, and relevant docs; split independent work. Use lowercase Conventional Commit subjects. Do not include unrelated work or secrets.
 
 ## Where things go
 

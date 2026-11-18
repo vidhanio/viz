@@ -1,6 +1,6 @@
 # Architecture
 
-Current state as of the scaffold (2026-11-17). Plans live in `TODO.md`; reasons in `docs/decisions/`.
+Current architecture. Plans live in `TODO.md`; reasons in `docs/decisions/`.
 
 ```mermaid
 flowchart LR
@@ -16,24 +16,42 @@ flowchart LR
   subgraph backend[viz-backend · Bun]
     server[server.ts<br/>JSON-RPC over WebSocket]
     harness[pi-durable Harness]
+    acp[ACP client]
     db[(viz.sqlite<br/>$XDG_STATE_HOME/viz)]
   end
-  harnesses[ACP harnesses<br/>claude-agent-acp, codex-acp, opencode, pi-acp]
+  harnesses[Configured ACP harnesses]
 
   desktop & cli & discord & imessage -- unix socket --> server
   ios -- TCP + token over tailnet --> server
   server --> harness --> db
-  harness -. planned .-> harnesses
+  server --> acp
+  harness --> acp
+  acp -- ACP over stdio --> harnesses
+  harnesses -- scoped MCP progress --> acp
 ```
 
 ## Backend (`backend/`)
 
 `viz-backend` is the only process that owns state. It opens a pi-durable `Harness` over SQLite (`openNodeSqliteStorage`, which runs on Bun's `node:sqlite`) at `$STATE_DIRECTORY` or `$XDG_STATE_HOME/viz/viz.sqlite`. pi-durable is single-writer: other processes never open the database; they talk to the backend.
 
-- **Orchestrator**: pi-durable's reserved root conversation (`harness.root()`), with the `CodingTools`, `viz.memory`, `viz.orchestrator` (turns prompt) and `viz.subagent` extensions; model, thinking level, instructions, cwd and extensions are re-applied from config on every start. Its history is unbounded through its memory (below).
-- **Subagents**: the `subagent` tool creates a conversation owned by the tool call (`ownership: { kind: "task" }`), so aborting the call aborts it, a crash resumes it, and UIs can attach to it through the call's `details.conversationId`. Runs on `[subagents].model`, without the orchestrator's memory and prompt.
-- **App chats**: `conversation.create` makes an ownerless conversation, the sidebar's other entries: the orchestrator's model, thinking level and cwd, with coding tools and subagents but without its memory or prompt.
-- **Durability**: every model request and tool call is a checkpointed pi-durable task. `requestId` on `conversation.submit` makes admission idempotent (connectors use the platform message id).
+- **Orchestrator**: pi-durable's reserved root conversation (`harness.root()`) and viz's only native model loop. It uses the `CodingTools`, `viz.memory`, `viz.orchestrator` (turns prompt) and `viz.subagent` extensions. Model, thinking level, instructions, cwd and extensions are re-applied from config on every start. Its history is unbounded through its memory (below).
+- **Durability**: the orchestrator's model requests and tool calls are checkpointed pi-durable tasks. `requestId` on `conversation.submit` makes admission idempotent (connectors use the platform message id).
+
+### ACP app chats
+
+`conversation.create` makes an ownerless conversation for an app chat. The backend binds the chat to an ACP runner and retains its subprocess and session across turns. After a backend restart, it reconnects to the same session using ACP `session/resume` or `session/load`. If it cannot restore the session, the turn fails instead of silently starting a fresh chat.
+
+One durable worker drains each chat's inputs in order. The backend stores the runner's session ID before sending its first prompt and records progress in that chat's transcript. An interrupted prompt is never sent twice.
+
+Legacy native app chats keep their visible transcript. Their next input starts an ACP session; their old native history is not sent to the new runner.
+
+### ACP delegation
+
+The `subagent` tool creates a task-owned conversation; UIs can attach through `details.conversationId`. The calling conversation supplies the working directory. Each delegation runs one turn in its own ACP process and session. The child is a read-only transcript of text, reasoning, tool status, plans, and progress. The subprocess gets only a scoped `report_progress` tool over loopback HTTP MCP (a local stdio bridge for harnesses without HTTP capability). Its token is revoked when the turn ends.
+
+Cancellation sends `session/cancel` and closes the process. An interrupted external prompt is not resent after restart: ACP has no idempotency key for prompts, so replaying could repeat side effects. A committed outcome is reused when pi-durable replays the parent tool.
+
+Both app chats and delegation use `[backend].default_harness` unless the chat is already bound to a runner or the delegation names another configured harness. With exactly one configured harness it is the implicit default. With several and no explicit default, existing chats can still use their bound runner and delegations can name one; starting a new default chat or subagent requires a default. With none configured, the orchestrator still works, but app chat creation fails and `subagent` is unavailable.
 
 ## Memory (`backend/src/memory/`)
 
@@ -79,4 +97,4 @@ One TOML document, layered from `config.toml` + `config.d/*.toml` in `$XDG_CONFI
 
 - **uniichat** (`docs/findings/uniichat.md`): the single never-ending chat, its summary-tree memory with `zoom` (above), and every window being a live view of server-owned state.
 - **t3code** (`docs/findings/t3code.md`): the contract-only protocol module, per-thread snapshot + delta subscriptions, idempotent commands, token-authenticated remote access over tailnet, capability-driven harness adapters, and MCP as the tool surface for spawned harnesses.
-- **ACP** (`docs/findings/acp.md`): the planned way viz drives other harnesses (viz is the ACP client; each external session maps to a viz conversation).
+- **ACP** (`docs/findings/acp.md`): viz is an ACP client for app chats and external delegations.

@@ -20,6 +20,8 @@ const OUTPUT_CHARS: usize = 6_000;
 /// The conversation's transcript window, live state and settings.
 #[derive(Debug, Clone, Default)]
 pub struct Thread {
+    /// Whether this conversation is owned by a task, not an app chat.
+    pub read_only: bool,
     /// Timeline items in transcript order.
     pub items: Vec<Item>,
     /// The window starts after the transcript's first entry.
@@ -125,7 +127,7 @@ pub struct Tool {
 /// `pi.live`, as the window shows it.
 #[derive(Debug, Clone, Default)]
 pub struct Live {
-    /// A run is in progress (`run` present).
+    /// A native run or ACP turn is in progress.
     pub busy: bool,
     /// The in-flight answer (`generation.message`), parsed like a committed
     /// one.
@@ -172,24 +174,33 @@ impl Thread {
             items: Vec::new(),
             calls: HashMap::new(),
         };
+        let mut acp_busy = false;
         for entry in array(view.get("entries")) {
+            match str_at(entry, "kind") {
+                Some("viz.agent.prompt") => acp_busy = true,
+                Some("viz.agent.turn") => acp_busy = false,
+                _ => {}
+            }
             reader.entry(entry);
         }
         reader.live_tools(slots);
-        let busy = live.is_some_and(|live| live.get("run").is_some());
+        let native_busy = live.is_some_and(|live| live.get("run").is_some());
         let mut items = reader.items;
         for item in &mut items {
             if let Item::Tool(tool) = item
-                && !busy
+                && !native_busy
                 && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
             {
                 tool.status = ToolStatus::Abandoned;
             }
         }
+        let mut live = live.map_or_default(|live| Live::read(live, native_busy));
+        live.busy |= acp_busy;
         Self {
+            read_only: view.pointer("/conversation/owner").is_some(),
             items,
             earlier: view.get("before").is_some(),
-            live: live.map_or_default(|live| Live::read(live, busy)),
+            live,
             agent: view.pointer("/docs/pi.agent").map_or_default(Agent::read),
             usage: view.pointer("/docs/pi.usage").map(Usage::read),
             queued: array(view.pointer("/docs/pi.inbox/items"))
@@ -231,7 +242,7 @@ impl Reader {
                 key: format!("e{id}"),
                 label: Some("Earlier context summarized"),
             }),
-            "pi.user" | "viz.input" => {
+            "pi.user" | "viz.input" | "viz.agent.prompt" => {
                 // A connector's input reaches the model with a routing prefix;
                 // `data.text` is what I actually wrote.
                 let raw = entry
@@ -271,6 +282,90 @@ impl Reader {
             "pi.tool-result" => {
                 for message in messages {
                     self.result(message);
+                }
+            }
+            kind if kind.starts_with("viz.agent.") => self.acp_entry(kind, &id, entry),
+            _ => {}
+        }
+    }
+
+    /// Reads display-only ACP updates without treating them as native model
+    /// messages.
+    fn acp_entry(&mut self, kind: &str, id: &str, entry: &Value) {
+        match kind {
+            "viz.agent.text" | "viz.agent.thought" => {
+                let Some(text) = entry.pointer("/data/text").and_then(Value::as_str) else {
+                    return;
+                };
+                match (kind, self.items.last_mut()) {
+                    ("viz.agent.text", Some(Item::Text { text: previous, .. }))
+                    | ("viz.agent.thought", Some(Item::Thinking { text: previous, .. })) => {
+                        previous.push_str(text);
+                    }
+                    ("viz.agent.text", _) => self.items.push(Item::Text {
+                        key: format!("e{id}"),
+                        text: text.to_owned(),
+                    }),
+                    _ => self.items.push(Item::Thinking {
+                        key: format!("e{id}"),
+                        text: text.to_owned(),
+                        duration_ms: None,
+                    }),
+                }
+            }
+            "viz.agent.tool" => {
+                let Some(data) = entry.get("data") else {
+                    return;
+                };
+                let title = str_at(data, "title").unwrap_or("Tool");
+                let status = match str_at(data, "status") {
+                    Some("completed") => ToolStatus::Done,
+                    Some("failed") => ToolStatus::Failed,
+                    _ => ToolStatus::Abandoned,
+                };
+                self.items.push(Item::Tool(Tool {
+                    key: format!("e{id}"),
+                    call_id: str_at(data, "id").unwrap_or_default().to_owned(),
+                    name: str_at(data, "kind").unwrap_or("tool").to_owned(),
+                    summary: first_line(title, SUMMARY_CHARS),
+                    arguments: String::new(),
+                    status,
+                    output: String::new(),
+                    duration_ms: None,
+                    child: None,
+                }));
+            }
+            "viz.agent.progress" | "viz.agent.turn" | "viz.agent.plan" => {
+                let Some(data) = entry.get("data") else {
+                    return;
+                };
+                let text = match kind {
+                    "viz.agent.progress" => str_at(data, "text").map(str::to_owned),
+                    "viz.agent.turn" => str_at(data, "error").map(str::to_owned).or_else(|| {
+                        str_at(data, "stopReason")
+                            .filter(|reason| *reason != "end_turn")
+                            .map(|reason| format!("ACP turn ended: {}", reason.replace('_', " ")))
+                    }),
+                    _ => {
+                        let plan = array(data.get("entries"))
+                            .iter()
+                            .filter_map(|item| {
+                                Some(format!(
+                                    "[{}] {}",
+                                    str_at(item, "status")?,
+                                    str_at(item, "content")?
+                                ))
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        (!plan.is_empty()).then_some(plan)
+                    }
+                };
+                if let Some(text) = text {
+                    self.items.push(Item::Notice {
+                        key: format!("e{id}"),
+                        text,
+                    });
                 }
             }
             _ => {}
