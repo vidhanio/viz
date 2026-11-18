@@ -8,15 +8,13 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-futures-util = { version = "0.3", default-features = false, features = [
-  "sink",
-] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tokio = { version = "1", features = ["macros", "net", "rt", "sync"] }
-tokio-tungstenite = "0.28"
-tracing = "0.1"
+futures-util = { workspace = true, features = ["sink"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync"] }
+tokio-tungstenite.workspace = true
+tracing.workspace = true
 viz-config.workspace = true
 
 [lints]

@@ -54,6 +54,7 @@ After changing `backend/src/protocol.ts`: `cd backend && bun run schema`, then u
 
 ## Conventions
 
+- Cargo: declare all direct dependencies under `[workspace.dependencies]` in the root `Cargo.toml`. Members inherit them with `dep.workspace = true` or `{ workspace = true, features = [...] }` for crate-specific features.
 - Config: one TOML document from `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml` (later wins, tables merge). Both loaders (`crates/viz-config`, `backend/src/config.ts`) implement the same layering and XDG rules; change them together. Each component parses only its own sections. Secrets are `"inline" | { file = "..." } | { env = "..." }`. Reference: `docs/config.md`.
 - State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); sockets in `$XDG_RUNTIME_DIR/viz`. Only `viz-backend` writes `viz.sqlite` (pi-durable is single-writer).
 - pi-durable extensions and tools are identified by name in storage: never rename an installed extension/tool/task without a migration.
