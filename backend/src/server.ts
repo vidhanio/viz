@@ -125,7 +125,7 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       return { conversations };
     },
     "conversation.create": async () => {
-      const created = await harness.createConversation({ ownership: { kind: "ownerless" } }, context);
+      const created = await viz.createChat(context);
       return { conversation: created.id };
     },
     "conversation.submit": async (_ws, { conversation: id, text, requestId, origin }) => {

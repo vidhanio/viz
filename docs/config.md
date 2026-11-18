@@ -2,11 +2,11 @@
 
 Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Example: `config.example.toml`.
 
-| Location         | Default                                                  | Override                     |
-| ---------------- | -------------------------------------------------------- | ---------------------------- |
+| Location         | Default                                                  | Override                                                 |
+| ---------------- | -------------------------------------------------------- | -------------------------------------------------------- |
 | Config           | `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml`   | `$VIZ_CONFIG_DIR`; `$VIZ_CONFIG` (one file, no drop-ins) |
-| State (database) | `$XDG_STATE_HOME/viz/{viz,memory}.sqlite`                | `$STATE_DIRECTORY` (systemd); `[backend].state_dir` |
-| Socket           | `$XDG_RUNTIME_DIR/viz/backend.sock` (state dir if unset) | `[backend].socket`           |
+| State (database) | `$XDG_STATE_HOME/viz/{viz,memory}.sqlite`                | `$STATE_DIRECTORY` (systemd); `[backend].state_dir`      |
+| Socket           | `$XDG_RUNTIME_DIR/viz/backend.sock` (state dir if unset) | `[backend].socket`                                       |
 
 `viz config` prints the resolved locations and the merged document.
 
@@ -14,17 +14,17 @@ Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Ex
 
 ## `[backend]` (backend, Rust clients)
 
-| Key      | Type          | Default                             |                                                   |
-| -------- | ------------- | ----------------------------------- | ------------------------------------------------- |
-| `socket` | path          | `$XDG_RUNTIME_DIR/viz/backend.sock` | Local listener, mode 0600                         |
-| `listen` | `"host:port"` | unset                               | TCP listener for remote clients; requires `token` |
-| `token`  | Secret        | unset                               | Bearer token for TCP clients                      |
-| `state_dir` | path       | `$XDG_STATE_HOME/viz`               | Backend databases                                 |
+| Key         | Type          | Default                             |                                                   |
+| ----------- | ------------- | ----------------------------------- | ------------------------------------------------- |
+| `socket`    | path          | `$XDG_RUNTIME_DIR/viz/backend.sock` | Local listener, mode 0600                         |
+| `listen`    | `"host:port"` | unset                               | TCP listener for remote clients; requires `token` |
+| `token`     | Secret        | unset                               | Bearer token for TCP clients                      |
+| `state_dir` | path          | `$XDG_STATE_HOME/viz`               | Backend databases                                 |
 
 ## `[providers.<id>]` (backend)
 
-| Key       | Type   |                                                                                               |
-| --------- | ------ | --------------------------------------------------------------------------------------------- |
+| Key       | Type   |                                                                                                |
+| --------- | ------ | ---------------------------------------------------------------------------------------------- |
 | `api_key` | Secret | Key for pi-ai provider `<id>` (e.g. `anthropic`, `opencode-go`); unset: the provider's env var |
 
 ## `[orchestrator]` (backend, required)

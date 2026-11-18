@@ -32,7 +32,7 @@ flowchart LR
 
 - **Orchestrator**: pi-durable's reserved root conversation (`harness.root()`), with the `CodingTools`, `viz.memory`, `viz.orchestrator` (turns prompt) and `viz.subagent` extensions; model, thinking level, instructions, cwd and extensions are re-applied from config on every start. Its history is unbounded through its memory (below).
 - **Subagents**: the `subagent` tool creates a conversation owned by the tool call (`ownership: { kind: "task" }`), so aborting the call aborts it, a crash resumes it, and UIs can attach to it through the call's `details.conversationId`. Runs on `[subagents].model`, without the orchestrator's memory and prompt.
-- **App chats**: `conversation.create` makes an ownerless conversation, the sidebar's other entries.
+- **App chats**: `conversation.create` makes an ownerless conversation, the sidebar's other entries: the orchestrator's model, thinking level and cwd, with coding tools and subagents but without its memory or prompt.
 - **Durability**: every model request and tool call is a checkpointed pi-durable task. `requestId` on `conversation.submit` makes admission idempotent (connectors use the platform message id).
 
 ## Memory (`backend/src/memory/`)

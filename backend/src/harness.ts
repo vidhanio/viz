@@ -40,6 +40,8 @@ export type VizHarness = {
    * the model only through the memory's view. Other conversations queue inputs as follow-ups.
    */
   submit(target: Conversation, draft: InputSubmissionDraft, context: Context): Promise<Submission>;
+  /** A new ownerless chat: the orchestrator's model, thinking and cwd, with tools and subagents but no memory. */
+  createChat(context: Context): Promise<Conversation>;
   close(context: Context): Promise<void>;
 };
 
@@ -154,6 +156,19 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       );
       return turn;
     },
+    createChat: (context) =>
+      harness.createConversation(
+        {
+          ownership: { kind: "ownerless" },
+          agent: {
+            model: ref(orchestrator.model),
+            thinkingLevel: orchestrator.thinking ?? null,
+            cwd: orchestrator.cwd ?? homedir(),
+            extensions: [CodingTools, Subagent],
+          },
+        },
+        context,
+      ),
     close: async (context) => {
       await watch.stop();
       memory.stop();
