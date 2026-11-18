@@ -2,7 +2,7 @@
 //! (retrying while the backend is down), watches the selected conversation, and
 //! pushes state into the UI.
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use rune::AppHandle;
 use serde::Deserialize;
@@ -14,7 +14,10 @@ use viz_client::{
 };
 use viz_config::Config;
 
-use crate::{Desktop, Status, transcript};
+use crate::{
+    app::{Desktop, Listed, Status},
+    thread::Thread,
+};
 
 /// How long to wait between connection attempts.
 const RETRY: Duration = Duration::from_secs(3);
@@ -33,6 +36,8 @@ pub enum Command {
         /// The input text.
         text: String,
     },
+    /// While disconnected: try again now.
+    Reconnect,
 }
 
 /// Starts the connection thread. `first` hears once the first connection
@@ -63,8 +68,8 @@ fn set_status(ui: &AppHandle<Desktop>, status: Status) {
     ui.update(move |s, _| s.status = status);
 }
 
-fn notify(ui: &AppHandle<Desktop>, notice: String) {
-    ui.update(move |s, _| s.notice = Some(notice));
+fn toast(ui: &AppHandle<Desktop>, title: &'static str, detail: String) {
+    ui.update(move |s, tx| s.toast(tx, title, Some(detail)));
 }
 
 /// Tells `main` the first connection attempt's outcome is in the UI's queue.
@@ -89,11 +94,15 @@ async fn run(
             set_status(ui, Status::Error(e.to_string()));
             signal(&mut first);
             while let Some(command) = commands.recv().await {
-                offline(ui, &command, &mut None);
+                if !offline(ui, &command, &mut None) {
+                    set_status(ui, Status::Error(e.to_string()));
+                }
             }
             return;
         }
     };
+    let shown = endpoint.to_string();
+    ui.update(move |s, _| s.endpoint = Some(shown));
     // Survives reconnects, so the window keeps its conversation.
     let mut selected = None;
     loop {
@@ -105,7 +114,10 @@ async fn run(
             Ok(connection) => {
                 match session(ui, connection, &mut commands, &mut selected, &mut first).await {
                     Ended::Quit => return,
-                    Ended::Lost(e) => e.to_string(),
+                    Ended::Lost(e) => {
+                        toast(ui, "Lost the connection to the backend", e.to_string());
+                        e.to_string()
+                    }
                 }
             }
             Err(e) => e.to_string(),
@@ -118,7 +130,9 @@ async fn run(
             tokio::select! {
                 () = &mut retry => break,
                 command = commands.recv() => match command {
-                    Some(command) => offline(ui, &command, &mut selected),
+                    Some(command) => if !offline(ui, &command, &mut selected) {
+                        break;
+                    },
                     None => return,
                 },
             }
@@ -126,14 +140,22 @@ async fn run(
     }
 }
 
-/// Handles a command while disconnected.
-fn offline(ui: &AppHandle<Desktop>, command: &Command, selected: &mut Option<ConversationId>) {
+/// Handles a command while disconnected; false to try connecting now.
+fn offline(
+    ui: &AppHandle<Desktop>,
+    command: &Command,
+    selected: &mut Option<ConversationId>,
+) -> bool {
     match command {
         &Command::Select(conversation) => *selected = Some(conversation),
-        Command::Create | Command::Submit { .. } => {
-            notify(ui, "Not connected to the backend".into());
-        }
+        Command::Create | Command::Submit { .. } => toast(
+            ui,
+            "Not connected",
+            "Start the backend or check [client].url in the config.".into(),
+        ),
+        Command::Reconnect => return false,
     }
+    true
 }
 
 /// Why a session ended.
@@ -165,13 +187,13 @@ async fn session(
         root: hello.root,
         watched,
         view: None,
+        listed: HashSet::new(),
     };
     let (version, root) = (hello.version, hello.root);
     ui.update(move |s, _| {
         s.status = Status::Connected { version };
         s.root = Some(root);
         s.show(watched);
-        s.notice = None;
     });
     let started = async {
         session.refresh_list().await?;
@@ -195,7 +217,7 @@ async fn session(
         match result {
             Ok(()) => {}
             Err(Error::Closed) => return Ended::Lost(Error::Closed),
-            Err(e) => notify(ui, e.to_string()),
+            Err(e) => toast(ui, "Request failed", e.to_string()),
         }
     }
 }
@@ -208,6 +230,8 @@ struct Session<'a> {
     watched: ConversationId,
     /// Its latest view, once the first value arrives.
     view: Option<Value>,
+    /// Conversations the sidebar lists, to notice new subagents.
+    listed: HashSet<ConversationId>,
 }
 
 impl Session<'_> {
@@ -230,7 +254,10 @@ impl Session<'_> {
                     self.client.call("conversation.create", json!({})).await?;
                 self.refresh_list().await?;
                 *selected = Some(conversation);
-                self.ui.update(move |s, _| s.show(conversation));
+                self.ui.update(move |s, _| {
+                    s.show(conversation);
+                    s.draft.focused = true;
+                });
                 self.switch(conversation).await
             }
             Command::Submit { conversation, text } => {
@@ -241,6 +268,8 @@ impl Session<'_> {
                 };
                 self.client.submit(&submit).await.map(drop)
             }
+            // Already connected.
+            Command::Reconnect => Ok(()),
         }
     }
 
@@ -262,7 +291,7 @@ impl Session<'_> {
                 if let Err(e) = delta::apply(view, &ops) {
                     // The replica is unusable: start over from a fresh full
                     // value.
-                    notify(self.ui, format!("view out of sync ({e}); reloading"));
+                    toast(self.ui, "View out of sync; reloading", e.to_string());
                     self.view = None;
                     self.unwatch().await?;
                     return self.watch().await;
@@ -275,12 +304,20 @@ impl Session<'_> {
         let Some(view) = &self.view else {
             return Ok(());
         };
-        let lines = transcript::lines(view);
-        self.ui.update(move |s, _| {
-            if s.selected == Some(conversation) {
-                s.transcript = lines;
-            }
-        });
+        let thread = Thread::from_view(view);
+        let unlisted: Vec<_> = thread
+            .children()
+            .map(|(child, _)| child)
+            .filter(|child| !self.listed.contains(child))
+            .collect();
+        self.ui
+            .update(move |s, _| s.set_thread(conversation, thread));
+        if !unlisted.is_empty() {
+            self.refresh_list().await?;
+            // Asked once: a child the list still lacks doesn't ask again on
+            // every revision.
+            self.listed.extend(unlisted);
+        }
         Ok(())
     }
 
@@ -314,25 +351,36 @@ impl Session<'_> {
             .map(drop)
     }
 
-    /// Lists conversations other than the root into the sidebar.
-    async fn refresh_list(&self) -> viz_client::Result<()> {
+    /// Lists conversations other than the root into the sidebar, newest
+    /// first.
+    async fn refresh_list(&mut self) -> viz_client::Result<()> {
         #[derive(Deserialize)]
-        struct Listed {
+        struct Listing {
             conversations: Vec<Record>,
         }
         #[derive(Deserialize)]
         struct Record {
             id: ConversationId,
+            owner: Option<Owner>,
         }
-        let Listed { conversations } = self.client.call("conversations.list", json!({})).await?;
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Owner {
+            conversation_id: ConversationId,
+        }
+        let Listing { conversations } = self.client.call("conversations.list", json!({})).await?;
         let root = self.root;
-        let mut ids: Vec<_> = conversations
+        let mut listed: Vec<_> = conversations
             .into_iter()
-            .map(|record| record.id)
-            .filter(|&id| id != root)
+            .filter(|record| record.id != root)
+            .map(|record| Listed {
+                id: record.id,
+                owner: record.owner.map(|owner| owner.conversation_id),
+            })
             .collect();
-        ids.sort_unstable();
-        self.ui.update(move |s, _| s.conversations = ids);
+        listed.sort_unstable_by_key(|listed| std::cmp::Reverse(listed.id));
+        self.listed = listed.iter().map(|listed| listed.id).collect();
+        self.ui.update(move |s, _| s.conversations = listed);
         Ok(())
     }
 }

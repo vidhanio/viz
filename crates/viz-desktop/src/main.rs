@@ -1,312 +1,100 @@
-//! viz desktop app: conversations in a sidebar, the selected one's transcript,
-//! and a message field. `cargo run -p viz-desktop` opens the window; `-- --snap
-//! out.png` renders it headless.
+//! viz desktop app: conversations in a sidebar, the selected one's timeline,
+//! and a composer, in `OpenCode`'s theme through rune-kit. `cargo run -p
+//! viz-desktop` opens the window; `-- --snap out.png` renders it headless.
 
+mod app;
 mod backend;
-mod transcript;
+mod composer;
+mod header;
+mod sidebar;
+mod theme;
+mod thread;
+mod timeline;
 
 use std::time::Duration;
 
-use rune::{
-    App, AppSpec, Cx, El, ScrollSpec, TextEdit, col, el, row, text, text_input,
-    tok::{self, Theme, radius, space, type_},
+use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col};
+use rune_kit::{
+    Kit, Toast, ToastRegion,
+    shell::{self, SidebarToggle, SplitView},
 };
+use rune_theme_opencode::icons;
 use tokio::sync::mpsc;
-use viz_client::protocol::ConversationId;
 
-use crate::{
-    backend::Command,
-    transcript::{Line, Role},
-};
+use crate::app::Desktop;
 
 /// Longest a headless run waits for the first connection attempt before
 /// rendering.
 const HEADLESS_CONNECT_WAIT: Duration = Duration::from_secs(5);
 
-/// The backend connection, as the status line shows it.
-#[derive(Debug)]
-pub(crate) enum Status {
-    /// Trying to connect.
-    Connecting,
-    /// Connected to a backend of this version.
-    Connected {
-        /// Backend version.
-        version: String,
-    },
-    /// Not connected, and why.
-    Error(String),
-}
-
-/// The window's state. The backend thread fills it in through the app handle.
-pub(crate) struct Desktop {
-    commands: mpsc::UnboundedSender<Command>,
-    status: Status,
-    /// The orchestrator's conversation, once connected.
-    root: Option<ConversationId>,
-    /// Every other conversation.
-    conversations: Vec<ConversationId>,
-    selected: Option<ConversationId>,
-    transcript: Vec<Line>,
-    /// The latest failed request, shown under the message field.
-    notice: Option<String>,
-    draft: TextEdit,
-}
-
-impl Desktop {
-    fn new(commands: mpsc::UnboundedSender<Command>) -> Self {
-        Self {
-            commands,
-            status: Status::Connecting,
-            root: None,
-            conversations: Vec::new(),
-            selected: None,
-            transcript: Vec::new(),
-            notice: None,
-            draft: TextEdit::new(""),
-        }
-    }
-
-    /// Shows `conversation`, empty until its view arrives.
-    fn show(&mut self, conversation: ConversationId) {
-        if self.selected != Some(conversation) {
-            self.selected = Some(conversation);
-            self.transcript.clear();
-        }
-    }
-
-    fn send(&mut self, command: Command) {
-        if self.commands.send(command).is_err() {
-            self.notice = Some("The connection thread stopped".into());
-        }
-    }
-
-    fn select(&mut self, conversation: ConversationId) {
-        self.show(conversation);
-        self.send(Command::Select(conversation));
-    }
-
-    fn submit(&mut self) {
-        let text = self.draft.text.trim().to_owned();
-        if text.is_empty() {
-            return;
-        }
-        let Some(conversation) = self.selected else {
-            self.notice = Some("Not connected to the backend".into());
-            return;
-        };
-        self.notice = None;
-        self.draft.clear();
-        self.send(Command::Submit { conversation, text });
-    }
-
-    fn title(&self, conversation: ConversationId) -> String {
-        if self.root == Some(conversation) {
-            "Orchestrator".into()
-        } else {
-            format!("Conversation {conversation}")
-        }
-    }
-}
-
-/// A state with no connection thread behind it, for `AppSpec::init`; `main`
-/// replaces it.
-fn detached() -> Desktop {
-    Desktop::new(mpsc::unbounded_channel().0)
-}
-
 fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
-    let t = tok::theme(cx.system_dark());
-    row()
-        .key("window")
-        .w_full()
-        .h_full()
-        .fill(t.bg)
-        .child(sidebar(s, t))
-        .child(main_pane(s, t))
-}
-
-fn sidebar(s: &Desktop, t: Theme) -> El {
-    let conversations = s.root.into_iter().chain(s.conversations.iter().copied());
-    let list = col().key("conversations").gap(2.0).children(
-        conversations.map(|id| conversation_row(id, s.title(id), s.selected == Some(id), t)),
-    );
-    col()
-        .key("sidebar")
-        .w(220.0)
-        .h_full()
-        .min_h(0.0)
-        .padding(space::S3)
-        .gap(space::S2)
-        .fill(t.card)
-        .border_sides([0.0, 1.0, 0.0, 0.0], t.separator)
-        .child(
-            row()
-                .key("new-chat")
-                .role("button")
-                .label("New chat")
-                .h(28.0)
-                .px(space::S3)
-                .center()
-                .radius(radius::MD)
-                .fill(t.control_off)
-                .hover(t.hover)
-                .on_press(|s: &mut Desktop| s.send(Command::Create))
-                .child(text("New chat").font(type_::LABEL).color(t.text)),
-        )
-        .child(
-            list.scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .grow(1.0)
-            .min_h(0.0),
-        )
-        .child(status_line(&s.status, t))
-}
-
-fn conversation_row(id: ConversationId, title: String, selected: bool, t: Theme) -> El {
-    let row = row()
-        .key(format!("conversation-{id}"))
-        .role("button")
-        .label(title.clone())
-        .h(28.0)
-        .px(space::S2)
-        .center_y()
-        .radius(radius::SM)
-        .hover(t.hover)
-        .on_press(move |s: &mut Desktop| s.select(id))
-        .child(text(title).font(type_::BODY).color(t.text).truncate());
-    if selected {
-        row.fill(t.control_off)
-    } else {
-        row
-    }
-}
-
-fn status_line(status: &Status, t: Theme) -> El {
-    let (label, color, detail) = match status {
-        Status::Connecting => ("Connecting…".to_owned(), t.text_secondary, None),
-        Status::Connected { version } => {
-            (format!("Connected · v{version}"), t.text_secondary, None)
-        }
-        Status::Error(message) => (
-            "Disconnected".to_owned(),
-            rune::oklch(0.65, 0.2, 25.0),
-            Some(message),
-        ),
-    };
-    let status = col()
-        .key("status")
-        .w_full()
-        .gap(space::S1)
-        .child(text(label).key("state").font(type_::LABEL).color(color));
-    match detail {
-        Some(detail) => status.child(
-            text(detail.clone())
-                .key("detail")
-                .font(type_::LABEL)
-                .color(t.text_secondary)
-                .wrap_anywhere()
-                .w_full(),
-        ),
-        None => status,
-    }
-}
-
-fn main_pane(s: &Desktop, t: Theme) -> El {
-    let title = s
-        .selected
-        .map_or_else(|| "Not connected".to_owned(), |id| s.title(id));
-    let lines = col()
-        .key("transcript")
-        .w_full()
-        .gap(space::S3)
-        .padding(space::S6)
-        .children(s.transcript.iter().map(|line| transcript_line(line, t)));
-    let field = el()
-        .key("draft-field")
-        .w_full()
-        .min_h(36.0)
-        .px(space::S3)
-        .py(space::S2)
-        .radius(radius::MD)
-        .fill(t.card)
-        .border(1.0, t.card_border)
-        .center_y()
-        .child(
-            text_input(&s.draft, type_::BODY)
-                .key("draft")
-                .label("Message")
-                .w_full()
-                .color(t.text)
-                .placeholder("Message", t.text_secondary)
-                .on_edit(|s: &mut Desktop| &mut s.draft)
-                .on_submit(|s: &mut Desktop, _| s.submit()),
-        );
-    let mut composer = col()
-        .key("composer")
-        .w_full()
-        .px(space::S6)
-        .pb(space::S6)
-        .gap(space::S2)
-        .child(field);
-    if let Some(notice) = &s.notice {
-        composer = composer.child(
-            text(notice.clone())
-                .key("notice")
-                .font(type_::LABEL)
-                .color(t.text_secondary)
-                .wrap(),
-        );
-    }
-    col()
+    let k = theme::kit(cx.system_dark());
+    let main = col()
         .key("main")
-        .grow(1.0)
+        .w_full()
         .h_full()
-        .min_w(0.0)
         .min_h(0.0)
-        .child(
-            row()
-                .key("header")
-                .w_full()
-                .h(44.0)
-                .px(space::S6)
-                .center_y()
-                .border_sides([0.0, 0.0, 1.0, 0.0], t.separator)
-                .child(text(title).key("title").font(type_::TITLE).color(t.text)),
+        .child(timeline::timeline(s, k))
+        .child(composer::composer(s, k));
+    let split = SplitView::new(main)
+        .sidebar(
+            &s.sidebar,
+            |s: &mut Desktop| &mut s.sidebar,
+            sidebar::sidebar(s, k),
         )
-        .child(
-            lines
-                .scroll(ScrollSpec { stick_bottom: true })
-                .grow(1.0)
-                .min_h(0.0),
-        )
-        .child(composer)
+        .toolbar(header::toolbar(s, k))
+        .titlebar_inset(cx.titlebar_inset())
+        .frame_inset(8.0)
+        .toolbar_in_panel()
+        .sidebar_toggle(SidebarToggle::new().in_header())
+        .reduced_motion(cx.is_reduced_motion())
+        .build(k);
+    rune_kit::root(split, toasts(s, k))
 }
 
-fn transcript_line(line: &Line, t: Theme) -> El {
-    let body = text(line.text.clone()).font(type_::BODY).w_full();
-    match line.role {
-        Role::User => col()
-            .key(line.key.clone())
-            .w_full()
-            .gap(space::S1)
-            .child(text("You").font(type_::LABEL).color(t.text_secondary))
-            .child(body.color(t.text).wrap()),
-        Role::Assistant => body.key(line.key.clone()).color(t.text).wrap(),
-        Role::Tool => text(format!("→ {}", line.text))
-            .key(line.key.clone())
-            .font(type_::LABEL)
-            .color(t.text_secondary)
-            .w_full()
-            .truncate(),
+/// The toast stack, when there's anything in it.
+fn toasts(s: &Desktop, k: &Kit) -> Option<El> {
+    if s.toasts.is_empty() {
+        return None;
     }
+    let region = s.toasts.iter().fold(ToastRegion::new(), |region, toast| {
+        let id = toast.id;
+        let mut built = Toast::new(format!("toast-{id}"), toast.title.clone())
+            .icon(k, &icons::CIRCLE_EXCLAMATION)
+            .on_close(move |s: &mut Desktop| s.dismiss(id));
+        if let Some(detail) = &toast.detail {
+            built = built.description(detail.clone());
+        }
+        region.toast(built.build(k))
+    });
+    Some(region.build(k))
+}
+
+fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    if shell::is_sidebar_toggle(ev) {
+        s.sidebar.toggle();
+        return true;
+    }
+    if ev.is_command('n') && !ev.mods.shift {
+        s.create(tx);
+        return true;
+    }
+    false
+}
+
+fn poll(s: &mut Desktop, clock: f64, _: &mut Tx) -> bool {
+    s.expire(clock)
 }
 
 fn main() {
     let (commands, receiver) = mpsc::unbounded_channel();
     let app = App::new(AppSpec {
-        min_size: Some((640.0, 420.0)),
-        ..AppSpec::new("viz", (960.0, 640.0), detached, view)
+        min_size: Some((720.0, 480.0)),
+        fonts: theme::FONTS,
+        families: theme::FAMILIES,
+        on_key: Some(on_key),
+        poll: Some(poll),
+        ..AppSpec::new("viz", (1120.0, 740.0), Desktop::detached, view)
     })
     .init(move || Desktop::new(commands));
     let (first, connected) = std::sync::mpsc::channel();

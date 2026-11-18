@@ -44,8 +44,9 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 
 ## Desktop (Rune)
 
-- [x] Skeleton: sidebar + transcript + input, live view via delta ops (headless snapshots verified; live submit untested)
-- [ ] Subagents nested under their tool calls (`details.conversationId`), tool output, diffs, approvals
+- [x] Skeleton: sidebar + transcript + input, live view via delta ops
+- [x] Redesign on rune-kit + OpenCode theme (light/dark): split shell with collapsible sidebar (Orchestrator, Chats, Subagents, busy spinners, connection footer), thread header (model, thinking, usage), Markdown timeline with grouped collapsible tool rows, subagent rows that open the child, turn dividers, streaming answer, auto-growing composer, toasts
+- [ ] Desktop follow-ups: Stop button (needs a protocol `conversation.abort`), busy state for unwatched conversations (needs per-conversation status in `conversations.list` or a task-graph watch), diffs for edit/write tool results, approvals, conversation titles from the backend
 - [ ] Settings UI writing `config.d/` drop-ins
 - [ ] Tray/notifications (Rune `dbus` feature), global shortcut to summon
 
