@@ -1,47 +1,91 @@
-//! The timeline: user bubbles, assistant prose as Markdown, thinking and tool
-//! calls as collapsible work-log rows, turn dividers, and the live answer as it
-//! streams in. It sticks to the bottom while new content arrives.
+//! The timeline: one centred reading column of full-width rows. My messages
+//! sit on a faint accent wash behind the tide line; the assistant's answers
+//! are plain Markdown; tool calls, subagent calls and reasoning are compact
+//! rows that stack tightly between them; turns are set apart by space and a
+//! short rule. The live answer streams in with a caret. It sticks to the
+//! bottom while new content arrives.
+//!
+//! rune-kit has no compact log row, so the message and tool rows are drawn
+//! here; prose is the kit's `Markdown`, reasoning the kit's `Collapsible`,
+//! and the busy marks its `Spinner`.
 
-use rune::{Align, El, Icon, ScrollSpec, Tx, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, Collapsible, ControlSize, Kit, Markdown, Spinner};
-use rune_theme_opencode::icons;
+use rune::{Align, El, LoopSpec, ScrollSpec, Tx, col, el, icon, row, text};
+use rune_kit::{Button, ButtonVariant, Collapsible, ControlSize, Markdown, Spinner};
 
 use crate::{
     app::{Desktop, Status},
-    theme,
-    thread::{Item, Origin, Tool, ToolStatus, User},
+    theme::{self, Theme},
+    thread::{Item, Tool, ToolStatus, User},
 };
 
-/// The widest a user bubble gets.
-const BUBBLE_WIDTH: f32 = 560.0;
 /// The tallest an expanded tool block gets before it scrolls.
 const BLOCK_HEIGHT: f32 = 280.0;
+/// A tool row's height.
+const TOOL_ROW: f32 = 26.0;
+
+/// What a row is, for the space above it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Mine,
+    Prose,
+    Activity,
+    Turn,
+    Notice,
+}
+
+/// Points above a row of kind `next` that follows one of kind `prev`.
+const fn space(prev: Kind, next: Kind) -> f32 {
+    match (prev, next) {
+        (Kind::Turn, _) | (_, Kind::Turn) => 0.0,
+        (Kind::Activity, Kind::Activity) => 1.0,
+        (Kind::Mine, _) => 20.0,
+        (_, Kind::Mine) => 28.0,
+        _ => 14.0,
+    }
+}
+
+/// Rows in order, each spaced from the one before by its kind.
+struct Rows {
+    rows: Vec<El>,
+    last: Option<Kind>,
+}
+
+impl Rows {
+    fn push(&mut self, kind: Kind, el: El) {
+        let gap = self.last.map_or(0.0, |prev| space(prev, kind));
+        self.rows.push(el.mt(gap));
+        self.last = Some(kind);
+    }
+}
 
 /// The scrolling timeline, or what to show in its place.
-pub fn timeline(s: &Desktop, k: &Kit) -> El {
+pub fn timeline(s: &Desktop, t: &Theme) -> El {
     let thread = &s.thread;
     let empty = thread.items.is_empty() && !thread.live.busy && thread.live.failure.is_none();
     let body = if empty {
-        placeholder(s, k)
+        empty_state(s, t)
     } else {
-        let mut rows = Vec::new();
+        let mut rows = Rows {
+            rows: Vec::new(),
+            last: None,
+        };
         if thread.earlier {
             rows.push(
+                Kind::Notice,
                 text("Earlier messages aren't shown")
                     .key("earlier")
-                    .font(k.ty.small)
-                    .color(k.c.text_faint)
+                    .font(t.small)
+                    .color(t.faint)
                     .self_center(),
             );
         }
-        items(s, &thread.items, false, &mut rows, k);
-        live(s, &mut rows, k);
+        items(s, &thread.items, false, &mut rows, t);
+        live(s, &mut rows, t);
         col()
             .key("items")
             .w_full()
             .max_w(theme::READING_WIDTH)
-            .gap(16.0)
-            .children(rows)
+            .children(rows.rows)
     };
     col()
         .key("timeline")
@@ -56,266 +100,253 @@ pub fn timeline(s: &Desktop, k: &Kit) -> El {
                 .w_full()
                 .min_h(0.0)
                 .px(24.0)
-                .pt(20.0)
-                .pb(28.0)
+                .pt(28.0)
+                .pb(24.0)
                 .items_center()
                 .child(body),
         )
 }
 
-/// Builds `items` into `rows`, gathering consecutive tool calls into one
-/// work-log card. `streaming` marks the in-flight answer.
-fn items(s: &Desktop, items: &[Item], streaming: bool, rows: &mut Vec<El>, k: &Kit) {
-    let mut tools: Vec<&Tool> = Vec::new();
-    let flush = |tools: &mut Vec<&Tool>, rows: &mut Vec<El>| {
-        if !tools.is_empty() {
-            rows.push(work_log(s, tools, k));
-            tools.clear();
-        }
-    };
+/// Builds `items` into `rows`. `streaming` marks the in-flight answer.
+fn items(s: &Desktop, items: &[Item], streaming: bool, rows: &mut Rows, t: &Theme) {
     for item in items {
-        if let Item::Tool(tool) = item {
-            tools.push(tool);
-            continue;
+        match item {
+            Item::User(user) => rows.push(Kind::Mine, mine(user, t)),
+            Item::Text { key, text } => rows.push(Kind::Prose, prose(key, text, streaming, t)),
+            Item::Thinking {
+                key,
+                text,
+                duration_ms,
+            } => rows.push(
+                Kind::Activity,
+                thinking(s, key, text, *duration_ms, streaming, t),
+            ),
+            Item::Tool(tool) => rows.push(
+                Kind::Activity,
+                if tool.child.is_some() || tool.name == "subagent" {
+                    subagent_row(s, tool, t)
+                } else {
+                    tool_row(s, tool, t)
+                },
+            ),
+            Item::Divider { key, label } => rows.push(Kind::Turn, divider(key, *label, t)),
+            Item::Notice { key, text } => rows.push(Kind::Notice, notice(key, text, t)),
         }
-        flush(&mut tools, rows);
-        rows.push(match item {
-            Item::User(user) => bubble(user, k),
-            Item::Text { key, text } => Markdown::new(text.clone())
-                .streaming(streaming)
-                .selectable(true)
-                .on_link_tx(|_: &mut Desktop, url: &str, tx: &mut Tx| {
-                    _ = tx.open_url(url);
-                })
-                .build(k)
-                .key(key.clone())
-                .w_full(),
-            Item::Thinking { key, text } => thinking(s, key, text, k),
-            Item::Divider { key, label } => divider(key, label, k),
-            Item::Notice { key, text } => notice(key, text, k),
-            Item::Tool(_) => unreachable!("tools are gathered above"),
-        });
     }
-    flush(&mut tools, rows);
 }
 
-/// What's happening now: the streaming answer, a working line, a retry or
-/// compaction, or why the last run ended without an answer.
-fn live(s: &Desktop, rows: &mut Vec<El>, k: &Kit) {
+/// What's happening now: the streaming answer and its caret, a quiet
+/// working line before there's anything to show, a retry or compaction, or
+/// why the last run ended without an answer.
+fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
     let live = &s.thread.live;
-    let c = &k.c;
-    items(s, &live.partial, true, rows, k);
+    items(s, &live.partial, true, rows, t);
     if live.busy {
-        let running = s.thread.items.iter().rev().find_map(|item| match item {
-            Item::Tool(tool) if tool.status == ToolStatus::Running => Some(tool.name.as_str()),
-            _ => None,
-        });
-        let label = match (&live.retry, running, live.compacting) {
-            (Some(error), ..) => format!("Retrying after an error: {error}"),
-            (None, Some(tool), _) => format!("Running {tool}…"),
-            (None, None, true) => "Compacting context…".to_owned(),
-            (None, None, false) if live.partial.is_empty() => "Thinking…".to_owned(),
-            (None, None, false) => "Writing…".to_owned(),
+        let running = s
+            .thread
+            .items
+            .iter()
+            .any(|item| matches!(item, Item::Tool(tool) if tool.status == ToolStatus::Running));
+        let writing = matches!(live.partial.last(), Some(Item::Text { .. }));
+        let status = match (&live.retry, live.compacting) {
+            (Some(error), _) => Some((format!("Retrying after an error: {error}"), t.warning)),
+            (None, true) => Some(("Compacting context…".to_owned(), t.muted)),
+            (None, false) if live.partial.is_empty() && !running => {
+                Some(("Thinking…".to_owned(), t.faint))
+            }
+            (None, false) => None,
         };
-        rows.push(
-            row()
-                .key("working")
-                .role("status")
-                .label(label.clone())
-                .gap(8.0)
-                .center_y()
-                .child(Spinner::new().size(14.0).build(k))
-                .child(
-                    text(label)
-                        .font(k.ty.ui)
-                        .color(if live.retry.is_some() {
-                            c.warning.fg
-                        } else {
-                            c.text_muted
-                        })
-                        .truncate()
-                        .shrink(),
-                ),
-        );
+        if let Some((label, color)) = status {
+            rows.push(
+                Kind::Activity,
+                row()
+                    .key("working")
+                    .role("status")
+                    .label(label.clone())
+                    .h(TOOL_ROW)
+                    .px(6.0)
+                    .gap(8.0)
+                    .center_y()
+                    .child(
+                        el().size(12.0, 12.0)
+                            .center()
+                            .child(theme::pulse(t.accent, 6.0)),
+                    )
+                    .child(text(label).font(t.ui).color(color).truncate().shrink()),
+            );
+        } else if writing {
+            rows.push(
+                Kind::Activity,
+                el().key("caret")
+                    .w(2.0)
+                    .h(17.0)
+                    .radius(1.0)
+                    .fill(t.accent)
+                    .looping(LoopSpec::opacity(1.0, 0.0, 0.0, 1.0))
+                    .a11y_hidden(),
+            );
+        }
     }
     if let Some(failure) = &live.failure {
-        rows.push(notice("run-failure", failure, k));
+        rows.push(Kind::Notice, notice("run-failure", failure, t));
     }
 }
 
-/// The timeline before there's anything in it.
-fn placeholder(s: &Desktop, k: &Kit) -> El {
-    let c = &k.c;
-    let (glyph, title, line) = match (&s.status, s.selected) {
+/// The timeline before there's anything in it: the wordmark and a line.
+fn empty_state(s: &Desktop, t: &Theme) -> El {
+    let (line, retry) = match (&s.status, s.selected) {
         (Status::Error(_), _) => (
-            &icons::OUTLINE_HEXAGONAL_WARNING,
-            "Not connected".to_owned(),
-            "The desktop app talks to viz-backend. Start it, or point [client].url at a running one; this window reconnects on its own.",
+            "Can't reach the backend. Start viz-backend; this window reconnects on its own.",
+            true,
         ),
-        (Status::Connecting, _) | (_, None) => (
-            &icons::SERVER,
-            "Connecting…".to_owned(),
-            "Looking for the backend.",
-        ),
-        (Status::Connected { .. }, Some(id)) if Some(id) == s.root => (
-            &icons::OUTLINE_BRAIN,
-            "Orchestrator".to_owned(),
-            "One conversation for everything: messages from here and from connectors land in it, and it hands work to subagents.",
-        ),
-        (Status::Connected { .. }, Some(id)) => (
-            &icons::SPEECH_BUBBLE,
-            s.title(id),
-            "A fresh conversation. Ask anything.",
-        ),
+        (Status::Connecting, _) | (_, None) => ("Connecting…", false),
+        (Status::Connected { .. }, Some(_)) => ("What's on your mind?", false),
     };
-    col()
-        .key("placeholder")
+    let mark = row()
+        .key("wordmark")
+        .gap(3.0)
+        .items_end()
+        .child(
+            text("viz")
+                .font(rune::TextStyle::new(30.0, 640.0).lh(34.0).tracking(-0.8))
+                .color(t.text),
+        )
+        .child(theme::dot(t.accent, 7.0).mb(8.0).shadow(0.0, 10.0, t.glow));
+    let mut state = col()
+        .key("empty")
         .w_full()
         .max_w(420.0)
-        .pt(96.0)
+        .pt(140.0)
         .gap(10.0)
         .items_center()
-        .child(
-            el().size(44.0, 44.0)
-                .radius(12.0)
-                .center()
-                .fill(c.layer_02)
-                .border(1.0, c.border_weak)
-                .child(icon(glyph, 22.0).color(c.icon_muted)),
-        )
-        .child(
-            text(title)
-                .key("placeholder-title")
-                .font(k.ty.body_medium)
-                .color(c.text_base),
-        )
+        .child(mark)
         .child(
             text(line)
-                .key("placeholder-line")
-                .font(k.ty.ui)
-                .color(c.text_muted)
+                .key("empty-line")
+                .font(t.ui)
+                .color(t.muted)
                 .wrap()
                 .align(Align::Center)
                 .w_full(),
-        )
-}
-
-/// A user's message: a bubble on the right, with a chip naming the connector
-/// it came through.
-fn bubble(user: &User, k: &Kit) -> El {
-    let c = &k.c;
-    let mut column = col().key(user.key.clone()).w_full().gap(4.0).items_end();
-    if let Some(origin) = &user.origin {
-        column = column.child(origin_chip(origin, k));
+        );
+    if retry {
+        state = state.child(
+            Button::new("Retry now")
+                .variant(ButtonVariant::Ghost)
+                .control_size(ControlSize::Small)
+                .on_press_tx(|s: &mut Desktop, tx: &mut Tx| s.reconnect(tx))
+                .build(&t.k)
+                .key("retry"),
+        );
     }
-    column.child(
-        el().key("bubble")
-            .max_w(BUBBLE_WIDTH)
-            .px(14.0)
-            .py(9.0)
-            .radius(k.radius.xl)
-            .fill(c.layer_02)
-            .border(1.0, c.border_weak)
-            .child(
-                text(user.text.clone())
-                    .font(k.ty.body)
-                    .color(c.text_base)
-                    .wrap()
-                    .selectable(true)
-                    .selection_color(k.selection()),
-            ),
-    )
+    state
 }
 
-/// `discord · @alice`, with the connector's mark when there is one.
-fn origin_chip(origin: &Origin, k: &Kit) -> El {
-    let c = &k.c;
-    let glyph = match origin.connector.as_str() {
-        "discord" => &icons::DISCORD,
-        "github" => &icons::GITHUB,
-        _ => &icons::SPEECH_BUBBLE,
-    };
-    let who = origin.author.as_ref().map_or_else(
-        || format!("#{}", origin.channel),
-        |author| format!("@{author}"),
-    );
-    row()
-        .key("origin")
-        .h(20.0)
-        .px(6.0)
-        .gap(4.0)
-        .center_y()
-        .radius(k.radius.sm)
-        .fill(c.layer_01)
-        .border(1.0, c.border_weak)
-        .help(format!(
-            "From {} · channel {}",
-            origin.connector, origin.channel
-        ))
-        .child(icon(glyph, 12.0).color(c.icon_muted))
+/// Something I wrote: a full-width row on a faint wash, the tide line at its
+/// edge.
+fn mine(user: &User, t: &Theme) -> El {
+    el().key(user.key.clone())
+        .role("article")
+        .label("You")
+        .w_full()
+        .px(16.0)
+        .py(11.0)
+        .radius(t.k.radius.md)
+        .fill(t.mine)
         .child(
-            text(format!("{} · {who}", origin.connector))
-                .font(k.ty.small_medium)
-                .color(c.text_muted),
+            text(user.text.clone())
+                .font(t.body)
+                .color(t.text)
+                .wrap()
+                .w_full()
+                .selectable(true)
+                .selection_color(t.k.selection()),
+        )
+        .child(
+            el().w(2.0)
+                .pin(Some(0.0), Some(9.0), None, Some(9.0))
+                .radius(1.0)
+                .fill(t.accent)
+                .shadow(0.0, 8.0, t.glow)
+                .a11y_hidden(),
         )
 }
 
-fn thinking(s: &Desktop, key: &str, thought: &str, k: &Kit) -> El {
+/// Assistant prose.
+fn prose(key: &str, source: &str, streaming: bool, t: &Theme) -> El {
+    Markdown::new(source.to_owned())
+        .style(t.markdown())
+        .streaming(streaming)
+        .selectable(true)
+        .on_link_tx(|_: &mut Desktop, url: &str, tx: &mut Tx| {
+            _ = tx.open_url(url);
+        })
+        .build(&t.k)
+        .key(key.to_owned())
+        .w_full()
+}
+
+/// Reasoning: one faint collapsed row.
+fn thinking(
+    s: &Desktop,
+    key: &str,
+    thought: &str,
+    duration_ms: Option<u64>,
+    streaming: bool,
+    t: &Theme,
+) -> El {
     let open = s.expanded.contains(key);
+    let title = match duration_ms {
+        _ if streaming => "Thinking…".to_owned(),
+        Some(ms) => format!("Thought for {}s", (ms + 500) / 1000),
+        None => "Thought".to_owned(),
+    };
     let body = if thought.trim().is_empty() {
         "The provider redacted this reasoning."
     } else {
         thought
     };
     let toggle = key.to_owned();
-    Collapsible::new("Thinking", open)
+    Collapsible::new(title, open)
         .ghost()
         .child(
             el().key("thought")
                 .w_full()
+                .ml(6.0)
+                .mb(6.0)
                 .pl(12.0)
-                .ml(4.0)
-                .border_sides([0.0, 0.0, 0.0, 2.0], k.c.border_weak)
+                .border_sides([0.0, 0.0, 0.0, 1.0], t.hairline)
                 .child(
                     text(body.to_owned())
-                        .font(k.ty.text_small)
-                        .color(k.c.text_muted)
+                        .font(t.ui)
+                        .color(t.muted)
                         .wrap()
                         .selectable(true)
-                        .selection_color(k.selection()),
+                        .selection_color(t.k.selection()),
                 ),
         )
         .on_toggle(move |s: &mut Desktop| s.toggle(&toggle))
-        .build(k)
+        .build(&t.k)
         .key(key.to_owned())
+        .pl(6.0)
 }
 
-/// A run of tool calls: one card, a row each.
-fn work_log(s: &Desktop, tools: &[&Tool], k: &Kit) -> El {
-    let c = &k.c;
-    let key = format!("work-{}", tools[0].key);
-    let rows = tools.iter().enumerate().map(|(i, tool)| {
-        let row = tool_row(s, tool, k);
-        if i == 0 {
-            row
-        } else {
-            row.border_sides([1.0, 0.0, 0.0, 0.0], c.border_weak)
+/// What a settled or running call says at its right end.
+fn meta(tool: &Tool, t: &Theme) -> Option<El> {
+    let faint = |words: String| text(words).font(t.mono_small).color(t.faint);
+    match tool.status {
+        ToolStatus::Running => Some(Spinner::new().size(12.0).color(t.accent).build(&t.k)),
+        ToolStatus::Pending => Some(faint("queued".to_owned())),
+        ToolStatus::Abandoned => Some(faint("no result".to_owned())),
+        ToolStatus::Done | ToolStatus::Failed => {
+            tool.duration_ms.map(|ms| faint(theme::duration(ms)))
         }
-    });
-    col()
-        .key(key)
-        .role("list")
-        .label("Tool calls")
-        .w_full()
-        .radius(k.radius.lg)
-        .fill(c.layer_01)
-        .border(1.0, c.border_weak)
-        .clip_rounded(k.radius.lg)
-        .children(rows)
+    }
 }
 
-fn tool_row(s: &Desktop, tool: &Tool, k: &Kit) -> El {
-    let c = &k.c;
+/// A tool call: chevron, name, a faint summary of its arguments, its time.
+/// Opens into its arguments and output.
+fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let open = s.expanded.contains(&tool.key);
     let toggle = tool.key.clone();
     let failed = tool.status == ToolStatus::Failed;
@@ -325,185 +356,186 @@ fn tool_row(s: &Desktop, tool: &Tool, k: &Kit) -> El {
         .label(format!("{} {}", tool.name, tool.summary))
         .expanded(open)
         .focusable(true)
-        .focus_ring(2.0, -2.0, c.border_focus)
+        .focus_ring(2.0, -2.0, t.k.c.border_focus)
         .w_full()
-        .h(34.0)
-        .px(10.0)
+        .h(TOOL_ROW)
+        .px(6.0)
         .gap(8.0)
         .center_y()
+        .radius(t.k.radius.md)
         .on_press(move |s: &mut Desktop| s.toggle(&toggle))
-        .child(status_icon(tool, k))
+        .child(
+            icon(
+                if open {
+                    &theme::CHEVRON_OPEN
+                } else {
+                    &theme::CHEVRON
+                },
+                12.0,
+            )
+            .color(t.faint),
+        )
         .child(
             text(tool.name.clone())
                 .key("name")
-                .font(k.ty.ui_medium)
-                .color(if failed { c.danger.fg } else { c.text_base }),
+                .font(t.mono_medium)
+                .color(if failed { t.danger } else { t.muted }),
         )
         .child(
             text(tool.summary.clone())
                 .key("summary")
-                .font(k.ty.ui)
-                .color(c.text_muted)
+                .font(t.mono)
+                .color(t.faint)
                 .truncate()
                 .grow(1.0)
                 .shrink(),
         );
-    if let Some(child) = tool.child {
-        header = header.child(
-            Button::new(format!("Open #{child}"))
-                .variant(ButtonVariant::GhostMuted)
-                .control_size(ControlSize::Small)
-                .icon(&icons::ARROW_UP_RIGHT)
-                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| s.select(child, tx))
-                .build(k)
-                .key("open-child"),
-        );
+    if let Some(meta) = meta(tool, t) {
+        header = header.child(meta.key("meta"));
     }
-    let meta = match tool.status {
-        ToolStatus::Pending => Some("queued".to_owned()),
-        ToolStatus::Running => Some("running".to_owned()),
-        ToolStatus::Abandoned => Some("no result".to_owned()),
-        ToolStatus::Done | ToolStatus::Failed => tool.duration_ms.map(theme::duration),
-    };
-    if let Some(meta) = meta {
-        header = header.child(text(meta).key("meta").font(k.ty.small).color(c.text_faint));
-    }
-    header = k.interactive(
-        header.child(
-            icon(
-                if open {
-                    k.glyph.chevron_up
-                } else {
-                    k.glyph.chevron_down
-                },
-                14.0,
-            )
-            .color(c.icon_faint),
-        ),
-    );
-    let mut tool_el = col().key(tool.key.clone()).w_full().child(header);
+    let header = header.hover(t.hover);
+    let mut el = col().key(tool.key.clone()).w_full().child(header);
     if open {
-        let mut body = col()
-            .key("body")
-            .w_full()
-            .px(10.0)
-            .pt(2.0)
-            .pb(10.0)
-            .gap(8.0);
-        if !tool.arguments.is_empty() && tool.arguments != "{}" {
-            body = body.child(block("arguments", "Arguments", &tool.arguments, false, k));
-        }
-        let (label, empty) = match tool.status {
-            ToolStatus::Failed => ("Error", "No error text"),
-            ToolStatus::Running | ToolStatus::Pending => ("Output", "No output yet"),
-            ToolStatus::Done => ("Result", "No output"),
-            ToolStatus::Abandoned => ("Result", "The run ended before this call finished"),
-        };
-        let output = if tool.output.is_empty() {
-            empty
-        } else {
-            tool.output.as_str()
-        };
-        body = body.child(block("output", label, output, failed, k));
-        tool_el = tool_el.child(body);
+        el = el.child(output(tool, t));
     }
-    tool_el
+    el
 }
 
-/// A tool row's leading mark: its status while it runs or when it failed,
-/// else the tool's icon.
-fn status_icon(tool: &Tool, k: &Kit) -> El {
-    let c = &k.c;
-    let glyph = |glyph: &'static Icon, color| icon(glyph, 14.0).color(color);
-    let mark = match tool.status {
-        ToolStatus::Running => Spinner::new().size(14.0).build(k),
-        ToolStatus::Pending => theme::dot(c.icon_faint, 6.0),
-        ToolStatus::Failed => glyph(&icons::CIRCLE_X, c.danger.icon),
-        ToolStatus::Abandoned => glyph(&icons::CIRCLE_BAN_SIGN, c.icon_faint),
-        ToolStatus::Done => glyph(theme::tool_icon(&tool.name), c.icon_muted),
+/// An open tool row's arguments and output, in a scrolling mono block.
+fn output(tool: &Tool, t: &Theme) -> El {
+    let failed = tool.status == ToolStatus::Failed;
+    let empty = match tool.status {
+        ToolStatus::Failed => "No error text",
+        ToolStatus::Running | ToolStatus::Pending => "No output yet",
+        ToolStatus::Done => "No output",
+        ToolStatus::Abandoned => "The run ended before this call finished",
     };
-    el().key("status").size(16.0, 16.0).center().child(mark)
-}
-
-/// A labelled monospace block that scrolls past [`BLOCK_HEIGHT`].
-fn block(key: &str, label: &str, body: &str, error: bool, k: &Kit) -> El {
-    let c = &k.c;
+    let mut inner = col().key("inner").w_full().padding(12.0).gap(10.0);
+    if !tool.arguments.is_empty() && tool.arguments != "{}" {
+        inner = inner.child(
+            text(tool.arguments.clone())
+                .key("arguments")
+                .font(t.mono)
+                .color(t.faint)
+                .wrap_anywhere()
+                .selectable(true)
+                .selection_color(t.k.selection())
+                .w_full(),
+        );
+        inner = inner.child(el().w_full().h(1.0).fill(t.hairline));
+    }
+    let body = if tool.output.is_empty() {
+        (empty.to_owned(), t.faint)
+    } else {
+        (tool.output.clone(), if failed { t.danger } else { t.text })
+    };
+    inner = inner.child(
+        text(body.0)
+            .key("output")
+            .font(t.mono)
+            .color(body.1)
+            .wrap_anywhere()
+            .selectable(true)
+            .selection_color(t.k.selection())
+            .w_full(),
+    );
     col()
-        .key(key.to_owned())
+        .key("body")
         .w_full()
-        .gap(4.0)
-        .child(
-            text(label.to_owned())
-                .font(k.ty.small_medium)
-                .color(c.text_faint),
-        )
-        .child(
-            col()
-                .key("scroll")
-                .w_full()
-                .max_h(BLOCK_HEIGHT)
-                .radius(k.radius.md)
-                .fill(c.bg_base)
-                .border(1.0, c.border_weak)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .child(
-                    text(body.to_owned())
-                        .font(k.ty.mono)
-                        .color(if error { c.danger.fg } else { c.text_base })
-                        .wrap_anywhere()
-                        .selectable(true)
-                        .selection_color(k.selection())
-                        .w_full()
-                        .padding(8.0),
-                ),
-        )
+        .mt(2.0)
+        .mb(6.0)
+        .ml(26.0)
+        .max_h(BLOCK_HEIGHT)
+        .radius(t.k.radius.md)
+        .fill(t.surface)
+        .border(1.0, t.hairline)
+        .clip_rounded(t.k.radius.md)
+        .scroll(ScrollSpec {
+            stick_bottom: tool.status == ToolStatus::Running,
+        })
+        .child(inner)
+        .shrink()
 }
 
-/// A turn boundary: a thin rule with a quiet label.
-fn divider(key: &str, label: &str, k: &Kit) -> El {
-    let c = &k.c;
-    let rule = || el().h(1.0).grow(1.0).fill(c.border_weak);
+/// A subagent call: "↳ title", opening the child conversation.
+fn subagent_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let title = tool
+        .child
+        .filter(|child| {
+            s.summary(*child)
+                .is_some_and(|summary| !summary.title.is_empty())
+        })
+        .map_or_else(|| tool.summary.clone(), |child| s.title(child));
+    let failed = tool.status == ToolStatus::Failed;
+    let mut el = row()
+        .key(tool.key.clone())
+        .role("link")
+        .label(format!("Subagent: {title}"))
+        .w_full()
+        .h(TOOL_ROW + 2.0)
+        .px(6.0)
+        .gap(8.0)
+        .center_y()
+        .radius(t.k.radius.md)
+        .child(icon(&theme::BRANCH, 13.0).color(if failed { t.danger } else { t.accent }))
+        .child(
+            text(title)
+                .key("title")
+                .font(t.ui)
+                .color(t.text)
+                .truncate()
+                .grow(1.0)
+                .shrink(),
+        );
+    if let Some(meta) = meta(tool, t) {
+        el = el.child(meta.key("meta"));
+    }
+    match tool.child {
+        Some(child) => el
+            .focusable(true)
+            .focus_ring(2.0, -2.0, t.k.c.border_focus)
+            .help("Open the subagent's conversation")
+            .hover(t.hover)
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| s.select(child, tx)),
+        None => el,
+    }
+}
+
+/// A turn boundary: room, and a short faint rule; or a quiet label for
+/// other markers.
+fn divider(key: &str, label: Option<&str>, t: &Theme) -> El {
+    let mark = label.map_or_else(
+        || el().w(40.0).h(1.0).fill(t.hairline),
+        |label| text(label.to_owned()).font(t.small).color(t.faint),
+    );
     row()
         .key(key.to_owned())
         .role("separator")
-        .label(label.to_owned())
+        .label(label.unwrap_or("New turn").to_owned())
         .w_full()
-        .gap(10.0)
-        .center_y()
-        .child(rule())
-        .child(
-            text(label.to_owned())
-                .font(k.ty.small_medium)
-                .color(c.text_faint),
-        )
-        .child(rule())
+        .py(22.0)
+        .center()
+        .child(mark)
 }
 
 /// An answer that didn't come: a danger-tinted line.
-fn notice(key: &str, message: &str, k: &Kit) -> El {
-    let danger = &k.c.danger;
+fn notice(key: &str, message: &str, t: &Theme) -> El {
     row()
         .key(key.to_owned())
         .role("alert")
         .w_full()
-        .px(12.0)
-        .py(8.0)
-        .gap(8.0)
+        .px(6.0)
+        .gap(10.0)
         .items_start()
-        .radius(k.radius.md)
-        .fill(danger.bg)
-        .border(1.0, danger.border)
         .child(
-            el().size(16.0, 20.0)
+            el().size(12.0, 20.0)
                 .center()
-                .child(icon(&icons::CIRCLE_EXCLAMATION, 14.0).color(danger.icon)),
+                .child(theme::dot(t.danger, 6.0)),
         )
         .child(
             text(message.to_owned())
-                .font(k.ty.ui)
-                .color(danger.fg)
+                .font(t.ui)
+                .color(t.danger)
                 .wrap()
                 .selectable(true)
                 .grow(1.0)

@@ -10,12 +10,12 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 use viz_client::{
     Client, Connection, Endpoint, Error, delta,
-    protocol::{ClientInfo, ClientKind, ConversationId, Notification, Submit},
+    protocol::{ClientInfo, ClientKind, ConversationId, ConversationSummary, Notification, Submit},
 };
 use viz_config::Config;
 
 use crate::{
-    app::{Desktop, Listed, Status},
+    app::{Desktop, Status},
     thread::Thread,
 };
 
@@ -184,7 +184,6 @@ async fn session(
     let mut session = Session {
         ui,
         client,
-        root: hello.root,
         watched,
         view: None,
         listed: HashSet::new(),
@@ -225,7 +224,6 @@ async fn session(
 struct Session<'a> {
     ui: &'a AppHandle<Desktop>,
     client: Client,
-    root: ConversationId,
     /// The conversation whose view this session holds.
     watched: ConversationId,
     /// Its latest view, once the first value arrives.
@@ -266,7 +264,9 @@ impl Session<'_> {
                     text,
                     ..Submit::default()
                 };
-                self.client.submit(&submit).await.map(drop)
+                self.client.submit(&submit).await?;
+                // A chat's first message titles it.
+                self.refresh_list().await
             }
             // Already connected.
             Command::Reconnect => Ok(()),
@@ -307,7 +307,6 @@ impl Session<'_> {
         let thread = Thread::from_view(view);
         let unlisted: Vec<_> = thread
             .children()
-            .map(|(child, _)| child)
             .filter(|child| !self.listed.contains(child))
             .collect();
         self.ui
@@ -351,36 +350,15 @@ impl Session<'_> {
             .map(drop)
     }
 
-    /// Lists conversations other than the root into the sidebar, newest
-    /// first.
+    /// Lists every conversation, titled by the backend, into the sidebar.
     async fn refresh_list(&mut self) -> viz_client::Result<()> {
         #[derive(Deserialize)]
         struct Listing {
-            conversations: Vec<Record>,
-        }
-        #[derive(Deserialize)]
-        struct Record {
-            id: ConversationId,
-            owner: Option<Owner>,
-        }
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Owner {
-            conversation_id: ConversationId,
+            conversations: Vec<ConversationSummary>,
         }
         let Listing { conversations } = self.client.call("conversations.list", json!({})).await?;
-        let root = self.root;
-        let mut listed: Vec<_> = conversations
-            .into_iter()
-            .filter(|record| record.id != root)
-            .map(|record| Listed {
-                id: record.id,
-                owner: record.owner.map(|owner| owner.conversation_id),
-            })
-            .collect();
-        listed.sort_unstable_by_key(|listed| std::cmp::Reverse(listed.id));
-        self.listed = listed.iter().map(|listed| listed.id).collect();
-        self.ui.update(move |s, _| s.conversations = listed);
+        self.listed = conversations.iter().map(|summary| summary.id).collect();
+        self.ui.update(move |s, _| s.conversations = conversations);
         Ok(())
     }
 }

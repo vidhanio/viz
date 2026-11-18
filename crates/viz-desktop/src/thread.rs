@@ -37,7 +37,7 @@ pub struct Thread {
 /// One timeline row.
 #[derive(Debug, Clone)]
 pub enum Item {
-    /// A user's input, from this app or a connector.
+    /// Something I wrote.
     User(User),
     /// Assistant prose, Markdown.
     Text {
@@ -52,15 +52,18 @@ pub enum Item {
         key: String,
         /// The reasoning text (empty when redacted).
         text: String,
+        /// About how long it took, once its message is done: the message's
+        /// time in proportion to the share of its output the reasoning is.
+        duration_ms: Option<u64>,
     },
     /// A tool call and, once settled, its result.
     Tool(Tool),
-    /// A turn boundary or another marker that isn't a message.
+    /// A turn boundary (no label) or another marker that isn't a message.
     Divider {
         /// Stable element key.
         key: String,
-        /// What it marks.
-        label: &'static str,
+        /// What it marks, when it's more than a new turn.
+        label: Option<&'static str>,
     },
     /// An assistant reply that ended without an answer.
     Notice {
@@ -71,27 +74,14 @@ pub enum Item {
     },
 }
 
-/// A user's input.
+/// Something I wrote. Single-user: every input is mine, whichever client or
+/// connector it came through.
 #[derive(Debug, Clone)]
 pub struct User {
     /// Stable element key.
     pub key: String,
-    /// What they wrote, without the routing prefix the backend adds for the
-    /// model.
+    /// What I wrote.
     pub text: String,
-    /// The connector it came from, if not a full UI.
-    pub origin: Option<Origin>,
-}
-
-/// Where a connector input came from (`viz.input`'s `data.origin`).
-#[derive(Debug, Clone)]
-pub struct Origin {
-    /// Connector name, e.g. `discord`.
-    pub connector: String,
-    /// Human-readable author, if the connector gave one.
-    pub author: Option<String>,
-    /// Connector-specific channel id.
-    pub channel: String,
 }
 
 /// A tool call's progress.
@@ -209,27 +199,10 @@ impl Thread {
         }
     }
 
-    /// The `subagent` calls' child conversations and the tasks they were
-    /// given, to title them in the sidebar.
-    pub fn children(&self) -> impl Iterator<Item = (ConversationId, String)> + '_ {
+    /// The child conversations of its `subagent` calls.
+    pub fn children(&self) -> impl Iterator<Item = ConversationId> + '_ {
         self.items.iter().filter_map(|item| match item {
-            Item::Tool(Tool {
-                child: Some(child),
-                summary,
-                ..
-            }) => Some((*child, summary.clone())),
-            _ => None,
-        })
-    }
-
-    /// The first thing the user said, when the window starts at the
-    /// beginning, to title the conversation.
-    pub fn opening(&self) -> Option<String> {
-        if self.earlier {
-            return None;
-        }
-        self.items.iter().find_map(|item| match item {
-            Item::User(user) => Some(first_line(&user.text, SUMMARY_CHARS)),
+            Item::Tool(tool) => tool.child,
             _ => None,
         })
     }
@@ -252,26 +225,33 @@ impl Reader {
         match kind {
             "pi.reset" => self.items.push(Item::Divider {
                 key: format!("e{id}"),
-                label: "New turn",
+                label: None,
             }),
             "pi.compaction" => self.items.push(Item::Divider {
                 key: format!("e{id}"),
-                label: "Earlier context summarized",
+                label: Some("Earlier context summarized"),
             }),
             "pi.user" | "viz.input" => {
-                let origin = entry.pointer("/data/origin").and_then(Origin::read);
-                for (m, message) in messages.iter().enumerate() {
-                    let text = content_text(message.get("content"));
-                    let text = if origin.is_some() {
-                        strip_route(&text).to_owned()
-                    } else {
-                        text
-                    };
+                // A connector's input reaches the model with a routing prefix;
+                // `data.text` is what I actually wrote.
+                let raw = entry
+                    .pointer("/data/text")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let texts: Vec<String> = raw.map_or_else(
+                    || {
+                        messages
+                            .iter()
+                            .map(|message| content_text(message.get("content")))
+                            .collect()
+                    },
+                    |raw| vec![raw],
+                );
+                for (m, text) in texts.into_iter().enumerate() {
                     if !text.trim().is_empty() {
                         self.items.push(Item::User(User {
                             key: format!("e{id}-{m}"),
                             text,
-                            origin: origin.clone(),
                         }));
                     }
                 }
@@ -310,7 +290,10 @@ impl Reader {
         } else {
             ToolStatus::Done
         };
-        tool.output = cap_head(&content_text(message.get("content")), OUTPUT_CHARS);
+        tool.output = cap_head(
+            content_text(message.get("content")).trim_end(),
+            OUTPUT_CHARS,
+        );
         tool.duration_ms = message.get("durationMs").and_then(Value::as_u64);
         tool.child = tool.child.or_else(|| child(message.get("details")));
     }
@@ -334,7 +317,7 @@ impl Reader {
                 _ => {}
             }
             if let Some(output) = str_at(slot, "output") {
-                tool.output = cap_tail(output, OUTPUT_CHARS);
+                tool.output = cap_tail(output.trim_end(), OUTPUT_CHARS);
             }
         }
     }
@@ -343,7 +326,10 @@ impl Reader {
 /// Pushes an assistant message's parts: text, thinking, tool calls (with
 /// `status` until their results arrive), and why it ended without an answer.
 fn assistant(key: &str, message: &Value, items: &mut Vec<Item>, status: ToolStatus) {
-    for (p, part) in array(message.get("content")).iter().enumerate() {
+    let parts = array(message.get("content"));
+    let duration_ms = message.get("durationMs").and_then(Value::as_u64);
+    let output: usize = parts.iter().map(output_len).sum();
+    for (p, part) in parts.iter().enumerate() {
         let key = format!("{key}-{p}");
         match str_at(part, "type") {
             Some("text") => {
@@ -362,6 +348,7 @@ fn assistant(key: &str, message: &Value, items: &mut Vec<Item>, status: ToolStat
                     items.push(Item::Thinking {
                         key,
                         text: text.to_owned(),
+                        duration_ms: duration_ms.map(|ms| share(ms, output_len(part), output)),
                     });
                 }
             }
@@ -432,14 +419,30 @@ fn summary(arguments: &Value) -> String {
     first_line(&pairs, SUMMARY_CHARS)
 }
 
-impl Origin {
-    fn read(origin: &Value) -> Option<Self> {
-        Some(Self {
-            connector: str_at(origin, "connector")?.to_owned(),
-            channel: str_at(origin, "channel").unwrap_or_default().to_owned(),
-            author: str_at(origin, "author").map(str::to_owned),
-        })
+/// How much output a part is, in characters, to apportion its message's time.
+fn output_len(part: &Value) -> usize {
+    let len = |name| str_at(part, name).map_or(0, str::len);
+    match str_at(part, "type") {
+        Some("text") => len("text"),
+        Some("thinking") => len("thinking"),
+        Some("toolCall") => part.get("arguments").map_or(0, |a| a.to_string().len()),
+        _ => 0,
     }
+}
+
+/// `part` of `whole` of `ms`: tokens stream at a roughly steady rate, so a
+/// part's share of the characters is about its share of the time.
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::cast_precision_loss,
+    reason = "an approximate duration in whole milliseconds"
+)]
+fn share(ms: u64, part: usize, whole: usize) -> u64 {
+    if whole == 0 {
+        return ms;
+    }
+    (ms as f64 * part as f64 / whole as f64).round() as u64
 }
 
 impl Live {
@@ -536,17 +539,9 @@ fn content_text(content: Option<&Value>) -> String {
     }
 }
 
-/// Drops the `[connector #channel @author] ` prefix the backend gives a
-/// connector input for the model; the origin chip shows it instead.
-fn strip_route(text: &str) -> &str {
-    text.strip_prefix('[')
-        .and_then(|rest| rest.split_once("] "))
-        .map_or(text, |(_, body)| body)
-}
-
 /// The first non-empty line of `text`, cut to `max` characters, with an
 /// ellipsis when anything was left out.
-pub fn first_line(text: &str, max: usize) -> String {
+fn first_line(text: &str, max: usize) -> String {
     let mut lines = text.lines().map(str::trim).filter(|line| !line.is_empty());
     let cut = cap_head(lines.next().unwrap_or_default(), max);
     if lines.next().is_some() && !cut.ends_with('…') {

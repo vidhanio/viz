@@ -1,15 +1,12 @@
 //! The window's state and what the user can do to it. The backend thread fills
 //! it in through the app handle; the views only read it.
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::{collections::HashSet, time::Duration};
 
 use rune::{TextEdit, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
-use viz_client::protocol::ConversationId;
+use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary};
 
 use crate::{backend::Command, thread::Thread};
 
@@ -30,15 +27,6 @@ pub enum Status {
     },
     /// Not connected, and why.
     Error(String),
-}
-
-/// A conversation other than the orchestrator, as listed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Listed {
-    /// Its id.
-    pub id: ConversationId,
-    /// The conversation whose task created it: a subagent's parent.
-    pub owner: Option<ConversationId>,
 }
 
 /// A transient message in the bottom-right corner.
@@ -64,11 +52,8 @@ pub struct Desktop {
     pub endpoint: Option<String>,
     /// The orchestrator's conversation, once connected.
     pub root: Option<ConversationId>,
-    /// Every other conversation, newest first.
-    pub conversations: Vec<Listed>,
-    /// Titles learned along the way: a subagent's task, a chat's opening
-    /// message.
-    pub titles: HashMap<ConversationId, String>,
+    /// Every conversation as the backend lists it, titles included.
+    pub conversations: Vec<ConversationSummary>,
     /// The conversation in the main pane.
     pub selected: Option<ConversationId>,
     /// Its transcript and live state, once its view arrives.
@@ -79,10 +64,6 @@ pub struct Desktop {
     pub draft: TextEdit,
     /// The sidebar's width and whether it's open.
     pub sidebar: PaneState,
-    /// The subagent section is collapsed.
-    pub subagents_closed: bool,
-    /// The chats section is collapsed.
-    pub chats_closed: bool,
     /// Toasts, oldest first.
     pub toasts: Vec<Toast>,
     next_toast: u64,
@@ -99,14 +80,11 @@ impl Desktop {
             endpoint: None,
             root: None,
             conversations: Vec::new(),
-            titles: HashMap::new(),
             selected: None,
             thread: Thread::default(),
             expanded: HashSet::new(),
             draft,
-            sidebar: PaneState::new(260.0).range(180.0, 420.0),
-            subagents_closed: false,
-            chats_closed: false,
+            sidebar: PaneState::new(248.0).range(200.0, 400.0),
             toasts: Vec::new(),
             next_toast: 0,
         }
@@ -132,21 +110,11 @@ impl Desktop {
         }
     }
 
-    /// Takes a new view of the selected conversation, learning the titles it
-    /// reveals.
+    /// Takes a new view of the selected conversation.
     pub fn set_thread(&mut self, conversation: ConversationId, thread: Thread) {
-        if self.selected != Some(conversation) {
-            return;
+        if self.selected == Some(conversation) {
+            self.thread = thread;
         }
-        for (child, task) in thread.children() {
-            self.titles.entry(child).or_insert(task);
-        }
-        if Some(conversation) != self.root
-            && let Some(opening) = thread.opening()
-        {
-            self.titles.entry(conversation).or_insert(opening);
-        }
-        self.thread = thread;
     }
 
     fn send(&mut self, command: Command, tx: &mut Tx) {
@@ -196,23 +164,29 @@ impl Desktop {
         self.send(Command::Submit { conversation, text }, tx);
     }
 
-    /// The conversation's name in the sidebar and header.
-    pub fn title(&self, conversation: ConversationId) -> String {
-        if self.root == Some(conversation) {
-            return "Orchestrator".into();
-        }
-        if let Some(title) = self.titles.get(&conversation) {
-            return title.clone();
-        }
-        let owned = self
-            .conversations
+    /// The conversation as listed, once the list has it.
+    pub fn summary(&self, conversation: ConversationId) -> Option<&ConversationSummary> {
+        self.conversations
             .iter()
-            .any(|listed| listed.id == conversation && listed.owner.is_some());
-        if owned {
-            format!("Subagent #{conversation}")
-        } else {
-            format!("Chat #{conversation}")
+            .find(|summary| summary.id == conversation)
+    }
+
+    /// The conversation's name in the sidebar and header: the backend's title,
+    /// or what it is until the backend has one.
+    pub fn title(&self, conversation: ConversationId) -> String {
+        let summary = self.summary(conversation);
+        if let Some(summary) = summary.filter(|summary| !summary.title.is_empty()) {
+            return summary.title.clone();
         }
+        let kind = summary.map(|summary| summary.kind).or_else(|| {
+            (self.root == Some(conversation)).then_some(ConversationKind::Orchestrator)
+        });
+        match kind {
+            Some(ConversationKind::Orchestrator) => "Orchestrator",
+            Some(ConversationKind::Subagent) => "Subagent",
+            Some(ConversationKind::Chat) | None => "New chat",
+        }
+        .to_owned()
     }
 
     /// Shows a toast for [`TOAST_LIFE`].
