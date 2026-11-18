@@ -8,22 +8,23 @@
 //! allowed_users = [123456789012345678]
 //! ```
 
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use anyhow::Context as _;
 use serde::Deserialize;
 use serenity::{
-    all::{ChannelId, CreateMessage, GatewayIntents, Message, MessageId, Ready},
+    all::{ChannelId, CreateMessage, GatewayIntents, Message, MessageId, Ready, UserId},
     async_trait,
     client::{Context, EventHandler},
     http::Http,
 };
 use viz_client::{
-    Client, Endpoint,
+    Client, Connection, Endpoint,
     protocol::{ClientInfo, ClientKind, Notification, Origin, Submit},
 };
 use viz_config::{Config, Secret};
 
+/// The connector's name: its config section, `hello` name and origins.
 const NAME: &str = "discord";
 /// Discord's message length limit, in characters.
 const MAX_MESSAGE: usize = 2000;
@@ -32,13 +33,13 @@ const MAX_MESSAGE: usize = 2000;
 #[serde(deny_unknown_fields)]
 struct DiscordConfig {
     bot_token: Secret,
-    /// Discord user ids whose messages are forwarded. Everyone else is ignored.
-    allowed_users: Vec<u64>,
+    /// Users whose messages are forwarded. Everyone else is ignored.
+    allowed_users: HashSet<UserId>,
 }
 
 struct Handler {
     viz: Client,
-    allowed_users: Vec<u64>,
+    allowed_users: HashSet<UserId>,
 }
 
 #[async_trait]
@@ -48,7 +49,7 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, ctx: Context, msg: Message) {
-        if msg.author.bot || !self.allowed_users.contains(&msg.author.id.get()) {
+        if msg.author.bot || !self.allowed_users.contains(&msg.author.id) {
             return;
         }
         let is_dm = msg.guild_id.is_none();
@@ -56,14 +57,14 @@ impl EventHandler for Handler {
             return;
         }
         let submit = Submit {
-            text: msg.content.clone(),
-            request_id: Some(format!("discord:{}", msg.id)),
+            text: msg.content,
+            request_id: Some(format!("{NAME}:{}", msg.id)),
             origin: Some(Origin {
-                connector: NAME.into(),
+                connector: NAME.to_owned(),
                 channel: msg.channel_id.to_string(),
                 thread: None,
                 message: Some(msg.id.to_string()),
-                author: Some(msg.author.name.clone()),
+                author: Some(msg.author.name),
             }),
             ..Submit::default()
         };
@@ -74,12 +75,14 @@ impl EventHandler for Handler {
     }
 }
 
+/// Posts `text` to the origin's channel in Discord-sized chunks, the first
+/// replying to the origin's message.
 async fn post_reply(http: &Http, origin: &Origin, text: &str) -> anyhow::Result<()> {
     let channel = ChannelId::new(origin.channel.parse().context("origin channel")?);
     let reference = origin
         .message
         .as_deref()
-        .and_then(|m| m.parse().ok())
+        .and_then(|message| message.parse().ok())
         .map(MessageId::new);
     let chars: Vec<char> = text.chars().collect();
     for (i, chunk) in chars.chunks(MAX_MESSAGE).enumerate() {
@@ -107,36 +110,37 @@ async fn main() -> anyhow::Result<()> {
         "[connectors.discord].allowed_users is empty: nobody could talk to viz"
     );
     let endpoint = Endpoint::from_config(&config)?;
-    let mut viz = Client::connect(
+    let Connection {
+        client: viz,
+        mut notifications,
+        hello,
+    } = Client::connect(
         &endpoint,
         ClientInfo {
             kind: ClientKind::Connector,
-            name: NAME.into(),
+            name: NAME.to_owned(),
         },
     )
     .await?;
-    tracing::info!(
-        "connected to viz-backend {} at {endpoint}",
-        viz.hello.version
-    );
+    tracing::info!("connected to viz-backend {} at {endpoint}", hello.version);
 
     let intents = GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
     let mut client = serenity::Client::builder(discord.bot_token.resolve()?, intents)
         .event_handler(Handler {
-            viz: viz.client.clone(),
+            viz,
             allowed_users: discord.allowed_users,
         })
         .await?;
-    let http: Arc<Http> = client.http.clone();
+    let http = Arc::clone(&client.http);
 
     let replies = tokio::spawn(async move {
-        while let Some(notification) = viz.notifications.recv().await {
+        while let Some(notification) = notifications.recv().await {
             let Notification::Reply { origin, text, .. } = notification else {
                 continue;
             };
-            let Some(text) = text.filter(|t| !t.is_empty()) else {
+            let Some(text) = text.filter(|text| !text.is_empty()) else {
                 continue;
             };
             if let Err(e) = post_reply(&http, &origin, &text).await {

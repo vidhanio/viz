@@ -5,12 +5,13 @@
 use std::{collections::HashSet, time::Duration};
 
 use rune::AppHandle;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::mpsc;
 use viz_client::{
     Client, Connection, Endpoint, Error, delta,
-    protocol::{ClientInfo, ClientKind, ConversationId, ConversationSummary, Notification, Submit},
+    protocol::{
+        ClientInfo, ClientKind, ConversationId, Notification, Revision, Submit, ViewRevision,
+    },
 };
 use viz_config::Config;
 
@@ -86,16 +87,16 @@ async fn run(
 ) {
     let mut first = Some(first);
     let endpoint = match Config::load()
-        .map_err(Error::from)
-        .and_then(|config| Endpoint::from_config(&config))
+        .map_err(|e| e.to_string())
+        .and_then(|config| Endpoint::from_config(&config).map_err(|e| e.to_string()))
     {
         Ok(endpoint) => endpoint,
-        Err(e) => {
-            set_status(ui, Status::Error(e.to_string()));
+        Err(detail) => {
+            set_status(ui, Status::Error(detail.clone()));
             signal(&mut first);
             while let Some(command) = commands.recv().await {
                 if !offline(ui, &command, &mut None) {
-                    set_status(ui, Status::Error(e.to_string()));
+                    set_status(ui, Status::Error(detail.clone()));
                 }
             }
             return;
@@ -196,7 +197,7 @@ async fn session(
     });
     let started = async {
         session.refresh_list().await?;
-        session.watch().await
+        session.client.watch(watched).await
     };
     if let Err(e) = started.await {
         return Ended::Lost(e);
@@ -244,12 +245,7 @@ impl Session<'_> {
                 self.switch(conversation).await
             }
             Command::Create => {
-                #[derive(Deserialize)]
-                struct Created {
-                    conversation: ConversationId,
-                }
-                let Created { conversation } =
-                    self.client.call("conversation.create", json!({})).await?;
+                let conversation = self.client.create_conversation().await?;
                 self.refresh_list().await?;
                 *selected = Some(conversation);
                 self.ui.update(move |s, _| {
@@ -274,35 +270,31 @@ impl Session<'_> {
     }
 
     async fn on_notification(&mut self, notification: Notification) -> viz_client::Result<()> {
-        let Notification::ConversationView {
+        let Notification::ConversationView(ViewRevision {
             conversation,
-            value,
-            ops,
-        } = notification
+            revision,
+        }) = notification
         else {
             return Ok(());
         };
         if conversation != self.watched {
             return Ok(());
         }
-        match (value, ops, &mut self.view) {
-            (Some(value), _, view) => *view = Some(value),
-            (None, Some(Value::Array(ops)), Some(view)) => {
+        let view = match (revision, &mut self.view) {
+            (Revision::Full(value), view) => view.insert(value),
+            (Revision::Delta(ops), Some(view)) => {
                 if let Err(e) = delta::apply(view, &ops) {
                     // The replica is unusable: start over from a fresh full
                     // value.
                     toast(self.ui, "View out of sync; reloading", e.to_string());
                     self.view = None;
-                    self.unwatch().await?;
-                    return self.watch().await;
+                    self.client.unwatch(conversation).await?;
+                    return self.client.watch(conversation).await;
                 }
+                view
             }
-            // Ops before the first value, or not a batch: nothing to apply them
-            // to.
-            _ => return Ok(()),
-        }
-        let Some(view) = &self.view else {
-            return Ok(());
+            // Ignore deltas until a full view arrives.
+            (Revision::Delta(_), None) => return Ok(()),
         };
         let thread = Thread::from_view(view);
         let unlisted: Vec<_> = thread
@@ -324,39 +316,15 @@ impl Session<'_> {
         if conversation == self.watched {
             return Ok(());
         }
-        self.unwatch().await?;
+        self.client.unwatch(self.watched).await?;
         self.watched = conversation;
         self.view = None;
-        self.watch().await
-    }
-
-    async fn watch(&self) -> viz_client::Result<()> {
-        self.client
-            .call::<Value>(
-                "conversation.watch",
-                json!({ "conversation": self.watched }),
-            )
-            .await
-            .map(drop)
-    }
-
-    async fn unwatch(&self) -> viz_client::Result<()> {
-        self.client
-            .call::<Value>(
-                "conversation.unwatch",
-                json!({ "conversation": self.watched }),
-            )
-            .await
-            .map(drop)
+        self.client.watch(conversation).await
     }
 
     /// Lists every conversation, titled by the backend, into the sidebar.
     async fn refresh_list(&mut self) -> viz_client::Result<()> {
-        #[derive(Deserialize)]
-        struct Listing {
-            conversations: Vec<ConversationSummary>,
-        }
-        let Listing { conversations } = self.client.call("conversations.list", json!({})).await?;
+        let conversations = self.client.list_conversations().await?;
         self.listed = conversations.iter().map(|summary| summary.id).collect();
         self.ui.update(move |s, _| s.conversations = conversations);
         Ok(())

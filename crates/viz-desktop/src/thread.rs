@@ -614,7 +614,7 @@ impl Usage {
 
 /// A tool result's or progress `details.conversationId`.
 fn child(details: Option<&Value>) -> Option<ConversationId> {
-    details?.get("conversationId")?.as_u64()
+    details?.get("conversationId")?.as_u64().map(ConversationId)
 }
 
 /// A message's text: a string, or its text blocks joined.

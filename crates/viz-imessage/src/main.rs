@@ -19,6 +19,7 @@ use viz_client::{
 };
 use viz_config::{Config, Secret};
 
+/// The connector's name: its config section, `hello` name and origins.
 const NAME: &str = "imessage";
 
 #[derive(Debug, Deserialize)]
@@ -40,23 +41,25 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::load()?;
     let imessage: ImessageConfig = config.connector(NAME)?;
+    // Fail early on a password that won't resolve; the bridge will use it.
     imessage.password.resolve()?;
     anyhow::ensure!(
         !imessage.allowed_handles.is_empty(),
         "[connectors.imessage].allowed_handles is empty: nobody could talk to viz"
     );
     let endpoint = Endpoint::from_config(&config)?;
-    let viz = Client::connect(
+    let hello = Client::connect(
         &endpoint,
         ClientInfo {
             kind: ClientKind::Connector,
-            name: NAME.into(),
+            name: NAME.to_owned(),
         },
     )
-    .await?;
+    .await?
+    .hello;
     tracing::info!(
         "connected to viz-backend {} at {endpoint}; BlueBubbles server {}",
-        viz.hello.version,
+        hello.version,
         imessage.server_url
     );
     anyhow::bail!("the BlueBubbles bridge is not implemented yet (TODO.md)")

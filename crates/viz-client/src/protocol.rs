@@ -1,15 +1,70 @@
 //! Protocol v1 types, mirroring `backend/src/protocol.ts` (the source of truth;
 //! its JSON Schema is `protocol/schema.json`).
+//!
+//! Each request's params type implements [`Method`], which names the method on
+//! the wire and its result type.
 
-use serde::{Deserialize, Serialize};
+use std::fmt;
+
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
+use serde_json::Value;
 
 /// The protocol version this crate speaks.
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// A pi-durable conversation id.
-pub type ConversationId = u64;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ConversationId(pub u64);
+
+impl fmt::Display for ConversationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 /// A pi-durable submission id.
-pub type SubmissionId = u64;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct SubmissionId(pub u64);
+
+impl fmt::Display for SubmissionId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
+/// A request method: its params type, its name on the wire, and its result
+/// type. Sealed: the protocol defines every method.
+pub trait Method: Serialize + Sync + private::Sealed {
+    /// The JSON-RPC method name.
+    const NAME: &'static str;
+    /// The `result` of a successful call.
+    type Response: DeserializeOwned;
+}
+
+mod private {
+    pub trait Sealed {}
+}
+
+macro_rules! methods {
+    ($($params:ty => $name:literal, $response:ty;)*) => {$(
+        impl private::Sealed for $params {}
+        impl Method for $params {
+            const NAME: &'static str = $name;
+            type Response = $response;
+        }
+    )*};
+}
+
+methods! {
+    HelloParams => "hello", Hello;
+    ListConversations => "conversations.list", ConversationList;
+    CreateConversation => "conversation.create", Created;
+    Submit => "conversation.submit", Submitted;
+    Watch => "conversation.watch", Watching;
+    Unwatch => "conversation.unwatch", Watching;
+}
 
 /// What kind of client is connecting; decides which notifications it receives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -51,6 +106,15 @@ pub struct Origin {
     pub author: Option<String>,
 }
 
+/// `hello` params: the first request on a connection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HelloParams {
+    /// The protocol version the client speaks, [`PROTOCOL_VERSION`].
+    pub protocol: u32,
+    /// Who is connecting.
+    pub client: ClientInfo,
+}
+
 /// `hello` result.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct Hello {
@@ -62,20 +126,15 @@ pub struct Hello {
     pub root: ConversationId,
 }
 
-/// `conversation.submit` params.
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Submit {
-    /// Target conversation; `None` is the orchestrator.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub conversation: Option<ConversationId>,
-    /// The input text.
-    pub text: String,
-    /// Idempotency key: a retry with the same id returns the same submission.
-    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<String>,
-    /// Where the input came from.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub origin: Option<Origin>,
+/// `conversations.list` params.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ListConversations {}
+
+/// `conversations.list` result.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ConversationList {
+    /// Every conversation.
+    pub conversations: Vec<ConversationSummary>,
 }
 
 /// What a conversation is.
@@ -95,13 +154,71 @@ pub enum ConversationKind {
 pub struct ConversationSummary {
     /// Its id.
     pub id: ConversationId,
-    /// Set by the backend; empty until known.
-    pub title: String,
+    /// Set by the backend: fixed for the orchestrator, a subagent's task, a
+    /// chat's first message. `None` (empty on the wire) until known.
+    #[serde(deserialize_with = "non_empty")]
+    pub title: Option<String>,
     /// What it is.
     pub kind: ConversationKind,
     /// For a subagent: the conversation whose tool call owns it.
     #[serde(default)]
     pub parent: Option<ConversationId>,
+}
+
+/// `conversation.create` params.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct CreateConversation {}
+
+/// `conversation.create` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Created {
+    /// The new conversation.
+    pub conversation: ConversationId,
+}
+
+/// `conversation.submit` params.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Submit {
+    /// Target conversation; `None` is the orchestrator.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationId>,
+    /// The input text.
+    pub text: String,
+    /// Idempotency key: a retry with the same id returns the same submission.
+    #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+    /// Where the input came from.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub origin: Option<Origin>,
+}
+
+/// `conversation.submit` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Submitted {
+    /// The submission the input became.
+    pub submission: SubmissionId,
+}
+
+/// `conversation.watch` params: start receiving
+/// [`Notification::ConversationView`] for a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Watch {
+    /// The conversation.
+    pub conversation: ConversationId,
+}
+
+/// `conversation.unwatch` params: stop watching a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct Unwatch {
+    /// The conversation.
+    pub conversation: ConversationId,
+}
+
+/// `conversation.watch` and `conversation.unwatch` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Watching {
+    /// Whether this client now watches the conversation.
+    pub watching: bool,
 }
 
 /// How a submission settled.
@@ -132,17 +249,59 @@ pub enum Notification {
         /// The answer's text, if any.
         text: Option<String>,
     },
-    /// A watched conversation's view: full `value` first, then Chord delta
-    /// `ops`.
+    /// A revision of a watched conversation's view.
     #[serde(rename = "conversation.view")]
-    ConversationView {
-        /// The conversation.
-        conversation: ConversationId,
-        /// Full view (first revision).
-        #[serde(default)]
-        value: Option<serde_json::Value>,
-        /// Delta operations against the previous revision.
-        #[serde(default)]
-        ops: Option<serde_json::Value>,
-    },
+    ConversationView(ViewRevision),
+}
+
+/// `conversation.view` params: one revision of a watched conversation's view.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(try_from = "RawViewRevision")]
+pub struct ViewRevision {
+    /// The conversation.
+    pub conversation: ConversationId,
+    /// The revision's content.
+    pub revision: Revision,
+}
+
+/// What a [`ViewRevision`] carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Revision {
+    /// The full view: the first revision, and any that replace the replica.
+    Full(Value),
+    /// Chord delta ops against the previous revision (see
+    /// [`delta`](crate::delta)).
+    Delta(Vec<Value>),
+}
+
+/// `conversation.view` params as sent: `value` or `ops`.
+#[derive(Deserialize)]
+struct RawViewRevision {
+    conversation: ConversationId,
+    #[serde(default)]
+    value: Option<Value>,
+    #[serde(default)]
+    ops: Option<Vec<Value>>,
+}
+
+impl TryFrom<RawViewRevision> for ViewRevision {
+    type Error = &'static str;
+
+    fn try_from(raw: RawViewRevision) -> Result<Self, Self::Error> {
+        let revision = match (raw.value, raw.ops) {
+            (Some(value), _) => Revision::Full(value),
+            (None, Some(ops)) => Revision::Delta(ops),
+            (None, None) => return Err("a view revision has neither `value` nor `ops`"),
+        };
+        Ok(Self {
+            conversation: raw.conversation,
+            revision,
+        })
+    }
+}
+
+/// Reads a string that is empty until known as an `Option`.
+fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
+    let text = String::deserialize(deserializer)?;
+    Ok((!text.is_empty()).then_some(text))
 }

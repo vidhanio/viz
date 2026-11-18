@@ -4670,7 +4670,6 @@ dependencies = [
  "rune",
  "rune-kit",
  "rune-theme-opencode",
- "serde",
  "serde_json",
  "tokio",
  "viz-client",

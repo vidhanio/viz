@@ -11,7 +11,6 @@ publish.workspace = true
 rune.workspace = true
 rune-kit = { workspace = true, features = ["markdown"] }
 rune-theme-opencode.workspace = true
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["macros", "rt", "sync", "time"] }
 viz-client.workspace = true

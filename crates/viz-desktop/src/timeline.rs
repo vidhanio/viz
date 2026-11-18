@@ -461,11 +461,10 @@ fn output(tool: &Tool, t: &Theme) -> El {
 fn subagent_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let title = tool
         .child
-        .filter(|child| {
-            s.summary(*child)
-                .is_some_and(|summary| !summary.title.is_empty())
-        })
-        .map_or_else(|| tool.summary.clone(), |child| s.title(child));
+        .and_then(|child| s.summary(child))
+        .and_then(|summary| summary.title.as_ref())
+        .unwrap_or(&tool.summary)
+        .clone();
     let failed = tool.status == ToolStatus::Failed;
     let mut el = row()
         .key(tool.key.clone())

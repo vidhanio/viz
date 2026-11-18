@@ -16,14 +16,19 @@
 //! Like Chord, ops apply in order and an error leaves the value partially
 //! updated: discard it and recover from a fresh full value.
 
+use std::mem;
+
 use serde_json::Value;
 
 /// Path segments that reach the JS prototype chain; Chord rejects them.
 const RESERVED_SEGMENTS: [&str; 3] = ["__proto__", "constructor", "prototype"];
 
+/// 2^64: the first integral `f64` past `u64`.
+const PAST_U64: f64 = 18_446_744_073_709_551_616.0;
+
 /// Why a batch couldn't be applied.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
-pub enum DeltaError {
+pub enum ApplyError {
     /// The op has the wrong verb, arity, or payload shape (Chord's
     /// `TypeError`).
     #[error("invalid op: {0}")]
@@ -38,14 +43,189 @@ pub enum DeltaError {
     Path(Value),
 }
 
+/// Applies `ops` to `value` in order.
+///
+/// # Errors
+///
+/// Returns an [`ApplyError`] for a malformed op or a path that doesn't
+/// resolve; `value` is then partially updated and should be discarded.
+pub fn apply(value: &mut Value, ops: &[Value]) -> Result<(), ApplyError> {
+    for op in ops {
+        Op::decode(op)?.apply(value)?;
+    }
+    Ok(())
+}
+
+/// A validated op, borrowing its payload from the batch.
+enum Op<'o> {
+    /// `r`.
+    Replace(&'o Value),
+    /// `s`.
+    Set {
+        path: SlotPath<'o>,
+        value: &'o Value,
+    },
+    /// `d`.
+    Delete(SlotPath<'o>),
+    /// `a`.
+    Append { path: SlotPath<'o>, text: &'o str },
+    /// `t`.
+    TrimFront { path: SlotPath<'o>, count: usize },
+    /// `p`.
+    Splice {
+        path: Path<'o>,
+        index: usize,
+        remove: usize,
+        items: &'o [Value],
+    },
+    /// `m`: a bijection on the array's indices.
+    Reorder {
+        path: Path<'o>,
+        permutation: Vec<usize>,
+    },
+}
+
+impl<'o> Op<'o> {
+    /// Validates an op tuple's verb, arity, path and payload, in Chord's order.
+    fn decode(op: &'o Value) -> Result<Self, ApplyError> {
+        let Some((verb, args)) = op.as_array().and_then(|tuple| tuple.split_first()) else {
+            return Err(ApplyError::InvalidOp("op is not a tuple"));
+        };
+        let invalid = |reason| Err(ApplyError::InvalidOp(reason));
+        match (verb.as_str(), args) {
+            (Some("r"), [value]) => Ok(Self::Replace(value)),
+            (Some("r"), _) => invalid("r arity"),
+            (Some("s"), [path, value]) => Ok(Self::Set {
+                path: SlotPath::parse(path)?,
+                value,
+            }),
+            (Some("s"), _) => invalid("s arity"),
+            (Some("d"), [path]) => Ok(Self::Delete(SlotPath::parse(path)?)),
+            (Some("d"), _) => invalid("d arity"),
+            (Some("a"), [path, text]) => {
+                let Some(text) = text.as_str() else {
+                    return invalid("a shape");
+                };
+                Ok(Self::Append {
+                    path: SlotPath::parse(path)?,
+                    text,
+                })
+            }
+            (Some("a"), _) => invalid("a shape"),
+            (Some("t"), [path, count]) => {
+                let Some(count) = non_negative_integer(count) else {
+                    return invalid("t shape");
+                };
+                Ok(Self::TrimFront {
+                    path: SlotPath::parse(path)?,
+                    count,
+                })
+            }
+            (Some("t"), _) => invalid("t shape"),
+            (Some("p"), [path, index, remove, items]) => {
+                let path = Path::parse(path)?;
+                let Some(index) = non_negative_integer(index) else {
+                    return invalid("p index");
+                };
+                let Some(remove) = non_negative_integer(remove) else {
+                    return invalid("p remove");
+                };
+                let Some(items) = items.as_array() else {
+                    return invalid("p items");
+                };
+                Ok(Self::Splice {
+                    path,
+                    index,
+                    remove,
+                    items,
+                })
+            }
+            (Some("p"), _) => invalid("p arity"),
+            (Some("m"), [path, permutation]) => Ok(Self::Reorder {
+                path: Path::parse(path)?,
+                permutation: decode_permutation(permutation)?,
+            }),
+            (Some("m"), _) => invalid("m arity"),
+            _ => invalid("unknown op verb"),
+        }
+    }
+
+    fn apply(self, root: &mut Value) -> Result<(), ApplyError> {
+        match self {
+            Self::Replace(value) => value.clone_into(root),
+            Self::Set { path, value } => {
+                let (parent, slot) = path.resolve(root)?;
+                slot.write(parent, value.clone());
+            }
+            Self::Delete(path) => match path.resolve(root)? {
+                (Value::Array(items), Slot::Index(index)) => {
+                    if index >= items.len() {
+                        return Err(path.unresolvable());
+                    }
+                    items.remove(index);
+                }
+                (Value::Object(map), Slot::Key(key)) => _ = map.remove(&key),
+                _ => unreachable!("SlotPath::resolve pairs arrays with indices, objects with keys"),
+            },
+            Self::Append { path, text } => {
+                let (parent, slot) = path.resolve(root)?;
+                let Some(Value::String(current)) = slot.lookup(parent) else {
+                    return Err(path.unresolvable());
+                };
+                current.push_str(text);
+            }
+            Self::TrimFront { path, count } => {
+                let (parent, slot) = path.resolve(root)?;
+                let Some(Value::String(current)) = slot.lookup(parent) else {
+                    return Err(path.unresolvable());
+                };
+                trim_utf16_front(current, count);
+            }
+            Self::Splice {
+                path,
+                index,
+                remove,
+                items,
+            } => {
+                let Value::Array(target) = path.resolve(root)? else {
+                    return Err(path.unresolvable());
+                };
+                // `Array.prototype.splice` clamps both the start and the count.
+                let start = index.min(target.len());
+                let end = start.saturating_add(remove).min(target.len());
+                target.splice(start..end, items.iter().cloned());
+            }
+            Self::Reorder { path, permutation } => {
+                let Value::Array(target) = path.resolve(root)? else {
+                    return Err(path.unresolvable());
+                };
+                if target.len() != permutation.len() {
+                    return Err(path.unresolvable());
+                }
+                let mut previous: Vec<Option<Value>> =
+                    mem::take(target).into_iter().map(Some).collect();
+                *target = permutation
+                    .iter()
+                    .map(|&from| {
+                        previous[from]
+                            .take()
+                            .expect("a bijection takes each element once")
+                    })
+                    .collect();
+            }
+        }
+        Ok(())
+    }
+}
+
 /// A validated path segment.
 #[derive(Debug, Clone, Copy)]
-enum Seg<'a> {
-    Key(&'a str),
+enum Segment<'o> {
+    Key(&'o str),
     Index(u64),
 }
 
-impl Seg<'_> {
+impl Segment<'_> {
     fn to_value(self) -> Value {
         match self {
             Self::Key(key) => Value::from(key),
@@ -54,154 +234,145 @@ impl Seg<'_> {
     }
 }
 
-/// Applies `ops` to `value` in order.
-///
-/// # Errors
-///
-/// Returns a [`DeltaError`] for a malformed op or a path that doesn't resolve;
-/// `value` is then partially updated and should be discarded.
-pub fn apply(value: &mut Value, ops: &[Value]) -> Result<(), DeltaError> {
-    ops.iter().try_for_each(|op| apply_op(value, op))
+/// A validated path to an object or array, possibly the root (`p`, `m`).
+struct Path<'o> {
+    /// The path as sent, for errors.
+    raw: &'o Value,
+    segments: Vec<Segment<'o>>,
 }
 
-fn apply_op(root: &mut Value, op: &Value) -> Result<(), DeltaError> {
-    let Some(tuple) = op.as_array().filter(|tuple| !tuple.is_empty()) else {
-        return Err(DeltaError::InvalidOp("op is not a tuple"));
-    };
-    match (tuple[0].as_str(), tuple.len()) {
-        (Some("r"), 2) => {
-            tuple[1].clone_into(root);
-            Ok(())
-        }
-        (Some("r"), _) => Err(DeltaError::InvalidOp("r arity")),
-        (Some("s"), 3) => {
-            let path = path_arg(&tuple[1], true)?;
-            let (parent, key) = parent_slot(root, &tuple[1], &path)?;
-            write(parent, key, tuple[2].clone());
-            Ok(())
-        }
-        (Some("s"), _) => Err(DeltaError::InvalidOp("s arity")),
-        (Some("d"), 2) => {
-            let path = path_arg(&tuple[1], true)?;
-            let (parent, key) = parent_slot(root, &tuple[1], &path)?;
-            match (parent, key) {
-                (Value::Array(items), Slot::Index(index)) => {
-                    if index >= items.len() {
-                        return Err(DeltaError::Path(tuple[1].clone()));
-                    }
-                    items.remove(index);
+impl<'o> Path<'o> {
+    /// Validates a path argument (Chord's `assertPathArg`).
+    fn parse(raw: &'o Value) -> Result<Self, ApplyError> {
+        let Some(segments) = raw.as_array() else {
+            return Err(ApplyError::InvalidOp("path is not an array"));
+        };
+        let segments = segments
+            .iter()
+            .map(|segment| match segment {
+                Value::String(key) if RESERVED_SEGMENTS.contains(&key.as_str()) => {
+                    Err(ApplyError::UnsafePath(segment.clone()))
                 }
-                (Value::Object(map), Slot::Key(key)) => _ = map.remove(&key),
-                _ => unreachable!("parent_slot pairs arrays with indices and objects with keys"),
+                Value::String(key) => Ok(Segment::Key(key)),
+                _ => non_negative_integer_u64(segment)
+                    .map(Segment::Index)
+                    .ok_or_else(|| ApplyError::UnsafePath(segment.clone())),
+            })
+            .collect::<Result<_, _>>()?;
+        Ok(Self { raw, segments })
+    }
+
+    fn unresolvable(&self) -> ApplyError {
+        ApplyError::Path(self.raw.clone())
+    }
+
+    /// Walks the path through own properties to an object or array (Chord's
+    /// `resolve`).
+    fn resolve<'v>(&self, root: &'v mut Value) -> Result<&'v mut Value, ApplyError> {
+        let mut node = root;
+        for &segment in &self.segments {
+            node = match (node, segment) {
+                (Value::Array(_), Segment::Key(_)) => {
+                    return Err(ApplyError::UnsafePath(segment.to_value()));
+                }
+                (Value::Array(items), Segment::Index(index)) => usize::try_from(index)
+                    .ok()
+                    .and_then(|index| items.get_mut(index))
+                    .ok_or_else(|| self.unresolvable())?,
+                (Value::Object(map), Segment::Key(key)) => {
+                    map.get_mut(key).ok_or_else(|| self.unresolvable())?
+                }
+                (Value::Object(map), Segment::Index(index)) => map
+                    .get_mut(&index.to_string())
+                    .ok_or_else(|| self.unresolvable())?,
+                _ => return Err(self.unresolvable()),
+            };
+        }
+        if node.is_object() || node.is_array() {
+            Ok(node)
+        } else {
+            Err(self.unresolvable())
+        }
+    }
+}
+
+/// A validated non-empty path to a property or element (`s`, `d`, `a`, `t`):
+/// its parent's path and its last segment.
+struct SlotPath<'o> {
+    /// The parent's path; its `raw` is the whole path.
+    parent: Path<'o>,
+    last: Segment<'o>,
+}
+
+impl<'o> SlotPath<'o> {
+    fn parse(raw: &'o Value) -> Result<Self, ApplyError> {
+        let mut parent = Path::parse(raw)?;
+        let Some(last) = parent.segments.pop() else {
+            return Err(ApplyError::InvalidOp("path is empty"));
+        };
+        Ok(Self { parent, last })
+    }
+
+    fn unresolvable(&self) -> ApplyError {
+        self.parent.unresolvable()
+    }
+
+    /// Resolves the parent and checks the last segment fits it.
+    fn resolve<'v>(&self, root: &'v mut Value) -> Result<(&'v mut Value, Slot), ApplyError> {
+        let parent = self.parent.resolve(root)?;
+        let slot = match (&*parent, self.last) {
+            (Value::Array(_), Segment::Key(_)) => {
+                return Err(ApplyError::UnsafePath(self.last.to_value()));
             }
-            Ok(())
-        }
-        (Some("d"), _) => Err(DeltaError::InvalidOp("d arity")),
-        (Some("a"), 3) => {
-            let Some(text) = tuple[2].as_str() else {
-                return Err(DeltaError::InvalidOp("a shape"));
-            };
-            let path = path_arg(&tuple[1], true)?;
-            let (parent, key) = parent_slot(root, &tuple[1], &path)?;
-            let Some(Value::String(current)) = read(parent, &key) else {
-                return Err(DeltaError::Path(tuple[1].clone()));
-            };
-            current.push_str(text);
-            Ok(())
-        }
-        (Some("a"), _) => Err(DeltaError::InvalidOp("a shape")),
-        (Some("t"), 3) => {
-            let Some(count) = non_negative_integer(&tuple[2]) else {
-                return Err(DeltaError::InvalidOp("t shape"));
-            };
-            let path = path_arg(&tuple[1], true)?;
-            let (parent, key) = parent_slot(root, &tuple[1], &path)?;
-            let Some(Value::String(current)) = read(parent, &key) else {
-                return Err(DeltaError::Path(tuple[1].clone()));
-            };
-            trim_utf16_front(current, count);
-            Ok(())
-        }
-        (Some("t"), _) => Err(DeltaError::InvalidOp("t shape")),
-        (Some("p"), 5) => splice(root, tuple),
-        (Some("p"), _) => Err(DeltaError::InvalidOp("p arity")),
-        (Some("m"), 3) => reorder(root, tuple),
-        (Some("m"), _) => Err(DeltaError::InvalidOp("m arity")),
-        _ => Err(DeltaError::InvalidOp("unknown op verb")),
+            // An index may address an element or append exactly one past the
+            // end.
+            (Value::Array(items), Segment::Index(index)) => match usize::try_from(index) {
+                Ok(index) if index <= items.len() => Slot::Index(index),
+                _ => return Err(ApplyError::UnsafePath(self.last.to_value())),
+            },
+            (_, Segment::Key(key)) => Slot::Key(key.to_owned()),
+            // JS property keys are strings: `obj[3]` is `obj["3"]`.
+            (_, Segment::Index(index)) => Slot::Key(index.to_string()),
+        };
+        Ok((parent, slot))
     }
 }
 
-/// `["p", path, index, remove, items]`.
-fn splice(root: &mut Value, tuple: &[Value]) -> Result<(), DeltaError> {
-    let path = path_arg(&tuple[1], false)?;
-    let Some(index) = non_negative_integer(&tuple[2]) else {
-        return Err(DeltaError::InvalidOp("p index"));
-    };
-    let Some(remove) = non_negative_integer(&tuple[3]) else {
-        return Err(DeltaError::InvalidOp("p remove"));
-    };
-    let Some(items) = tuple[4].as_array() else {
-        return Err(DeltaError::InvalidOp("p items"));
-    };
-    let Value::Array(target) = resolve(root, &tuple[1], &path)? else {
-        return Err(DeltaError::Path(tuple[1].clone()));
-    };
-    // `Array.prototype.splice` clamps both the start and the count.
-    let start = index.min(target.len());
-    let end = start.saturating_add(remove).min(target.len());
-    target.splice(start..end, items.iter().cloned());
-    Ok(())
+/// Where an `s`/`d`/`a`/`t` op writes under its parent: arrays pair with
+/// indices, objects with keys.
+enum Slot {
+    Key(String),
+    Index(usize),
 }
 
-/// `["m", path, permutation]`.
-fn reorder(root: &mut Value, tuple: &[Value]) -> Result<(), DeltaError> {
-    let path = path_arg(&tuple[1], false)?;
-    let permutation = permutation(&tuple[2])?;
-    let Value::Array(target) = resolve(root, &tuple[1], &path)? else {
-        return Err(DeltaError::Path(tuple[1].clone()));
-    };
-    if target.len() != permutation.len() {
-        return Err(DeltaError::Path(tuple[1].clone()));
+impl Slot {
+    fn lookup<'v>(&self, parent: &'v mut Value) -> Option<&'v mut Value> {
+        match self {
+            Self::Index(index) => parent.as_array_mut()?.get_mut(*index),
+            Self::Key(key) => parent.as_object_mut()?.get_mut(key),
+        }
     }
-    let mut previous: Vec<Option<Value>> = std::mem::take(target).into_iter().map(Some).collect();
-    *target = permutation
-        .iter()
-        .map(|&from| {
-            previous[from]
-                .take()
-                .expect("a bijection takes each element once")
-        })
-        .collect();
-    Ok(())
-}
 
-/// Validates a path argument (Chord's `assertPathArg`).
-fn path_arg(path: &Value, non_empty: bool) -> Result<Vec<Seg<'_>>, DeltaError> {
-    let Some(segments) = path.as_array() else {
-        return Err(DeltaError::InvalidOp("path is not an array"));
-    };
-    if non_empty && segments.is_empty() {
-        return Err(DeltaError::InvalidOp("path is empty"));
-    }
-    segments
-        .iter()
-        .map(|segment| match segment {
-            Value::String(key) if RESERVED_SEGMENTS.contains(&key.as_str()) => {
-                Err(DeltaError::UnsafePath(segment.clone()))
+    fn write(self, parent: &mut Value, value: Value) {
+        match (parent, self) {
+            (Value::Array(items), Self::Index(index)) => {
+                if index == items.len() {
+                    items.push(value);
+                } else {
+                    items[index] = value;
+                }
             }
-            Value::String(key) => Ok(Seg::Key(key)),
-            _ => non_negative_integer_u64(segment)
-                .map(Seg::Index)
-                .ok_or_else(|| DeltaError::UnsafePath(segment.clone())),
-        })
-        .collect()
+            (Value::Object(map), Self::Key(key)) => _ = map.insert(key, value),
+            _ => unreachable!("SlotPath::resolve pairs arrays with indices, objects with keys"),
+        }
+    }
 }
 
 /// Validates an `m` permutation: a bijection on `0..len` (Chord's
 /// `assertPermutation`).
-fn permutation(value: &Value) -> Result<Vec<usize>, DeltaError> {
+fn decode_permutation(value: &Value) -> Result<Vec<usize>, ApplyError> {
     let Some(entries) = value.as_array() else {
-        return Err(DeltaError::InvalidOp("m permutation is not an array"));
+        return Err(ApplyError::InvalidOp("m permutation is not an array"));
     };
     let mut seen = vec![false; entries.len()];
     entries
@@ -209,15 +380,12 @@ fn permutation(value: &Value) -> Result<Vec<usize>, DeltaError> {
         .map(|entry| {
             let index = non_negative_integer(entry)
                 .filter(|&index| index < entries.len() && !seen[index])
-                .ok_or(DeltaError::InvalidOp("m permutation is not a bijection"))?;
+                .ok_or(ApplyError::InvalidOp("m permutation is not a bijection"))?;
             seen[index] = true;
             Ok(index)
         })
         .collect()
 }
-
-/// 2^64: the first integral `f64` past `u64`.
-const PAST_U64: f64 = 18_446_744_073_709_551_616.0;
 
 /// A JSON number that JS's `Number.isInteger` accepts and that is non-negative.
 fn non_negative_integer_u64(value: &Value) -> Option<u64> {
@@ -241,91 +409,6 @@ fn non_negative_integer_u64(value: &Value) -> Option<u64> {
 /// clamp like JS's.
 fn non_negative_integer(value: &Value) -> Option<usize> {
     non_negative_integer_u64(value).map(|n| usize::try_from(n).unwrap_or(usize::MAX))
-}
-
-/// The key an `s`/`d`/`a`/`t` op writes under its parent.
-enum Slot {
-    Key(String),
-    Index(usize),
-}
-
-/// Resolves the parent of `path`'s last segment and checks the segment fits it.
-fn parent_slot<'v>(
-    root: &'v mut Value,
-    raw: &Value,
-    path: &[Seg<'_>],
-) -> Result<(&'v mut Value, Slot), DeltaError> {
-    let (last, init) = path.split_last().expect("validated non-empty");
-    let parent = resolve(root, raw, init)?;
-    let slot = match (&*parent, *last) {
-        (Value::Array(_), Seg::Key(_)) => return Err(DeltaError::UnsafePath(last.to_value())),
-        (Value::Array(items), Seg::Index(index)) => {
-            // An index may address an element or append exactly one past the
-            // end.
-            match usize::try_from(index) {
-                Ok(index) if index <= items.len() => Slot::Index(index),
-                _ => return Err(DeltaError::UnsafePath(last.to_value())),
-            }
-        }
-        (_, Seg::Key(key)) => Slot::Key(key.to_owned()),
-        // JS property keys are strings: `obj[3]` is `obj["3"]`.
-        (_, Seg::Index(index)) => Slot::Key(index.to_string()),
-    };
-    Ok((parent, slot))
-}
-
-/// Walks `path` through own properties to an object or array (Chord's
-/// `resolve`).
-fn resolve<'v>(
-    root: &'v mut Value,
-    raw: &Value,
-    path: &[Seg<'_>],
-) -> Result<&'v mut Value, DeltaError> {
-    let unresolvable = || DeltaError::Path(raw.clone());
-    let mut node = root;
-    for &segment in path {
-        node = match (node, segment) {
-            (Value::Array(_), Seg::Key(_)) => {
-                return Err(DeltaError::UnsafePath(segment.to_value()));
-            }
-            (Value::Array(items), Seg::Index(index)) => usize::try_from(index)
-                .ok()
-                .and_then(|index| items.get_mut(index))
-                .ok_or_else(unresolvable)?,
-            (Value::Object(map), Seg::Key(key)) => map.get_mut(key).ok_or_else(unresolvable)?,
-            (Value::Object(map), Seg::Index(index)) => {
-                map.get_mut(&index.to_string()).ok_or_else(unresolvable)?
-            }
-            _ => return Err(unresolvable()),
-        };
-    }
-    if node.is_object() || node.is_array() {
-        Ok(node)
-    } else {
-        Err(unresolvable())
-    }
-}
-
-fn read<'v>(parent: &'v mut Value, slot: &Slot) -> Option<&'v mut Value> {
-    match (parent, slot) {
-        (Value::Array(items), Slot::Index(index)) => items.get_mut(*index),
-        (Value::Object(map), Slot::Key(key)) => map.get_mut(key),
-        _ => None,
-    }
-}
-
-fn write(parent: &mut Value, slot: Slot, value: Value) {
-    match (parent, slot) {
-        (Value::Array(items), Slot::Index(index)) => {
-            if index == items.len() {
-                items.push(value);
-            } else {
-                items[index] = value;
-            }
-        }
-        (Value::Object(map), Slot::Key(key)) => _ = map.insert(key, value),
-        _ => unreachable!("parent_slot pairs arrays with indices and objects with keys"),
-    }
 }
 
 /// Drops `count` UTF-16 code units from the front, like JS's

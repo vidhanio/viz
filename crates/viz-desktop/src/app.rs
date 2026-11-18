@@ -187,8 +187,8 @@ impl Desktop {
     /// or what it is until the backend has one.
     pub fn title(&self, conversation: ConversationId) -> String {
         let summary = self.summary(conversation);
-        if let Some(summary) = summary.filter(|summary| !summary.title.is_empty()) {
-            return summary.title.clone();
+        if let Some(title) = summary.and_then(|summary| summary.title.as_ref()) {
+            return title.clone();
         }
         let kind = summary.map(|summary| summary.kind).or_else(|| {
             (self.root == Some(conversation)).then_some(ConversationKind::Orchestrator)
