@@ -30,8 +30,8 @@ use crate::{
         EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff, GitPr, GitPush, GitRevert,
         Harness, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses, ListProjects,
         Method, Notification, PROTOCOL_VERSION, PrResult, Project, RemoveProject,
-        RemoveQueuedInput, RespondApproval, SearchConversations, SearchFiles, SearchHit,
-        SubmissionId, Submit, Unwatch, UpdateConversation, UpdateProject, Watch,
+        RemoveQueuedInput, SearchConversations, SearchFiles, SearchHit, SubmissionId, Submit,
+        Unwatch, UpdateConversation, UpdateProject, Watch,
     },
 };
 
@@ -178,15 +178,6 @@ impl Client {
         self.request(&AbortConversation { conversation })
             .await
             .map(drop)
-    }
-
-    /// Answers or cancels an approval.
-    ///
-    /// # Errors
-    ///
-    /// See [`Client::submit`].
-    pub async fn respond_approval(&self, params: &RespondApproval<'_>) -> Result<()> {
-        self.request(params).await.map(drop)
     }
 
     /// Lists available project directories.

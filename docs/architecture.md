@@ -45,7 +45,7 @@ One durable worker drains each chat's inputs in order. The backend stores the ru
 
 `conversation.state` exposes waiting inputs, which can be removed until they are placed. The orchestrator uses pi-durable's inbox; ACP uses its own durable chat queue. A chat becomes unread when it stops working with no app watching; watching clears the flag.
 
-The runner advertises configuration options, modes, and slash commands. `viz.acp.state` stores the last options and commands and the user's desired values. The backend reapplies choices that differ on open or restore. Slash commands go to the runner as typed. Full and Read-only answer ACP permission requests automatically; Ask exposes them to apps until a user responds, the turn ends or is aborted, or the process closes. The access setting is not a sandbox.
+The runner advertises configuration options, modes, and slash commands. `viz.acp.state` stores the last options and commands and the user's desired values. The backend reapplies choices that differ on open or restore. Slash commands go to the runner as typed. viz allows every ACP permission request, choosing the first `allow_once` option, else `allow_always`, and cancels a request that offers neither; there is no sandbox.
 
 File mentions search within the chat's cwd. With Git on `PATH`, its index and ignore rules determine candidates in a checkout; elsewhere a bounded walk excludes hidden directories, `node_modules`, and `target`. Searches cache file lists briefly and rank fuzzy basename matches before path-only matches.
 
@@ -102,7 +102,7 @@ Listeners (see `docs/decisions/0001-remote-transport.md`):
 Every connector input goes into the orchestrator (or a named conversation) with an `origin` (`connector`, `channel`, optional `thread`/`message`/`author`). The backend stores the origin with the transcript entry (`kind: "viz.input"`, `data.origin`) and prefixes the model-visible text with a tag like `[discord #123 @alice]`, so the orchestrator knows where an input came from.
 
 - **Connectors** receive only `reply` notifications for inputs whose `origin.connector` is their own `hello` name, and render just those replies.
-- **Apps** watch conversations for `conversation.view` (snapshot, then Chord deltas) and `conversation.state` (status, cwd, options, commands, approvals, queued inputs, attachment capability, and Git status). Stored pi-durable commits and in-memory approval changes drive debounced `conversations.changed` notifications; apps then reload their conversation and project lists. Git state also refreshes on Git RPCs and every five seconds for watched conversations.
+- **Apps** watch conversations for `conversation.view` (snapshot, then Chord deltas) and `conversation.state` (status, cwd, options, commands, queued inputs, attachment capability, and Git status). Stored pi-durable commits drive debounced `conversations.changed` notifications; apps then reload their conversation and project lists. Git state also refreshes on Git RPCs and every five seconds for watched conversations.
 
 Reply routing is in-memory today: a reply to a connector that is disconnected when the answer lands is dropped (durable outbox: `TODO.md`).
 

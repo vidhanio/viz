@@ -14,8 +14,8 @@ use viz_client::{
     protocol::{
         ClientInfo, ClientKind, ConfigureConversation, ConversationId, CreateConversation,
         CreateProject, EntryId, Notification, OptionValue, RemoveProject, RemoveQueuedInput,
-        RespondApproval, Revision, SearchFiles, SubmissionId, Submit, UpdateConversation,
-        UpdateProject, ViewRevision,
+        Revision, SearchFiles, SubmissionId, Submit, UpdateConversation, UpdateProject,
+        ViewRevision,
     },
 };
 use viz_config::Config;
@@ -48,11 +48,6 @@ pub enum Command {
         value: OptionValue,
     },
     Abort(ConversationId),
-    Approval {
-        conversation: ConversationId,
-        approval: String,
-        option: String,
-    },
     Project(ProjectChange),
     SearchFiles {
         conversation: ConversationId,
@@ -359,19 +354,6 @@ impl Session<'_> {
                     .await
             }
             Command::Abort(id) => self.client.abort_conversation(id).await,
-            Command::Approval {
-                conversation,
-                approval,
-                option,
-            } => {
-                self.client
-                    .respond_approval(&RespondApproval {
-                        conversation,
-                        approval: &approval,
-                        option: Some(&option),
-                    })
-                    .await
-            }
             Command::Project(change) => self.project(change).await,
             Command::SearchFiles {
                 conversation,

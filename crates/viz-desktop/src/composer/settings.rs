@@ -4,7 +4,7 @@ use viz_client::protocol::{ConfigOption, ConversationId, OptionKind, OptionValue
 
 use crate::{app::Desktop, backend::Command, theme::Theme, ui};
 
-const CATEGORIES: [&str; 4] = ["model", "thought_level", "mode", "access"];
+const CATEGORIES: [&str; 3] = ["model", "thought_level", "mode"];
 const HARNESS_PICKER: &str = "harness";
 
 fn category(option: &ConfigOption) -> Option<usize> {
@@ -30,9 +30,9 @@ fn picker_width(label: &str, t: &Theme) -> f32 {
     (rune::text::measure(label, &[], font, None).0 + PICKER_CHROME).min(PICKER_MAX)
 }
 
-/// The session's selects in one row no wider than `budget`: model, effort, mode
-/// and access in that priority, the ones that don't fit folded into More with
-/// the uncategorized options.
+/// The session's selects in one row no wider than `budget`: model, effort and
+/// mode in that priority, the ones that don't fit folded into More with the
+/// uncategorized options.
 pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) -> El {
     let bar = row().key("settings").min_h(26.0).gap(2.0).center_y();
     if let Some(new) = &s.new_chat {

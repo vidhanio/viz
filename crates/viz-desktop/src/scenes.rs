@@ -3,10 +3,10 @@
 
 use serde_json::json;
 use viz_client::protocol::{
-    Approval, ApprovalKind, ApprovalOption, Attachment, AttachmentCapabilities, ConfigOption,
-    ConversationId, ConversationKind, ConversationState, ConversationStatus, ConversationSummary,
-    EntryId, GitFile, GitFileStatus, GitState, OptionChoice, OptionKind, OptionValue, Project,
-    QueuedInput, SearchHit, SlashCommand, SubmissionId,
+    Attachment, AttachmentCapabilities, ConfigOption, ConversationId, ConversationKind,
+    ConversationState, ConversationStatus, ConversationSummary, EntryId, GitFile, GitFileStatus,
+    GitState, OptionChoice, OptionKind, OptionValue, Project, QueuedInput, SearchHit, SlashCommand,
+    SubmissionId,
 };
 
 use crate::{
@@ -19,7 +19,6 @@ type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
     ("selectors", selectors),
-    ("approval", approval),
     ("palette", palette),
     ("diff", diff),
     ("commit", commit),
@@ -165,17 +164,6 @@ fn conversation() -> ConversationState {
                 "build",
                 &[("build", "Build"), ("plan", "Plan")],
             ),
-            option(
-                "access",
-                "Access",
-                "access",
-                "ask",
-                &[
-                    ("full", "Full access"),
-                    ("ask", "Ask first"),
-                    ("read-only", "Read-only"),
-                ],
-            ),
             ConfigOption {
                 id: "context".into(),
                 name: "Include workspace context".into(),
@@ -191,7 +179,6 @@ fn conversation() -> ConversationState {
             description: "Review the current changes".into(),
             hint: Some("[path]".into()),
         }],
-        approvals: Vec::new(),
         queue: Vec::new(),
         git: Some(GitState {
             branch: Some("main".into()),
@@ -242,35 +229,6 @@ fn transcript(attachments: &[&str]) -> Thread {
 fn selectors(s: &mut Desktop) {
     workspace(s);
     s.open_picker = Some("option-model".into());
-}
-
-fn approval(s: &mut Desktop) {
-    workspace(s);
-    s.toggle("e4");
-    if let Some(state) = &mut s.conversation {
-        state.status = ConversationStatus::Approval;
-        state.approvals.push(Approval {
-            id: "run-export".into(),
-            title: "Run the markdown export".into(),
-            kind: Some("execute".into()),
-            detail: Some("{\n  \"command\": \"cargo run -- export notes/\"\n}".into()),
-            options: [
-                ("reject", "Deny", ApprovalKind::RejectOnce),
-                ("always", "Always allow", ApprovalKind::AllowAlways),
-                ("allow", "Allow once", ApprovalKind::AllowOnce),
-            ]
-            .map(|(id, name, kind)| ApprovalOption {
-                id: id.into(),
-                name: name.into(),
-                kind,
-            })
-            .into(),
-        });
-    }
-    if let Some(chat) = s.conversations.iter_mut().find(|chat| chat.id == CHAT) {
-        chat.status = ConversationStatus::Approval;
-    }
-    s.toggle("approval-run-export");
 }
 
 fn palette(s: &mut Desktop) {

@@ -7,7 +7,6 @@ import type { ConfigOption, ConversationState } from "../protocol.ts";
 export type OptionValue = ConfigOption["value"];
 export type Desired = Record<string, OptionValue>;
 export type Commands = ConversationState["commands"];
-export type Access = "full" | "ask" | "read-only";
 
 export const AcpStateDoc = defineDoc<{
   options: ConfigOption[];
@@ -24,58 +23,29 @@ export const AcpStateDoc = defineDoc<{
   checkpointWhen: () => true,
 });
 
-export function access(value: OptionValue | undefined, config?: HarnessConfig): Access {
-  if (value === "full" || value === "ask" || value === "read-only") return value;
-  return config?.permissions === "allow" ? "full" : config?.permissions === "ask" ? "ask" : "read-only";
-}
-
-export function accessOption(value: Access): ConfigOption {
-  return {
-    id: "access",
-    name: "Access",
-    category: "access",
-    type: "select",
-    value,
-    choices: [
-      { value: "full", name: "Full" },
-      { value: "ask", name: "Ask" },
-      { value: "read-only", name: "Read-only" },
-    ],
-  };
-}
-
 export function validValue(option: ConfigOption, value: OptionValue): boolean {
   return option.type === "boolean"
     ? typeof value === "boolean"
     : option.choices.some((choice) => choice.value === value);
 }
 
-export function initialDesired(config: HarnessConfig, options?: Desired): Desired {
-  if (Object.hasOwn(options ?? {}, "access") && options?.access !== access(options?.access, config)) {
-    throw new Error("Invalid access value");
-  }
-  return { ...options, access: access(options?.access, config) };
-}
-
 export function normalize(options: SessionConfigOption[]): ConfigOption[] {
-  return options
-    .filter((option) => option.id !== "access")
-    .map((option) => ({
-      id: option.id,
-      name: option.name,
-      ...(option.description != null && { description: option.description }),
-      category: option.category ?? null,
-      type: option.type,
-      value: option.currentValue,
-      choices:
-        option.type === "boolean"
-          ? []
-          : option.options.flatMap((choice) =>
-              "group" in choice
-                ? choice.options.map((item) => ({ ...selectChoice(item), group: choice.name }))
-                : [selectChoice(choice)],
-            ),
-    }));
+  return options.map((option) => ({
+    id: option.id,
+    name: option.name,
+    ...(option.description != null && { description: option.description }),
+    category: option.category ?? null,
+    type: option.type,
+    value: option.currentValue,
+    choices:
+      option.type === "boolean"
+        ? []
+        : option.options.flatMap((choice) =>
+            "group" in choice
+              ? choice.options.map((item) => ({ ...selectChoice(item), group: choice.name }))
+              : [selectChoice(choice)],
+          ),
+  }));
 }
 
 function selectChoice({ value, name, description }: { value: string; name: string; description?: string | null }) {

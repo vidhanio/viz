@@ -39,7 +39,7 @@ enum VizProtocol {
     }
 
     enum Status: String, Decodable {
-      case idle, working, approval, failed
+      case idle, working, failed
     }
 
     let id: Int

@@ -27,7 +27,6 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 import { ChatDoc, type ChatInput, chatScheduler } from "./agents/chat.ts";
 import { AgentDoc } from "./agents/model.ts";
-import { initialDesired } from "./agents/options.ts";
 import { Runners } from "./agents/runners.ts";
 import { AgentSessions } from "./agents/sessions.ts";
 import { agentTools } from "./agents/tools.ts";
@@ -57,7 +56,6 @@ export type VizHarness = {
   readonly conversations: Conversations;
   readonly projects: ProjectStore;
   readonly runners: Runners;
-  readonly approvals: AgentSessions["approvals"];
   readonly search: SearchIndex;
   readonly repositories: Repositories;
   saveAttachments(attachments: Attachment[]): Promise<StoredAttachment[]>;
@@ -234,10 +232,10 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     if (!subject) throw new Error("Model did not return a Conventional Commits subject");
     return subject;
   });
-  const conversations = new Conversations(harness, root.id, cwd, runners, sessions, settings.options, rootImages, git);
+  const conversations = new Conversations(harness, root.id, cwd, sessions, settings.options, rootImages, git);
   const projectStore = projects(harness, root.id);
   const files = new FileSearch();
-  const changes = await observeChanges(harness, root.id, sessions.approvals, context);
+  const changes = await observeChanges(harness, root.id, context);
   const search = await SearchIndex.open(dir, harness, context);
   const repositories = new Repositories(git, harness, root.id, conversations, changes);
 
@@ -354,7 +352,6 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     conversations,
     projects: projectStore,
     runners,
-    approvals: sessions.approvals,
     search,
     repositories,
     saveAttachments: (attachments) => saveAttachments(dir, attachments),
@@ -430,7 +427,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     createChat: ({ worktree, ...options }, context) => {
       if (!worktree) return chats.create(harness, options, context);
       if (!options.project) throw new Error("A worktree requires a project");
-      initialDesired(runners.require(options.harness).config, options.options);
+      runners.require(options.harness);
       return inWorktree(options.project, worktree, context, (created) =>
         chats.create(harness, { ...options, worktree: created }, context),
       );

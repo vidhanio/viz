@@ -297,7 +297,6 @@ struct ContentView: View {
     switch status {
     case .idle: "Idle"
     case .working: "Working"
-    case .approval: "Approval needed"
     case .failed: "Failed"
     }
   }

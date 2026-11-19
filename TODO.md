@@ -19,17 +19,16 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 - [x] **uniichat memory** for the orchestrator (`backend/src/memory/`, `docs/architecture.md` "Memory"): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
 - [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
 - [x] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): `list_conversations`, `read_conversation`, `search_conversations`, `spawn_chat` (background, reports back as a `[chat N]` input), `message_conversation` (queues), `cancel_conversation`.
-- [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers), an approval route for spawned chats nobody watches, recover a worktree left by a crash between creation and saving it.
+- [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers), recover a worktree left by a crash between creation and saving it.
 - [x] **ACP delegation** (`docs/findings/acp.md`): run a named harness via `subagent`, store its child transcript, map updates for the desktop, and cancel with the owning tool.
 - [x] **Scoped MCP progress** for ACP delegations: loopback HTTP or stdio bridge, per-turn token, no access to unrelated conversations.
 - [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
 - [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP (`docs/decisions/0004-ade-workspace.md`).
-- [x] **ACP approvals**: per-chat `access` option (full / ask / read-only); `ask` holds permission requests as approvals until a client answers.
+- [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`). Per-chat access and approvals existed briefly and were removed as unneeded.
 - [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
 - [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, worktree, timestamps) for the sidebar; rename.
 - [x] **ADE workspace** (t3code parity, 2026-11-18): projects, per-chat model/effort/mode from the runner's ACP config options (config = default), slash commands, `@` file search, stop, queue view and removal, attachments, full-text search, history paging, git worktree chats, per-turn checkpoints with diff and revert, commit (generated message) / push / PR.
 - [ ] ADE follow-ups (from the t3code gap analysis): terminal panes (server PTYs; Bun lacks openpty), in-thread find, edit-from-here / fork a chat at a message, plan-mode approve → implement, usage and limits panel, settings UI and rebindable keys, harness probe (capabilities and models per runner before a chat exists), scratch directories for project-less chats, multi-model fan-out to parallel worktrees.
-- [ ] Approvals: `beforeTool` hook + memo for dangerous tools, surfaced as protocol requests.
 - [ ] Credentials: persist pi-ai `CredentialStore` in the state dir; OAuth login (Claude Pro/Max, ChatGPT, Copilot) driven from a UI.
 - [ ] Auth: per-client tokens, pairing codes (QR for iOS), scopes; `tailscale serve` helper (t3code's `--tailscale-serve`).
 - [ ] Expose viz as an ACP agent itself, so editors (Zed) can talk to the orchestrator.
@@ -39,7 +38,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 ## Protocol
 
 - [ ] Generate Rust (`typify`) and Swift (`quicktype` or hand-rolled from schema) types from `protocol/schema.json` instead of mirroring by hand.
-- [ ] Methods: compact, fork. (Done: abort, configure, archive, approvals, paging via `conversation.entries`.)
+- [ ] Methods: compact, fork. (Done: abort, configure, archive, paging via `conversation.entries`.)
 - [ ] Protocol version negotiation beyond the `hello` equality check.
 
 ## Connectors
@@ -53,7 +52,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 
 - [x] Skeleton: sidebar + transcript + input, live view via delta ops
 - [x] Redesign on rune-kit + OpenCode theme (light/dark): split shell with collapsible sidebar (Orchestrator, Chats, Subagents, busy spinners, connection footer), thread header (model, thinking, usage), Markdown timeline with grouped collapsible tool rows, subagent rows that open the child, turn dividers, streaming answer, auto-growing composer, toasts
-- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode/access selects, `/` commands, `@` files, attachments, stop, queue rows; approval card; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; Ctrl/Cmd+D changes panel (diffs, branch, commit, push, PR, revert); worktree chats; desktop notifications and window-title status
+- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; Ctrl/Cmd+D changes panel (diffs, branch, commit, push, PR, revert); worktree chats; desktop notifications and window-title status. (Its access select and approval card were later removed with ACP approvals.)
 - [ ] Settings UI writing `config.d/` drop-ins
 - [ ] Tray, global shortcut to summon
 

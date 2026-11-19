@@ -47,8 +47,6 @@ pub struct Theme {
     pub warning: Color,
     /// Interface text, 13 on 20.
     pub ui: TextStyle,
-    /// `ui` at the medium weight.
-    pub ui_medium: TextStyle,
     /// Small labels, 11.5 on 16.
     pub small: TextStyle,
     /// Message text, 14.5 on 23.
@@ -220,10 +218,6 @@ impl Theme {
             success: hex(t.success),
             warning: hex(t.warning),
             ui,
-            ui_medium: TextStyle {
-                weight: 500.0,
-                ..ui
-            },
             small: TextStyle::new(11.5, 400.0).lh(16.0),
             body: TextStyle::new(14.5, 400.0).lh(23.0),
             title: TextStyle::new(14.0, 600.0).lh(20.0),

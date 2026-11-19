@@ -57,9 +57,3 @@ export class ToolContent {
     return record;
   }
 }
-
-export function approvalDetail(tool: ToolCallUpdate): string | null {
-  if (tool.rawInput !== undefined) return inputText(tool.rawInput) ?? null;
-  const paths = tool.content?.flatMap((item) => (item.type === "diff" ? [item.path] : []));
-  return paths?.length ? `Files changed:\n${paths.join("\n")}`.slice(0, 4000) : null;
-}

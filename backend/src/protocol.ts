@@ -53,9 +53,7 @@ export const Project = obj({
 });
 export type Project = Static<typeof Project>;
 
-const Status = oneOf(["idle", "working", "approval", "failed"], {
-  description: "working: a turn runs or inputs wait; approval: a permission request waits for the user",
-});
+const Status = oneOf(["idle", "working", "failed"], { description: "working: a turn runs or inputs wait" });
 
 export const ConversationSummary = obj({
   id: ConversationId,
@@ -80,14 +78,13 @@ const OptionValue = union([str(), bool()]);
 
 /**
  * A per-conversation setting shown in the composer. ACP chats take them from the runner's session config options
- * (`category` model, thought_level, mode, ...); the orchestrator has `model` and `thinking`; every ACP conversation also
- * has viz's `access` (full: allow every permission request; ask: route them to approvals; read-only: reject them).
+ * (`category` model, thought_level, mode, ...); the orchestrator has `model` and `thinking`.
  */
 export const ConfigOption = obj({
   id: str(),
   name: str(),
   description: opt(str()),
-  category: nullable(str({ description: "model | thought_level | mode | access | other ACP categories" })),
+  category: nullable(str({ description: "model | thought_level | mode | other ACP categories" })),
   type: oneOf(["select", "boolean"]),
   value: OptionValue,
   choices: arr(
@@ -95,22 +92,6 @@ export const ConfigOption = obj({
   ),
 });
 export type ConfigOption = Static<typeof ConfigOption>;
-
-/** An ACP permission request waiting for the user. */
-export const Approval = obj({
-  id: str(),
-  title: str({ description: "The tool call's title" }),
-  kind: nullable(str({ description: "ACP tool kind: read, edit, delete, move, search, execute, fetch, ..." })),
-  detail: nullable(str({ description: "The tool call's input or a diff, as text, capped" })),
-  options: arr(
-    obj({
-      id: str(),
-      name: str(),
-      kind: oneOf(["allow_once", "allow_always", "reject_once", "reject_always"]),
-    }),
-  ),
-});
-export type Approval = Static<typeof Approval>;
 
 /** The conversation's working tree, when its cwd is in a git repository. */
 export const GitState = obj({
@@ -150,7 +131,6 @@ export const ConversationState = obj({
   commands: arr(
     obj({ name: str({ description: "Without the leading /" }), description: str(), hint: nullable(str()) }),
   ),
-  approvals: arr(Approval),
   queue: arr(obj({ submission: SubmissionId, text: str() }), { description: "Inputs waiting for the next turn" }),
   git: nullable(GitState),
   attachments: obj(
@@ -209,14 +189,6 @@ export const Methods = {
   },
   "conversation.abort": {
     params: obj({ conversation: ConversationId }),
-    result: Empty,
-  },
-  "approval.respond": {
-    params: obj({
-      conversation: ConversationId,
-      approval: str(),
-      option: nullable(str({ description: "An Approval option id; null cancels the request" })),
-    }),
     result: Empty,
   },
   "conversation.submit": {

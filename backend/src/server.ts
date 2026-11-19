@@ -173,10 +173,6 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       await viz.abortConversation((await conversation(id)).id, context);
       return {};
     },
-    "approval.respond": async (_ws, { conversation: id, approval, option }) => {
-      viz.approvals.respond((await conversation(id)).id, approval, option);
-      return {};
-    },
     "projects.list": async () => ({ projects: await viz.projects.list(context) }),
     "project.create": async (_ws, { path, name }) => ({ project: await viz.projects.create(path, name, context) }),
     "project.update": async (_ws, { project, name }) => ({

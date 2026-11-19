@@ -58,21 +58,20 @@ The compactor writes every summary line, so pick a cheap, fast model (uniichat u
 
 ## `[harnesses.<name>]` (backend, optional)
 
-Defines a named ACP runner for app chats and the `subagent` tool. A configured harness runs under the backend's OS account. Permission policy only covers requests the ACP harness sends to viz; it is not a sandbox.
+Defines a named ACP runner for app chats and the `subagent` tool. A configured harness runs under the backend's OS account with full access: viz allows every ACP permission request. There is no sandbox.
 
-| Key           | Type                        | Default                                                              |
-| ------------- | --------------------------- | -------------------------------------------------------------------- |
-| `command`     | string                      | Required; executable on `PATH` or absolute path                      |
-| `args`        | array of strings            | `[]`                                                                 |
-| `env`         | table of Secret values      | `{}`; provider keys are not automatically inherited from the backend |
-| `model`       | string                      | ACP session's default model                                          |
-| `effort`      | string                      | ACP session's default thinking level                                 |
-| `mode`        | string                      | ACP session's default mode                                           |
-| `permissions` | `allow`, `ask`, or `reject` | `reject`; default Access setting for new chats                       |
+| Key       | Type                   | Default                                                              |
+| --------- | ---------------------- | -------------------------------------------------------------------- |
+| `command` | string                 | Required; executable on `PATH` or absolute path                      |
+| `args`    | array of strings       | `[]`                                                                 |
+| `env`     | table of Secret values | `{}`; provider keys are not automatically inherited from the backend |
+| `model`   | string                 | ACP session's default model                                          |
+| `effort`  | string                 | ACP session's default thinking level                                 |
+| `mode`    | string                 | ACP session's default mode                                           |
 
 Set `model`, `effort`, and `mode` to values reported by the runner. viz matches the option category (`model`, `thought_level`, `mode`), then the option id if there is no matching category. The app's selections override these defaults for that conversation.
 
-Access maps `allow` to **Full**, `ask` to **Ask**, and `reject` to **Read-only**. Ask waits for an app to respond to each ACP permission request; an ended or cancelled turn dismisses its pending requests. Read-only rejects ACP permission requests; it cannot stop a runner that acts without asking.
+The `permissions` key was removed; configs that still set it fail validation like any unknown key, so delete it.
 
 ## `[client]` (Rust clients)
 

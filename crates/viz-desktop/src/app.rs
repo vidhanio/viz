@@ -177,19 +177,18 @@ impl Desktop {
         matches!(self.status, Status::Connected { .. })
     }
 
-    /// Takes a new conversation list. A turn that ended, failed or stopped for
-    /// an approval where the user isn't looking becomes a desktop notification.
+    /// Takes a new conversation list. A turn that ended or failed where the
+    /// user isn't looking becomes a desktop notification.
     pub fn set_conversations(&mut self, conversations: Vec<ConversationSummary>, tx: &mut Tx) {
-        use ConversationStatus::{Approval, Failed, Idle, Working};
+        use ConversationStatus::{Failed, Idle, Working};
         for chat in &conversations {
             let Some(before) = self.summary(chat.id).map(|old| old.status) else {
                 continue;
             };
-            let ran = matches!(before, Working | Approval);
+            let ran = before == Working;
             let watched = self.focused && self.selected == Some(chat.id);
             let body = match chat.status {
                 _ if before == chat.status || watched => continue,
-                Approval => "Needs approval",
                 // A subagent's end reaches its parent, which notifies in turn.
                 _ if chat.kind == ConversationKind::Subagent => continue,
                 Idle if ran => "Finished",
@@ -284,7 +283,6 @@ impl Desktop {
                 (Status::Error(_), _) => "viz — Offline",
                 (Status::Connecting, _) => "viz — Connecting",
                 (_, Some(ConversationStatus::Working)) => "viz — Working",
-                (_, Some(ConversationStatus::Approval)) => "viz — Approval needed",
                 (_, Some(ConversationStatus::Failed)) => "viz — Failed",
                 _ => "viz",
             },
@@ -449,7 +447,7 @@ impl Desktop {
     pub fn busy(&self) -> bool {
         matches!(
             self.conversation.as_ref().map(|s| s.status),
-            Some(ConversationStatus::Working | ConversationStatus::Approval)
+            Some(ConversationStatus::Working)
         )
     }
 

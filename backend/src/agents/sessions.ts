@@ -21,19 +21,8 @@ import { bridgeEnv } from "../mcp/bridge.ts";
 import { McpServer, type McpTool } from "../mcp/server.ts";
 import type { ConfigOption } from "../protocol.ts";
 import { AcpProcess } from "./acp.ts";
-import { Approvals, CANCELLED } from "./approvals.ts";
 import { type Outcome, PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
-import {
-  type Access,
-  access,
-  accessOption,
-  AcpStateDoc,
-  defaults,
-  legacyMode,
-  normalize,
-  type OptionValue,
-  validValue,
-} from "./options.ts";
+import { AcpStateDoc, defaults, legacyMode, normalize, type OptionValue, validValue } from "./options.ts";
 import { ToolContent } from "./tool-record.ts";
 
 export type TurnOutcome = Exclude<Outcome, { kind: "running" }>;
@@ -68,7 +57,6 @@ type LiveSession = {
   sessionId: string | null;
   options: ConfigOption[];
   legacyMode?: ConfigOption;
-  access: Access;
   configuring: Promise<void>;
   cancelled: boolean;
   active?: ActiveTurn & { update: (update: SessionUpdate) => void };
@@ -76,7 +64,6 @@ type LiveSession = {
 
 /** One process per conversation. Callers serialize turns and persist their prompt and terminal state. */
 export class AgentSessions {
-  readonly approvals = new Approvals();
   readonly #sessions = new Map<ConversationId, LiveSession>();
   readonly #cancelledDelegations = new Set<ConversationId>();
   #mcp!: McpServer<ToolScope>;
@@ -123,7 +110,6 @@ export class AgentSessions {
     if (live.cancelled) return;
     live.cancelled = true;
     delete live.active;
-    this.approvals.cancel(live.id);
     if (live.process && live.sessionId !== null) {
       const cancel = withAbortSignal(AbortSignal.timeout(250), BACKGROUND_CONTEXT);
       await awaitWithContext(live.process.cancel(live.sessionId), cancel).catch(() => {});
@@ -136,7 +122,6 @@ export class AgentSessions {
     if (this.#sessions.get(id) !== live) return;
     this.#sessions.delete(id);
     delete live.active;
-    this.approvals.cancel(id);
     this.#mcp.revoke(live.token);
     live.lifetime.abort(error ?? new Error("ACP session closed"));
     live.process?.close();
@@ -154,7 +139,6 @@ export class AgentSessions {
       lifetime: new AbortController(),
       sessionId: null,
       options: [],
-      access: access(undefined, config),
       configuring: Promise.resolve(),
       cancelled: false,
       ready: Promise.resolve()
@@ -188,21 +172,14 @@ export class AgentSessions {
   ) {
     await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, id);
-      const setting =
-        option === "access"
-          ? accessOption(access(doc.desired.access, config))
-          : doc.options.find((item) => item.id === option);
+      const setting = doc.options.find((item) => item.id === option);
       if (!setting) throw new Error("Option not found");
       if (!validValue(setting, value)) throw new Error("Invalid option value");
       doc.desired = { ...doc.desired, [option]: value };
-      if (option !== "access") setting.value = value;
+      setting.value = value;
     }, context);
     const live = this.#sessions.get(id);
     if (!live) return;
-    if (option === "access") {
-      live.access = access(value, config);
-      return;
-    }
     const job = live.configuring.then(async () => {
       await live.ready;
       await this.#setOption(live, option, value);
@@ -225,7 +202,6 @@ export class AgentSessions {
       this.#harness.snapshot(AcpStateDoc, id, context),
     ]);
     const sessionId = session?.sessionId ?? null;
-    live.access = access(saved?.desired.access, config);
     const env = Object.fromEntries(
       await awaitWithContext(
         Promise.all(Object.entries(config.env ?? {}).map(async ([key, value]) => [key, await resolveSecret(value)])),
@@ -249,10 +225,6 @@ export class AgentSessions {
             void this.#onUpdate(live, update).catch((error: unknown) => this.#release(live, error));
           }
         },
-        onPermission: (params) =>
-          params.sessionId === live.sessionId && live.active && !live.active.context.abortSignal?.aborted
-            ? this.approvals.request(id, live.access, params)
-            : Promise.resolve(CANCELLED),
         onClose: (error) => {
           if (error) {
             console.error(`ACP ${name}:`, error.message);
@@ -294,17 +266,16 @@ export class AgentSessions {
     const desired = await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, id);
       doc.images = process.supportsImages;
+      // `access` was viz's own option, since removed; never send it to the agent.
+      delete doc.desired.access;
       doc.desired = {
         ...(sessionId === null && defaults(config, this.#options(live))),
         ...doc.desired,
-        access: access(doc.desired.access, config),
       };
       return { ...doc.desired };
     }, context);
-    live.access = access(desired.access, config);
     for (const [option, value] of Object.entries(desired)) {
-      if (option === "access" || !this.#options(live).some((item) => item.id === option && validValue(item, value)))
-        continue;
+      if (!this.#options(live).some((item) => item.id === option && validValue(item, value))) continue;
       await awaitWithContext(this.#setOption(live, option, value), context);
     }
     await this.#saveOptions(live);
@@ -463,7 +434,6 @@ export class AgentSessions {
     toolTurn.cancel();
     if (live !== undefined) {
       delete live.active;
-      this.approvals.cancel(id);
       if (outcome.kind === "failed" || outcome.stopReason === "cancelled") this.#release(live);
     }
     try {

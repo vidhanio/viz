@@ -22,7 +22,7 @@ import { MetaDoc, projectIn, touch, type WorktreeBinding } from "../projects.ts"
 import type { Origin } from "../protocol.ts";
 import { TitleDoc, titleFrom } from "../titles.ts";
 import { AgentDoc, PromptEntry, TurnEntry } from "./model.ts";
-import { AcpStateDoc, type Desired, initialDesired } from "./options.ts";
+import { AcpStateDoc, type Desired } from "./options.ts";
 import type { Runners } from "./runners.ts";
 import type { AgentSessions, TurnOutcome } from "./sessions.ts";
 
@@ -208,7 +208,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
       directory = worktree?.path ?? selected.path;
     }
     const { name, config } = runners.require(options.harness ?? inherited);
-    const desired = initialDesired(config, options.options);
+    const desired = { ...options.options };
     (await tx.doc(ChatDoc, id)).runner = { name, cwd: directory };
     (await tx.doc(AcpStateDoc, id)).desired = desired;
     const meta = await tx.doc(MetaDoc, id);
@@ -235,12 +235,10 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
     const chat = await tx.doc(ChatDoc, id);
     if (chat.runner === null) {
       // Older delegated ACP chats have a runner in viz.agent only. Native chats keep their visible history.
-      const { name, config } = runners.require(delegated?.harness || undefined);
+      const { name } = runners.require(delegated?.harness || undefined);
       const { project } = await tx.doc(MetaDoc, id);
       const directory = project === null ? cwd : (await projectIn(tx, ROOT_CONVERSATION_ID, project)).path;
       chat.runner = { name, cwd: directory };
-      const acp = await tx.doc(AcpStateDoc, id);
-      acp.desired = initialDesired(config, acp.desired);
       await configure(tx, id, {
         model: null,
         thinkingLevel: null,

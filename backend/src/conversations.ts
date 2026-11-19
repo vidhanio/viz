@@ -11,8 +11,7 @@ import {
 
 import { ChatDoc } from "./agents/chat.ts";
 import { AgentDoc, TurnEntry } from "./agents/model.ts";
-import { access, accessOption, AcpStateDoc } from "./agents/options.ts";
-import type { Runners } from "./agents/runners.ts";
+import { AcpStateDoc } from "./agents/options.ts";
 import type { AgentSessions } from "./agents/sessions.ts";
 import type { Git } from "./git/index.ts";
 import { conversationRecords, MetaDoc, ProjectsDoc } from "./projects.ts";
@@ -80,7 +79,6 @@ export class Conversations {
     private readonly harness: Harness,
     private readonly root: ConversationId,
     private readonly cwd: string,
-    private readonly runners: Runners,
     private readonly sessions: AgentSessions,
     private readonly rootOptions: (context: Context) => Promise<ConfigOption[]>,
     private readonly rootImages: (context: Context) => Promise<boolean>,
@@ -102,7 +100,6 @@ export class Conversations {
   async #info(record: ConversationRecord, context: Context) {
     const { harness, root, sessions, cwd } = this;
     const { id } = record;
-    const approvals = sessions.approvals.list(id);
     const meta = await harness.snapshot(MetaDoc, id, context);
     const parent = parentOf(record, meta);
     if (id === root) {
@@ -112,7 +109,7 @@ export class Conversations {
         : live?.runFailure && !["aborted", "reset"].includes(live.runFailure.reason)
           ? "failed"
           : "idle";
-      return { status, meta, parent, harness: null, cwd, approvals, readOnly: false } as const;
+      return { status, meta, parent, harness: null, cwd, readOnly: false } as const;
     }
     const [chat, agent] = await Promise.all([
       harness.snapshot(ChatDoc, id, context),
@@ -120,15 +117,14 @@ export class Conversations {
     ]);
     const name = chat?.runner?.name ?? (agent?.harness || null);
     const readOnly = agent?.outcome?.kind === "running";
-    const status = approvals.length
-      ? "approval"
-      : readOnly || chat?.hasWorker || chat?.dispatched || chat?.queue.length
+    const status =
+      readOnly || chat?.hasWorker || chat?.dispatched || chat?.queue.length
         ? "working"
         : chat?.setupFailed ||
             ((chat || agent) && ((await failed(harness, id, context)) ?? agent?.outcome?.kind === "failed"))
           ? "failed"
           : "idle";
-    return { status, meta, parent, harness: name, cwd: chat?.runner?.cwd, approvals, readOnly } as const;
+    return { status, meta, parent, harness: name, cwd: chat?.runner?.cwd, readOnly } as const;
   }
 
   async summary(record: ConversationRecord, context: Context): Promise<ConversationSummary> {
@@ -164,7 +160,6 @@ export class Conversations {
       project: info.meta?.project ?? null,
       cwd,
       git: await this.git.state(cwd, info.meta?.worktree?.path ?? null),
-      approvals: info.approvals,
       readOnly: info.readOnly,
     };
     if (id === this.root) {
@@ -195,10 +190,7 @@ export class Conversations {
       attachments: { images: acp?.images ?? false },
       queue: chat?.queue.map(({ submission, text }) => ({ submission, text })) ?? [],
       commands: acp?.commands ?? [],
-      options: [
-        ...(acp?.options ?? []),
-        accessOption(access(acp?.desired.access, this.runners.get(info.harness ?? undefined))),
-      ],
+      options: acp?.options ?? [],
     };
   }
 

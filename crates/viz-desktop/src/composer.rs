@@ -1,12 +1,12 @@
-//! Per-conversation composer, settings, completions, and pending approvals.
+//! Per-conversation composer, settings, completions, and queued input.
 
 mod completion;
 mod settings;
 
 pub use completion::{Completion, poll};
 use rune::{El, ScrollSpec, col, icon, row, text, text_input};
-use rune_kit::{ButtonVariant, Collapsible, IconButtonVariant};
-use viz_client::protocol::{Approval, ApprovalKind, ConversationId, QueuedInput};
+use rune_kit::IconButtonVariant;
+use viz_client::protocol::{ConversationId, QueuedInput};
 
 use crate::{
     app::Desktop,
@@ -23,27 +23,6 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         return None;
     }
     let mut column = col().w_full().max_w(theme::READING_WIDTH).gap(8.0);
-    if let Some((id, state)) = s.selected.zip(s.conversation.as_ref())
-        && !state.approvals.is_empty()
-    {
-        column = column.child(
-            col()
-                .key("approvals")
-                .w_full()
-                .max_h(260.0)
-                .min_h(0.0)
-                .scroll(ScrollSpec {
-                    stick_bottom: false,
-                })
-                .gap(6.0)
-                .children(
-                    state
-                        .approvals
-                        .iter()
-                        .map(|approval| approval_card(s, id, approval, t)),
-                ),
-        );
-    }
     if let Some((id, state)) = s.selected.zip(s.conversation.as_ref())
         && !state.queue.is_empty()
     {
@@ -276,84 +255,4 @@ fn send_button(s: &Desktop, t: &Theme) -> El {
             .key("send")
             .size(29.0, 29.0)
     }
-}
-
-fn approval_card(s: &Desktop, conversation: ConversationId, approval: &Approval, t: &Theme) -> El {
-    let key = format!("approval-{}", approval.id);
-    let mut card = col()
-        .key(key.clone())
-        .w_full()
-        .padding(11.0)
-        .gap(8.0)
-        .radius(t.k.radius.md)
-        .fill(t.surface)
-        .border(1.0, t.hairline)
-        .child(
-            row()
-                .key("request")
-                .gap(7.0)
-                .center_y()
-                .child(icon(t.k.glyph.lock, 13.0).color(t.warning))
-                .child(ui::section("Permission needed", t).grow(1.0))
-                .children(approval.kind.as_ref().map(|kind| ui::chip(kind, t))),
-        )
-        .child(
-            text(&approval.title)
-                .key("title")
-                .font(t.ui_medium)
-                .color(t.text)
-                .wrap(),
-        );
-    if let Some(detail) = &approval.detail {
-        let open = s.expanded.contains(&key);
-        card = card.child(
-            Collapsible::new("Details", open)
-                .ghost()
-                .on_toggle(move |s: &mut Desktop| s.toggle(&key))
-                .child(
-                    col()
-                        .key("approval-detail")
-                        .w_full()
-                        .max_h(120.0)
-                        .min_h(0.0)
-                        .scroll(ScrollSpec {
-                            stick_bottom: false,
-                        })
-                        .padding(7.0)
-                        .child(ui::code(detail, t)),
-                )
-                .build(&t.k),
-        );
-    }
-    card.child(
-        row()
-            .key("responses")
-            .w_full()
-            .gap(6.0)
-            .flex_wrap()
-            .justify_end()
-            .children(approval.options.iter().map(|option| {
-                let variant = match option.kind {
-                    ApprovalKind::AllowOnce => ButtonVariant::Submit,
-                    ApprovalKind::AllowAlways => ButtonVariant::Outline,
-                    ApprovalKind::RejectOnce | ApprovalKind::RejectAlways => ButtonVariant::Danger,
-                };
-                let approval_id = approval.id.clone();
-                let option_id = option.id.clone();
-                ui::button(&option.name, variant)
-                    .disabled(!s.connected())
-                    .on_press_tx(move |s: &mut Desktop, tx| {
-                        s.send(
-                            Command::Approval {
-                                conversation,
-                                approval: approval_id.clone(),
-                                option: option_id.clone(),
-                            },
-                            tx,
-                        );
-                    })
-                    .build(&t.k)
-                    .key(&option.id)
-            })),
-    )
 }

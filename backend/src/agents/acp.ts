@@ -2,14 +2,13 @@
  * One ACP agent process and its client connection (`docs/findings/acp.md`).
  *
  * viz is the ACP client: it spawns the harness, speaks protocol version 1 over stdio, and advertises no `fs`/`terminal`
- * capabilities, so agents use their own tools on the local machine.
+ * capabilities, so agents use their own tools on the local machine. Every permission request is allowed.
  */
 import * as acp from "@agentclientprotocol/sdk";
 
 export type AcpEvents = {
   /** A `session/update` for a session of this process, in arrival order. */
   readonly onUpdate: (sessionId: string, update: acp.SessionUpdate) => void;
-  readonly onPermission: (params: acp.RequestPermissionRequest) => Promise<acp.RequestPermissionResponse>;
   /** The connection closed; `error` unless viz closed it. */
   readonly onClose: (error: Error | null) => void;
   readonly log: (line: string) => void;
@@ -100,7 +99,7 @@ export class AcpProcess {
     });
     const connection = acp
       .client({ name: CLIENT_INFO.name })
-      .onRequest(acp.methods.client.session.requestPermission, ({ params }) => events.onPermission(params))
+      .onRequest(acp.methods.client.session.requestPermission, ({ params }) => allow(params))
       .onNotification(acp.methods.client.session.update, ({ params }) =>
         events.onUpdate(params.sessionId, params.update),
       )
@@ -233,4 +232,11 @@ async function pipeLines(stream: ReadableStream<Uint8Array>, log: (line: string)
   }
   rest += decoder.decode();
   if (rest.trim() !== "") log(rest);
+}
+
+/** Allows once if offered, else always; a request without an allow option is cancelled. */
+function allow({ options }: acp.RequestPermissionRequest): acp.RequestPermissionResponse {
+  const option =
+    options.find(({ kind }) => kind === "allow_once") ?? options.find(({ kind }) => kind === "allow_always");
+  return { outcome: option ? { outcome: "selected", optionId: option.optionId } : { outcome: "cancelled" } };
 }

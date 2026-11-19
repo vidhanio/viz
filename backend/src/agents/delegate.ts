@@ -6,7 +6,7 @@ import { touch } from "../projects.ts";
 import { TitleDoc, titleFrom } from "../titles.ts";
 import { ChatDoc } from "./chat.ts";
 import { AgentDoc, PromptEntry, TurnEntry } from "./model.ts";
-import { AcpStateDoc, initialDesired } from "./options.ts";
+import { AcpStateDoc } from "./options.ts";
 import type { AgentSessions, TurnOutcome } from "./sessions.ts";
 
 export async function delegate(
@@ -28,7 +28,6 @@ export async function delegate(
     const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
     (await tx.doc(TitleDoc, child.id)).title = titleFrom(task);
     (await tx.doc(ChatDoc, child.id)).runner = { name: runner.name, cwd };
-    (await tx.doc(AcpStateDoc, child.id)).desired = initialDesired(runner.config);
     await touch(tx, child.id);
     const state = await tx.doc(AgentDoc, child.id);
     state.harness = runner.name;

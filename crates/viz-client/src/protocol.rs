@@ -71,7 +71,6 @@ methods! {
     UpdateConversation<'_> => "conversation.update", Empty;
     ConfigureConversation<'_> => "conversation.configure", Empty;
     AbortConversation => "conversation.abort", Empty;
-    RespondApproval<'_> => "approval.respond", Empty;
     ListProjects => "projects.list", ProjectList;
     CreateProject<'_> => "project.create", ProjectResult;
     UpdateProject<'_> => "project.update", ProjectResult;
@@ -244,8 +243,6 @@ pub enum ConversationStatus {
     Idle,
     /// A turn is running or waiting.
     Working,
-    /// An approval is pending.
-    Approval,
     /// The last turn failed.
     Failed,
 }
@@ -314,46 +311,6 @@ pub struct SlashCommand {
     pub hint: Option<String>,
 }
 
-/// Effect and persistence of an approval choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ApprovalKind {
-    /// Allow this request.
-    AllowOnce,
-    /// Allow requests of this kind.
-    AllowAlways,
-    /// Reject this request.
-    RejectOnce,
-    /// Reject requests of this kind.
-    RejectAlways,
-}
-
-/// A response offered by an approval.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ApprovalOption {
-    /// Option id to send.
-    pub id: String,
-    /// Display label.
-    pub name: String,
-    /// Effect of the response.
-    pub kind: ApprovalKind,
-}
-
-/// An ACP permission request awaiting a decision.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct Approval {
-    /// The request id.
-    pub id: String,
-    /// The tool's display title.
-    pub title: String,
-    /// Optional tool category.
-    pub kind: Option<String>,
-    /// Input or diff summary, if available.
-    pub detail: Option<String>,
-    /// Possible responses.
-    pub options: Vec<ApprovalOption>,
-}
-
 /// The current application state of a watched conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -372,8 +329,6 @@ pub struct ConversationState {
     pub options: Vec<ConfigOption>,
     /// Available slash commands.
     pub commands: Vec<SlashCommand>,
-    /// The pending permission requests.
-    pub approvals: Vec<Approval>,
     /// Inputs waiting for their turn.
     pub queue: Vec<QueuedInput>,
     /// Git state of the current working directory.
@@ -449,17 +404,6 @@ pub struct ConfigureConversation<'a> {
 pub struct AbortConversation {
     /// The conversation to stop.
     pub conversation: ConversationId,
-}
-
-/// Answer or cancel a pending permission request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct RespondApproval<'a> {
-    /// Conversation holding the request.
-    pub conversation: ConversationId,
-    /// The request id.
-    pub approval: &'a str,
-    /// Option id to select; `None` cancels the request.
-    pub option: Option<&'a str>,
 }
 
 /// List projects.

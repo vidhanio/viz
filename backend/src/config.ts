@@ -62,11 +62,6 @@ const Harness = obj({
   command: str({ description: "Executable, looked up on PATH when not absolute" }),
   args: opt(arr(str())),
   env: opt(map(Secret, { description: "Extra environment; values are secrets, e.g. API keys" })),
-  permissions: opt(
-    oneOf(["allow", "ask", "reject"], {
-      description: "How viz answers the agent's permission requests; default reject",
-    }),
-  ),
   model: opt(str({ description: "Default ACP model option value" })),
   effort: opt(str({ description: "Default ACP thinking option value" })),
   mode: opt(str({ description: "Default ACP mode option value" })),

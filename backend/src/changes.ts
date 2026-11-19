@@ -1,7 +1,6 @@
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
 import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 
-import type { Approvals } from "./agents/approvals.ts";
 import { ChatDoc } from "./agents/chat.ts";
 import { AgentDoc, TurnEntry } from "./agents/model.ts";
 import { AcpStateDoc } from "./agents/options.ts";
@@ -19,12 +18,7 @@ export type ChangeFeed = {
   stop(): Promise<void>;
 };
 
-export async function observeChanges(
-  harness: Harness,
-  root: ConversationId,
-  approvals: Approvals,
-  context: Context,
-): Promise<ChangeFeed> {
+export async function observeChanges(harness: Harness, root: ConversationId, context: Context): Promise<ChangeFeed> {
   const live = await harness.snapshot(LiveDoc, root, context);
   let running = !!live?.run;
   let failure: string | undefined = live?.runFailure?.reason;
@@ -138,7 +132,6 @@ export async function observeChanges(
       clearTimeout(timer);
     },
   });
-  const stopApprovals = approvals.observe((id) => schedule(id, true));
   return {
     subscribe(listener: (changes: Changes) => void) {
       listeners.add(listener);
@@ -165,7 +158,6 @@ export async function observeChanges(
     },
     async stop() {
       observation.detach();
-      stopApprovals();
       clearTimeout(timer);
       listeners.clear();
       if (rootEnded || unread.size) await flush();

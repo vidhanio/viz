@@ -170,16 +170,7 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
             (Some(error), _) => Some((format!("Retrying: {error}"), t.warning)),
             (None, true) => Some(("Compacting context".to_owned(), t.muted)),
             (None, false) if live.partial.is_empty() && !running => {
-                let label = if s
-                    .conversation
-                    .as_ref()
-                    .is_some_and(|state| !state.approvals.is_empty())
-                {
-                    "Waiting for approval"
-                } else {
-                    "Working"
-                };
-                Some((label.to_owned(), t.muted))
+                Some(("Working".to_owned(), t.muted))
             }
             (None, false) => None,
         };

@@ -74,7 +74,6 @@ pub fn status(status: ConversationStatus, t: &Theme) -> Option<El> {
     let (icon, label) = match status {
         ConversationStatus::Idle => return None,
         ConversationStatus::Working => (spinner(13.0, t), "Working"),
-        ConversationStatus::Approval => (dot(t.warning, 6.0), "Approval needed"),
         ConversationStatus::Failed => (dot(t.danger, 6.0), "Failed"),
     };
     Some(

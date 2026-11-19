@@ -113,8 +113,8 @@
                   "description": "ACP runner name; absent for the orchestrator"
                 },
                 "status": {
-                  "enum": ["idle", "working", "approval", "failed"],
-                  "description": "working: a turn runs or inputs wait; approval: a permission request waits for the user"
+                  "enum": ["idle", "working", "failed"],
+                  "description": "working: a turn runs or inputs wait"
                 },
                 "archived": {
                   "type": "boolean"
@@ -290,39 +290,6 @@
           }
         },
         "required": ["conversation"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    "approval.respond": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "approval": {
-            "type": "string"
-          },
-          "option": {
-            "anyOf": [
-              {
-                "type": "string",
-                "description": "An Approval option id; null cancels the request"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": ["conversation", "approval", "option"],
         "additionalProperties": false
       },
       "result": {
@@ -1100,8 +1067,8 @@
           "type": "object",
           "properties": {
             "status": {
-              "enum": ["idle", "working", "approval", "failed"],
-              "description": "working: a turn runs or inputs wait; approval: a permission request waits for the user"
+              "enum": ["idle", "working", "failed"],
+              "description": "working: a turn runs or inputs wait"
             },
             "harness": {
               "anyOf": [
@@ -1157,7 +1124,7 @@
                     "anyOf": [
                       {
                         "type": "string",
-                        "description": "model | thought_level | mode | access | other ACP categories"
+                        "description": "model | thought_level | mode | other ACP categories"
                       },
                       {
                         "type": "null"
@@ -1230,64 +1197,6 @@
                   }
                 },
                 "required": ["name", "description", "hint"],
-                "additionalProperties": false
-              }
-            },
-            "approvals": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "title": {
-                    "type": "string",
-                    "description": "The tool call's title"
-                  },
-                  "kind": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "description": "ACP tool kind: read, edit, delete, move, search, execute, fetch, ..."
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "detail": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "description": "The tool call's input or a diff, as text, capped"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  },
-                  "options": {
-                    "type": "array",
-                    "items": {
-                      "type": "object",
-                      "properties": {
-                        "id": {
-                          "type": "string"
-                        },
-                        "name": {
-                          "type": "string"
-                        },
-                        "kind": {
-                          "enum": ["allow_once", "allow_always", "reject_once", "reject_always"]
-                        }
-                      },
-                      "required": ["id", "name", "kind"],
-                      "additionalProperties": false
-                    }
-                  }
-                },
-                "required": ["id", "title", "kind", "detail", "options"],
                 "additionalProperties": false
               }
             },
@@ -1405,7 +1314,6 @@
             "readOnly",
             "options",
             "commands",
-            "approvals",
             "queue",
             "git",
             "attachments"
