@@ -12,7 +12,7 @@ use viz_client::protocol::ConversationStatus;
 use crate::theme::{
     CARD_INSET, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL,
     RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S4, S8, S12, Size, TRAILING, TREE_ROW,
-    TREE_STEP, Theme,
+    TREE_ROW_TALL, TREE_STEP, Theme,
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -221,6 +221,8 @@ pub fn code(body: &str, t: &Theme) -> El {
 pub struct TreeLine<'a> {
     pub key: &'a str,
     pub label: &'a str,
+    /// A quiet second line; the row grows to `TREE_ROW_TALL`.
+    pub detail: Option<&'a str>,
     pub depth: u16,
     /// Unread: the medium weight in full ink.
     pub strong: bool,
@@ -244,12 +246,35 @@ impl TreeLine<'_> {
         } else {
             t.muted
         };
-        row()
+        let title = text(self.label)
+            .font(if self.strong { t.ui_medium } else { t.ui })
+            .color(color)
+            .truncate()
+            .help_when_truncated(self.label);
+        let labels = col()
+            .min_w(0.0)
+            .shrink()
+            .grow(1.0)
+            .a11y_hidden()
+            .child(title)
+            .children(self.detail.map(|detail| {
+                text(detail)
+                    .font(t.small)
+                    .color(t.faint)
+                    .truncate()
+                    .help_when_truncated(detail)
+            }));
+        let height = if self.detail.is_some() {
+            TREE_ROW_TALL
+        } else {
+            TREE_ROW
+        };
+        let mut line = row()
             .key(self.key)
             .role("treeitem")
             .label(self.label)
             .level(u32::from(self.depth) + 1)
-            .h(TREE_ROW)
+            .h(height)
             .w_full()
             .pl(f32::from(self.depth).mul_add(TREE_STEP, ROW_INSET))
             .gap(S8)
@@ -265,19 +290,13 @@ impl TreeLine<'_> {
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .children(leading.map(|mark| lead(mark, TREE_ROW)))
-            .child(
-                text(self.label)
-                    .font(if self.strong { t.ui_medium } else { t.ui })
-                    .color(color)
-                    .truncate()
-                    .min_w(0.0)
-                    .shrink()
-                    .grow(1.0)
-                    .a11y_hidden()
-                    .help_when_truncated(self.label),
-            )
+            .child(labels)
             .children(markers)
-            .child(slot)
+            .child(slot);
+        if let Some(detail) = self.detail {
+            line = line.description(detail);
+        }
+        line
     }
 }
 

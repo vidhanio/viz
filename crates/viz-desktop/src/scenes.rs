@@ -32,6 +32,7 @@ pub const SCENES: &[Scene] = &[
     ("agents", agents),
     ("subagent", subagent),
     ("delete", delete),
+    ("projects", projects),
 ];
 
 const CHAT: ConversationId = ConversationId(11);
@@ -367,6 +368,12 @@ fn subagent(s: &mut Desktop) {
             {"id":2,"kind":"viz.agent.text","data":{"text":"Running both exporters over `samples/` now."}},
         ],
     }));
+}
+
+/// The workspace with chats listed under their projects.
+fn projects(s: &mut Desktop) {
+    workspace(s);
+    sidebar::preview_projects(s);
 }
 
 /// The delete confirmation for the open chat.

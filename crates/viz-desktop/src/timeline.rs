@@ -363,8 +363,7 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
         let intro = ui::empty(
             Some(icon(&ui::STAR, ICON_LARGE).color(t.accent)),
             "Orchestrator",
-            "Your main agent. It keeps memory across chats, answers your \
-             connectors, and starts chats when work needs its own thread.",
+            "Remembers across chats and starts agents for you.",
             onboarding.then(add_project),
             t,
         );

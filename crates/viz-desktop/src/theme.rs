@@ -63,6 +63,8 @@ pub const SIDEBAR_INSET: f32 = S16;
 /// A tree row's inset inside its fill.
 pub const ROW_INSET: f32 = SIDEBAR_INSET - SIDEBAR_PAD;
 pub const TREE_ROW: f32 = Size::Default.height();
+/// A sidebar row with a quiet second line (Recent's project names).
+pub const TREE_ROW_TALL: f32 = S40;
 /// One depth: a leading icon and its gap, so a child's label lines up with
 /// its parent's.
 pub const TREE_STEP: f32 = ICON + S8;

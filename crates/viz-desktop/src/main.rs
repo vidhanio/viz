@@ -180,7 +180,11 @@ fn main() {
         )),
         ..Chrome::DEFAULT
     })
-    .init(move || Desktop::new(commands))
+    .init(move || {
+        let mut desktop = Desktop::new(commands);
+        desktop.navigation.restore();
+        desktop
+    })
     .on_focus(Desktop::set_focus);
     // Rune has no resize hook; a drawn frame reports the viewport, and a change
     // re-lays out what depends on it (the composer's selects).

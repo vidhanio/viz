@@ -1,13 +1,18 @@
-//! The sidebar: the orchestrator, then pinned chats and projects with their
-//! top-level chats. Subagents live in their parent chat, not here.
+//! The sidebar: the orchestrator, then pinned chats, then top-level chats
+//! either newest first (Recent) or under their projects (Projects).
+//! Subagents live in their parent chat, not here.
 
 mod actions;
 mod worktree;
 
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+};
 
 use rune::{El, TextEdit, Tx, col, el, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, shell::Sidebar};
+use serde_json::{Value, json};
 use viz_client::protocol::{
     ConversationId, ConversationKind, ConversationStatus, ConversationSummary, Project,
 };
@@ -24,15 +29,37 @@ use crate::{
 /// The widest a project's branch name gets before it truncates.
 const BRANCH_MAX: f32 = S32 * 2.0;
 
+/// How the sidebar lists top-level chats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Mode {
+    /// Newest first, each with its project under the title.
+    #[default]
+    Recent,
+    /// Under their collapsible projects, newest first.
+    Projects,
+}
+
+impl Mode {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Recent => "recent",
+            Self::Projects => "projects",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Navigation {
     filter: TextEdit,
     archived: bool,
+    mode: Mode,
     collapsed_projects: HashSet<String>,
     menu: Option<actions::Context>,
     edit: Option<actions::Edit>,
     value: TextEdit,
     worktree: worktree::Form,
+    /// Where the mode and collapsed projects persist, once restored from it.
+    store: Option<PathBuf>,
 }
 
 impl Default for Navigation {
@@ -40,16 +67,61 @@ impl Default for Navigation {
         Self {
             filter: TextEdit::new(""),
             archived: false,
+            mode: Mode::default(),
             collapsed_projects: HashSet::new(),
             menu: None,
             edit: None,
             value: TextEdit::new(""),
             worktree: worktree::Form::default(),
+            store: None,
         }
     }
 }
 
 impl Navigation {
+    /// Takes the sidebar's mode and collapsed projects from
+    /// `$XDG_STATE_HOME/viz/desktop.json` and keeps them there from now on.
+    /// A missing or unreadable file leaves the defaults.
+    pub fn restore(&mut self) {
+        let Ok(paths) = viz_config::Paths::from_env() else {
+            return;
+        };
+        let path = paths.state_dir.join("desktop.json");
+        if let Some(saved) = std::fs::read(&path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
+        {
+            self.mode = match saved.get("sidebar").and_then(Value::as_str) {
+                Some("projects") => Mode::Projects,
+                _ => Mode::Recent,
+            };
+            self.collapsed_projects = saved
+                .get("collapsedProjects")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(str::to_owned)
+                .collect();
+        }
+        self.store = Some(path);
+    }
+
+    /// Writes what `restore` reads. Failing to is harmless: the next launch
+    /// starts from the defaults.
+    fn persist(&self) {
+        let Some(path) = &self.store else {
+            return;
+        };
+        let mut collapsed: Vec<_> = self.collapsed_projects.iter().collect();
+        collapsed.sort_unstable();
+        let saved = json!({ "sidebar": self.mode.name(), "collapsedProjects": collapsed });
+        if let Some(dir) = path.parent() {
+            _ = std::fs::create_dir_all(dir);
+        }
+        _ = std::fs::write(path, saved.to_string());
+    }
+
     /// Opens the project holding `id`'s top-level chat.
     pub fn reveal(&mut self, id: ConversationId, summaries: &[ConversationSummary]) {
         let top = top_level(summaries, id);
@@ -63,12 +135,22 @@ impl Navigation {
     }
 
     pub fn expand_project(&mut self, project: &str) {
-        self.collapsed_projects.remove(project);
+        if self.collapsed_projects.remove(project) {
+            self.persist();
+        }
     }
 
     fn toggle_project(&mut self, id: &str) {
         if !self.collapsed_projects.remove(id) {
             self.collapsed_projects.insert(id.to_owned());
+        }
+        self.persist();
+    }
+
+    fn set_mode(&mut self, mode: Mode) {
+        if self.mode != mode {
+            self.mode = mode;
+            self.persist();
         }
     }
 }
@@ -115,6 +197,8 @@ struct Outline<'a> {
     projects: HashMap<&'a str, Vec<&'a ConversationSummary>>,
     loose: Vec<&'a ConversationSummary>,
     pinned: Vec<&'a ConversationSummary>,
+    /// Every listed chat but the pinned ones, newest first.
+    recent: Vec<&'a ConversationSummary>,
     query: String,
 }
 
@@ -127,6 +211,7 @@ impl<'a> Outline<'a> {
             projects: HashMap::new(),
             loose: Vec::new(),
             pinned: Vec::new(),
+            recent: Vec::new(),
             query,
         };
         let known_projects: HashSet<_> = state.projects.iter().map(|p| p.id.as_str()).collect();
@@ -158,12 +243,22 @@ impl<'a> Outline<'a> {
             }
             if chat.pinned {
                 outline.pinned.push(chat);
-            } else if let Some(project) = project {
-                outline.projects.entry(project).or_default().push(chat);
             } else {
-                outline.loose.push(chat);
+                outline.recent.push(chat);
+                if let Some(project) = project {
+                    outline.projects.entry(project).or_default().push(chat);
+                } else {
+                    outline.loose.push(chat);
+                }
             }
         }
+        let newest = |chats: &mut Vec<&ConversationSummary>| {
+            chats.sort_by_key(|chat| std::cmp::Reverse(chat.updated_at));
+        };
+        newest(&mut outline.pinned);
+        newest(&mut outline.recent);
+        newest(&mut outline.loose);
+        outline.projects.values_mut().for_each(newest);
         outline
     }
 
@@ -177,7 +272,16 @@ impl<'a> Outline<'a> {
             || self.matches(&project.path)
     }
 
-    fn chat(&self, chat: &ConversationSummary, depth: u16, t: &Theme, layer: &mut Vec<El>) -> El {
+    /// A top-level chat's row. With `detail`, a quiet second line names its
+    /// project and worktree.
+    fn chat(
+        &self,
+        chat: &ConversationSummary,
+        depth: u16,
+        detail: bool,
+        t: &Theme,
+        layer: &mut Vec<El>,
+    ) -> El {
         let id = chat.id;
         let s = self.state;
         let selected = self.open == Some(id);
@@ -192,7 +296,26 @@ impl<'a> Outline<'a> {
             })
         });
         let menu = actions::chat_menu(s, chat, &key, t, layer);
-        let worktree = chat.worktree.as_ref().map(|path| {
+        let worktree = chat.worktree.as_deref().map(|path| {
+            std::path::Path::new(path)
+                .file_name()
+                .map_or_else(|| path.into(), |name| name.to_string_lossy())
+        });
+        let place = detail.then(|| {
+            let project = chat
+                .project
+                .as_deref()
+                .and_then(|id| s.projects.iter().find(|p| p.id == id))
+                .map(|project| project.name.as_str());
+            match (project, &worktree) {
+                (Some(project), Some(worktree)) => format!("{project} · {worktree}"),
+                (Some(project), None) => project.to_owned(),
+                (None, Some(worktree)) => worktree.to_string(),
+                (None, None) => "No project".to_owned(),
+            }
+        });
+        // On one-line rows a worktree shows as a mark.
+        let marker = chat.worktree.as_ref().filter(|_| !detail).map(|path| {
             icon(&ui::GIT_BRANCH, ICON_SMALL)
                 .key("worktree")
                 .color(t.faint)
@@ -202,12 +325,13 @@ impl<'a> Outline<'a> {
         let mut node = TreeLine {
             key: &key,
             label: chat_title(chat),
+            detail: place.as_deref(),
             depth,
             strong: chat.unread && !chat.archived,
             dim: chat.archived,
             selected,
         }
-        .build(None, worktree, ui::trailing(rest, Some(menu), menu_open), t)
+        .build(None, marker, ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
         if chat.unread {
             node = node.description("Unread");
@@ -256,6 +380,7 @@ impl<'a> Outline<'a> {
         let mut node = TreeLine {
             key: &key,
             label: &project.name,
+            detail: None,
             depth: 0,
             strong: false,
             dim: false,
@@ -280,7 +405,7 @@ impl<'a> Outline<'a> {
             .w_full()
             .child(node);
         if let Some(chats) = self.projects.get(project.id.as_str()).filter(|_| open) {
-            branch = branch.children(chats.iter().map(|chat| self.chat(chat, 1, t, layer)));
+            branch = branch.children(chats.iter().map(|chat| self.chat(chat, 1, false, t, layer)));
         }
         branch
     }
@@ -355,6 +480,11 @@ pub fn preview_worktree(s: &mut Desktop) {
 /// Shows the delete confirmation for `id` in a preview scene.
 pub fn preview_delete(s: &mut Desktop, id: ConversationId) {
     s.navigation.edit = Some(actions::Edit::DeleteChat(id));
+}
+
+/// Lists chats under their projects in a preview scene.
+pub const fn preview_projects(s: &mut Desktop) {
+    s.navigation.mode = Mode::Projects;
 }
 
 /// New chat, as an icon button: in the sidebar's header row while the sidebar
@@ -465,6 +595,7 @@ fn filter(s: &Desktop, t: &Theme) -> El {
 
 fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let outline = Outline::new(s);
+    let recent = s.navigation.mode == Mode::Recent;
     let mut tree = col()
         .key("conversation-tree")
         .role("tree")
@@ -477,44 +608,78 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 outline
                     .pinned
                     .iter()
-                    .map(|chat| outline.chat(chat, 0, t, layer)),
+                    .map(|chat| outline.chat(chat, 0, recent, t, layer)),
             );
     }
-    tree = tree
-        .child(ui::section_row(
-            "projects-heading",
-            "Projects",
-            Some(
-                ui::icon_button(
-                    &ui::PLUS,
-                    "Add project",
-                    IconButtonVariant::GhostMuted,
-                    Size::Small,
-                )
-                .disabled(!s.connected())
-                .on_press_tx(open_add_project)
-                .build(&t.k)
-                .key("add-project"),
-            ),
-            t,
-        ))
-        .children(
-            s.projects
+    let add = ui::icon_button(
+        &ui::PLUS,
+        "Add project",
+        IconButtonVariant::GhostMuted,
+        Size::Small,
+    )
+    .disabled(!s.connected())
+    .on_press_tx(open_add_project)
+    .build(&t.k)
+    .key("add-project");
+    tree = tree.child(mode_switch(s.navigation.mode, add, t));
+    if recent {
+        return tree.children(
+            outline
+                .recent
                 .iter()
-                .filter(|p| outline.visible_project(p))
-                .map(|p| outline.project(p, t, layer)),
+                .map(|chat| outline.chat(chat, 0, true, t, layer)),
         );
+    }
+    tree = tree.children(
+        s.projects
+            .iter()
+            .filter(|p| outline.visible_project(p))
+            .map(|p| outline.project(p, t, layer)),
+    );
     if !outline.loose.is_empty() {
         tree = tree
-            .child(ui::section_row("chats-heading", "Chats", None, t))
+            .child(ui::section_row("chats-heading", "No project", None, t))
             .children(
                 outline
                     .loose
                     .iter()
-                    .map(|chat| outline.chat(chat, 0, t, layer)),
+                    .map(|chat| outline.chat(chat, 0, false, t, layer)),
             );
     }
     tree
+}
+
+/// The section row that picks how chats are listed, with Add project in its
+/// trailing slot.
+fn mode_switch(current: Mode, add: El, t: &Theme) -> El {
+    let tab = |mode: Mode, label: &'static str| {
+        let active = mode == current;
+        ui::section(label, t)
+            .key(mode.name())
+            .role("radio")
+            .label(label)
+            .checked(active)
+            .color(if active { t.text } else { t.faint })
+            .hover_group()
+            .group_color(if active { t.text } else { t.muted })
+            .focusable(true)
+            .focus_ring(HAIRLINE, theme::S2, t.accent)
+            .on_press(move |s: &mut Desktop| s.navigation.set_mode(mode))
+    };
+    row()
+        .key("sidebar-mode")
+        .role("radiogroup")
+        .label("List chats by")
+        .w_full()
+        .h(theme::TREE_ROW)
+        .mt(theme::S12)
+        .pl(ROW_INSET)
+        .gap(theme::S12)
+        .center_y()
+        .child(tab(Mode::Recent, "Recent"))
+        .child(tab(Mode::Projects, "Projects"))
+        .child(el().grow(1.0).a11y_hidden())
+        .child(ui::trailing(None, Some(add), true))
 }
 
 /// The connection (a dot and one word, the detail in its tooltip), a retry

@@ -1,4 +1,4 @@
-use rune::{El, PointerPress, Tx};
+use rune::{El, FileDialogOptions, PointerPress, Tx};
 use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement};
 use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary, Project};
 
@@ -35,7 +35,6 @@ impl Context {
 
 #[derive(Debug)]
 pub(super) enum Edit {
-    AddProject,
     RenameProject(String),
     RemoveProject(String),
     RenameChat(ConversationId),
@@ -53,8 +52,31 @@ fn open_edit(s: &mut Desktop, edit: Edit, value: &str, tx: &mut Tx) {
     tx.focus_when_shown("edit-value", false);
 }
 
+/// Picks a folder with the OS dialog and adds it as a project; the backend
+/// names it after the folder (rename it from its menu).
 pub(super) fn add_project(s: &mut Desktop, tx: &mut Tx) {
-    open_edit(s, Edit::AddProject, "", tx);
+    if !s.connected() {
+        return;
+    }
+    s.navigation.menu = None;
+    let options = FileDialogOptions {
+        title: "Add project".into(),
+        ..FileDialogOptions::default()
+    };
+    tx.open_folder(options, |s: &mut Desktop, result, tx| match result {
+        Ok(Some(path)) => {
+            s.send(
+                Command::Project(ProjectChange::Add(path.to_string_lossy().into_owned())),
+                tx,
+            );
+        }
+        Ok(None) => {}
+        Err(error) => s.toast(
+            tx,
+            "Couldn’t open the folder picker",
+            Some(error.to_string()),
+        ),
+    });
 }
 
 /// Asks to delete chat `id` and its subagents. The orchestrator can't be
@@ -79,7 +101,6 @@ fn edit_submit(s: &mut Desktop, tx: &mut Tx) {
         return;
     }
     let command = match edit {
-        Edit::AddProject => Command::Project(ProjectChange::Add(value.into())),
         Edit::RenameProject(id) => Command::Project(ProjectChange::Rename {
             id: id.clone(),
             name: value.into(),
@@ -100,13 +121,6 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     let field = Some((&s.navigation.value, "Name"));
     let delete_title;
     let form = match edit {
-        Edit::AddProject => DialogForm {
-            title: "Add project",
-            detail: None,
-            field: Some((&s.navigation.value, "Directory path")),
-            action: "Add project",
-            variant: ButtonVariant::Submit,
-        },
         Edit::RenameProject(_) | Edit::RenameChat(_) => DialogForm {
             title: if matches!(edit, Edit::RenameProject(_)) {
                 "Rename project"
