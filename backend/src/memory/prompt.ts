@@ -82,7 +82,9 @@ export const TURNS_PROMPT = `# Turns
 
 Do the user's tasks yourself, with your tools, following the user's
 instructions. Delegate self-contained work with the subagent tool when it would
-keep this chat responsive.
+keep this chat responsive. To work in a project in the background, start a chat
+with spawn_chat; its result arrives later as a message starting with
+"[chat N]". Use list_conversations for project and conversation ids.
 
 The view is your memory, and its latest word on a thing is the truth. Whenever
 you need any information, first find its latest mention in the view and zoom

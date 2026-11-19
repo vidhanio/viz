@@ -2,14 +2,18 @@ import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context"
 import {
   type Conversation,
   type ConversationId,
+  type ConversationRecord,
   configure,
   defineDoc,
   defineExtension,
   defineTask,
   type EntryId,
+  type Extension,
   type Harness,
   ROOT_CONVERSATION_ID,
   type SubmissionId,
+  type Submission,
+  type Tx,
 } from "@earendil-works/pi-durable";
 
 import type { StoredAttachment } from "../attachments.ts";
@@ -28,6 +32,24 @@ export type ChatInput = {
   readonly origin?: Origin;
   readonly requestId?: string;
   readonly attachments?: StoredAttachment[];
+};
+
+export type ChatOptions = {
+  readonly harness?: string;
+  readonly project?: string;
+  readonly parent?: ConversationId;
+  readonly options?: Desired;
+  readonly worktree?: WorktreeBinding;
+};
+
+type ChatRunner = { name: string; cwd: string; config: HarnessConfig };
+
+export type ChatScheduler = {
+  readonly extension: Extension;
+  setup(tx: Tx, id: ConversationId, options: ChatOptions): Promise<ChatRunner>;
+  enqueue(tx: Tx, conversation: ConversationRecord, input: ChatInput): Promise<SubmissionId>;
+  create(harness: Harness, options: ChatOptions, context: Context): Promise<Conversation>;
+  submit(harness: Harness, id: ConversationId, input: ChatInput, context: Context): Promise<Submission>;
 };
 
 type Pending = Omit<ChatInput, "requestId"> & { submission: SubmissionId };
@@ -52,7 +74,7 @@ export const ChatDoc = defineDoc<ChatState>({
 
 const completed = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
-export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: string) {
+export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: string): ChatScheduler {
   const Worker = defineTask<null, Phase, null>({
     name: "viz.acp.chat",
     version: 1,
@@ -168,49 +190,93 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
     },
   });
 
+  /** Binds new conversation `id` to its runner, project, worktree, and parent, in the commit that creates it. */
+  async function setup(tx: Tx, id: ConversationId, options: ChatOptions): Promise<ChatRunner> {
+    let project = options.project ?? null;
+    let directory = cwd;
+    let worktree = options.worktree;
+    let inherited: string | undefined;
+    if (options.parent !== undefined) {
+      const parent = await tx.doc(MetaDoc, options.parent);
+      const chat = await tx.doc(ChatDoc, options.parent);
+      project = parent.project;
+      directory = chat.runner?.cwd ?? cwd;
+      worktree = parent.worktree;
+      inherited = chat.runner?.name;
+    } else if (project !== null) {
+      const selected = await projectIn(tx, ROOT_CONVERSATION_ID, project);
+      directory = worktree?.path ?? selected.path;
+    }
+    const { name, config } = runners.require(options.harness ?? inherited);
+    const desired = initialDesired(config, options.options);
+    (await tx.doc(ChatDoc, id)).runner = { name, cwd: directory };
+    (await tx.doc(AcpStateDoc, id)).desired = desired;
+    const meta = await tx.doc(MetaDoc, id);
+    meta.project = project;
+    meta.parent = options.parent ?? null;
+    if (worktree) meta.worktree = worktree;
+    await touch(tx, id);
+    return { name, cwd: directory, config };
+  }
+
+  /**
+   * Queues `input` for `conversation`, starting its worker; a known `requestId` returns its first submission. Table
+   * reads must precede a commit's first table write, so the caller reads the record.
+   */
+  async function enqueue(tx: Tx, conversation: ConversationRecord, input: ChatInput): Promise<SubmissionId> {
+    const { id } = conversation;
+    const { requestId, ...prompt } = input;
+    if (requestId !== undefined) {
+      const existing = await tx.submissionByRequest(id, requestId);
+      if (existing) return existing.id;
+    }
+    const delegated = conversation.owner ? await tx.doc(AgentDoc, id) : undefined;
+    if (delegated?.outcome?.kind === "running") throw new Error("The subagent is still working");
+    const chat = await tx.doc(ChatDoc, id);
+    if (chat.runner === null) {
+      // Older delegated ACP chats have a runner in viz.agent only. Native chats keep their visible history.
+      const { name, config } = runners.require(delegated?.harness || undefined);
+      const { project } = await tx.doc(MetaDoc, id);
+      const directory = project === null ? cwd : (await projectIn(tx, ROOT_CONVERSATION_ID, project)).path;
+      chat.runner = { name, cwd: directory };
+      const acp = await tx.doc(AcpStateDoc, id);
+      acp.desired = initialDesired(config, acp.desired);
+      await configure(tx, id, {
+        model: null,
+        thinkingLevel: null,
+        extensions: null,
+        tools: null,
+        instructions: null,
+      });
+    } else runners.require(chat.runner.name);
+    const title = await tx.doc(TitleDoc, id);
+    await touch(tx, id);
+    if (title.title === "") title.title = titleFrom(prompt.text);
+    const queued = await tx.createSubmission({
+      type: "input",
+      conversationId: id,
+      status: "queued",
+      ...(requestId !== undefined && { requestId }),
+    });
+    chat.queue.push({ ...prompt, submission: queued.id });
+    if (!chat.hasWorker) {
+      await tx.createTask(Worker, null, { conversationId: id, ownership: { kind: "conversation" } });
+      chat.hasWorker = true;
+    }
+    return queued.id;
+  }
+
   return {
     extension: defineExtension({ name: "viz.acp.chat", tasks: [Worker] }),
-    async create(
-      harness: Harness,
-      options: {
-        harness?: string;
-        project?: string;
-        parent?: ConversationId;
-        options?: Desired;
-        worktree?: WorktreeBinding;
-      },
-      context: Context,
-    ): Promise<Conversation> {
-      const binding: { runner?: { name: string; cwd: string; config: HarnessConfig } } = {};
+    setup,
+    enqueue,
+    async create(harness, options, context) {
+      const binding: { runner?: ChatRunner } = {};
       const created = await harness.createConversation(
         {
           ownership: { kind: "ownerless" },
           init: async (tx, id) => {
-            let project = options.project ?? null;
-            let directory = cwd;
-            let worktree = options.worktree;
-            let inherited: string | undefined;
-            if (options.parent !== undefined) {
-              const parent = await tx.doc(MetaDoc, options.parent);
-              const chat = await tx.doc(ChatDoc, options.parent);
-              project = parent.project;
-              directory = chat.runner?.cwd ?? cwd;
-              worktree = parent.worktree;
-              inherited = chat.runner?.name;
-            } else if (project !== null) {
-              const selected = await projectIn(tx, ROOT_CONVERSATION_ID, project);
-              directory = worktree?.path ?? selected.path;
-            }
-            const { name, config } = runners.require(options.harness ?? inherited);
-            const desired = initialDesired(config, options.options);
-            (await tx.doc(ChatDoc, id)).runner = { name, cwd: directory };
-            (await tx.doc(AcpStateDoc, id)).desired = desired;
-            const meta = await tx.doc(MetaDoc, id);
-            meta.project = project;
-            meta.parent = options.parent ?? null;
-            if (worktree) meta.worktree = worktree;
-            await touch(tx, id);
-            binding.runner = { name, cwd: directory, config };
+            binding.runner = await setup(tx, id, options);
           },
         },
         context,
@@ -228,49 +294,11 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
         .catch((error: unknown) => console.error("ACP setup state:", error));
       return created;
     },
-    async submit(harness: Harness, id: ConversationId, input: ChatInput, context: Context) {
-      const { requestId, ...prompt } = input;
+    async submit(harness, id, input, context) {
       const submission = await harness.commit(async (tx) => {
         const conversation = await tx.conversation(id);
         if (!conversation) throw new Error("Conversation not found");
-        if (requestId !== undefined) {
-          const existing = await tx.submissionByRequest(id, requestId);
-          if (existing) return existing.id;
-        }
-        const delegated = conversation.owner ? await tx.doc(AgentDoc, id) : undefined;
-        if (delegated?.outcome?.kind === "running") throw new Error("The subagent is still working");
-        const chat = await tx.doc(ChatDoc, id);
-        if (chat.runner === null) {
-          // Older delegated ACP chats have a runner in viz.agent only. Native chats keep their visible history.
-          const { name, config } = runners.require(delegated?.harness || undefined);
-          const { project } = await tx.doc(MetaDoc, id);
-          const directory = project === null ? cwd : (await projectIn(tx, ROOT_CONVERSATION_ID, project)).path;
-          chat.runner = { name, cwd: directory };
-          const acp = await tx.doc(AcpStateDoc, id);
-          acp.desired = initialDesired(config, acp.desired);
-          await configure(tx, id, {
-            model: null,
-            thinkingLevel: null,
-            extensions: null,
-            tools: null,
-            instructions: null,
-          });
-        } else runners.require(chat.runner.name);
-        const title = await tx.doc(TitleDoc, id);
-        await touch(tx, id);
-        if (title.title === "") title.title = titleFrom(prompt.text);
-        const queued = await tx.createSubmission({
-          type: "input",
-          conversationId: id,
-          status: "queued",
-          ...(requestId !== undefined && { requestId }),
-        });
-        chat.queue.push({ ...prompt, submission: queued.id });
-        if (!chat.hasWorker) {
-          await tx.createTask(Worker, null, { conversationId: id, ownership: { kind: "conversation" } });
-          chat.hasWorker = true;
-        }
-        return queued.id;
+        return enqueue(tx, conversation, input);
       }, context);
       return (await harness.submission(submission, context))!;
     },

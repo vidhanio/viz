@@ -42,7 +42,8 @@ import { type Compactor, Memory } from "./memory/memory.ts";
 import { MEMORY_PROMPT } from "./memory/prompt.ts";
 import { Sync } from "./memory/sync.ts";
 import { modelRef, Orchestrator, orchestratorSettings, SettingsDoc, subagentExtension } from "./orchestrator.ts";
-import { MetaDoc, projectIn, projects, type ProjectStore, touch } from "./projects.ts";
+import { orchestratorToolkit, type ToolkitHost } from "./orchestrator-tools.ts";
+import { MetaDoc, projectIn, projects, type ProjectStore, touch, type WorktreeBinding } from "./projects.ts";
 import type { Attachment, Params } from "./protocol.ts";
 import { Repositories } from "./repositories.ts";
 import { SearchIndex } from "./search.ts";
@@ -134,12 +135,18 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   const sessions = new AgentSessions();
   const chats = chatScheduler(runners, sessions, cwd);
   const Subagent = subagentExtension(runners, sessions, () => harness);
+  let toolkit: ToolkitHost | undefined;
+  const Toolkit = orchestratorToolkit(() => {
+    if (!toolkit) throw new Error("viz is still starting");
+    return toolkit;
+  });
 
   const registry = createRegistry();
   registry.install(CodingTools);
   registry.install(Memorize);
   registry.install(Orchestrator);
   registry.install(Subagent);
+  registry.install(Toolkit);
   registry.install(chats.extension);
 
   const harness: Harness = await Harness.open(
@@ -173,7 +180,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       thinkingLevel: overrides?.thinking ?? orchestrator.thinking ?? null,
       instructions: orchestrator.instructions ?? null,
       cwd,
-      extensions: [CodingTools, Memorize, Orchestrator, Subagent],
+      extensions: [CodingTools, Memorize, Orchestrator, Subagent, Toolkit],
     },
     context,
   );
@@ -254,8 +261,6 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     }),
     (id, prompt, cwd, context) => repositories.checkpoint(id, prompt, cwd, context),
   );
-  harness.resume();
-
   let lock = Promise.resolve();
   let projectsLock = Promise.resolve();
   function editProject<T>(action: () => Promise<T>): Promise<T> {
@@ -266,6 +271,82 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     );
     return result;
   }
+  /** Creates a worktree of `projectId`; `use` runs before the project lock is released. */
+  const inWorktree = <T>(
+    projectId: string,
+    spec: NonNullable<Params<"conversation.create">["worktree"]>,
+    context: Context,
+    use: (worktree: WorktreeBinding) => Promise<T>,
+  ) =>
+    editProject(async () => {
+      const project = await harness.commit(async (tx) => ({ ...(await projectIn(tx, root.id, projectId)) }), context);
+      return repositories.inTree(project.path, context, async () =>
+        use(await git.createWorktree({ ...project, branch: null }, spec)),
+      );
+    });
+  const submit: VizHarness["submit"] = async (target, input, context) => {
+    const { text, content, requestId, origin, attachments = [] } = input;
+    if (target.id !== root.id) return chats.submit(harness, target.id, input, context);
+    // One at a time, so no input starts a turn between the idle check and the reset.
+    const turn = lock.then(() =>
+      repositories.inTree(cwd, context, async () => {
+        if (requestId !== undefined) {
+          const existing = await harness.commit((tx) => tx.submissionByRequest(root.id, requestId), context);
+          if (existing) return (await harness.submission(existing.id, context))!;
+        }
+        const live = await harness.snapshot(LiveDoc, root.id, context);
+        if (live?.run === undefined) await root.reset(undefined, context);
+        let prompt: UserMessage["content"] = withAttachmentPaths(content, attachments);
+        if (attachments.some(({ mime }) => mime.startsWith("image/")) && (await rootImages(context))) {
+          const blocks: Exclude<UserMessage["content"], string> = [{ type: "text", text: prompt }];
+          for (const { mime, path } of attachments)
+            if (mime.startsWith("image/"))
+              blocks.push({
+                type: "image",
+                mimeType: mime,
+                data: Buffer.from(await Bun.file(path).arrayBuffer()).toString("base64"),
+              });
+          prompt = blocks;
+        }
+        const submission = await root.submit(
+          {
+            type: "input",
+            content: prompt,
+            whenBusy: "steer",
+            ...(requestId !== undefined && { requestId }),
+            ...((origin || attachments.length) && {
+              entry: {
+                kind: "viz.input",
+                data: { text, ...(origin && { origin }), ...(attachments.length && { attachments }) },
+              },
+            }),
+          },
+          context,
+        );
+        await harness.commit((tx) => touch(tx, root.id), context);
+        return submission;
+      }),
+    );
+    lock = turn.then(
+      () => {},
+      () => {},
+    );
+    return turn;
+  };
+  toolkit = {
+    harness,
+    root: root.id,
+    conversations,
+    projects: projectStore,
+    search,
+    runners,
+    chats,
+    worktree: (project, branch, context) => inWorktree(project, { branch }, context, async (created) => created),
+    report: async (text, requestId, context) => void (await submit(root, { text, content: text, requestId }, context)),
+    abort: abortConversation,
+  };
+  harness.resume();
+
   return {
     harness,
     root,
@@ -345,69 +426,14 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       }),
     searchFiles: async (id, query, limit, context) =>
       files.search(await conversations.cwdFor(id, context), query, limit),
-    submit: async (target, input, context) => {
-      const { text, content, requestId, origin, attachments = [] } = input;
-      if (target.id !== root.id) return chats.submit(harness, target.id, input, context);
-      // One at a time, so no input starts a turn between the idle check and the reset.
-      const turn = lock.then(() =>
-        repositories.inTree(cwd, context, async () => {
-          if (requestId !== undefined) {
-            const existing = await harness.commit((tx) => tx.submissionByRequest(root.id, requestId), context);
-            if (existing) return (await harness.submission(existing.id, context))!;
-          }
-          const live = await harness.snapshot(LiveDoc, root.id, context);
-          if (live?.run === undefined) await root.reset(undefined, context);
-          let prompt: UserMessage["content"] = withAttachmentPaths(content, attachments);
-          if (attachments.some(({ mime }) => mime.startsWith("image/")) && (await rootImages(context))) {
-            const blocks: Exclude<UserMessage["content"], string> = [{ type: "text", text: prompt }];
-            for (const { mime, path } of attachments)
-              if (mime.startsWith("image/"))
-                blocks.push({
-                  type: "image",
-                  mimeType: mime,
-                  data: Buffer.from(await Bun.file(path).arrayBuffer()).toString("base64"),
-                });
-            prompt = blocks;
-          }
-          const submission = await root.submit(
-            {
-              type: "input",
-              content: prompt,
-              whenBusy: "steer",
-              ...(requestId !== undefined && { requestId }),
-              ...((origin || attachments.length) && {
-                entry: {
-                  kind: "viz.input",
-                  data: { text, ...(origin && { origin }), ...(attachments.length && { attachments }) },
-                },
-              }),
-            },
-            context,
-          );
-          await harness.commit((tx) => touch(tx, root.id), context);
-          return submission;
-        }),
-      );
-      lock = turn.then(
-        () => {},
-        () => {},
-      );
-      return turn;
-    },
+    submit,
     createChat: ({ worktree, ...options }, context) => {
       if (!worktree) return chats.create(harness, options, context);
-      return editProject(async () => {
-        if (!options.project) throw new Error("A worktree requires a project");
-        initialDesired(runners.require(options.harness).config, options.options);
-        const project = await harness.commit(
-          async (tx) => ({ ...(await projectIn(tx, root.id, options.project!)) }),
-          context,
-        );
-        return repositories.inTree(project.path, context, async () => {
-          const created = await git.createWorktree({ ...project, branch: null }, worktree);
-          return chats.create(harness, { ...options, worktree: created }, context);
-        });
-      });
+      if (!options.project) throw new Error("A worktree requires a project");
+      initialDesired(runners.require(options.harness).config, options.options);
+      return inWorktree(options.project, worktree, context, (created) =>
+        chats.create(harness, { ...options, worktree: created }, context),
+      );
     },
     close: async (context) => {
       await watch.stop();

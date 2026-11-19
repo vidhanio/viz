@@ -3,19 +3,16 @@ import { join } from "node:path";
 
 import type { Context } from "@earendil-works/chord/context";
 import {
-  AssistantEntry,
   type CommitObservation,
   type ConversationId,
   type Cursor,
   type EntryId,
   type EntryRecord,
   type Harness,
-  ToolResultEntry,
-  UserEntry,
 } from "@earendil-works/pi-durable";
 
-import { PromptEntry, TextEntry, ToolEntry } from "./agents/model.ts";
 import type { Result } from "./protocol.ts";
+import { entryLine } from "./transcripts.ts";
 
 type SearchResult = Result<"conversations.search">;
 const PAGE = 256;
@@ -26,38 +23,6 @@ CREATE TABLE IF NOT EXISTS search_cursors (
   conversation INTEGER PRIMARY KEY,
   entry INTEGER NOT NULL
 );`;
-
-function entryText(entry: EntryRecord): string | undefined {
-  if (PromptEntry.is(entry) || TextEntry.is(entry)) return entry.data.text;
-  if (ToolEntry.is(entry)) return entry.data.title;
-
-  const input = entry.kind === "viz.input";
-  const data = entry.data;
-  // A connector's original text excludes the routing prefix that the model receives.
-  if (input && data && typeof data === "object" && !Array.isArray(data) && typeof data.text === "string") {
-    return data.text;
-  }
-  const user = input || UserEntry.is(entry);
-  const assistant = AssistantEntry.is(entry);
-  const tool = ToolResultEntry.is(entry);
-  if ((!user && !assistant && !tool) || !entry.model) return;
-
-  const parts: string[] = [];
-  for (const message of entry.model) {
-    if (user && message.role === "user") {
-      if (typeof message.content === "string") parts.push(message.content);
-      else for (const block of message.content) if (block.type === "text") parts.push(block.text);
-    } else if (assistant && message.role === "assistant") {
-      for (const block of message.content) {
-        if (block.type === "text") parts.push(block.text);
-        else if (block.type === "toolCall") parts.push(block.name);
-      }
-    } else if (tool && message.role === "toolResult") {
-      parts.push(message.toolName);
-    }
-  }
-  return parts.join("\n");
-}
 
 export class SearchIndex {
   readonly #db: Database;
@@ -100,8 +65,8 @@ export class SearchIndex {
         }
         if (entry.id <= cursor.before) continue;
         // The snippet's control markers must come from FTS, not the transcript.
-        const text = entryText(entry)
-          ?.replace(/[\0\u0001\u0002]/g, " ")
+        const text = entryLine(entry)
+          ?.text.replace(/[\0\u0001\u0002]/g, " ")
           .trim();
         if (text) insert.run(entry.id, id, text);
         cursor.after = Math.max(cursor.after, entry.id);

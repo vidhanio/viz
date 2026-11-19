@@ -1,18 +1,20 @@
 /**
  * `viz-backend mcp-bridge`: a stdio MCP server that relays to viz's HTTP MCP endpoint, for ACP agents that only take
- * `command`-style MCP servers (every ACP agent must support those). Like t3code's `acp-mcp-bridge`: newline-delimited
- * JSON-RPC from stdin is POSTed with the agent's token; JSON answers go to stdout. stdout carries nothing else.
+ * `command`-style MCP servers (every ACP agent must support those). Like t3code's `acp-mcp-bridge`: the SDK's stdio
+ * transport reads JSON-RPC from stdin, and its Streamable HTTP client transport POSTs each message with the agent's
+ * token and the protocol headers the message needs. stdout carries nothing else.
  */
-import { compile, lit, nul, num, obj, str, union } from "@earendil-works/pi-schema";
-
-import { mcpRequestHeaders } from "./server.ts";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
+import {
+  isInitializeRequest,
+  isJSONRPCRequest,
+  isJSONRPCResultResponse,
+  type JSONRPCMessage,
+} from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 
 const URL_ENV = "VIZ_MCP_URL";
 const TOKEN_ENV = "VIZ_MCP_TOKEN";
-
-const Reply = compile(obj({ jsonrpc: lit("2.0"), id: union([str(), num(), nul()]) }, { open: true }));
-const InitializeReply = compile(obj({ result: obj({ protocolVersion: str() }, { open: true }) }, { open: true }));
-const Initialize = compile(obj({ method: lit("initialize") }, { open: true }));
 
 /** The environment the bridge reads, for the process that launches it. */
 export function bridgeEnv(url: string, token: string): Record<string, string> {
@@ -26,79 +28,53 @@ export async function runBridge(): Promise<never> {
     console.error(`mcp-bridge: ${URL_ENV} and ${TOKEN_ENV} must be set`);
     process.exit(2);
   }
-  const headers = {
-    authorization: `Bearer ${token}`,
-    "content-type": "application/json",
-    accept: "application/json, text/event-stream",
+  const local = new StdioServerTransport();
+  const upstream = new StreamableHTTPClientTransport(new URL(url), {
+    authProvider: { token: async () => token },
+    redirectPolicy: "same-origin",
+  });
+  // A 2025-era client negotiates its version once; later requests must carry it as a header.
+  const initializing = new Set<string | number>();
+  upstream.onmessage = (message) => {
+    if (isJSONRPCResultResponse(message) && initializing.delete(message.id)) {
+      const version = message.result.protocolVersion;
+      if (typeof version === "string") upstream.setProtocolVersion(version);
+    }
+    void local.send(message).catch((error: unknown) => fatal(error));
   };
-  let legacyVersion: string | undefined;
+  upstream.onerror = (error) => console.error(`mcp-bridge: ${error.message}`);
+  local.onerror = (error) => console.error(`mcp-bridge: ${error.message}`);
+  const { promise: closed, resolve: close } = Promise.withResolvers<void>();
+  local.onclose = close;
+
   // One message at a time, in order: an `initialize` must finish before the calls that follow it.
-  for await (const line of console) {
-    if (line.trim() === "") continue;
-    let message: unknown;
+  let queue = Promise.resolve();
+  local.onmessage = (message) => {
+    queue = queue.then(() => relay(message));
+  };
+  const relay = async (message: JSONRPCMessage) => {
+    if (isJSONRPCRequest(message) && isInitializeRequest(message)) initializing.add(message.id);
     try {
-      message = JSON.parse(line);
-    } catch {
-      await write({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "invalid JSON" } });
-      continue;
+      await upstream.send(message);
+    } catch (error) {
+      // Answer a request the backend didn't, so the agent isn't left waiting; notifications need no answer.
+      if (isJSONRPCRequest(message)) {
+        initializing.delete(message.id);
+        const text = error instanceof Error ? error.message : String(error);
+        await local.send({ jsonrpc: "2.0", id: message.id, error: { code: -32603, message: text } });
+      }
     }
-    const mirrors = mcpRequestHeaders(message);
-    const version =
-      mirrors === undefined && legacyVersion !== undefined && !Initialize.check(message)
-        ? { "mcp-protocol-version": legacyVersion }
-        : undefined;
-    let response: Response;
-    try {
-      response = await fetch(url, {
-        method: "POST",
-        headers: { ...headers, ...version, ...mirrors },
-        body: line,
-        redirect: "error",
-      });
-    } catch {
-      await fail(message, "cannot reach viz backend");
-      continue;
-    }
-    if (response.status === 202) continue;
-    // The MCP endpoint also returns JSON-RPC errors with non-2xx HTTP status codes.
-    let reply: unknown;
-    try {
-      reply = await response.json();
-    } catch {
-      await fail(message, `invalid viz backend response (HTTP ${response.status})`);
-      continue;
-    }
-    if (!Reply.check(reply) && !(Array.isArray(reply) && reply.length > 0 && reply.every(Reply.check))) {
-      await fail(message, `invalid viz backend response (HTTP ${response.status})`);
-      continue;
-    }
-    if (Initialize.check(message) && InitializeReply.check(reply)) legacyVersion = reply.result.protocolVersion;
-    await write(reply);
-  }
+  };
+
+  await upstream.start();
+  await local.start();
+  await closed;
+  await queue;
+  await upstream.close();
   process.exit(0);
 }
 
-function write(message: unknown): Promise<void> {
-  const { promise, resolve, reject } = Promise.withResolvers<void>();
-  process.stdout.write(`${JSON.stringify(message)}\n`, (error) => (error ? reject(error) : resolve()));
-  return promise;
-}
-
-/** Answers a request the backend didn't, so the agent isn't left waiting; notifications need no answer. */
-async function fail(request: unknown, message: string): Promise<void> {
-  console.error(`mcp-bridge: ${message}`);
-  if (Array.isArray(request)) {
-    const responses = request.flatMap((item) => errorReply(item, message) ?? []);
-    if (responses.length > 0) await write(responses);
-    return;
-  }
-  const response = errorReply(request, message);
-  if (response !== undefined) await write(response);
-}
-
-function errorReply(request: unknown, message: string) {
-  if (request === null || typeof request !== "object" || !("id" in request)) return undefined;
-  const { id } = request;
-  if (id !== null && typeof id !== "string" && typeof id !== "number") return undefined;
-  return { jsonrpc: "2.0", id, error: { code: -32603, message } };
+function fatal(error: unknown): never {
+  console.error(`mcp-bridge: ${error instanceof Error ? error.message : String(error)}`);
+  process.exit(1);
 }

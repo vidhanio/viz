@@ -1,12 +1,12 @@
 import type { Context } from "@earendil-works/chord/context";
-import type { Conversation, ConversationId, Cursor, Harness, Submission } from "@earendil-works/pi-durable";
+import type { Conversation, ConversationId, Harness, Submission } from "@earendil-works/pi-durable";
 import { bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 
 import { parentOf, type Conversations } from "../conversations.ts";
 import { type McpTool, tool } from "../mcp/server.ts";
 import { conversationRecords, MetaDoc } from "../projects.ts";
 import type { ChatInput } from "./chat.ts";
-import { PromptEntry, TextEntry, ToolEntry, TurnEntry } from "./model.ts";
+import { settledAnswer, transcript } from "../transcripts.ts";
 import type { ToolScope } from "./sessions.ts";
 
 type Subagents = {
@@ -40,16 +40,10 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
   async function send(id: ConversationId, text: string, wait: boolean, context: Context) {
     const submission = await submit(id, { text, content: text }, context);
     if (!wait) return JSON.stringify({ conversation: id });
-    const result = await submission.wait(context);
-    if (result.status === "done" && result.type === "input") {
-      const turn = await harness.commit((tx) => tx.entry(TurnEntry, result.answer), context);
-      return JSON.stringify({ conversation: id, text: turn?.data.answer ?? "" });
-    }
-    return JSON.stringify({
-      conversation: id,
-      status: "unanswered",
-      ...(result.status === "unanswered" && { reason: result.reason }),
-    });
+    const result = await settledAnswer(harness, await submission.wait(context), context);
+    if ("answer" in result) return JSON.stringify({ conversation: id, text: result.answer });
+    const { unanswered: reason, error } = result;
+    return JSON.stringify({ conversation: id, status: "unanswered", reason, ...(error && { error }) });
   }
 
   return [
@@ -104,22 +98,7 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
       call: async ({ conversation, limit = 20 }, scope) => {
         const { context } = scope.active();
         const id = await requireChild(scope.id, conversation as ConversationId, context);
-        const target = await harness.conversation(id, context);
-        if (!target) throw new Error("Subagent not found");
-        const lines: string[] = [];
-        let cursor: Cursor | undefined;
-        do {
-          const page = await target.entries({}, 32, cursor, context);
-          for (const entry of page.items) {
-            if (PromptEntry.is(entry)) lines.push(`User: ${entry.data.text.slice(0, 4000)}`);
-            else if (TextEntry.is(entry)) lines.push(`Assistant: ${entry.data.text.slice(0, 4000)}`);
-            else if (ToolEntry.is(entry)) lines.push(`Tool: ${entry.data.title}`);
-            else if (TurnEntry.is(entry) && entry.data.error) lines.push(`Error: ${entry.data.error}`);
-            if (lines.length >= limit) break;
-          }
-          cursor = page.next;
-        } while (cursor !== undefined && lines.length < limit);
-        return lines.reverse().join("\n");
+        return transcript(harness, id, limit, context);
       },
     }),
     tool<ToolScope, { conversation: number; text: string; wait?: boolean }>({
