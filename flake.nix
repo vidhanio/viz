@@ -87,6 +87,11 @@
             pkgs.libxrandr
             pkgs.libxcb
           ];
+          # Programs Rune runs: xdg-open for links (e.g. a new PR), fc-list for system font lookup.
+          desktopRuntimeBins = [
+            pkgs.xdg-utils
+            pkgs.fontconfig.bin
+          ];
 
           src = craneLib.cleanCargoSource ./.;
           commonArgs = {
@@ -145,6 +150,20 @@
               # `--bytecode` compiles to CommonJS, which has no top-level await.
               bunCompileToBytecode = false;
               meta.mainProgram = "viz-backend";
+              nativeBuildInputs = [ pkgs.makeWrapper ];
+              # The backend shells out to these: git for projects, worktrees, checkpoints, diffs and commits (ssh for
+              # ssh remotes on push), gh for pull requests. Appended, so a user's own versions on PATH win. In
+              # postInstall: bun2nix sets dontFixup, as stripping would corrupt the compiled executable.
+              postInstall = ''
+                wrapProgram $out/bin/viz-backend \
+                  --suffix PATH : ${
+                    lib.makeBinPath [
+                      pkgs.git
+                      pkgs.gh
+                      pkgs.openssh
+                    ]
+                  }
+              '';
             };
             viz = crate "viz" { };
             viz-discord = crate "viz-discord" { };
@@ -153,7 +172,8 @@
               nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
               postFixup = ''
                 wrapProgram $out/bin/viz-desktop \
-                  --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath desktopRuntimeLibs}
+                  --prefix LD_LIBRARY_PATH : ${lib.makeLibraryPath desktopRuntimeLibs} \
+                  --suffix PATH : ${lib.makeBinPath desktopRuntimeBins}
               '';
             };
             default = pkgs.symlinkJoin {

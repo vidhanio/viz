@@ -114,7 +114,7 @@ One TOML document, layered from `config.toml` + `config.d/*.toml` in `$XDG_CONFI
 
 ## Nix
 
-- `packages`: `viz-backend` (bun2nix, `bun build --compile`), `viz`, `viz-discord`, `viz-imessage`, `viz-desktop` (crane; desktop wrapped with Rune's runtime libraries), `default` (all).
+- `packages`: `viz-backend` (bun2nix, `bun build --compile`), `viz`, `viz-discord`, `viz-imessage`, `viz-desktop` (crane; desktop wrapped with Rune's runtime libraries), `default` (all). Every program viz runs is in its wrapper's `PATH` (appended, so the user's own come first): `git`, `gh` and `ssh` for the backend; `xdg-open` and `fc-list` for the desktop. ACP harness commands are the user's to install.
 - `checks`: clippy, backend `bun check`, treefmt. No tests (`AGENTS.md`).
 - `homeModules.default`: `programs.viz` with `settings`, `mutableSettings`, `environmentFile`, `backend.enable`, `desktop.enable`, `connectors.<name>.enable`; systemd user services `viz-backend` (`StateDirectory=viz`, `RuntimeDirectory=viz`) and `viz-<connector>`.
 - Dev shell: nightly Rust, Bun, bun2nix, Swift 6.4 + xtool from the `nixpkgs-xtool` input (nixpkgs PR #548520, same as vidhanix), Rune's libraries.
