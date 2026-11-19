@@ -38,6 +38,7 @@ export type ChatOptions = {
   readonly harness?: string;
   readonly project?: string;
   readonly parent?: ConversationId;
+  readonly title?: string;
   readonly options?: Desired;
   readonly worktree?: WorktreeBinding;
 };
@@ -71,6 +72,12 @@ export const ChatDoc = defineDoc<ChatState>({
   initial: () => ({ runner: null, queue: [], hasWorker: false, dispatched: false }),
   checkpointWhen: (_value, _ops, { deltasSinceBase }) => deltasSinceBase >= 32,
 });
+
+export async function withdrawChatInputs(tx: Tx, id: ConversationId): Promise<void> {
+  const chat = await tx.doc(ChatDoc, id);
+  for (const { submission } of chat.queue) tx.settleSubmission(submission, { status: "unanswered", reason: "aborted" });
+  if (chat.queue.length) chat.queue = [];
+}
 
 const completed = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
@@ -172,10 +179,8 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
       const id = runtime.conversationId;
       sessions.forget(id);
       await runtime.commit(async (tx) => {
+        await withdrawChatInputs(tx, id);
         const chat = await tx.doc(ChatDoc, id);
-        for (const { submission } of chat.queue)
-          tx.settleSubmission(submission, { status: "unanswered", reason: "aborted" });
-        chat.queue = [];
         chat.hasWorker = false;
         chat.dispatched = false;
         delete chat.setupFailed;
@@ -198,6 +203,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
     let inherited: string | undefined;
     if (options.parent !== undefined) {
       const parent = await tx.doc(MetaDoc, options.parent);
+      if (parent.deleted) throw new Error("Conversation not found");
       const chat = await tx.doc(ChatDoc, options.parent);
       project = parent.project;
       directory = chat.runner?.cwd ?? cwd;
@@ -215,6 +221,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
     meta.project = project;
     meta.parent = options.parent ?? null;
     if (worktree) meta.worktree = worktree;
+    if (options.title !== undefined) (await tx.doc(TitleDoc, id)).title = options.title;
     await touch(tx, id);
     return { name, cwd: directory, config };
   }
@@ -225,13 +232,13 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
    */
   async function enqueue(tx: Tx, conversation: ConversationRecord, input: ChatInput): Promise<SubmissionId> {
     const { id } = conversation;
+    if ((await tx.doc(MetaDoc, id)).deleted) throw new Error("Conversation not found");
     const { requestId, ...prompt } = input;
     if (requestId !== undefined) {
       const existing = await tx.submissionByRequest(id, requestId);
       if (existing) return existing.id;
     }
     const delegated = conversation.owner ? await tx.doc(AgentDoc, id) : undefined;
-    if (delegated?.outcome?.kind === "running") throw new Error("The subagent is still working");
     const chat = await tx.doc(ChatDoc, id);
     if (chat.runner === null) {
       // Older delegated ACP chats have a runner in viz.agent only. Native chats keep their visible history.

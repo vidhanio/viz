@@ -5,14 +5,15 @@ import { bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 import { parentOf, type Conversations } from "../conversations.ts";
 import { type McpTool, tool } from "../mcp/server.ts";
 import { conversationRecords, MetaDoc } from "../projects.ts";
-import type { ChatInput } from "./chat.ts";
+import { titleFrom } from "../titles.ts";
 import { settledAnswer, transcript } from "../transcripts.ts";
+import type { ChatInput, ChatOptions } from "./chat.ts";
 import type { ToolScope } from "./sessions.ts";
 
 type Subagents = {
   harness: Harness;
   conversations: Conversations;
-  create: (options: { parent: ConversationId; harness?: string }, context: Context) => Promise<Conversation>;
+  create: (options: ChatOptions, context: Context) => Promise<Conversation>;
   submit: (id: ConversationId, input: ChatInput, context: Context) => Promise<Submission>;
   abort: (id: ConversationId, context: Context) => Promise<void>;
 };
@@ -27,7 +28,10 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
       while (id !== null && id > caller) {
         const record = await tx.conversation(id);
         if (!record) return false;
-        const parent = parentOf(record, record.owner ? undefined : await tx.doc(MetaDoc, id));
+        const meta = await tx.doc(MetaDoc, id);
+        // Deleting a conversation deletes its descendants, so a deleted ancestor implies a deleted target.
+        if (meta.deleted) return false;
+        const parent = parentOf(record, record.owner ? undefined : meta);
         if (parent !== null && parent >= id) return false;
         id = parent;
       }
@@ -53,7 +57,7 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
       input: obj({ text: str({ minLength: 1, maxLength: 4096 }) }),
       call: async ({ text }, scope) => {
         await scope.active().report(text);
-        return "Progress recorded";
+        return { text: "Progress recorded" };
       },
     }),
     tool<ToolScope, { task: string; harness?: string; wait?: boolean }>({
@@ -62,8 +66,11 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
       input: obj({ task: text, harness: opt(str()), wait: opt(bool()) }),
       call: async ({ task, harness, wait = true }, scope) => {
         const { context } = scope.active();
-        const child = await create({ parent: scope.id, ...(harness !== undefined && { harness }) }, context);
-        return send(child.id, task, wait, context);
+        const child = await create(
+          { parent: scope.id, title: titleFrom(task), ...(harness !== undefined && { harness }) },
+          context,
+        );
+        return { text: await send(child.id, task, wait, context), child: child.id };
       },
     }),
     tool<ToolScope, Record<string, never>>({
@@ -75,11 +82,9 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
         const records = await harness.commit(async (tx) => {
           const children = [];
           for await (const record of conversationRecords(tx)) {
-            if (
-              record.id > scope.id &&
-              parentOf(record, record.owner ? undefined : await tx.doc(MetaDoc, record.id)) === scope.id
-            )
-              children.push(record);
+            if (record.id <= scope.id) continue;
+            const meta = await tx.doc(MetaDoc, record.id);
+            if (!meta.deleted && parentOf(record, record.owner ? undefined : meta) === scope.id) children.push(record);
           }
           return children;
         }, context);
@@ -88,7 +93,7 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
           const { id, title, status } = await conversations.summary(record, context);
           children.push({ id, title, status });
         }
-        return JSON.stringify(children);
+        return { text: JSON.stringify(children) };
       },
     }),
     tool<ToolScope, { conversation: number; limit?: number }>({
@@ -98,7 +103,7 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
       call: async ({ conversation, limit = 20 }, scope) => {
         const { context } = scope.active();
         const id = await requireChild(scope.id, conversation as ConversationId, context);
-        return transcript(harness, id, limit, context);
+        return { text: await transcript(harness, id, limit, context), child: id };
       },
     }),
     tool<ToolScope, { conversation: number; text: string; wait?: boolean }>({
@@ -107,7 +112,8 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
       input: obj({ conversation, text, wait: opt(bool()) }),
       call: async ({ conversation, text, wait = true }, scope) => {
         const { context } = scope.active();
-        return send(await requireChild(scope.id, conversation as ConversationId, context), text, wait, context);
+        const child = await requireChild(scope.id, conversation as ConversationId, context);
+        return { text: await send(child, text, wait, context), child };
       },
     }),
     tool<ToolScope, { conversation: number }>({
@@ -116,8 +122,9 @@ export function agentTools({ harness, conversations, create, submit, abort }: Su
       input: obj({ conversation }),
       call: async ({ conversation }, scope) => {
         const { context } = scope.active();
-        await abort(await requireChild(scope.id, conversation as ConversationId, context), context);
-        return "Subagent stopped";
+        const child = await requireChild(scope.id, conversation as ConversationId, context);
+        await abort(child, context);
+        return { text: "Subagent stopped", child };
       },
     }),
   ];

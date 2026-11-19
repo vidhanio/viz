@@ -24,7 +24,7 @@ export type McpTool<Scope, Args = unknown> = {
   readonly name: string;
   readonly description: string;
   readonly input: object;
-  readonly call: (args: Args, scope: Scope) => Promise<string>;
+  readonly call: (args: Args, scope: Scope) => Promise<{ text: string; child?: number }>;
 };
 
 const PATH = "/mcp";
@@ -38,7 +38,11 @@ export class McpServer<Scope> {
   readonly #handler: McpHttpHandler;
   #server: Bun.Server<undefined> | undefined;
 
-  constructor(options: McpServerOptions, tools: readonly McpTool<Scope>[]) {
+  constructor(
+    options: McpServerOptions,
+    tools: readonly McpTool<Scope>[],
+    receiptFor: (scope: Scope) => ((name: string, child?: number) => string) | undefined,
+  ) {
     const { name, version, instructions } = options;
     const schemas = tools.map((tool) => ({ tool, input: fromJsonSchema(tool.input as JsonSchemaType) }));
     // The SDK serves each request with a fresh server instance, bound here to the scope its token was admitted with.
@@ -49,12 +53,22 @@ export class McpServer<Scope> {
         const server = new SdkServer({ name, version }, { instructions, capabilities: { tools: {} } });
         for (const { tool, input } of schemas) {
           server.registerTool(tool.name, { description: tool.description, inputSchema: input }, async (args) => {
-            try {
-              return { content: [{ type: "text", text: await tool.call(args, scope) }] };
-            } catch (error) {
-              const text = error instanceof Error ? error.message : String(error);
-              return { content: [{ type: "text", text }], isError: true };
-            }
+            const receipt = receiptFor(scope);
+            const result = await tool.call(args, scope).then(
+              ({ text, child }) => ({ text, child, isError: false }),
+              (error: unknown) => ({
+                text: error instanceof Error ? error.message : String(error),
+                child: undefined,
+                isError: true,
+              }),
+            );
+            return {
+              content: [
+                { type: "text", text: result.text },
+                ...(receipt ? [{ type: "text" as const, text: receipt(tool.name, result.child) }] : []),
+              ],
+              ...(result.isError && { isError: true }),
+            };
           });
         }
         return server;
@@ -66,7 +80,13 @@ export class McpServer<Scope> {
   /** Listens on a free loopback port. */
   start(): void {
     if (this.#server !== undefined) return;
-    this.#server = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: (request) => this.#fetch(request) });
+    // A waiting subagent call can outlast Bun's request timeout; the enclosing ACP turn owns cancellation.
+    this.#server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      idleTimeout: 0,
+      fetch: (request) => this.#fetch(request),
+    });
   }
 
   stop(): void {

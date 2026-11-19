@@ -1,9 +1,4 @@
-/**
- * The orchestrator: viz's root conversation and the tools it uses to delegate work.
- *
- * Subagents are external ACP sessions with durable, task-owned transcripts.
- */
-import { homedir } from "node:os";
+/** The orchestrator: viz's root conversation and its turn instructions. */
 
 import type { Context } from "@earendil-works/chord/context";
 import type { Models } from "@earendil-works/pi-ai";
@@ -12,16 +7,11 @@ import {
   configure,
   defineDoc,
   defineExtension,
-  defineTool,
   type Extension,
   type Harness,
   section,
 } from "@earendil-works/pi-durable";
-import { obj, opt, str } from "@earendil-works/pi-schema";
 
-import { delegate } from "./agents/delegate.ts";
-import type { Runners } from "./agents/runners.ts";
-import type { AgentSessions } from "./agents/sessions.ts";
 import type { BackendConfig } from "./config.ts";
 import { TURNS_PROMPT } from "./memory/prompt.ts";
 import type { ConfigOption } from "./protocol.ts";
@@ -105,39 +95,6 @@ export function orchestratorSettings(
       } else throw new Error("Option not found");
     },
   };
-}
-
-export function subagentExtension(runners: Runners, sessions: AgentSessions, host: () => Harness): Extension {
-  const names = runners.names.join(", ");
-  return defineExtension({
-    name: "viz.subagent",
-    tools: [
-      defineTool({
-        name: "subagent",
-        description: names ? "Run a task in an ACP subagent." : "No ACP harness is configured.",
-        parameters: obj({
-          task: str({ description: "Task and context" }),
-          harness: opt(
-            str({
-              description: `ACP harness (${names || "none"}); omit for the default`,
-            }),
-          ),
-        }),
-        // A rerun returns a committed outcome or reports interruption; it never resends a prompt.
-        replay: "safe",
-        execute: async ({ task, harness }, api, context) => {
-          const { text, conversationId, isError } = await delegate(api, context, {
-            select: () => runners.require(harness),
-            task,
-            cwd: (await api.agent(context)).cwd ?? homedir(),
-            sessions,
-            harness: host(),
-          });
-          return { output: [{ type: "text", text }], details: { conversationId }, isError };
-        },
-      }),
-    ],
-  });
 }
 
 export const Orchestrator: Extension = defineExtension({

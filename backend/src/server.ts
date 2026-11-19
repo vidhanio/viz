@@ -22,6 +22,7 @@ import type { Server, ServerWebSocket } from "bun";
 
 import { TurnEntry } from "./agents/model.ts";
 import type { VizHarness } from "./harness.ts";
+import { isDeleted } from "./projects.ts";
 import {
   ErrorCode,
   type MethodName,
@@ -81,7 +82,8 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
   const conversation = async (id: number | undefined) => {
     if (id === undefined) return root;
     const found = await harness.conversation(id as ConversationId, context);
-    if (!found) throw new RpcError(ErrorCode.NotFound, `no conversation ${id}`);
+    if (!found || (await isDeleted(harness, found.id, context)))
+      throw new RpcError(ErrorCode.NotFound, `no conversation ${id}`);
     return found;
   };
 
@@ -173,6 +175,12 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       await viz.abortConversation((await conversation(id)).id, context);
       return {};
     },
+    "conversation.delete": async (_ws, { conversation: id }) => {
+      const { ids, kept } = await viz.deleteConversation((await conversation(id)).id, context);
+      // Their views would never change again; apps learn of the deletion from `conversations.changed`.
+      for (const ws of clients) for (const deleted of ids) await stopWatch(ws, deleted);
+      return { kept };
+    },
     "projects.list": async () => ({ projects: await viz.projects.list(context) }),
     "project.create": async (_ws, { path, name }) => ({ project: await viz.projects.create(path, name, context) }),
     "project.update": async (_ws, { project, name }) => ({
@@ -231,8 +239,13 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     },
     "conversation.watch": async (ws, { conversation: value }) => {
       const id = value as ConversationId;
+      const target = await conversation(id);
       if (ws.data.watches.has(id)) return { watching: true };
-      const view = await (await conversation(id)).watch(context);
+      const view = await target.watch(context);
+      if (await isDeleted(harness, id, context)) {
+        await view.stop();
+        throw new RpcError(ErrorCode.NotFound, `no conversation ${id}`);
+      }
       if (ws.data.closed || ws.data.watches.has(id)) {
         await view.stop();
         return { watching: !ws.data.closed };
@@ -249,14 +262,17 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       return { watching: true };
     },
     "conversation.unwatch": async (ws, { conversation: value }) => {
-      const id = value as ConversationId;
-      const watch = ws.data.watches.get(id);
-      ws.data.watches.delete(id);
-      if (watch && ws.data.client?.kind === "app") viz.changes.watched(id, false);
-      await watch?.view.stop();
+      await stopWatch(ws, value as ConversationId);
       return { watching: false };
     },
   };
+
+  async function stopWatch(ws: Socket, id: ConversationId) {
+    const watch = ws.data.watches.get(id);
+    ws.data.watches.delete(id);
+    if (watch && ws.data.client?.kind === "app") viz.changes.watched(id, false);
+    await watch?.view.stop();
+  }
 
   const dispatch = async (ws: Socket, raw: string | Buffer) => {
     let id: RpcId = null;

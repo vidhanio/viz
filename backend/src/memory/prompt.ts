@@ -81,10 +81,12 @@ write the line as soon as you understand <input> well enough to compress it.`;
 export const TURNS_PROMPT = `# Turns
 
 Do the user's tasks yourself, with your tools, following the user's
-instructions. Delegate self-contained work with the subagent tool when it would
-keep this chat responsive. To work in a project in the background, start a chat
-with spawn_chat; its result arrives later as a message starting with
-"[chat N]". Use list_conversations for project and conversation ids.
+instructions. Delegate self-contained work with spawn_chat. It starts a visible,
+independent ACP chat, optionally in a project, and returns immediately. Its
+result arrives later as an input starting with "[chat ". Use list_conversations
+for project and top-level chat ids, message_conversation for follow-ups, and
+cancel_conversation to stop delegated work. Nested subagents are managed by
+their parent chat.
 
 The view is your memory, and its latest word on a thing is the truth. Whenever
 you need any information, first find its latest mention in the view and zoom

@@ -9,6 +9,7 @@ import { InMemoryCredentialStore, type UserMessage } from "@earendil-works/pi-ai
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
+  AssistantEntry,
   type Conversation,
   type ConversationId,
   configure,
@@ -20,13 +21,15 @@ import {
   LiveDoc,
   type Submission,
   type SubmissionId,
+  ToolTask,
+  type ToolTaskInput,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
-import { ChatDoc, type ChatInput, chatScheduler } from "./agents/chat.ts";
-import { AgentDoc } from "./agents/model.ts";
+import { ChatDoc, type ChatInput, chatScheduler, withdrawChatInputs } from "./agents/chat.ts";
+import { AgentDoc, TurnEntry } from "./agents/model.ts";
 import { Runners } from "./agents/runners.ts";
 import { AgentSessions } from "./agents/sessions.ts";
 import { agentTools } from "./agents/tools.ts";
@@ -40,9 +43,18 @@ import { type MemoryBinding, memoryExtension } from "./memory/extension.ts";
 import { type Compactor, Memory } from "./memory/memory.ts";
 import { MEMORY_PROMPT } from "./memory/prompt.ts";
 import { Sync } from "./memory/sync.ts";
-import { modelRef, Orchestrator, orchestratorSettings, SettingsDoc, subagentExtension } from "./orchestrator.ts";
+import { modelRef, Orchestrator, orchestratorSettings, SettingsDoc } from "./orchestrator.ts";
 import { orchestratorToolkit, type ToolkitHost } from "./orchestrator-tools.ts";
-import { MetaDoc, projectIn, projects, type ProjectStore, touch, type WorktreeBinding } from "./projects.ts";
+import {
+  conversationRecords,
+  isDeleted,
+  MetaDoc,
+  projectIn,
+  projects,
+  type ProjectStore,
+  touch,
+  type WorktreeBinding,
+} from "./projects.ts";
 import type { Attachment, Params } from "./protocol.ts";
 import { Repositories } from "./repositories.ts";
 import { SearchIndex } from "./search.ts";
@@ -79,6 +91,11 @@ export type VizHarness = {
     context: Context,
   ): Promise<void>;
   abortConversation(id: ConversationId, context: Context): Promise<void>;
+  /**
+   * Deletes a conversation and its descendants: stops their turns, releases their runners, hides them everywhere, and
+   * removes their clean worktrees. Returns the deleted IDs and the dirty worktrees it left on disk.
+   */
+  deleteConversation(id: ConversationId, context: Context): Promise<{ ids: ConversationId[]; kept: string[] }>;
   removeProject(id: string, context: Context): Promise<void>;
   searchFiles(id: ConversationId, query: string, limit: number | undefined, context: Context): Promise<string[]>;
   close(context: Context): Promise<void>;
@@ -132,7 +149,6 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   const cwd = resolve(orchestrator.cwd ?? homedir());
   const sessions = new AgentSessions();
   const chats = chatScheduler(runners, sessions, cwd);
-  const Subagent = subagentExtension(runners, sessions, () => harness);
   let toolkit: ToolkitHost | undefined;
   const Toolkit = orchestratorToolkit(() => {
     if (!toolkit) throw new Error("viz is still starting");
@@ -143,7 +159,6 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   registry.install(CodingTools);
   registry.install(Memorize);
   registry.install(Orchestrator);
-  registry.install(Subagent);
   registry.install(Toolkit);
   registry.install(chats.extension);
 
@@ -178,7 +193,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       thinkingLevel: overrides?.thinking ?? orchestrator.thinking ?? null,
       instructions: orchestrator.instructions ?? null,
       cwd,
-      extensions: [CodingTools, Memorize, Orchestrator, Subagent, Toolkit],
+      extensions: [CodingTools, Memorize, Orchestrator, Toolkit],
     },
     context,
   );
@@ -187,13 +202,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     if (doc.title !== ORCHESTRATOR_TITLE) doc.title = ORCHESTRATOR_TITLE;
   }, context);
 
-  // A previous version could leave native non-root tasks in storage. Mark them before starting the scheduler.
-  const { tasks } = await harness.inspect(context);
-  for (const { record } of tasks) {
-    if (record.conversationId !== root.id && record.kind.startsWith("pi.")) {
-      await harness.abortTask(record.id, context);
-    }
-  }
+  await stopRetiredTasks(harness, root.id, context);
 
   const sync = new Sync(memory, root, context);
   binding.sync = sync;
@@ -239,13 +248,61 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   const search = await SearchIndex.open(dir, harness, context);
   const repositories = new Repositories(git, harness, root.id, conversations, changes);
 
-  const abortConversation = async (id: ConversationId, context: Context) => {
+  const abortConversation = async (id: ConversationId, context: Context, deleting = false) => {
     const target = await harness.conversation(id, context);
     if (!target) throw new Error("Conversation not found");
-    const record = await harness.commit((tx) => tx.conversation(id), context);
-    const agent = record?.owner && (await harness.snapshot(AgentDoc, id, context));
-    if (agent?.outcome?.kind === "running") await sessions.cancelDelegation(id);
-    else await target.abort(context);
+    await target.abort(context, { background: deleting });
+  };
+  const deleteConversation: VizHarness["deleteConversation"] = async (id, context) => {
+    if (id === root.id) throw new Error("The orchestrator can't be deleted");
+    // This commit is the cutoff: afterwards no input, subagent, tool, or RPC reaches these conversations.
+    const { ids, worktrees } = await harness.commit(async (tx) => {
+      if (!(await tx.conversation(id)) || (await tx.doc(MetaDoc, id)).deleted) {
+        throw new Error("Conversation not found");
+      }
+      const ids = [id];
+      for await (const { record } of descendants(tx, id)) {
+        if (!(await tx.doc(MetaDoc, record.id)).deleted) ids.push(record.id);
+      }
+      const deleting = new Set(ids);
+      const paths = new Set<string>();
+      for (const target of ids) {
+        const { worktree } = await tx.doc(MetaDoc, target);
+        if (worktree) paths.add(worktree.path);
+      }
+      // Subagents share their parent's worktree; one that a remaining conversation uses stays.
+      for await (const record of conversationRecords(tx)) {
+        if (deleting.has(record.id)) continue;
+        const { deleted, worktree } = await tx.doc(MetaDoc, record.id);
+        if (!deleted && worktree) paths.delete(worktree.path);
+      }
+      for (const target of ids) {
+        const meta = await tx.doc(MetaDoc, target);
+        meta.deleted = true;
+        meta.updatedAt = Date.now();
+        await withdrawChatInputs(tx, target);
+      }
+      return { ids, worktrees: [...paths] };
+    }, context);
+    // Children first: a parent's turn may be waiting on one of them. They are deleted already, so a failed stop is
+    // only logged; releasing the session still closes the runner.
+    for (const target of [...ids].reverse()) {
+      await abortConversation(target, context, true).catch((error: unknown) =>
+        console.error(`Stopping deleted conversation ${target}:`, error instanceof Error ? error.message : error),
+      );
+      sessions.forget(target);
+    }
+    const kept: string[] = [];
+    for (const path of worktrees) {
+      const removed = await repositories
+        .inTree(path, context, () => git.removeWorktree(path))
+        .catch((error: unknown) => {
+          console.error(`Removing worktree ${path}:`, error instanceof Error ? error.message : error);
+          return false;
+        });
+      if (!removed) kept.push(path);
+    }
+    return { ids, kept };
   };
   sessions.start(
     options.version,
@@ -341,7 +398,11 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     chats,
     worktree: (project, branch, context) => inWorktree(project, { branch }, context, async (created) => created),
     report: async (text, requestId, context) => void (await submit(root, { text, content: text, requestId }, context)),
-    abort: abortConversation,
+    // A deleted conversation is not found; `abortConversation` itself also serves the deletion.
+    abort: async (id, context) => {
+      if (await isDeleted(harness, id, context)) throw new Error("Conversation not found");
+      await abortConversation(id, context);
+    },
   };
   harness.resume();
 
@@ -374,10 +435,14 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
         tx.settleSubmission(submission, { status: "unanswered", reason: "removed" });
       }, context),
     abortConversation,
+    deleteConversation,
     updateConversation: async (id, options, context) => {
       const { title, archived, project, pinned, unread } = options;
-      if (id === root.id && (title !== undefined || archived !== undefined || project !== undefined))
-        throw new Error("The orchestrator cannot be renamed, archived, or moved");
+      if (
+        id === root.id &&
+        (title !== undefined || archived !== undefined || project !== undefined || pinned !== undefined)
+      )
+        throw new Error("The orchestrator can't be changed");
       if (unread !== undefined) changes.clearPendingUnread(id);
       const moved = await harness.commit(async (tx) => {
         if (title !== undefined) (await tx.doc(TitleDoc, id)).title = title;
@@ -442,4 +507,45 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       memory.close();
     },
   };
+}
+
+/** Retire old native runs and blocking delegations before the scheduler can replay them. */
+async function stopRetiredTasks(harness: Harness, root: ConversationId, context: Context): Promise<void> {
+  const { tasks } = await harness.inspect(context);
+  for (const { record } of tasks) {
+    if (record.conversationId !== root) {
+      if (record.kind.startsWith("pi.") || (await isDeleted(harness, record.conversationId, context)))
+        await harness.abortTask(record.id, context);
+    } else if (record.kind === ToolTask.definition.name) {
+      // The built-in abort handler uses the persisted call and does not need the retired extension.
+      const input = record.input as ToolTaskInput;
+      const legacy =
+        input.kind === "nested"
+          ? input.call.name === "subagent"
+          : await harness.commit(async (tx) => {
+              const entry = await tx.entry(AssistantEntry, input.assistant);
+              const message = entry?.model?.[0];
+              return (
+                message?.role === "assistant" &&
+                message.content.some(
+                  (call) => call.type === "toolCall" && call.id === input.callId && call.name === "subagent",
+                )
+              );
+            }, context);
+      if (legacy) await harness.abortTask(record.id, context);
+    }
+  }
+
+  await harness.commit(async (tx) => {
+    const interrupted: ConversationId[] = [];
+    for await (const { id, owner } of conversationRecords(tx)) {
+      if (owner && (await tx.doc(AgentDoc, id)).outcome?.kind === "running") interrupted.push(id);
+    }
+    for (const id of interrupted) {
+      const error = "Interrupted ACP delegation; prompt not resent";
+      (await tx.doc(AgentDoc, id)).outcome = { kind: "failed", error };
+      await touch(tx, id);
+      await tx.appendEntry(TurnEntry, id, { data: { stopReason: "error", error } });
+    }
+  }, context);
 }

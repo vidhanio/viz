@@ -24,8 +24,8 @@ import { bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 
 import type { ChatScheduler } from "./agents/chat.ts";
 import type { Runners } from "./agents/runners.ts";
-import type { Conversations } from "./conversations.ts";
-import type { ProjectStore, WorktreeBinding } from "./projects.ts";
+import { parentOf, type Conversations } from "./conversations.ts";
+import { conversationRecords, MetaDoc, type ProjectStore, type WorktreeBinding } from "./projects.ts";
 import type { SearchIndex } from "./search.ts";
 import { TitleDoc } from "./titles.ts";
 import { settledAnswer, transcript } from "./transcripts.ts";
@@ -59,6 +59,21 @@ const limit = (maximum: number) => opt(int({ minimum: 1, maximum }));
 const text = (value: string) => ({ output: [{ type: "text" as const, text: value }] });
 
 export function orchestratorToolkit(host: () => ToolkitHost): Extension {
+  const topLevelRecord = async (tx: Tx, id: ConversationId) => {
+    if (id === host().root) return;
+    const record = await tx.conversation(id);
+    if (!record) return;
+    const meta = await tx.doc(MetaDoc, id);
+    if (!meta.deleted && parentOf(record, meta) === null) return record;
+  };
+
+  const topLevel = async (tx: Tx, id: ConversationId) => {
+    if (id === host().root) throw new Error("That is this conversation");
+    const record = await topLevelRecord(tx, id);
+    if (!record) throw new Error("Conversation not found");
+    return record;
+  };
+
   const Report = defineTask<{ conversation: number; submission: number }, { phase: "wait" }, null>({
     name: "viz.orchestrator.report",
     version: 1,
@@ -71,15 +86,17 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
         const submission = await harness.submission(task.input.submission as SubmissionId, context);
         if (!submission) throw new Error("Input not found");
         const result = await settledAnswer(harness, await submission.wait(context), context);
-        const title = (await harness.snapshot(TitleDoc, id, context))?.title;
-        const head = `[chat ${id}${title ? ` "${title}"` : ""}]`;
-        await report(
-          "answer" in result
-            ? `${head} finished:\n\n${result.answer}`
-            : `${head} stopped (${result.unanswered})${result.error ? `: ${result.error}` : ""}`,
-          `viz.report:${runtime.taskId}`,
-          context,
-        );
+        if (await harness.commit((tx) => topLevelRecord(tx, id), context)) {
+          const title = (await harness.snapshot(TitleDoc, id, context))?.title;
+          const head = `[chat ${id}${title ? ` "${title}"` : ""}]`;
+          await report(
+            "answer" in result
+              ? `${head} finished:\n\n${result.answer}`
+              : `${head} stopped (${result.unanswered})${result.error ? `: ${result.error}` : ""}`,
+            `viz.report:${runtime.taskId}`,
+            context,
+          );
+        }
         await runtime.commit(() => ({ status: "terminal", outcome: { status: "completed", result: null } }), context);
       },
     },
@@ -95,7 +112,11 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
   ) =>
     api.commit(async (tx) => {
       const call = await tx.doc(CallDoc, api.taskId);
-      if (call.conversation !== null) return call.conversation as ConversationId;
+      if (call.conversation !== null) {
+        const id = call.conversation as ConversationId;
+        await topLevel(tx, id);
+        return id;
+      }
       const { conversation, submission } = await start(tx);
       await tx.createTask(
         Report,
@@ -106,23 +127,21 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
       return conversation;
     }, context);
 
-  const target = (id: number) => {
-    if (id === host().root) throw new Error("That is this conversation");
-    return id as ConversationId;
-  };
-
   return defineExtension({
     name: "viz.orchestrator.tools",
     tasks: [Report],
     tools: [
       defineTool({
         name: "list_conversations",
-        description: "List projects and conversations, newest first.",
+        description: "List projects and top-level ACP chats, newest first.",
         parameters: obj({ archived: opt(bool({ description: "Include archived" })), limit: limit(200) }),
         replay: "safe",
         execute: async ({ archived = false, limit = 50 }, _api, context) => {
           const { projects, conversations } = host();
-          const [all, summaries] = await Promise.all([projects.list(context), conversations.list(context)]);
+          const [all, summaries] = await Promise.all([
+            projects.list(context),
+            conversations.list(context, "top-level"),
+          ]);
           const listed = summaries
             .filter((summary) => archived || !summary.archived)
             .sort((a, b) => b.updatedAt - a.updatedAt)
@@ -143,27 +162,38 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
       }),
       defineTool({
         name: "read_conversation",
-        description: "Read a conversation's recent transcript.",
+        description: "Read a top-level chat's recent transcript.",
         parameters: obj({ conversation, limit: limit(200) }),
         replay: "safe",
-        execute: async ({ conversation, limit = 30 }, _api, context) =>
-          text((await transcript(host().harness, conversation as ConversationId, limit, context)) || "(empty)"),
+        execute: async ({ conversation, limit = 30 }, _api, context) => {
+          const { harness } = host();
+          const id = conversation as ConversationId;
+          await harness.commit((tx) => topLevel(tx, id), context);
+          return text((await transcript(harness, id, limit, context)) || "(empty)");
+        },
       }),
       defineTool({
         name: "search_conversations",
-        description: "Search all transcripts.",
+        description: "Search chats and their subagents, returning one match per top-level chat.",
         parameters: obj({ query: str({ minLength: 1 }), limit: limit(50) }),
         replay: "safe",
         execute: async ({ query, limit = 20 }, _api, context) => {
-          const { harness, search } = host();
-          const titles = new Map<number, string>();
-          const lines: string[] = [];
-          for (const { conversation, snippet } of search.search(query, limit).hits) {
-            let title = titles.get(conversation);
-            if (title === undefined) {
-              title = (await harness.snapshot(TitleDoc, conversation as ConversationId, context))?.title ?? "";
-              titles.set(conversation, title);
+          const { harness, root, search } = host();
+          const groups = await harness.commit(async (tx) => {
+            const groups = new Map<number, number>();
+            for await (const record of conversationRecords(tx)) {
+              if (record.id === root) continue;
+              const meta = await tx.doc(MetaDoc, record.id);
+              if (meta.deleted) continue;
+              const parent = parentOf(record, meta);
+              const chat = parent === null ? record.id : groups.get(parent);
+              if (chat !== undefined) groups.set(record.id, chat);
             }
+            return groups;
+          }, context);
+          const lines: string[] = [];
+          for (const { conversation, snippet } of search.search(query, limit, groups).hits) {
+            const title = (await harness.snapshot(TitleDoc, conversation as ConversationId, context))?.title;
             lines.push(`[${conversation}${title ? ` "${title}"` : ""}] ${snippet.replace(/[\u0001\u0002]/g, "**")}`);
           }
           return text(lines.join("\n") || "No matches");
@@ -210,14 +240,13 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
       }),
       defineTool({
         name: "message_conversation",
-        description: "Queue a message to a chat or subagent. Its reply reports back here.",
+        description: "Queue a message to a top-level chat. Its reply reports back here.",
         parameters: obj({ conversation, text: str({ minLength: 1 }) }),
         replay: "safe",
         execute: async ({ conversation, text: message }, api, context) => {
-          const id = target(conversation);
+          const id = conversation as ConversationId;
           await admit(api, context, async (tx) => {
-            const record = await tx.conversation(id);
-            if (!record) throw new Error("Conversation not found");
+            const record = await topLevel(tx, id);
             return {
               conversation: id,
               submission: await host().chats.enqueue(tx, record, { text: message, content: message }),
@@ -228,12 +257,14 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
       }),
       defineTool({
         name: "cancel_conversation",
-        description: "Stop a conversation's turn and drop its queue.",
+        description: "Stop a top-level chat's turn and drop its queue.",
         parameters: obj({ conversation }),
         replay: "safe",
         execute: async ({ conversation }, _api, context) => {
-          const id = target(conversation);
-          await host().abort(id, context);
+          const { harness, abort } = host();
+          const id = conversation as ConversationId;
+          await harness.commit((tx) => topLevel(tx, id), context);
+          await abort(id, context);
           return text(`Stopped ${id}.`);
         },
       }),

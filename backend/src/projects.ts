@@ -16,6 +16,11 @@ export const MetaDoc = defineDoc<{
   archived: boolean;
   pinned?: boolean;
   unread?: boolean;
+  /**
+   * Deleted by the user: hidden from every list, search, tool, and RPC. pi-durable cannot remove a conversation, so
+   * this tombstone is the deletion; its transcript stays in `viz.sqlite`.
+   */
+  deleted?: boolean;
   worktree?: WorktreeBinding;
   createdAt: number;
   updatedAt: number;
@@ -47,6 +52,11 @@ export async function* conversationRecords(tx: Tx) {
     yield* page.items;
     cursor = page.next;
   } while (cursor !== undefined);
+}
+
+/** Whether `id` is deleted; deleted conversations behave as if they did not exist. */
+export async function isDeleted(harness: Harness, id: ConversationId, context: Context) {
+  return (await harness.snapshot(MetaDoc, id, context))?.deleted === true;
 }
 
 export async function touch(tx: Tx, id: ConversationId) {
@@ -126,7 +136,8 @@ export function projects(harness: Harness, root: ConversationId): ProjectStore {
         const index = doc.projects.findIndex((project) => project.id === id);
         if (index < 0) throw new Error("Project not found");
         for await (const record of conversationRecords(tx)) {
-          if ((await tx.doc(MetaDoc, record.id)).project === id) await move(tx, record.id);
+          const meta = await tx.doc(MetaDoc, record.id);
+          if (!meta.deleted && meta.project === id) await move(tx, record.id);
         }
         doc.projects.splice(index, 1);
       }, context);

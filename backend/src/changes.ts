@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context"
 import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 
 import { ChatDoc } from "./agents/chat.ts";
-import { AgentDoc, TurnEntry } from "./agents/model.ts";
+import { TurnEntry } from "./agents/model.ts";
 import { AcpStateDoc } from "./agents/options.ts";
 import { SettingsDoc } from "./orchestrator.ts";
 import { MetaDoc, ProjectsDoc, touch } from "./projects.ts";
@@ -58,7 +58,9 @@ export async function observeChanges(harness: Harness, root: ConversationId, con
           if (touchRoot) await touch(tx, root);
           for (const id of pending) {
             if (!unread.delete(id)) continue;
-            if (!appWatches.has(id)) (await tx.doc(MetaDoc, id)).unread = true;
+            if (appWatches.has(id)) continue;
+            const meta = await tx.doc(MetaDoc, id);
+            if (!meta.deleted) meta.unread = true;
           }
         }, BACKGROUND_CONTEXT)
         .catch((error: unknown) => {
@@ -95,14 +97,6 @@ export async function observeChanges(harness: Harness, root: ConversationId, con
                 else if (workingChats.delete(id)) ended(id);
               }
               schedule(id, true);
-              break;
-            }
-            case AgentDoc.definition.kind: {
-              const outcome =
-                change.kind === "change" ? (change.value.outcome as { kind?: string } | null | undefined) : undefined;
-              if (change.conversationId !== undefined && outcome?.kind && outcome.kind !== "running")
-                ended(change.conversationId);
-              schedule(change.conversationId, true);
               break;
             }
             case InboxDoc.definition.kind:

@@ -10,6 +10,8 @@ export type ToolRecord = {
   title: string;
   kind: ToolKind | null;
   status: ToolCallStatus;
+  viz?: string;
+  child?: number;
   input?: string;
   output?: string;
   diffs?: { path: string; oldText: string | null; newText: string }[];
@@ -24,7 +26,7 @@ type AgentState = {
   outcome: Outcome | null;
 };
 
-/** A nonempty harness marks a delegated transcript, not a pi-durable model conversation. */
+/** Legacy task-owned chats retain their runner and outcome here. */
 export const AgentDoc = defineDoc<AgentState>({
   kind: "viz.agent",
   version: 1,

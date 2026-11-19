@@ -6,6 +6,32 @@ export function inputText(value: unknown): string | undefined {
   return JSON.stringify(value, null, 2)?.slice(0, 4000);
 }
 
+/** ACP and MCP do not share call IDs. Correlate the response itself, not names, titles, or request order. */
+export class ToolReceipts {
+  readonly #calls = new Map<string, { viz: string; child?: number; claimedBy?: string }>();
+
+  issue = (viz: string, child?: number): string => {
+    const id = crypto.randomUUID();
+    this.#calls.set(id, { viz, ...(child !== undefined && { child }) });
+    // Some runners only forward MCP text blocks, not structured response metadata.
+    return `[viz-tool:${id}]`;
+  };
+
+  strip(value: string, record: ToolRecord): string {
+    if (!this.#calls.size) return value;
+    return value.replace(/\[viz-tool:([0-9a-f-]{36})\]/g, (marker: string, id: string) => {
+      const call = this.#calls.get(id);
+      if (!call) return marker;
+      if (call.claimedBy === undefined || call.claimedBy === record.id) {
+        call.claimedBy = record.id;
+        record.viz = call.viz;
+        if (call.child !== undefined) record.child = call.child;
+      }
+      return "";
+    });
+  }
+}
+
 export class ToolContent {
   record: ToolRecord;
   #rawOutput = "";
@@ -15,16 +41,15 @@ export class ToolContent {
     this.record = { id, title: id, kind: null, status: "pending" };
   }
 
-  update(update: ToolCallUpdate): ToolRecord {
+  update(update: ToolCallUpdate, receipts: ToolReceipts): ToolRecord {
     const record = this.record;
     record.title = update.title ?? record.title;
     record.kind = update.kind ?? record.kind;
     record.status = update.status ?? record.status;
     if (update.rawInput !== undefined) record.input = inputText(update.rawInput)!;
     if (update.rawOutput !== undefined) {
-      this.#rawOutput = (
-        typeof update.rawOutput === "string" ? update.rawOutput : JSON.stringify(update.rawOutput, null, 2)
-      ).slice(0, 8000);
+      const raw = typeof update.rawOutput === "string" ? update.rawOutput : JSON.stringify(update.rawOutput, null, 2);
+      this.#rawOutput = receipts.strip(raw, record).slice(0, 8000);
     }
     if (update.content) {
       this.#contentText = "";
@@ -36,10 +61,12 @@ export class ToolContent {
             oldText: item.oldText?.slice(0, 20000) ?? null,
             newText: item.newText.slice(0, 20000),
           });
-        } else if (item.type === "content" && item.content.type === "text" && this.#contentText.length < 8000) {
-          const separator = this.#contentText ? "\n" : "";
-          this.#contentText +=
-            separator + item.content.text.slice(0, 8000 - this.#contentText.length - separator.length);
+        } else if (item.type === "content" && item.content.type === "text") {
+          const text = receipts.strip(item.content.text, record);
+          if (text && this.#contentText.length < 8000) {
+            const separator = this.#contentText ? "\n" : "";
+            this.#contentText += separator + text.slice(0, 8000 - this.#contentText.length - separator.length);
+          }
         }
       }
       if (diffs.length) record.diffs = diffs;

@@ -147,6 +147,30 @@ export class Git {
     return { path, base };
   }
 
+  /**
+   * Removes a linked worktree that viz created, unless it has modified, untracked, or ignored files. Its branch stays.
+   * Returns whether the worktree is gone.
+   */
+  async removeWorktree(path: string): Promise<boolean> {
+    const exists = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code !== "ENOENT") throw error;
+      return null;
+    });
+    if (!exists) return true;
+    const status = await git(path, [
+      "status",
+      "--porcelain",
+      "-z",
+      "--untracked-files=all",
+      "--ignored=matching",
+      "--ignore-submodules=none",
+    ]);
+    if (status !== "") return false;
+    // Git refuses a dirty worktree here too, should a file appear after the check.
+    await git(path, ["worktree", "remove", "--", path]);
+    return true;
+  }
+
   async checkpoint(id: ConversationId, prompt: EntryId, cwd: string, context: Context): Promise<void> {
     const root = await this.root(cwd);
     if (root === null) return;

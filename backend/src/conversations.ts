@@ -32,12 +32,7 @@ export async function moveConversation(tx: Tx, id: ConversationId, project: stri
   if (meta.worktree) return false;
   const chat = await tx.doc(ChatDoc, id);
   if (chat.runner && chat.runner.cwd !== cwd) {
-    if (
-      chat.hasWorker ||
-      chat.dispatched ||
-      chat.queue.length ||
-      (await tx.doc(AgentDoc, id)).outcome?.kind === "running"
-    ) {
+    if (chat.hasWorker || chat.dispatched || chat.queue.length) {
       throw new Error("Stop the conversation before moving it");
     }
     chat.runner.cwd = cwd;
@@ -85,10 +80,15 @@ export class Conversations {
     private readonly git: Git,
   ) {}
 
-  async list(context: Context): Promise<ConversationSummary[]> {
+  async list(context: Context, scope: "all" | "top-level" = "all"): Promise<ConversationSummary[]> {
     const records = await this.harness.commit(async (tx) => {
       const records: ConversationRecord[] = [];
-      for await (const record of conversationRecords(tx)) records.push(record);
+      for await (const record of conversationRecords(tx)) {
+        const meta = await tx.doc(MetaDoc, record.id);
+        if (meta.deleted) continue;
+        if (scope === "top-level" && (record.id === this.root || parentOf(record, meta) !== null)) continue;
+        records.push(record);
+      }
       return records;
     }, context);
     // Bound concurrent storage reads regardless of the number of conversations.
@@ -116,15 +116,14 @@ export class Conversations {
       record.owner ? harness.snapshot(AgentDoc, id, context) : undefined,
     ]);
     const name = chat?.runner?.name ?? (agent?.harness || null);
-    const readOnly = agent?.outcome?.kind === "running";
     const status =
-      readOnly || chat?.hasWorker || chat?.dispatched || chat?.queue.length
+      chat?.hasWorker || chat?.dispatched || chat?.queue.length
         ? "working"
         : chat?.setupFailed ||
             ((chat || agent) && ((await failed(harness, id, context)) ?? agent?.outcome?.kind === "failed"))
           ? "failed"
           : "idle";
-    return { status, meta, parent, harness: name, cwd: chat?.runner?.cwd, readOnly } as const;
+    return { status, meta, parent, harness: name, cwd: chat?.runner?.cwd, readOnly: false } as const;
   }
 
   async summary(record: ConversationRecord, context: Context): Promise<ConversationSummary> {
@@ -141,8 +140,9 @@ export class Conversations {
       ...(info.meta?.project && { project: info.meta.project }),
       ...(info.harness !== null && { harness: info.harness }),
       status: info.status,
-      archived: info.meta?.archived ?? false,
-      pinned: info.meta?.pinned ?? false,
+      // The orchestrator is not a thread the user manages: never archived or pinned.
+      archived: (record.id !== this.root && info.meta?.archived) || false,
+      pinned: (record.id !== this.root && info.meta?.pinned) || false,
       unread: info.meta?.unread ?? false,
       ...(info.meta?.worktree && { worktree: info.meta.worktree.path }),
       updatedAt: info.meta?.updatedAt ?? 0,

@@ -96,6 +96,10 @@ enum VizProtocol {
   struct Created: Decodable {
     let conversation: Int
   }
+
+  struct Deleted: Decodable {
+    let kept: [String]
+  }
 }
 
 /// Connection to a viz backend over its TCP listener (tailnet/LAN), with a bearer token.
@@ -197,6 +201,11 @@ final class Backend {
     if let pinned { params["pinned"] = pinned }
     if let unread { params["unread"] = unread }
     _ = try await call("conversation.update", params: params)
+  }
+
+  func delete(conversation: Int) async throws -> [String] {
+    let data = try await call("conversation.delete", params: ["conversation": conversation])
+    return try JSONDecoder().decode(VizProtocol.Deleted.self, from: data).kept
   }
 
   func search(query: String, limit: Int? = nil) async throws -> [VizProtocol.SearchHit] {

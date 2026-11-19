@@ -12,6 +12,7 @@ import {
 } from "@earendil-works/pi-durable";
 
 import { PromptEntry, TextEntry, ToolEntry, TurnEntry } from "./agents/model.ts";
+import { isDeleted } from "./projects.ts";
 
 type Line = { role: "User" | "Assistant" | "Tool"; text: string };
 
@@ -58,7 +59,7 @@ export async function transcript(
   width = 4000,
 ): Promise<string> {
   const target = await harness.conversation(id, context);
-  if (!target) throw new Error("Conversation not found");
+  if (!target || (await isDeleted(harness, id, context))) throw new Error("Conversation not found");
   const lines: string[] = [];
   let cursor: Cursor | undefined;
   do {

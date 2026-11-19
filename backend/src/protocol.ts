@@ -191,6 +191,14 @@ export const Methods = {
     params: obj({ conversation: ConversationId }),
     result: Empty,
   },
+  "conversation.delete": {
+    params: obj({ conversation: ConversationId }),
+    result: obj({
+      kept: arr(str(), {
+        description: "Worktree paths left on disk rather than removed",
+      }),
+    }),
+  },
   "conversation.submit": {
     params: obj({
       conversation: opt(int({ minimum: 1, description: "Default: the root (orchestrator) conversation" })),

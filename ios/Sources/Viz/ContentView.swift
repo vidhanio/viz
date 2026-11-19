@@ -29,7 +29,8 @@ struct ContentView: View {
   @State private var errors: [Int: String] = [:]
   @State private var searchText = ""
   @State private var searchResults: SearchResults?
-  @State private var updateError: String?
+  @State private var pendingDelete: VizProtocol.ConversationSummary?
+  @State private var notice: (title: String, detail: String)?
 
   var body: some View {
     NavigationSplitView {
@@ -40,7 +41,6 @@ struct ContentView: View {
         } else {
           searchSection
         }
-        CUT_PLACEHOLDER
       }
       .navigationTitle("viz")
       .searchable(text: $searchText, prompt: "Search conversations")
@@ -53,15 +53,28 @@ struct ContentView: View {
         }
       }
       .alert(
-        "Update failed",
+        pendingDelete.map { "Delete “\(title($0))”?" } ?? "Delete chat?",
         isPresented: Binding(
-          get: { updateError != nil },
-          set: { if !$0 { updateError = nil } }
+          get: { pendingDelete != nil },
+          set: { if !$0 { pendingDelete = nil } }
+        ),
+        presenting: pendingDelete
+      ) { conversation in
+        Button("Cancel", role: .cancel) {}
+        Button("Delete", role: .destructive) { delete(conversation) }
+      } message: { _ in
+        Text("Its subagents are deleted too. This can't be undone.")
+      }
+      .alert(
+        notice?.title ?? "",
+        isPresented: Binding(
+          get: { notice != nil },
+          set: { if !$0 { notice = nil } }
         )
       ) {
         Button("OK", role: .cancel) {}
       } message: {
-        Text(updateError ?? "")
+        Text(notice?.detail ?? "")
       }
     } detail: {
       if let conversation = openConversation {
@@ -247,19 +260,25 @@ struct ContentView: View {
     .swipeActions(allowsFullSwipe: false) {
       if conversation.kind != .orchestrator {
         Button(role: .destructive) {
+          pendingDelete = conversation
+        } label: {
+          Label("Delete", systemImage: "trash")
+        }
+        Button {
           update(conversation, archived: true)
         } label: {
           Label("Archive", systemImage: "archivebox")
         }
+        .tint(.orange)
+        Button {
+          update(conversation, pinned: !conversation.pinned)
+        } label: {
+          Label(
+            conversation.pinned ? "Unpin" : "Pin",
+            systemImage: conversation.pinned ? "pin.slash" : "pin")
+        }
+        .tint(.gray)
       }
-      Button {
-        update(conversation, pinned: !conversation.pinned)
-      } label: {
-        Label(
-          conversation.pinned ? "Unpin" : "Pin",
-          systemImage: conversation.pinned ? "pin.slash" : "pin")
-      }
-      .tint(.gray)
     }
   }
 
@@ -288,7 +307,35 @@ struct ContentView: View {
           selection = nil
         }
       } catch {
-        updateError = error.localizedDescription
+        notice = ("Update failed", error.localizedDescription)
+      }
+    }
+  }
+
+  private func delete(_ conversation: VizProtocol.ConversationSummary) {
+    var subtree: Set<Int> = [conversation.id]
+    for chat in backend.conversations.sorted(by: { $0.id < $1.id }) {
+      if let parent = chat.parent, subtree.contains(parent) { subtree.insert(chat.id) }
+    }
+    let parent = conversation.parent.flatMap { id in
+      visibleConversations.first { $0.id == id }
+    }
+    Task {
+      do {
+        let kept = try await backend.delete(conversation: conversation.id)
+        if let selected = selection?.conversationID, subtree.contains(selected) {
+          selection = parent.map { .conversation($0.id) }
+        }
+        for id in subtree {
+          drafts[id] = nil
+          sent[id] = nil
+          errors[id] = nil
+        }
+        if !kept.isEmpty {
+          notice = ("Worktrees kept on disk", kept.joined(separator: "\n"))
+        }
+      } catch {
+        notice = ("Delete failed", error.localizedDescription)
       }
     }
   }

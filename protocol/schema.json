@@ -298,6 +298,34 @@
         "additionalProperties": false
       }
     },
+    "conversation.delete": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": ["conversation"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "kept": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Worktree paths left on disk rather than removed"
+          }
+        },
+        "required": ["kept"],
+        "additionalProperties": false
+      }
+    },
     "conversation.submit": {
       "params": {
         "type": "object",

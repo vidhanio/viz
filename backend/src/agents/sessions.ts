@@ -23,7 +23,7 @@ import type { ConfigOption } from "../protocol.ts";
 import { AcpProcess } from "./acp.ts";
 import { type Outcome, PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
 import { AcpStateDoc, defaults, legacyMode, normalize, type OptionValue, validValue } from "./options.ts";
-import { ToolContent } from "./tool-record.ts";
+import { ToolContent, ToolReceipts } from "./tool-record.ts";
 
 export type TurnOutcome = Exclude<Outcome, { kind: "running" }>;
 
@@ -34,8 +34,6 @@ type TurnOptions = SessionOptions & {
   promptEntry: EntryId;
   commit: (write: (tx: Tx) => Promise<void>) => Promise<void>;
   context: Context;
-  progress?: (text: string) => void;
-  delegation?: true;
 };
 
 type Checkpoint = (id: ConversationId, prompt: EntryId, cwd: string, context: Context) => Promise<void>;
@@ -44,7 +42,11 @@ type Update = SessionUpdate | { sessionUpdate: "viz_progress"; text: string };
 type TextRun = { kind: "text" | "thought"; text: string };
 
 type ActiveTurn = { context: Context; report: (text: string) => Promise<void> };
-export type ToolScope = { id: ConversationId; active: () => ActiveTurn };
+export type ToolScope = {
+  id: ConversationId;
+  active: () => ActiveTurn;
+  receipt: () => ToolReceipts["issue"] | undefined;
+};
 
 type LiveSession = {
   readonly id: ConversationId;
@@ -59,13 +61,12 @@ type LiveSession = {
   legacyMode?: ConfigOption;
   configuring: Promise<void>;
   cancelled: boolean;
-  active?: ActiveTurn & { update: (update: SessionUpdate) => void };
+  active?: ActiveTurn & { update: (update: SessionUpdate) => void; receipts: ToolReceipts };
 };
 
 /** One process per conversation. Callers serialize turns and persist their prompt and terminal state. */
 export class AgentSessions {
   readonly #sessions = new Map<ConversationId, LiveSession>();
-  readonly #cancelledDelegations = new Set<ConversationId>();
   #mcp!: McpServer<ToolScope>;
   #harness!: Harness;
   #checkpoint!: Checkpoint;
@@ -76,6 +77,7 @@ export class AgentSessions {
     this.#mcp = new McpServer(
       { name: "viz", version, instructions: "Manage your subagents and record progress." },
       tools,
+      (scope) => scope.receipt(),
     );
     this.#mcp.start();
   }
@@ -83,7 +85,6 @@ export class AgentSessions {
   close(): void {
     for (const live of this.#sessions.values()) this.#release(live);
     this.#mcp?.stop();
-    this.#cancelledDelegations.clear();
   }
 
   forget(id: ConversationId): void {
@@ -94,16 +95,6 @@ export class AgentSessions {
   relocate(id: ConversationId, cwd: string): void {
     const live = this.#sessions.get(id);
     if (live && live.cwd !== cwd) this.#release(live);
-  }
-
-  async cancelDelegation(id: ConversationId): Promise<void> {
-    this.#cancelledDelegations.add(id);
-    const live = this.#sessions.get(id);
-    if (live) await this.#cancel(live);
-  }
-
-  delegationEnded(id: ConversationId): void {
-    this.#cancelledDelegations.delete(id);
   }
 
   async #cancel(live: LiveSession): Promise<void> {
@@ -149,6 +140,7 @@ export class AgentSessions {
         }),
       token: this.#mcp.grant({
         id,
+        receipt: () => live.active?.receipts.issue,
         active: () => {
           if (!live.active || live.active.context.abortSignal?.aborted) throw new Error("No active ACP turn");
           return live.active;
@@ -348,13 +340,12 @@ export class AgentSessions {
   }
 
   async turn(options: TurnOptions): Promise<TurnOutcome> {
-    const { id, text, commit, context, progress } = options;
-    if (options.delegation && this.#cancelledDelegations.has(id))
-      return { kind: "done", answer: "", stopReason: "cancelled" };
+    const { id, text, commit, context } = options;
     const transcript: { text?: TextRun } = {};
     let pending: Update[] = [];
     const answer: string[] = [];
     const tools = new Map<string, ToolContent>();
+    const receipts = new ToolReceipts();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let saved = Promise.resolve();
     let live: LiveSession | undefined;
@@ -367,7 +358,7 @@ export class AgentSessions {
       saved = saved.then(async () => {
         if (batch.length === 0 && !transcript.text && !(final && tools.size)) return;
         await commit(async (tx) => {
-          await apply(tx, id, batch, tools, transcript);
+          await apply(tx, id, batch, tools, receipts, transcript);
           if (final) {
             await appendText(tx, id, transcript);
             for (const { record } of tools.values()) await tx.appendEntry(ToolEntry, id, { data: record });
@@ -410,6 +401,7 @@ export class AgentSessions {
       turn.abortSignal?.throwIfAborted();
       live.active = {
         context: withAbortSignal(live.lifetime.signal, toolTurn.context),
+        receipts,
         update: (update) => {
           if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text")
             answer.push(update.content.text);
@@ -418,7 +410,6 @@ export class AgentSessions {
         report: async (text) => {
           push({ sessionUpdate: "viz_progress", text });
           await flush();
-          progress?.(text);
         },
       };
       // ACP prompts do not have idempotency keys. Never retry one after an error.
@@ -475,6 +466,7 @@ async function apply(
   id: ConversationId,
   updates: Update[],
   tools: Map<string, ToolContent>,
+  receipts: ToolReceipts,
   transcript: { text?: TextRun },
 ) {
   for (const update of updates) {
@@ -494,7 +486,7 @@ async function apply(
       case "tool_call":
       case "tool_call_update": {
         const tool = tools.get(update.toolCallId) ?? new ToolContent(update.toolCallId);
-        const record = tool.update(update);
+        const record = tool.update(update, receipts);
         if (record.status === "completed" || record.status === "failed") {
           await appendText(tx, id, transcript);
           await tx.appendEntry(ToolEntry, id, { data: record });
