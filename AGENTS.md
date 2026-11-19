@@ -63,6 +63,7 @@ After changing `backend/src/protocol.ts`: `cd backend && bun run schema`, then u
 ## Where things go
 
 - `TODO.md`: roadmap and open work, checked off as it lands. Update it in the same change.
+- `docs/design.md`: product scope (what viz is for and leaves out) and the desktop design system rules. Read before adding a feature or UI.
 - `docs/architecture.md`: how the system fits together (current state, not plans).
 - `docs/config.md`: config reference.
 - `docs/decisions/NNNN-title.md`: decision records (context, decision, consequences). Add one for any choice a future reader would question.
