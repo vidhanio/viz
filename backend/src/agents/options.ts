@@ -9,7 +9,12 @@ export type Desired = Record<string, OptionValue>;
 export type Commands = ConversationState["commands"];
 export type Access = "full" | "ask" | "read-only";
 
-export const AcpStateDoc = defineDoc<{ options: ConfigOption[]; commands: Commands; desired: Desired }>({
+export const AcpStateDoc = defineDoc<{
+  options: ConfigOption[];
+  commands: Commands;
+  desired: Desired;
+  images?: boolean;
+}>({
   kind: "viz.acp.state",
   version: 1,
   scope: "conversation",

@@ -14,6 +14,7 @@ import {
   AssistantEntry,
   type ConversationId,
   type ConversationWatch,
+  type EntryId,
   type SubmissionId,
 } from "@earendil-works/pi-durable";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
@@ -132,6 +133,9 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     hello: async (ws, { client }) => {
       const previous = ws.data.client;
       if (previous?.kind === "connector") connectors.get(previous.name)?.delete(ws);
+      if ((previous?.kind === "app") !== (client.kind === "app")) {
+        for (const id of ws.data.watches.keys()) viz.changes.watched(id, client.kind === "app");
+      }
       clients.add(ws);
       ws.data.client = client;
       if (client.kind === "connector") {
@@ -141,6 +145,18 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       return { protocol: PROTOCOL_VERSION, version: options.version, root: root.id };
     },
     "conversations.list": async () => ({ conversations: await viz.conversations.list(context) }),
+    "conversations.search": async (_ws, { query, limit }) => viz.search.search(query, limit),
+    "conversation.entries": async (_ws, { conversation: id, before, limit = 50 }) => {
+      const target = await conversation(id);
+      if (before === 1) return { entries: [] };
+      const page = await target.entries({ maxEntryId: (before - 1) as EntryId }, limit + 1, undefined, context);
+      const entries = page.items.slice(0, limit).reverse();
+      return { entries, ...(page.items.length > limit && { before: entries[0]!.id }) };
+    },
+    "queue.remove": async (_ws, { conversation: id, submission }) => {
+      await viz.removeQueued((await conversation(id)).id, submission as SubmissionId, context);
+      return {};
+    },
     "conversation.create": async (_ws, params) => {
       const created = await viz.createChat(params, context);
       return { conversation: created.id };
@@ -174,8 +190,29 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     "files.search": async (_ws, { conversation: id, query, limit }) => ({
       files: await viz.searchFiles((await conversation(id)).id, query, limit, context),
     }),
-    "conversation.submit": async (_ws, { conversation: id, text, requestId, origin }) => {
+    "git.diff": async (_ws, { conversation: id, ...params }) =>
+      viz.repositories.diff((await conversation(id)).id, params, context),
+    "git.branches": async (_ws, { conversation: id }) =>
+      viz.repositories.branches((await conversation(id)).id, context),
+    "git.checkout": async (_ws, { conversation: id, branch, create }) => {
+      await viz.repositories.checkout((await conversation(id)).id, branch, create, context);
+      return {};
+    },
+    "git.commit": async (_ws, { conversation: id, message, all }) =>
+      viz.repositories.commit((await conversation(id)).id, message, all, context),
+    "git.push": async (_ws, { conversation: id }) => {
+      await viz.repositories.push((await conversation(id)).id, context);
+      return {};
+    },
+    "git.pr": async (_ws, { conversation: id, ...params }) =>
+      viz.repositories.pr((await conversation(id)).id, params, context),
+    "git.revert": async (_ws, { conversation: id, turn }) => {
+      await viz.repositories.revert((await conversation(id)).id, turn, context);
+      return {};
+    },
+    "conversation.submit": async (_ws, { conversation: id, text, requestId, origin, attachments }) => {
       const target = await conversation(id);
+      const saved = attachments?.length ? await viz.saveAttachments(attachments) : undefined;
       const content = origin
         ? `[${[origin.connector, `#${origin.channel}`, origin.author && `@${origin.author}`].filter(Boolean).join(" ")}] ${text}`
         : text;
@@ -186,6 +223,7 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
           text,
           ...(requestId !== undefined && { requestId }),
           ...(origin && { origin }),
+          ...(saved && { attachments: saved }),
         },
         context,
       );
@@ -205,17 +243,20 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       }
       const watch = { view, sending: false, dirty: false };
       ws.data.watches.set(id, watch);
+      if (ws.data.client?.kind === "app") viz.changes.watched(id, true);
       notify(ws, "conversation.view", { conversation: id, value: view.value });
       view.start(async (call) => {
         if (call.kind === "value") notify(ws, "conversation.view", { conversation: id, ops: call.ops });
       });
       refreshState(ws, id, watch);
+      await viz.changes.markRead(id, context);
       return { watching: true };
     },
     "conversation.unwatch": async (ws, { conversation: value }) => {
       const id = value as ConversationId;
       const watch = ws.data.watches.get(id);
       ws.data.watches.delete(id);
+      if (watch && ws.data.client?.kind === "app") viz.changes.watched(id, false);
       await watch?.view.stop();
       return { watching: false };
     },
@@ -282,13 +323,18 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
   };
 
   const websocket = {
+    // Base64 needs about 27 MiB per 20 MiB attachment; still bound a single RPC frame.
+    maxPayloadLength: 128 * 1024 * 1024,
     message: (ws: Socket, raw: string | Buffer) => void dispatch(ws, raw),
     close: (ws: Socket) => {
       ws.data.closed = true;
       clients.delete(ws);
       const { client, watches } = ws.data;
       if (client?.kind === "connector") connectors.get(client.name)?.delete(ws);
-      for (const { view } of watches.values()) void view.stop();
+      for (const [id, { view }] of watches) {
+        if (client?.kind === "app") viz.changes.watched(id, false);
+        void view.stop();
+      }
       watches.clear();
     },
   };
@@ -314,11 +360,18 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     }
   });
 
+  const pollGit = setInterval(() => {
+    const ids = new Set<ConversationId>();
+    for (const ws of clients) for (const id of ws.data.watches.keys()) ids.add(id);
+    for (const id of ids) viz.changes.refresh(id);
+  }, 5_000);
+
   return {
     socket: options.socket,
     ...(tcp && { url: tcp.url.origin }),
     stop: async () => {
       stopChanges();
+      clearInterval(pollGit);
       await Promise.all([local.stop(true), tcp?.stop(true)]);
       await rm(options.socket, { force: true });
     },

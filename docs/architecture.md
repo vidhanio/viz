@@ -39,13 +39,23 @@ flowchart LR
 
 ### ACP app chats
 
-`conversation.create` makes an ownerless chat bound to an ACP runner and opens its session in the background. `viz.projects` on the root stores the project directories; `viz.meta` on each conversation stores its project, ACP parent, archive flag, and timestamps. Project branches come from Git's symbolic `HEAD`, including in linked worktrees. A project's chats run in its directory; unprojected chats use the orchestrator cwd. Moving a chat moves its descendants and requires affected turns to stop before their cwd changes. Removing a project leaves its conversations unprojected.
+`conversation.create` makes an ownerless chat bound to an ACP runner and opens its session in the background. `viz.projects` on the root stores project directories; `viz.meta` stores the conversation's project, ACP parent, archive/pin/unread flags, worktree, and timestamps. Project branches come from Git's symbolic `HEAD`, including linked worktrees. A chat normally runs in its project directory or the orchestrator cwd. Moving a chat moves its descendants and requires affected turns to stop before their cwd changes. A bound worktree survives moving or archiving its chat and removing its project.
 
 One durable worker drains each chat's inputs in order. The backend stores the runner's session id before its first prompt, keeps the process across turns, and reconnects with `session/resume` or `session/load` after restart or a cwd change. If the runner cannot restore the session, the turn fails instead of silently starting over. An interrupted prompt is never sent twice.
+
+`conversation.state` exposes waiting inputs, which can be removed until they are placed. The orchestrator uses pi-durable's inbox; ACP uses its own durable chat queue. A chat becomes unread when it stops working with no app watching; watching clears the flag.
 
 The runner advertises configuration options, modes, and slash commands. `viz.acp.state` stores the last options and commands and the user's desired values. The backend reapplies choices that differ on open or restore. Slash commands go to the runner as typed. Full and Read-only answer ACP permission requests automatically; Ask exposes them to apps until a user responds, the turn ends or is aborted, or the process closes. The access setting is not a sandbox.
 
 File mentions search within the chat's cwd. With Git on `PATH`, its index and ignore rules determine candidates in a checkout; elsewhere a bounded walk excludes hidden directories, `node_modules`, and `target`. Searches cache file lists briefly and rank fuzzy basename matches before path-only matches.
+
+Uploads up to 20 MiB each are saved under `attachments/<sha256>/<name>` in the state directory; prompt entries contain their names, MIME types, and paths. ACP receives file links and readable paths, and an image block when the runner accepts it. The orchestrator sends supported images inline and passes the saved paths in text.
+
+### Git and transcript search
+
+Worktree chats create a branch and linked checkout under `worktrees/<project-id>/` in the state directory. Before each ACP prompt in a Git repo, a temporary index captures tracked and non-ignored untracked files without altering the user's index. `viz.checkpoints` maps prompt entry IDs to commits retained by Git refs. Turn diffs compare to the next checkpoint or the current tree; revert restores the files without resetting the branch or index. Backend Git mutations share a per-working-tree lock. Checkout, commit, and revert refuse to modify a working tree during a viz turn.
+
+`search.sqlite` is a derived FTS5 index of prompt text, assistant answers, and tool names. Startup backfills from per-conversation entry cursors; the commit observer indexes new entries. Hits carry their original conversation and entry IDs. Older transcript pages come directly from pi-durable, using an exclusive entry ID cursor.
 
 Legacy native app chats keep their visible transcript. Their next input starts an ACP session; their old native history is not sent to the new runner.
 
@@ -84,7 +94,7 @@ Listeners (see `docs/decisions/0001-remote-transport.md`):
 Every connector input goes into the orchestrator (or a named conversation) with an `origin` (`connector`, `channel`, optional `thread`/`message`/`author`). The backend stores the origin with the transcript entry (`kind: "viz.input"`, `data.origin`) and prefixes the model-visible text with a tag like `[discord #123 @alice]`, so the orchestrator knows where an input came from.
 
 - **Connectors** receive only `reply` notifications for inputs whose `origin.connector` is their own `hello` name, and render just those replies.
-- **Apps** watch conversations for `conversation.view` (snapshot, then Chord deltas) and `conversation.state` (status, cwd, options, commands, and approvals). Stored pi-durable commits and in-memory approval changes drive debounced `conversations.changed` notifications; apps then reload their conversation and project lists.
+- **Apps** watch conversations for `conversation.view` (snapshot, then Chord deltas) and `conversation.state` (status, cwd, options, commands, approvals, queued inputs, attachment capability, and Git status). Stored pi-durable commits and in-memory approval changes drive debounced `conversations.changed` notifications; apps then reload their conversation and project lists. Git state also refreshes on Git RPCs and every five seconds for watched conversations.
 
 Reply routing is in-memory today: a reply to a connector that is disconnected when the answer lands is dropped (durable outbox: `TODO.md`).
 

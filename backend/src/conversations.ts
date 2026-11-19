@@ -4,6 +4,7 @@ import {
   type ConversationRecord,
   type Cursor,
   type Harness,
+  InboxDoc,
   LiveDoc,
   type Tx,
 } from "@earendil-works/pi-durable";
@@ -13,6 +14,7 @@ import { AgentDoc, TurnEntry } from "./agents/model.ts";
 import { access, accessOption, AcpStateDoc } from "./agents/options.ts";
 import type { Runners } from "./agents/runners.ts";
 import type { AgentSessions } from "./agents/sessions.ts";
+import type { Git } from "./git/index.ts";
 import { conversationRecords, MetaDoc, ProjectsDoc } from "./projects.ts";
 import type { ConfigOption, ConversationState, ConversationSummary } from "./protocol.ts";
 import { ORCHESTRATOR_TITLE, TitleDoc } from "./titles.ts";
@@ -26,7 +28,9 @@ export function parentOf(
 
 export async function moveConversation(tx: Tx, id: ConversationId, project: string | null, cwd: string) {
   const meta = await tx.doc(MetaDoc, id);
-  if (meta.project === project) return;
+  if (meta.project === project) return false;
+  meta.project = project;
+  if (meta.worktree) return false;
   const chat = await tx.doc(ChatDoc, id);
   if (chat.runner && chat.runner.cwd !== cwd) {
     if (
@@ -40,7 +44,7 @@ export async function moveConversation(tx: Tx, id: ConversationId, project: stri
     chat.runner.cwd = cwd;
     delete chat.setupFailed;
   }
-  meta.project = project;
+  return chat.runner !== null;
 }
 
 export async function* descendants(tx: Tx, conversation: ConversationId) {
@@ -79,6 +83,8 @@ export class Conversations {
     private readonly runners: Runners,
     private readonly sessions: AgentSessions,
     private readonly rootOptions: (context: Context) => Promise<ConfigOption[]>,
+    private readonly rootImages: (context: Context) => Promise<boolean>,
+    private readonly git: Git,
   ) {}
 
   async list(context: Context): Promise<ConversationSummary[]> {
@@ -140,6 +146,9 @@ export class Conversations {
       ...(info.harness !== null && { harness: info.harness }),
       status: info.status,
       archived: info.meta?.archived ?? false,
+      pinned: info.meta?.pinned ?? false,
+      unread: info.meta?.unread ?? false,
+      ...(info.meta?.worktree && { worktree: info.meta.worktree.path }),
       updatedAt: info.meta?.updatedAt ?? 0,
     };
   }
@@ -148,18 +157,43 @@ export class Conversations {
     const record = await this.harness.commit((tx) => tx.conversation(id), context);
     if (!record) throw new Error("Conversation not found");
     const info = await this.#info(record, context);
+    const cwd = info.cwd ?? info.meta?.worktree?.path ?? (await this.#projectCwd(info.meta?.project, context));
     const base = {
       status: info.status,
       harness: info.harness,
       project: info.meta?.project ?? null,
-      cwd: info.cwd ?? (await this.#projectCwd(info.meta?.project, context)),
+      cwd,
+      git: await this.git.state(cwd, info.meta?.worktree?.path ?? null),
       approvals: info.approvals,
       readOnly: info.readOnly,
     };
-    if (id === this.root) return { ...base, commands: [], options: await this.rootOptions(context) };
-    const acp = await this.harness.snapshot(AcpStateDoc, id, context);
+    if (id === this.root) {
+      const [options, images, inbox] = await Promise.all([
+        this.rootOptions(context),
+        this.rootImages(context),
+        this.harness.snapshot(InboxDoc, id, context),
+      ]);
+      const queue = (inbox?.items ?? []).flatMap((item) => {
+        if (item.mode === "write") return [];
+        const { data } = item.entry ?? {};
+        const text =
+          data && typeof data === "object" && !Array.isArray(data) && typeof data.text === "string"
+            ? data.text
+            : typeof item.content === "string"
+              ? item.content
+              : item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
+        return [{ submission: item.id, text }];
+      });
+      return { ...base, commands: [], options, queue, attachments: { images } };
+    }
+    const [acp, chat] = await Promise.all([
+      this.harness.snapshot(AcpStateDoc, id, context),
+      this.harness.snapshot(ChatDoc, id, context),
+    ]);
     return {
       ...base,
+      attachments: { images: acp?.images ?? false },
+      queue: chat?.queue.map(({ submission, text }) => ({ submission, text })) ?? [],
       commands: acp?.commands ?? [],
       options: [
         ...(acp?.options ?? []),
@@ -173,7 +207,7 @@ export class Conversations {
     const chat = await this.harness.snapshot(ChatDoc, id, context);
     if (chat?.runner) return chat.runner.cwd;
     const meta = await this.harness.snapshot(MetaDoc, id, context);
-    return this.#projectCwd(meta?.project, context);
+    return meta?.worktree?.path ?? this.#projectCwd(meta?.project, context);
   }
 
   async #projectCwd(project: string | null | undefined, context: Context): Promise<string> {

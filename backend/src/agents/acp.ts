@@ -156,6 +156,10 @@ export class AcpProcess {
     return this.#capabilities.mcpCapabilities?.http === true;
   }
 
+  get supportsImages(): boolean {
+    return this.#capabilities.promptCapabilities?.image === true;
+  }
+
   newSession(cwd: string, mcpServers: acp.McpServer[]): Promise<acp.NewSessionResponse> {
     return this.#connection.agent.request(acp.methods.agent.session.new, { cwd, mcpServers });
   }
@@ -182,10 +186,10 @@ export class AcpProcess {
   }
 
   /** Runs one prompt turn; resolves with its stop reason when the agent ends it. */
-  async prompt(sessionId: string, text: string): Promise<acp.StopReason> {
+  async prompt(sessionId: string, prompt: acp.ContentBlock[]): Promise<acp.StopReason> {
     const response = await this.#connection.agent.request(acp.methods.agent.session.prompt, {
       sessionId,
-      prompt: [{ type: "text", text }],
+      prompt,
     });
     return response.stopReason;
   }

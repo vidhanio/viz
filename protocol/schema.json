@@ -24,7 +24,10 @@
           "description": "Human-readable author, shown to the model"
         }
       },
-      "required": ["connector", "channel"],
+      "required": [
+        "connector",
+        "channel"
+      ],
       "additionalProperties": false
     }
   },
@@ -40,17 +43,27 @@
             "type": "object",
             "properties": {
               "kind": {
-                "enum": ["app", "connector", "cli"]
+                "enum": [
+                  "app",
+                  "connector",
+                  "cli"
+                ]
               },
               "name": {
                 "type": "string"
               }
             },
-            "required": ["kind", "name"],
+            "required": [
+              "kind",
+              "name"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["protocol", "client"],
+        "required": [
+          "protocol",
+          "client"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -68,7 +81,11 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": ["protocol", "version", "root"],
+        "required": [
+          "protocol",
+          "version",
+          "root"
+        ],
         "additionalProperties": false
       }
     },
@@ -96,7 +113,11 @@
                   "description": "Set by the backend: fixed for the orchestrator, a subagent's task, a chat's first message; empty until known"
                 },
                 "kind": {
-                  "enum": ["orchestrator", "chat", "subagent"]
+                  "enum": [
+                    "orchestrator",
+                    "chat",
+                    "subagent"
+                  ]
                 },
                 "parent": {
                   "type": "integer",
@@ -113,7 +134,12 @@
                   "description": "ACP runner name; absent for the orchestrator"
                 },
                 "status": {
-                  "enum": ["idle", "working", "approval", "failed"],
+                  "enum": [
+                    "idle",
+                    "working",
+                    "approval",
+                    "failed"
+                  ],
                   "description": "working: a turn runs or inputs wait; approval: a permission request waits for the user"
                 },
                 "archived": {
@@ -122,14 +148,36 @@
                 "updatedAt": {
                   "type": "integer",
                   "description": "Unix milliseconds of the last input or turn end; 0 when unknown"
+                },
+                "unread": {
+                  "type": "boolean",
+                  "description": "A turn ended while no app watched the conversation; watching clears it"
+                },
+                "pinned": {
+                  "type": "boolean"
+                },
+                "worktree": {
+                  "type": "string",
+                  "description": "Path of the viz-created git worktree the conversation runs in"
                 }
               },
-              "required": ["id", "title", "kind", "status", "archived", "updatedAt"],
+              "required": [
+                "id",
+                "title",
+                "kind",
+                "status",
+                "archived",
+                "updatedAt",
+                "unread",
+                "pinned"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["conversations"],
+        "required": [
+          "conversations"
+        ],
         "additionalProperties": false
       }
     },
@@ -141,6 +189,24 @@
             "type": "string",
             "minLength": 1,
             "description": "Backend-assigned project id"
+          },
+          "worktree": {
+            "type": "object",
+            "properties": {
+              "branch": {
+                "type": "string",
+                "minLength": 1
+              },
+              "base": {
+                "type": "string",
+                "description": "Default: the project's current branch"
+              }
+            },
+            "required": [
+              "branch"
+            ],
+            "additionalProperties": false,
+            "description": "Run the chat in a new git worktree of the project on a new branch"
           },
           "harness": {
             "type": "string",
@@ -172,7 +238,9 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": ["conversation"],
+        "required": [
+          "conversation"
+        ],
         "additionalProperties": false
       }
     },
@@ -192,6 +260,12 @@
           "archived": {
             "type": "boolean"
           },
+          "pinned": {
+            "type": "boolean"
+          },
+          "unread": {
+            "type": "boolean"
+          },
           "project": {
             "anyOf": [
               {
@@ -205,7 +279,9 @@
             ]
           }
         },
-        "required": ["conversation"],
+        "required": [
+          "conversation"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -237,7 +313,11 @@
             ]
           }
         },
-        "required": ["conversation", "option", "value"],
+        "required": [
+          "conversation",
+          "option",
+          "value"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -256,7 +336,9 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": ["conversation"],
+        "required": [
+          "conversation"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -289,7 +371,11 @@
             ]
           }
         },
-        "required": ["conversation", "approval", "option"],
+        "required": [
+          "conversation",
+          "approval",
+          "option"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -337,11 +423,42 @@
                 "description": "Human-readable author, shown to the model"
               }
             },
-            "required": ["connector", "channel"],
+            "required": [
+              "connector",
+              "channel"
+            ],
             "additionalProperties": false
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "mime": {
+                  "type": "string",
+                  "description": "e.g. image/png, text/plain"
+                },
+                "data": {
+                  "type": "string",
+                  "description": "Base64, at most 20 MiB decoded"
+                }
+              },
+              "required": [
+                "name",
+                "mime",
+                "data"
+              ],
+              "additionalProperties": false
+            }
           }
         },
-        "required": ["text"],
+        "required": [
+          "text"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -353,7 +470,9 @@
             "description": "pi-durable SubmissionId"
           }
         },
-        "required": ["submission"],
+        "required": [
+          "submission"
+        ],
         "additionalProperties": false
       }
     },
@@ -367,7 +486,9 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": ["conversation"],
+        "required": [
+          "conversation"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -377,7 +498,9 @@
             "type": "boolean"
           }
         },
-        "required": ["watching"],
+        "required": [
+          "watching"
+        ],
         "additionalProperties": false
       }
     },
@@ -391,7 +514,9 @@
             "description": "pi-durable ConversationId"
           }
         },
-        "required": ["conversation"],
+        "required": [
+          "conversation"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -401,7 +526,9 @@
             "type": "boolean"
           }
         },
-        "required": ["watching"],
+        "required": [
+          "watching"
+        ],
         "additionalProperties": false
       }
     },
@@ -447,12 +574,20 @@
                   "description": "Unix milliseconds"
                 }
               },
-              "required": ["id", "name", "path", "branch", "createdAt"],
+              "required": [
+                "id",
+                "name",
+                "path",
+                "branch",
+                "createdAt"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["projects"],
+        "required": [
+          "projects"
+        ],
         "additionalProperties": false
       }
     },
@@ -471,7 +606,9 @@
             "description": "Default: the directory's name"
           }
         },
-        "required": ["path"],
+        "required": [
+          "path"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -508,11 +645,19 @@
                 "description": "Unix milliseconds"
               }
             },
-            "required": ["id", "name", "path", "branch", "createdAt"],
+            "required": [
+              "id",
+              "name",
+              "path",
+              "branch",
+              "createdAt"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["project"],
+        "required": [
+          "project"
+        ],
         "additionalProperties": false
       }
     },
@@ -530,7 +675,10 @@
             "minLength": 1
           }
         },
-        "required": ["project", "name"],
+        "required": [
+          "project",
+          "name"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -567,11 +715,19 @@
                 "description": "Unix milliseconds"
               }
             },
-            "required": ["id", "name", "path", "branch", "createdAt"],
+            "required": [
+              "id",
+              "name",
+              "path",
+              "branch",
+              "createdAt"
+            ],
             "additionalProperties": false
           }
         },
-        "required": ["project"],
+        "required": [
+          "project"
+        ],
         "additionalProperties": false
       }
     },
@@ -585,7 +741,9 @@
             "description": "Backend-assigned project id"
           }
         },
-        "required": ["project"],
+        "required": [
+          "project"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -615,12 +773,17 @@
                   "type": "boolean"
                 }
               },
-              "required": ["name", "default"],
+              "required": [
+                "name",
+                "default"
+              ],
               "additionalProperties": false
             }
           }
         },
-        "required": ["harnesses"],
+        "required": [
+          "harnesses"
+        ],
         "additionalProperties": false
       }
     },
@@ -643,7 +806,10 @@
             "maximum": 200
           }
         },
-        "required": ["conversation", "query"],
+        "required": [
+          "conversation",
+          "query"
+        ],
         "additionalProperties": false
       },
       "result": {
@@ -657,7 +823,424 @@
             }
           }
         },
-        "required": ["files"],
+        "required": [
+          "files"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conversations.search": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "hits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "conversation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "pi-durable ConversationId"
+                },
+                "entry": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "pi-durable EntryId"
+                },
+                "snippet": {
+                  "type": "string",
+                  "description": "Matching text with the match wrapped in \u0001 \u0002 markers"
+                }
+              },
+              "required": [
+                "conversation",
+                "entry",
+                "snippet"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "hits"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "conversation.entries": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "before": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Return entries with smaller ids than this"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "conversation",
+          "before"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {},
+            "description": "pi-durable EntryRecords in ascending id order, as in the view"
+          },
+          "before": {
+            "type": "integer",
+            "description": "Set when older entries remain"
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "queue.remove": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "submission": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable SubmissionId"
+          }
+        },
+        "required": [
+          "conversation",
+          "submission"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "git.diff": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "scope": {
+            "enum": [
+              "worktree",
+              "turn",
+              "branch"
+            ],
+            "description": "worktree: uncommitted changes; turn: since the start of `turn`; branch: against the base branch"
+          },
+          "turn": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "For scope turn: the prompt entry id; default the latest turn"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "oldPath": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "status": {
+                  "enum": [
+                    "modified",
+                    "added",
+                    "deleted",
+                    "renamed"
+                  ]
+                },
+                "additions": {
+                  "type": "integer"
+                },
+                "deletions": {
+                  "type": "integer"
+                },
+                "patch": {
+                  "type": "string",
+                  "description": "Unified diff of this file, capped at 200 KB"
+                }
+              },
+              "required": [
+                "path",
+                "oldPath",
+                "status",
+                "additions",
+                "deletions",
+                "patch"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "git.branches": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "current": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "branches": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "current",
+          "branches"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "git.checkout": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "branch": {
+            "type": "string",
+            "minLength": 1
+          },
+          "create": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation",
+          "branch"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "git.commit": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "message": {
+            "type": "string",
+            "description": "Empty or absent: written by the [memory].compactor model from the diff"
+          },
+          "all": {
+            "type": "boolean",
+            "description": "Stage every change first; default true"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "commit": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "commit",
+          "message"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "git.push": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "git.pr": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "conversation"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "git.revert": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "turn": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Restore the working tree to the start of this turn (prompt entry id)"
+          }
+        },
+        "required": [
+          "conversation",
+          "turn"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     }
@@ -674,7 +1257,9 @@
         "value": {},
         "ops": {}
       },
-      "required": ["conversation"],
+      "required": [
+        "conversation"
+      ],
       "additionalProperties": false
     },
     "conversation.state": {
@@ -689,7 +1274,12 @@
           "type": "object",
           "properties": {
             "status": {
-              "enum": ["idle", "working", "approval", "failed"],
+              "enum": [
+                "idle",
+                "working",
+                "approval",
+                "failed"
+              ],
               "description": "working: a turn runs or inputs wait; approval: a permission request waits for the user"
             },
             "harness": {
@@ -754,7 +1344,10 @@
                     ]
                   },
                   "type": {
-                    "enum": ["select", "boolean"]
+                    "enum": [
+                      "select",
+                      "boolean"
+                    ]
                   },
                   "value": {
                     "anyOf": [
@@ -785,12 +1378,22 @@
                           "description": "Group label"
                         }
                       },
-                      "required": ["value", "name"],
+                      "required": [
+                        "value",
+                        "name"
+                      ],
                       "additionalProperties": false
                     }
                   }
                 },
-                "required": ["id", "name", "category", "type", "value", "choices"],
+                "required": [
+                  "id",
+                  "name",
+                  "category",
+                  "type",
+                  "value",
+                  "choices"
+                ],
                 "additionalProperties": false
               },
               "description": "Empty until the runner's session reports them"
@@ -818,7 +1421,11 @@
                     ]
                   }
                 },
-                "required": ["name", "description", "hint"],
+                "required": [
+                  "name",
+                  "description",
+                  "hint"
+                ],
                 "additionalProperties": false
               }
             },
@@ -868,24 +1475,182 @@
                           "type": "string"
                         },
                         "kind": {
-                          "enum": ["allow_once", "allow_always", "reject_once", "reject_always"]
+                          "enum": [
+                            "allow_once",
+                            "allow_always",
+                            "reject_once",
+                            "reject_always"
+                          ]
                         }
                       },
-                      "required": ["id", "name", "kind"],
+                      "required": [
+                        "id",
+                        "name",
+                        "kind"
+                      ],
                       "additionalProperties": false
                     }
                   }
                 },
-                "required": ["id", "title", "kind", "detail", "options"],
+                "required": [
+                  "id",
+                  "title",
+                  "kind",
+                  "detail",
+                  "options"
+                ],
                 "additionalProperties": false
               }
+            },
+            "queue": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "submission": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "pi-durable SubmissionId"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "submission",
+                  "text"
+                ],
+                "additionalProperties": false
+              },
+              "description": "Inputs waiting for the next turn"
+            },
+            "git": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "branch": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "Null when detached"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "upstream": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "ahead": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "behind": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "worktree": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "description": "Path of the viz-created worktree this conversation runs in"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "files": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": {
+                            "type": "string",
+                            "description": "Relative to the repository root"
+                          },
+                          "status": {
+                            "enum": [
+                              "modified",
+                              "added",
+                              "deleted",
+                              "renamed",
+                              "untracked",
+                              "conflicted"
+                            ]
+                          },
+                          "staged": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "path",
+                          "status",
+                          "staged"
+                        ],
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "required": [
+                    "branch",
+                    "upstream",
+                    "ahead",
+                    "behind",
+                    "worktree",
+                    "files"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "attachments": {
+              "type": "object",
+              "properties": {
+                "images": {
+                  "type": "boolean",
+                  "description": "The runner takes image prompts"
+                }
+              },
+              "required": [
+                "images"
+              ],
+              "additionalProperties": false,
+              "description": "What attachments the runner accepts; files always go as paths"
             }
           },
-          "required": ["status", "harness", "project", "cwd", "readOnly", "options", "commands", "approvals"],
+          "required": [
+            "status",
+            "harness",
+            "project",
+            "cwd",
+            "readOnly",
+            "options",
+            "commands",
+            "approvals",
+            "queue",
+            "git",
+            "attachments"
+          ],
           "additionalProperties": false
         }
       },
-      "required": ["conversation", "state"],
+      "required": [
+        "conversation",
+        "state"
+      ],
       "additionalProperties": false
     },
     "conversations.changed": {
@@ -919,7 +1684,10 @@
               "description": "Human-readable author, shown to the model"
             }
           },
-          "required": ["connector", "channel"],
+          "required": [
+            "connector",
+            "channel"
+          ],
           "additionalProperties": false
         },
         "conversation": {
@@ -933,7 +1701,10 @@
           "description": "pi-durable SubmissionId"
         },
         "status": {
-          "enum": ["done", "unanswered"]
+          "enum": [
+            "done",
+            "unanswered"
+          ]
         },
         "text": {
           "anyOf": [
@@ -946,7 +1717,13 @@
           ]
         }
       },
-      "required": ["origin", "conversation", "submission", "status", "text"],
+      "required": [
+        "origin",
+        "conversation",
+        "submission",
+        "status",
+        "text"
+      ],
       "additionalProperties": false
     }
   }

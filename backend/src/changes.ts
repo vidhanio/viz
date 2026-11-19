@@ -1,5 +1,5 @@
 import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context";
-import { type ConversationId, type Harness, LiveDoc } from "@earendil-works/pi-durable";
+import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 
 import type { Approvals } from "./agents/approvals.ts";
 import { ChatDoc } from "./agents/chat.ts";
@@ -12,6 +12,10 @@ import { TitleDoc } from "./titles.ts";
 export type Changes = { list: boolean; state: ReadonlySet<ConversationId> };
 export type ChangeFeed = {
   subscribe(listener: (changes: Changes) => void): () => void;
+  refresh(id: ConversationId): void;
+  watched(id: ConversationId, active: boolean): void;
+  markRead(id: ConversationId, context: Context): Promise<void>;
+  clearPendingUnread(id: ConversationId): void;
   stop(): Promise<void>;
 };
 
@@ -29,6 +33,17 @@ export async function observeChanges(
   let state = new Set<ConversationId>();
   let rootEnded = false;
   const listeners = new Set<(changes: Changes) => void>();
+  const appWatches = new Map<ConversationId, number>();
+  const unread = new Set<ConversationId>();
+  const { tasks } = await harness.inspect(context);
+  const workingChats = new Set(
+    tasks.flatMap(({ record }) => (record.kind === ChatDoc.definition.kind ? [record.conversationId] : [])),
+  );
+
+  function ended(id: ConversationId) {
+    if (!appWatches.has(id)) unread.add(id);
+    schedule(id, true);
+  }
 
   function schedule(id?: ConversationId, relist = false) {
     if (id !== undefined) state.add(id);
@@ -40,11 +55,22 @@ export async function observeChanges(
   }
 
   async function flush() {
-    while (rootEnded) {
+    while (rootEnded || unread.size) {
+      const touchRoot = rootEnded;
       rootEnded = false;
+      const pending = Array.from(unread);
       await harness
-        .commit((tx) => touch(tx, root), BACKGROUND_CONTEXT)
-        .catch((error: unknown) => console.error("Root turn state:", error));
+        .commit(async (tx) => {
+          if (touchRoot) await touch(tx, root);
+          for (const id of pending) {
+            if (!unread.delete(id)) continue;
+            if (!appWatches.has(id)) (await tx.doc(MetaDoc, id)).unread = true;
+          }
+        }, BACKGROUND_CONTEXT)
+        .catch((error: unknown) => {
+          for (const id of pending) unread.delete(id);
+          console.error("Conversation turn state:", error);
+        });
     }
     timer = undefined;
     const changes = { list, state };
@@ -66,10 +92,26 @@ export async function observeChanges(
               break;
             case TitleDoc.definition.kind:
             case MetaDoc.definition.kind:
-            case ChatDoc.definition.kind:
-            case AgentDoc.definition.kind:
               schedule(change.conversationId, true);
               break;
+            case ChatDoc.definition.kind: {
+              const id = change.conversationId;
+              if (id !== undefined) {
+                if (change.kind === "change" && change.value.hasWorker === true) workingChats.add(id);
+                else if (workingChats.delete(id)) ended(id);
+              }
+              schedule(id, true);
+              break;
+            }
+            case AgentDoc.definition.kind: {
+              const outcome =
+                change.kind === "change" ? (change.value.outcome as { kind?: string } | null | undefined) : undefined;
+              if (change.conversationId !== undefined && outcome?.kind && outcome.kind !== "running")
+                ended(change.conversationId);
+              schedule(change.conversationId, true);
+              break;
+            }
+            case InboxDoc.definition.kind:
             case SettingsDoc.definition.kind:
             case AcpStateDoc.definition.kind:
               schedule(change.conversationId);
@@ -79,7 +121,10 @@ export async function observeChanges(
               const next = change.kind === "change" && change.value.run !== undefined;
               const runFailure =
                 change.kind === "change" ? (change.value.runFailure as { reason?: string } | undefined) : undefined;
-              if (running && !next) rootEnded = true;
+              if (running && !next) {
+                rootEnded = true;
+                ended(root);
+              }
               if (running !== next || failure !== runFailure?.reason) schedule(root, true);
               running = next;
               failure = runFailure?.reason;
@@ -99,12 +144,31 @@ export async function observeChanges(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    refresh(id) {
+      schedule(id);
+    },
+    watched(id, active) {
+      const count = (appWatches.get(id) ?? 0) + (active ? 1 : -1);
+      if (count > 0) appWatches.set(id, count);
+      else appWatches.delete(id);
+      if (active) unread.delete(id);
+    },
+    async markRead(id, context) {
+      unread.delete(id);
+      await harness.commit(async (tx) => {
+        const meta = await tx.doc(MetaDoc, id);
+        if (meta.unread) meta.unread = false;
+      }, context);
+    },
+    clearPendingUnread(id) {
+      unread.delete(id);
+    },
     async stop() {
       observation.detach();
       stopApprovals();
       clearTimeout(timer);
       listeners.clear();
-      if (rootEnded) await harness.commit((tx) => touch(tx, root), BACKGROUND_CONTEXT);
+      if (rootEnded || unread.size) await flush();
     },
   };
 }

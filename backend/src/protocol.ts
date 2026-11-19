@@ -70,6 +70,9 @@ export const ConversationSummary = obj({
   status: Status,
   archived: bool(),
   updatedAt: int({ description: "Unix milliseconds of the last input or turn end; 0 when unknown" }),
+  unread: bool({ description: "A turn ended while no app watched the conversation; watching clears it" }),
+  pinned: bool(),
+  worktree: opt(str({ description: "Path of the viz-created git worktree the conversation runs in" })),
 });
 export type ConversationSummary = Static<typeof ConversationSummary>;
 
@@ -109,6 +112,33 @@ export const Approval = obj({
 });
 export type Approval = Static<typeof Approval>;
 
+/** The conversation's working tree, when its cwd is in a git repository. */
+export const GitState = obj({
+  branch: nullable(str({ description: "Null when detached" })),
+  upstream: nullable(str()),
+  ahead: int({ minimum: 0 }),
+  behind: int({ minimum: 0 }),
+  worktree: nullable(str({ description: "Path of the viz-created worktree this conversation runs in" })),
+  files: arr(
+    obj({
+      path: str({ description: "Relative to the repository root" }),
+      status: oneOf(["modified", "added", "deleted", "renamed", "untracked", "conflicted"]),
+      staged: bool(),
+    }),
+  ),
+});
+export type GitState = Static<typeof GitState>;
+
+/** A file sent with an input. Images go to runners that take them; everything is also saved for the agent to read. */
+export const Attachment = obj({
+  name: str({ minLength: 1 }),
+  mime: str({ description: "e.g. image/png, text/plain" }),
+  data: str({ description: "Base64, at most 20 MiB decoded" }),
+});
+export type Attachment = Static<typeof Attachment>;
+
+const ConversationTarget = obj({ conversation: ConversationId });
+
 /** viz's own per-conversation state, beside pi-durable's view. Sent whole on every change. */
 export const ConversationState = obj({
   status: Status,
@@ -121,6 +151,12 @@ export const ConversationState = obj({
     obj({ name: str({ description: "Without the leading /" }), description: str(), hint: nullable(str()) }),
   ),
   approvals: arr(Approval),
+  queue: arr(obj({ submission: SubmissionId, text: str() }), { description: "Inputs waiting for the next turn" }),
+  git: nullable(GitState),
+  attachments: obj(
+    { images: bool({ description: "The runner takes image prompts" }) },
+    { description: "What attachments the runner accepts; files always go as paths" },
+  ),
 });
 export type ConversationState = Static<typeof ConversationState>;
 
@@ -141,6 +177,12 @@ export const Methods = {
   "conversation.create": {
     params: obj({
       project: opt(ProjectId),
+      worktree: opt(
+        obj(
+          { branch: str({ minLength: 1 }), base: opt(str({ description: "Default: the project's current branch" })) },
+          { description: "Run the chat in a new git worktree of the project on a new branch" },
+        ),
+      ),
       harness: opt(str({ description: "Configured ACP runner; default [backend].default_harness" })),
       options: opt(
         map(OptionValue, {
@@ -155,6 +197,8 @@ export const Methods = {
       conversation: ConversationId,
       title: opt(str({ minLength: 1 })),
       archived: opt(bool()),
+      pinned: opt(bool()),
+      unread: opt(bool()),
       project: opt(nullable(ProjectId)),
     }),
     result: Empty,
@@ -181,6 +225,7 @@ export const Methods = {
       text: str(),
       requestId: opt(str({ description: "Idempotency key: a retry with the same id returns the same submission" })),
       origin: opt(Origin),
+      attachments: opt(arr(Attachment)),
     }),
     result: obj({ submission: SubmissionId }),
   },
@@ -222,6 +267,86 @@ export const Methods = {
       limit: opt(int({ minimum: 1, maximum: 200 })),
     }),
     result: obj({ files: arr(str({ description: "Path relative to the conversation's cwd" })) }),
+  },
+  "conversations.search": {
+    params: obj({ query: str({ minLength: 1 }), limit: opt(int({ minimum: 1, maximum: 200 })) }),
+    result: obj({
+      hits: arr(
+        obj({
+          conversation: ConversationId,
+          entry: int({ minimum: 1, description: "pi-durable EntryId" }),
+          snippet: str({ description: "Matching text with the match wrapped in \u0001 \u0002 markers" }),
+        }),
+      ),
+    }),
+  },
+  "conversation.entries": {
+    params: obj({
+      conversation: ConversationId,
+      before: int({ minimum: 1, description: "Return entries with smaller ids than this" }),
+      limit: opt(int({ minimum: 1, maximum: 200 })),
+    }),
+    result: obj({
+      entries: arr(unknown(), { description: "pi-durable EntryRecords in ascending id order, as in the view" }),
+      before: opt(int({ description: "Set when older entries remain" })),
+    }),
+  },
+  "queue.remove": {
+    params: obj({ conversation: ConversationId, submission: SubmissionId }),
+    result: Empty,
+  },
+  "git.diff": {
+    params: obj({
+      conversation: ConversationId,
+      scope: oneOf(["worktree", "turn", "branch"], {
+        description: "worktree: uncommitted changes; turn: since the start of `turn`; branch: against the base branch",
+      }),
+      turn: opt(int({ minimum: 1, description: "For scope turn: the prompt entry id; default the latest turn" })),
+      path: opt(str()),
+    }),
+    result: obj({
+      files: arr(
+        obj({
+          path: str(),
+          oldPath: nullable(str()),
+          status: oneOf(["modified", "added", "deleted", "renamed"]),
+          additions: int(),
+          deletions: int(),
+          patch: str({ description: "Unified diff of this file, capped at 200 KB" }),
+        }),
+      ),
+    }),
+  },
+  "git.branches": {
+    params: ConversationTarget,
+    result: obj({ current: nullable(str()), branches: arr(str()) }),
+  },
+  "git.checkout": {
+    params: obj({ conversation: ConversationId, branch: str({ minLength: 1 }), create: opt(bool()) }),
+    result: Empty,
+  },
+  "git.commit": {
+    params: obj({
+      conversation: ConversationId,
+      message: opt(str({ description: "Empty or absent: written by the [memory].compactor model from the diff" })),
+      all: opt(bool({ description: "Stage every change first; default true" })),
+    }),
+    result: obj({ commit: str(), message: str() }),
+  },
+  "git.push": {
+    params: ConversationTarget,
+    result: Empty,
+  },
+  "git.pr": {
+    params: obj({ conversation: ConversationId, title: opt(str()), body: opt(str()), draft: opt(bool()) }),
+    result: obj({ url: str() }),
+  },
+  "git.revert": {
+    params: obj({
+      conversation: ConversationId,
+      turn: int({ minimum: 1, description: "Restore the working tree to the start of this turn (prompt entry id)" }),
+    }),
+    result: Empty,
   },
 } as const;
 export type MethodName = keyof typeof Methods;

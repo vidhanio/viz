@@ -2,6 +2,7 @@
 import type { StopReason, ToolCallStatus, ToolKind } from "@agentclientprotocol/sdk";
 import { defineDoc, defineEntry } from "@earendil-works/pi-durable";
 
+import type { StoredAttachment } from "../attachments.ts";
 import type { Origin } from "../protocol.ts";
 
 export type ToolRecord = {
@@ -44,7 +45,9 @@ export const SessionDoc = defineDoc<{ sessionId: string | null; legacyMode?: boo
   checkpointWhen: () => true,
 });
 
-export const PromptEntry = defineEntry<{ text: string; origin?: Origin }>("viz.agent.prompt");
+export const PromptEntry = defineEntry<{ text: string; origin?: Origin; attachments?: StoredAttachment[] }>(
+  "viz.agent.prompt",
+);
 export const TextEntry = defineEntry<{ text: string }>("viz.agent.text");
 export const ThoughtEntry = defineEntry<{ text: string }>("viz.agent.thought");
 export const ToolEntry = defineEntry<ToolRecord>("viz.agent.tool");

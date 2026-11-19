@@ -1,4 +1,11 @@
-import type { LoadSessionResponse, McpServer as McpDeclaration, SessionUpdate } from "@agentclientprotocol/sdk";
+import { pathToFileURL } from "node:url";
+
+import type {
+  ContentBlock,
+  LoadSessionResponse,
+  McpServer as McpDeclaration,
+  SessionUpdate,
+} from "@agentclientprotocol/sdk";
 import {
   awaitWithContext,
   BACKGROUND_CONTEXT,
@@ -6,8 +13,9 @@ import {
   withAbortSignal,
   withCancel,
 } from "@earendil-works/chord/context";
-import type { ConversationId, Harness, Tx } from "@earendil-works/pi-durable";
+import type { ConversationId, EntryId, Harness, Tx } from "@earendil-works/pi-durable";
 
+import { type StoredAttachment, withAttachmentPaths } from "../attachments.ts";
 import { type Harness as HarnessConfig, resolveSecret } from "../config.ts";
 import { bridgeEnv } from "../mcp/bridge.ts";
 import { McpServer, type McpTool } from "../mcp/server.ts";
@@ -33,11 +41,15 @@ export type TurnOutcome = Exclude<Outcome, { kind: "running" }>;
 type SessionOptions = { id: ConversationId; name: string; config: HarnessConfig; cwd: string };
 type TurnOptions = SessionOptions & {
   text: string;
+  attachments?: StoredAttachment[];
+  promptEntry: EntryId;
   commit: (write: (tx: Tx) => Promise<void>) => Promise<void>;
   context: Context;
   progress?: (text: string) => void;
   delegation?: true;
 };
+
+type Checkpoint = (id: ConversationId, prompt: EntryId, cwd: string, context: Context) => Promise<void>;
 
 type Update = SessionUpdate | { sessionUpdate: "viz_progress"; text: string };
 type TextRun = { kind: "text" | "thought"; text: string };
@@ -69,8 +81,10 @@ export class AgentSessions {
   readonly #cancelledDelegations = new Set<ConversationId>();
   #mcp!: McpServer<ToolScope>;
   #harness!: Harness;
+  #checkpoint!: Checkpoint;
 
-  start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[]): void {
+  start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[], checkpoint: Checkpoint): void {
+    this.#checkpoint = checkpoint;
     this.#harness = harness;
     this.#mcp = new McpServer(
       { name: "viz", version, instructions: "Manage your subagents and record progress." },
@@ -279,6 +293,7 @@ export class AgentSessions {
     for (const [source, update] of early) if (source === live.sessionId) await this.#onUpdate(live, update);
     const desired = await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, id);
+      doc.images = process.supportsImages;
       doc.desired = {
         ...(sessionId === null && defaults(config, this.#options(live))),
         ...doc.desired,
@@ -410,6 +425,18 @@ export class AgentSessions {
       turn.abortSignal?.throwIfAborted();
       const { process, sessionId: session } = live;
       if (process === undefined || session === null) throw new Error("ACP session setup did not complete");
+      const attachments = options.attachments ?? [];
+      const prompt: ContentBlock[] = [{ type: "text", text: withAttachmentPaths(text, attachments) }];
+      for (const { name, mime, path } of attachments) {
+        const uri = pathToFileURL(path).href;
+        if (process.supportsImages && mime.startsWith("image/")) {
+          const data = Buffer.from(await Bun.file(path).arrayBuffer()).toString("base64");
+          prompt.push({ type: "image", data, mimeType: mime });
+        }
+        prompt.push({ type: "resource_link", uri, name, mimeType: mime });
+      }
+      await this.#checkpoint(id, options.promptEntry, options.cwd, turn);
+      turn.abortSignal?.throwIfAborted();
       live.active = {
         context: withAbortSignal(live.lifetime.signal, toolTurn.context),
         update: (update) => {
@@ -424,7 +451,7 @@ export class AgentSessions {
         },
       };
       // ACP prompts do not have idempotency keys. Never retry one after an error.
-      const stopReason = await awaitWithContext(process.prompt(session, text), turn);
+      const stopReason = await awaitWithContext(process.prompt(session, prompt), turn);
       outcome = { kind: "done", answer: answer.join(""), stopReason };
     } catch (error) {
       if (context.abortSignal?.aborted && live) await this.#cancel(live);

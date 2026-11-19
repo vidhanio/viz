@@ -8,10 +8,15 @@ import { type ConversationId, type Cursor, defineDoc, type Harness, type Tx } fr
 
 import type { Project } from "./protocol.ts";
 
+export type WorktreeBinding = { path: string; base: string };
+
 export const MetaDoc = defineDoc<{
   project: string | null;
   parent: number | null;
   archived: boolean;
+  pinned?: boolean;
+  unread?: boolean;
+  worktree?: WorktreeBinding;
   createdAt: number;
   updatedAt: number;
 }>({

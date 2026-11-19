@@ -6,13 +6,15 @@ import {
   defineDoc,
   defineExtension,
   defineTask,
+  type EntryId,
   type Harness,
   ROOT_CONVERSATION_ID,
   type SubmissionId,
 } from "@earendil-works/pi-durable";
 
+import type { StoredAttachment } from "../attachments.ts";
 import type { Harness as HarnessConfig } from "../config.ts";
-import { MetaDoc, projectIn, touch } from "../projects.ts";
+import { MetaDoc, projectIn, touch, type WorktreeBinding } from "../projects.ts";
 import type { Origin } from "../protocol.ts";
 import { TitleDoc, titleFrom } from "../titles.ts";
 import { AgentDoc, PromptEntry, TurnEntry } from "./model.ts";
@@ -25,6 +27,7 @@ export type ChatInput = {
   readonly content: string;
   readonly origin?: Origin;
   readonly requestId?: string;
+  readonly attachments?: StoredAttachment[];
 };
 
 type Pending = Omit<ChatInput, "requestId"> & { submission: SubmissionId };
@@ -64,7 +67,11 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
             return completed;
           }
           const prompt = await tx.appendEntry(PromptEntry, runtime.conversationId, {
-            data: { text: item.text, ...(item.origin && { origin: item.origin }) },
+            data: {
+              text: item.text,
+              ...(item.origin && { origin: item.origin }),
+              ...(item.attachments?.length && { attachments: item.attachments }),
+            },
           });
           tx.placeSubmission(item.submission, prompt.id);
           chat.dispatched = false;
@@ -73,7 +80,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
       prompt: async (task, runtime, context) => {
         const id = runtime.conversationId;
         const { item } = task.state.checkpoint;
-        const claim: { runner?: { name: string; cwd: string } } = {};
+        const claim: { runner?: { name: string; cwd: string; prompt: EntryId } } = {};
         let outcome: TurnOutcome;
         try {
           // Claim before making external calls. A rerun may recover the queue but must never resend a claimed prompt.
@@ -82,15 +89,17 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
             const runner = chat.runner;
             if (runner === null) throw new Error("ACP chat has no runner");
             if (chat.dispatched) return;
+            const placed = await tx.submission(item.submission);
+            if (placed?.status !== "placed" || !placed.entry) throw new Error("ACP prompt is not placed");
             chat.dispatched = true;
-            claim.runner = { name: runner.name, cwd: runner.cwd };
+            claim.runner = { name: runner.name, cwd: runner.cwd, prompt: placed.entry };
           }, context);
           const active = claim.runner;
           if (active === undefined) {
             sessions.forget(id);
             outcome = { kind: "failed", error: "viz was interrupted during the ACP turn; the prompt was not resent" };
           } else {
-            const { name, cwd } = active;
+            const { name, cwd, prompt } = active;
             const { config } = runners.require(name);
             outcome = await sessions.turn({
               id,
@@ -98,6 +107,8 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
               config,
               cwd,
               text: item.content,
+              promptEntry: prompt,
+              ...(item.attachments && { attachments: item.attachments }),
               context,
               commit: (write) =>
                 runtime.commit(async (tx) => {
@@ -161,7 +172,13 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
     extension: defineExtension({ name: "viz.acp.chat", tasks: [Worker] }),
     async create(
       harness: Harness,
-      options: { harness?: string; project?: string; parent?: ConversationId; options?: Desired },
+      options: {
+        harness?: string;
+        project?: string;
+        parent?: ConversationId;
+        options?: Desired;
+        worktree?: WorktreeBinding;
+      },
       context: Context,
     ): Promise<Conversation> {
       const binding: { runner?: { name: string; cwd: string; config: HarnessConfig } } = {};
@@ -171,15 +188,18 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
           init: async (tx, id) => {
             let project = options.project ?? null;
             let directory = cwd;
+            let worktree = options.worktree;
             let inherited: string | undefined;
             if (options.parent !== undefined) {
               const parent = await tx.doc(MetaDoc, options.parent);
               const chat = await tx.doc(ChatDoc, options.parent);
               project = parent.project;
               directory = chat.runner?.cwd ?? cwd;
+              worktree = parent.worktree;
               inherited = chat.runner?.name;
             } else if (project !== null) {
-              directory = (await projectIn(tx, ROOT_CONVERSATION_ID, project)).path;
+              const selected = await projectIn(tx, ROOT_CONVERSATION_ID, project);
+              directory = worktree?.path ?? selected.path;
             }
             const { name, config } = runners.require(options.harness ?? inherited);
             const desired = initialDesired(config, options.options);
@@ -188,6 +208,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
             const meta = await tx.doc(MetaDoc, id);
             meta.project = project;
             meta.parent = options.parent ?? null;
+            if (worktree) meta.worktree = worktree;
             await touch(tx, id);
             binding.runner = { name, cwd: directory, config };
           },

@@ -21,9 +21,9 @@ export async function delegate(
   },
 ): Promise<{ text: string; conversationId: ConversationId; isError: boolean }> {
   const { select, task, cwd, sessions, harness } = options;
-  const { id, runner } = await api.commit(async (tx) => {
+  const { id, runner, promptEntry } = await api.commit(async (tx) => {
     const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
-    if (existing) return { id: existing.id, runner: undefined };
+    if (existing) return { id: existing.id, runner: undefined, promptEntry: undefined };
     const runner = select();
     const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
     (await tx.doc(TitleDoc, child.id)).title = titleFrom(task);
@@ -33,8 +33,8 @@ export async function delegate(
     const state = await tx.doc(AgentDoc, child.id);
     state.harness = runner.name;
     state.outcome = { kind: "running" };
-    await tx.appendEntry(PromptEntry, child.id, { data: { text: task } });
-    return { id: child.id, runner };
+    const prompt = await tx.appendEntry(PromptEntry, child.id, { data: { text: task } });
+    return { id: child.id, runner, promptEntry: prompt.id };
   }, context);
 
   const cleanup = withoutAbortSignal(context);
@@ -59,6 +59,7 @@ export async function delegate(
         cwd,
         delegation: true,
         text: task,
+        promptEntry,
         commit,
         context,
         progress: (text) => api.output(`${text}\n`),

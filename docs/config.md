@@ -2,13 +2,15 @@
 
 Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Example: `config.example.toml`.
 
-| Location         | Default                                                  | Override                                                 |
-| ---------------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| Config           | `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml`   | `$VIZ_CONFIG_DIR`; `$VIZ_CONFIG` (one file, no drop-ins) |
-| State (database) | `$XDG_STATE_HOME/viz/{viz,memory}.sqlite`                | `$STATE_DIRECTORY` (systemd); `[backend].state_dir`      |
-| Socket           | `$XDG_RUNTIME_DIR/viz/backend.sock` (state dir if unset) | `[backend].socket`                                       |
+| Location | Default                                                  | Override                                                 |
+| -------- | -------------------------------------------------------- | -------------------------------------------------------- |
+| Config   | `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml`   | `$VIZ_CONFIG_DIR`; `$VIZ_CONFIG` (one file, no drop-ins) |
+| State    | `$XDG_STATE_HOME/viz/`                                   | `$STATE_DIRECTORY` (systemd); `[backend].state_dir`      |
+| Socket   | `$XDG_RUNTIME_DIR/viz/backend.sock` (state dir if unset) | `[backend].socket`                                       |
 
 `viz config` prints the resolved locations and the merged document.
+
+The state directory contains `viz.sqlite`, `memory.sqlite`, the derived `search.sqlite` index, uploaded `attachments/`, and the `worktrees/` created for chats. Git features use `git` on `PATH`; creating a pull request also needs an authenticated `gh`.
 
 **Secret** values are `"inline"`, `{ file = "/path" }` (trailing newline trimmed), or `{ env = "NAME" }`.
 
@@ -45,7 +47,7 @@ When upgrading, remove the old `[subagents].model` setting and configure ACP run
 
 ## `[memory]` (backend, required)
 
-The orchestrator's uniichat memory (`docs/architecture.md`, "Memory").
+The orchestrator's uniichat memory (`docs/architecture.md`, "Memory"). The same model writes a commit subject when `git.commit` is called without a message.
 
 | Key         | Type                                          | Default                |
 | ----------- | --------------------------------------------- | ---------------------- |
