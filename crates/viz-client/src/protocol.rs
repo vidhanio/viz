@@ -71,6 +71,7 @@ methods! {
     UpdateConversation<'_> => "conversation.update", Empty;
     ConfigureConversation<'_> => "conversation.configure", Empty;
     AbortConversation => "conversation.abort", Empty;
+    DeleteConversation => "conversation.delete", Deleted;
     ListProjects => "projects.list", ProjectList;
     CreateProject<'_> => "project.create", ProjectResult;
     UpdateProject<'_> => "project.update", ProjectResult;
@@ -404,6 +405,20 @@ pub struct ConfigureConversation<'a> {
 pub struct AbortConversation {
     /// The conversation to stop.
     pub conversation: ConversationId,
+}
+
+/// Delete a conversation and its subagents. The orchestrator can't be deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct DeleteConversation {
+    /// The conversation to delete.
+    pub conversation: ConversationId,
+}
+
+/// Result of `conversation.delete`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Deleted {
+    /// Worktree paths left on disk because they have uncommitted changes.
+    pub kept: Vec<String>,
 }
 
 /// List projects.

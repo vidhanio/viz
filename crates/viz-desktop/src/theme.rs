@@ -1,8 +1,25 @@
-//! Shared neutral surfaces, type scale, and one blue accent for light and dark.
+//! Design tokens. Views read these through `ui` components; a bare number in a
+//! view is a bug.
+//!
+//! - Space: a four-point grid (`S4`…`S48`); `S2` and `S6` are half steps for
+//!   optical centering only.
+//! - Controls: [`Size`] — small 24, default 28, large 36 points tall, each with
+//!   its radius (6, 6, 8). Cards round at [`RADIUS_CARD`], chips at
+//!   [`RADIUS_INNER`].
+//! - Icons: 12, 16 and 20 points; status dots are [`DOT`].
+//! - Type: `small` 11.5/16, `ui` 13/20, `title` 14/20, `body` 14.5/23, `mono`
+//!   12/18 (see [`Theme`]).
+//! - Rules: one [`HAIRLINE`], `Theme::hairline` ink; overlays get a hairline
+//!   outline and no shadow.
+//! - Sidebar: rows fill from [`SIDEBAR_PAD`]; every label, icon and section
+//!   title starts at [`SIDEBAR_INSET`] plus [`TREE_STEP`] per depth; every row
+//!   ends in a [`TRAILING`]-wide slot centered under the sidebar toggle.
+//! - Main pane: one [`READING_WIDTH`] column, [`READING_INSET`] from the pane's
+//!   edges, shared by the toolbar title, the transcript and the composer.
 
 use std::sync::LazyLock;
 
-use rune::{Color, Icon, Shadow, TextStyle};
+use rune::{Color, Shadow, TextStyle};
 use rune_kit::{Kit, MarkdownStyle, PaletteFocus, PaletteSeed};
 
 /// Inter and IBM Plex Mono, for `AppSpec::fonts`.
@@ -10,8 +27,105 @@ pub const FONTS: &[&[u8]] = rune_theme_opencode::FONTS;
 /// `AppSpec::families`: (sans, mono).
 pub const FAMILIES: (&str, &str) = rune_theme_opencode::FAMILIES;
 
-/// The timeline's and composer's reading width.
+pub const S2: f32 = 2.0;
+pub const S4: f32 = 4.0;
+pub const S6: f32 = 6.0;
+pub const S8: f32 = 8.0;
+pub const S12: f32 = 12.0;
+pub const S16: f32 = 16.0;
+pub const S20: f32 = 20.0;
+pub const S24: f32 = 24.0;
+pub const S32: f32 = 32.0;
+pub const S40: f32 = 40.0;
+pub const S48: f32 = 48.0;
+
+pub const HAIRLINE: f32 = 1.0;
+pub const ICON_SMALL: f32 = 12.0;
+pub const ICON: f32 = 16.0;
+pub const ICON_LARGE: f32 = 20.0;
+pub const DOT: f32 = 6.0;
+
+/// Chips, key caps and other marks inside a control.
+pub const RADIUS_INNER: f32 = S4;
+/// Cards, the composer, popovers.
+pub const RADIUS_CARD: f32 = S8;
+
+/// The shell's title band: the toolbar, the sidebar's header row, the
+/// inspector's tab row.
+pub const TOOLBAR_HEIGHT: f32 = rune_kit::shell::TOOLBAR_HEIGHT;
+/// rune-kit's padding at the toolbar band's ends.
+pub const TOOLBAR_PAD: f32 = S12;
+
+/// The sidebar pane's padding: where row fills start and end.
+pub const SIDEBAR_PAD: f32 = S8;
+/// Where sidebar content starts: labels, icons, section titles, the footer.
+pub const SIDEBAR_INSET: f32 = S16;
+/// A tree row's inset inside its fill.
+pub const ROW_INSET: f32 = SIDEBAR_INSET - SIDEBAR_PAD;
+pub const TREE_ROW: f32 = Size::Default.height();
+/// One depth: a leading icon and its gap, so a child's label lines up with
+/// its parent's.
+pub const TREE_STEP: f32 = ICON + S8;
+/// The fixed slot every sidebar row ends in (status, unread, actions).
+pub const TRAILING: f32 = Size::Default.height();
+/// The orchestrator's two-line row.
+pub const ORCHESTRATOR_ROW: f32 = S40 + S4;
+
+/// The transcript and composer column.
 pub const READING_WIDTH: f32 = 760.0;
+/// The main pane's side inset: the toolbar title, the transcript, the composer.
+pub const READING_INSET: f32 = S20;
+/// Padding inside cards: messages, tool output, plans, the composer.
+pub const CARD_INSET: f32 = S12;
+/// The changes inspector's side inset.
+pub const PANEL_INSET: f32 = S12;
+/// Padding inside dialogs (rune-kit's header uses the same).
+pub const DIALOG_INSET: f32 = S16;
+pub const DIALOG_WIDTH: f32 = 400.0;
+/// Floating cards anchored to a control: the Agents card.
+pub const CARD_WIDTH: f32 = 320.0;
+pub const PALETTE_WIDTH: f32 = 560.0;
+/// Empty states sit this far down the transcript.
+pub const EMPTY_TOP: f32 = S32 * 4.0;
+/// Empty states' text measure.
+pub const EMPTY_WIDTH: f32 = 360.0;
+
+/// Control sizes. Every button, field, select and row picks one.
+#[derive(Debug, Clone, Copy)]
+pub enum Size {
+    /// 24: row actions, inline tools, dense lists.
+    Small,
+    /// 28: toolbars, the composer, tree rows, dialogs.
+    Default,
+    /// 36: the palette's field, primary onboarding actions.
+    Large,
+}
+
+impl Size {
+    pub const fn height(self) -> f32 {
+        match self {
+            Self::Small => S24,
+            Self::Default => 28.0,
+            Self::Large => 36.0,
+        }
+    }
+
+    pub const fn radius(self) -> f32 {
+        match self {
+            Self::Small | Self::Default => S6,
+            Self::Large => S8,
+        }
+    }
+
+    /// rune-kit's control size with the same height.
+    pub const fn kit(self) -> rune_kit::ControlSize {
+        match self {
+            Self::Small => rune_kit::ControlSize::Regular,
+            Self::Default => rune_kit::ControlSize::Large,
+            Self::Large => rune_kit::ControlSize::ExtraLarge,
+        }
+    }
+}
 
 /// The palette, type and kits for one appearance.
 #[derive(Debug)]
@@ -21,6 +135,8 @@ pub struct Theme {
     /// `k` with square main-pane corners, for the shell: the main pane sits
     /// flush against the sidebar and the window's edges, not in a card.
     pub shell: Kit,
+    /// The main pane's background.
+    pub bg: Color,
     /// Cards on the main pane (composer, expanded tool output, code).
     pub surface: Color,
     /// One-pixel rules and outlines.
@@ -47,17 +163,21 @@ pub struct Theme {
     pub warning: Color,
     /// Interface text, 13 on 20.
     pub ui: TextStyle,
+    /// `ui` at the medium weight: names, emphasis.
+    pub ui_medium: TextStyle,
     /// Small labels, 11.5 on 16.
     pub small: TextStyle,
+    /// `small` at the medium weight: section titles.
+    pub small_medium: TextStyle,
     /// Message text, 14.5 on 23.
     pub body: TextStyle,
-    /// The header's title, 14 semibold.
+    /// Titles: the toolbar, empty states, 14 semibold on 20.
     pub title: TextStyle,
     /// Tool rows and code, 12 on 18.
     pub mono: TextStyle,
     /// `mono` at the medium weight, for tool names.
     pub mono_medium: TextStyle,
-    /// Small mono for durations and the model id, 11.5 on 16.
+    /// Small mono for durations and counts, 11.5 on 16.
     pub mono_small: TextStyle,
 }
 
@@ -136,12 +256,11 @@ impl Theme {
             PaletteFocus::Accent,
         );
         let ink = |a: f32| k.alpha(text, a);
-        let hairline = ink(if dark { 0.12 } else { 0.13 });
-        let hover = ink(if dark { 0.07 } else { 0.055 });
-        let pressed = ink(if dark { 0.08 } else { 0.07 });
-        let selected = k.alpha(accent, if dark { 0.15 } else { 0.10 });
-        let mine = raised;
-        let strong = ink(if dark { 0.14 } else { 0.16 });
+        let hairline = ink(if dark { 0.11 } else { 0.12 });
+        let hover = ink(if dark { 0.06 } else { 0.05 });
+        let pressed = ink(if dark { 0.09 } else { 0.08 });
+        let selected = ink(if dark { 0.09 } else { 0.075 });
+        let strong = ink(if dark { 0.15 } else { 0.17 });
         let c = &mut k.c;
         c.page = bg;
         c.bg_base = bg;
@@ -181,34 +300,46 @@ impl Theme {
         c.submit_fg = on_accent;
         c.submit_highlight = Color::WHITE.alpha(0.0);
         c.submit_hover = Color::WHITE.alpha(if dark { 0.14 } else { 0.12 });
+        let medium = |style: TextStyle| TextStyle {
+            weight: 500.0,
+            ..style
+        };
         let ui = TextStyle::new(13.0, 400.0).lh(20.0);
+        let small = TextStyle::new(11.5, 400.0).lh(16.0);
+        let body = TextStyle::new(14.5, 400.0).lh(23.0);
         let mono = TextStyle::new(12.0, 400.0).mono().lh(18.0);
         k.ty.ui = ui;
-        k.ty.ui_medium = TextStyle {
-            weight: 500.0,
-            ..ui
-        };
+        k.ty.ui_medium = medium(ui);
+        k.ty.ui_compact = ui.lh(small.line_height);
+        k.ty.small = small;
+        k.ty.small_medium = medium(small);
+        k.ty.body = body;
+        k.ty.body_medium = medium(body);
         k.ty.mono = mono;
-        k.radius.sm = 5.0;
-        k.radius.md = 7.0;
-        k.radius.lg = 9.0;
-        k.radius.xl = 12.0;
+        crate::ui::kit_glyphs(&mut k.glyph);
+        k.radius.xs = RADIUS_INNER;
+        k.radius.sm = RADIUS_INNER;
+        k.radius.md = Size::Default.radius();
+        k.radius.lg = Size::Default.radius();
+        k.radius.xl = Size::Large.radius();
         let outline = Shadow {
             color: strong,
-            spread: 1.0,
+            spread: HAIRLINE,
             ..Shadow::default()
         };
         k.elevation = rune_kit::Elevation::default();
         k.elevation.floating = vec![outline];
         k.elevation.overlay = vec![outline];
+        k.elevation.md = vec![outline];
         let mut shell = k.clone();
         shell.radius.lg = 0.0;
         Self {
             shell,
+            bg,
             surface,
             hairline,
             hover,
-            mine,
+            mine: raised,
             text,
             muted,
             faint,
@@ -218,14 +349,13 @@ impl Theme {
             success: hex(t.success),
             warning: hex(t.warning),
             ui,
-            small: TextStyle::new(11.5, 400.0).lh(16.0),
-            body: TextStyle::new(14.5, 400.0).lh(23.0),
+            ui_medium: medium(ui),
+            small,
+            small_medium: medium(small),
+            body,
             title: TextStyle::new(14.0, 600.0).lh(20.0),
             mono,
-            mono_medium: TextStyle {
-                weight: 500.0,
-                ..mono
-            },
+            mono_medium: medium(mono),
             mono_small: TextStyle::new(11.5, 400.0).mono().lh(16.0),
             k,
         }
@@ -249,58 +379,16 @@ impl Theme {
                 ..self.mono
             })
             .code_block(self.surface, self.hairline)
-            .code_block_padding(14.0, 12.0)
+            .code_block_padding(CARD_INSET, CARD_INSET)
             .inline_code_font(0.86, 400.0)
-            .code_margin(12.0, 16.0)
+            .code_margin(S12, S16)
             .quote_rule(self.hairline)
             .rule(self.hairline)
             .link(self.text)
             .strong_weight(620.0)
-            .list(22.0, 6.0)
+            .list(S24, S6)
     }
 }
-
-/// The orchestrator's mark: a small four-point star.
-pub static STAR: Icon = Icon {
-    name: "viz-star",
-    view: 16.0,
-    body: r#"<path d="M8 2C8.35 5.3 10.7 7.65 14 8C10.7 8.35 8.35 10.7 8 14C7.65 10.7 5.3 8.35 2 8C5.3 7.65 7.65 5.3 8 2Z" fill="currentColor"/>"#,
-};
-
-/// New chat.
-pub static PLUS: Icon = Icon {
-    name: "viz-plus",
-    view: 16.0,
-    body: r#"<path d="M8 3.5V12.5M3.5 8H12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>"#,
-};
-
-/// Send.
-pub static ARROW_UP: Icon = Icon {
-    name: "viz-arrow-up",
-    view: 16.0,
-    body: r#"<path d="M8 13V3.5M3.75 7.5L8 3.25L12.25 7.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>"#,
-};
-
-/// A subagent: a hooked arrow down and right.
-pub static BRANCH: Icon = Icon {
-    name: "viz-branch",
-    view: 16.0,
-    body: r#"<path d="M4.5 3V7.5C4.5 9 5.5 10 7 10H12M9.5 7.5L12 10L9.5 12.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
-};
-
-/// A collapsed row's disclosure.
-pub static CHEVRON: Icon = Icon {
-    name: "viz-chevron",
-    view: 16.0,
-    body: r#"<path d="M6.5 4.5L10 8L6.5 11.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
-};
-
-/// An open row's disclosure.
-pub static CHEVRON_OPEN: Icon = Icon {
-    name: "viz-chevron-open",
-    view: 16.0,
-    body: r#"<path d="M4.5 6.5L8 10L11.5 6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
-};
 
 /// A duration as `320ms`, `4.2s` or `2m 5s`.
 #[expect(
@@ -313,4 +401,19 @@ pub fn duration(ms: u64) -> String {
         1_000..60_000 => format!("{:.1}s", ms as f64 / 1e3),
         _ => format!("{}m {}s", ms / 60_000, ms % 60_000 / 1_000),
     }
+}
+
+/// How long ago `then` (Unix milliseconds) was: `now`, `4m`, `3h`, `2d`.
+pub fn ago(then: i64) -> Option<String> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?;
+    let now = i64::try_from(now.as_millis()).ok()?;
+    let minutes = (now - then).max(0) / 60_000;
+    (then > 0).then(|| match minutes {
+        0 => "now".to_owned(),
+        1..60 => format!("{minutes}m ago"),
+        60..1_440 => format!("{}h ago", minutes / 60),
+        _ => format!("{}d ago", minutes / 1_440),
+    })
 }

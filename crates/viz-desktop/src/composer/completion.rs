@@ -4,7 +4,12 @@ use rune::{El, Key, KeyEvent, TextEdit, Tx, icon, text};
 use rune_kit::PopupItem;
 use viz_client::protocol::SlashCommand;
 
-use crate::{app::Desktop, backend::Command, theme::Theme, ui};
+use crate::{
+    app::Desktop,
+    backend::Command,
+    theme::{ICON_SMALL, Theme},
+    ui,
+};
 
 const FILE_DELAY: Duration = Duration::from_millis(110);
 const POPUP: &str = "composer-completion";
@@ -159,7 +164,7 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         return;
     };
     let popup = ui::popup_list::<Desktop>(POPUP, "composer-card")
-        .width(358.0)
+        .width(ui::COMPLETION_WIDTH)
         .active(Some(s.completion.highlighted))
         .on_active(|s, i| s.completion.highlighted = i)
         .on_choose(choose);
@@ -178,7 +183,7 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
                             text(hint)
                                 .font(t.mono_small)
                                 .color(t.faint)
-                                .max_w(104.0)
+                                .max_w(ui::COMPLETION_WIDTH / 3.0)
                                 .truncate(),
                         );
                     }
@@ -195,7 +200,7 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
                 Some(Ok(_)) => "No files",
             })
             .items(files(s).iter().map(|path| {
-                PopupItem::new(path, path).leading(icon(t.k.glyph.search, 12.0).color(t.muted))
+                PopupItem::new(path, path).leading(icon(&ui::SEARCH, ICON_SMALL).color(t.muted))
             })),
     };
     popup.build(&t.k, layer);

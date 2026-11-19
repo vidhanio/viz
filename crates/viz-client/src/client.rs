@@ -26,10 +26,10 @@ use crate::{
     Endpoint, Error, Result,
     protocol::{
         AbortConversation, Branches, ClientInfo, CommitResult, ConfigureConversation,
-        ConversationId, ConversationSummary, CreateConversation, CreateProject, DiffFile,
-        EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff, GitPr, GitPush, GitRevert,
-        Harness, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses, ListProjects,
-        Method, Notification, PROTOCOL_VERSION, PrResult, Project, RemoveProject,
+        ConversationId, ConversationSummary, CreateConversation, CreateProject, DeleteConversation,
+        DiffFile, EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff, GitPr, GitPush,
+        GitRevert, Harness, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses,
+        ListProjects, Method, Notification, PROTOCOL_VERSION, PrResult, Project, RemoveProject,
         RemoveQueuedInput, SearchConversations, SearchFiles, SearchHit, SubmissionId, Submit,
         Unwatch, UpdateConversation, UpdateProject, Watch,
     },
@@ -178,6 +178,19 @@ impl Client {
         self.request(&AbortConversation { conversation })
             .await
             .map(drop)
+    }
+
+    /// Deletes a conversation and its subagents, returning the worktree
+    /// paths left on disk because they have uncommitted changes.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn delete_conversation(&self, conversation: ConversationId) -> Result<Vec<String>> {
+        Ok(self
+            .request(&DeleteConversation { conversation })
+            .await?
+            .kept)
     }
 
     /// Lists available project directories.

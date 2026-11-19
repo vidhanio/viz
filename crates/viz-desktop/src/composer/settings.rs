@@ -1,8 +1,13 @@
-use rune::{El, TextStyle, row};
+use rune::{El, row};
 use rune_kit::MenuItem;
 use viz_client::protocol::{ConfigOption, ConversationId, OptionKind, OptionValue};
 
-use crate::{app::Desktop, backend::Command, theme::Theme, ui};
+use crate::{
+    app::Desktop,
+    backend::Command,
+    theme::{S2, S8, S32, Size, Theme},
+    ui,
+};
 
 const CATEGORIES: [&str; 3] = ["model", "thought_level", "mode"];
 const HARNESS_PICKER: &str = "harness";
@@ -16,25 +21,24 @@ fn category(option: &ConfigOption) -> Option<usize> {
 }
 
 /// An inline select's chrome around its label: padding, gap and chevron.
-const PICKER_CHROME: f32 = 32.0;
-/// The kit caps an inline select's width here and truncates the label.
-const PICKER_MAX: f32 = 154.0;
-const GAP: f32 = 2.0;
+const PICKER_CHROME: f32 = S32;
+const GAP: f32 = S2;
 
 /// The width an inline select takes for `label`.
 fn picker_width(label: &str, t: &Theme) -> f32 {
-    let font = TextStyle {
-        line_height: 16.0,
-        ..t.k.ty.ui_medium
-    };
-    (rune::text::measure(label, &[], font, None).0 + PICKER_CHROME).min(PICKER_MAX)
+    (rune::text::measure(label, &[], t.ui_medium, None).0 + PICKER_CHROME)
+        .min(ui::PICKER_TRIGGER_MAX)
 }
 
 /// The session's selects in one row no wider than `budget`: model, effort and
 /// mode in that priority, the ones that don't fit folded into More with the
 /// uncategorized options.
 pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) -> El {
-    let bar = row().key("settings").min_h(26.0).gap(2.0).center_y();
+    let bar = row()
+        .key("settings")
+        .h(Size::Default.height())
+        .gap(GAP)
+        .center_y();
     if let Some(new) = &s.new_chat {
         return harness_bar(s, new.request.is_some(), bar, t, layer);
     }
@@ -110,15 +114,16 @@ fn harness_bar(s: &Desktop, opening: bool, bar: El, t: &Theme, layer: &mut Vec<E
     use rune_kit::ButtonVariant;
     if opening {
         return bar
-            .child(ui::spinner(13.0, t).ml(5.0))
+            .gap(S8)
+            .child(ui::lead(ui::spinner(t), Size::Default.height()))
             .child(ui::section("Opening session", t));
     }
     if s.harnesses.is_empty() {
-        return bar.child(ui::section("No harness configured", t).ml(6.0));
+        return bar.child(ui::section("No harness configured", t));
     }
     if s.harnesses.len() == 1 {
         return bar.child(
-            ui::button("Open session", ButtonVariant::Ghost)
+            ui::button("Open session", ButtonVariant::Ghost, Size::Default)
                 .disabled(!s.connected())
                 .on_press_tx(|s: &mut Desktop, tx| s.bind_harness(None, tx))
                 .build(&t.k),

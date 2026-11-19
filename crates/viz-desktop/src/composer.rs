@@ -12,34 +12,47 @@ use crate::{
     app::Desktop,
     attachments,
     backend::Command,
-    theme::{self, Theme},
-    ui,
+    theme::{
+        CARD_INSET, HAIRLINE, ICON, ICON_SMALL, READING_INSET, READING_WIDTH, S4, S8, S48, Size,
+        Theme,
+    },
+    ui::{self, Card},
 };
 
 const MAX_LINES: usize = 8;
+/// The composer toolbar's inset: its buttons' glyphs line up with the text
+/// above them.
+const TOOLBAR_INSET: f32 = CARD_INSET - (Size::Default.height() - ICON) / 2.0;
+/// The gap between the composer toolbar's items.
+const TOOLBAR_GAP: f32 = S4;
+/// The branch label's cap in the toolbar.
+const BRANCH_MAX: f32 = 116.0;
+/// The tallest the queue gets before it scrolls.
+const QUEUE_HEIGHT: f32 = 136.0;
 
 pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     if s.selected.is_none() && s.new_chat.is_none() {
         return None;
     }
-    let mut column = col().w_full().max_w(theme::READING_WIDTH).gap(8.0);
+    let mut column = col().gap(S8);
     if let Some((id, state)) = s.selected.zip(s.conversation.as_ref())
         && !state.queue.is_empty()
     {
         column = column.child(queue(s, id, &state.queue, t));
     }
     let editor = if s.conversation.as_ref().is_some_and(|state| state.read_only) {
-        let mut notice = row()
+        let mut notice = Card::Surface
+            .row(t)
             .key("read-only")
-            .w_full()
             .center_y()
-            .gap(8.0)
-            .px(12.0)
-            .py(9.0)
-            .radius(t.k.radius.md)
-            .border(1.0, t.hairline)
-            .fill(t.surface)
-            .child(icon(t.k.glyph.lock, 13.0).color(t.muted))
+            .gap(S8)
+            .pl(CARD_INSET)
+            .pr(TOOLBAR_INSET)
+            .py(TOOLBAR_INSET)
+            .child(ui::lead(
+                icon(&ui::LOCK, ICON_SMALL).color(t.muted),
+                Size::Default.height(),
+            ))
             .child(
                 text("Subagent is running")
                     .font(t.ui)
@@ -55,13 +68,9 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         editor(s, t, layer)
     };
     Some(
-        col()
+        ui::reading(column.child(editor))
             .key("composer")
-            .w_full()
-            .px(22.0)
-            .pb(18.0)
-            .items_center()
-            .child(column.child(editor)),
+            .pb(READING_INSET),
     )
 }
 
@@ -70,6 +79,8 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         "Offline"
     } else if s.busy() {
         "Queue a message"
+    } else if s.selected.is_some() && s.selected == s.root {
+        "Message the orchestrator"
     } else {
         "Ask anything"
     };
@@ -84,16 +95,18 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .on_input_paste(attachments::paste)
         .on_key(completion::on_key)
         .on_submit(Desktop::submit);
-    let mut metadata = row().key("composer-metadata").gap(6.0).center_y();
+    let mut metadata = row().key("composer-metadata").center_y();
     if let Some(branch) = s.branch() {
         metadata = metadata.child(
             row()
                 .key("branch")
+                .h(Size::Default.height())
+                .px(S4)
                 .center_y()
-                .gap(4.0)
-                .max_w(115.0)
+                .gap(S4)
+                .max_w(BRANCH_MAX)
                 .help(branch)
-                .child(icon(&ui::GIT_BRANCH, 13.0).color(t.muted))
+                .child(icon(&ui::GIT_BRANCH, ICON_SMALL).color(t.muted))
                 .child(
                     text(branch)
                         .font(t.small)
@@ -105,28 +118,25 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     }
     let attach = s.conversation.as_ref().map(|_| attachments::button(s, t));
     let budget = settings_budget(s, attach.is_some(), t);
-    let card = col()
+    let card = Card::Surface
+        .frame(t)
         .key("composer-card")
-        .w_full()
-        .radius(t.k.radius.lg)
-        .fill(t.surface)
-        .border(1.0, t.hairline)
         .children(attachments::draft_chips(s, t))
         .child(
             col()
                 .w_full()
-                .px(13.0)
-                .pt(10.0)
-                .pb(6.0)
-                .min_h(48.0)
+                .px(CARD_INSET)
+                .pt(CARD_INSET)
+                .pb(S4)
+                .min_h(S48)
                 .child(rune::auto_grow(field, 1, MAX_LINES)),
         )
         .child(
             row()
                 .key("composer-toolbar")
                 .w_full()
-                .px(7.0)
-                .pb(7.0)
+                .px(TOOLBAR_INSET)
+                .pb(TOOLBAR_INSET)
                 .gap(TOOLBAR_GAP)
                 .center_y()
                 .children(attach)
@@ -146,52 +156,50 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     }
 }
 
-/// The composer toolbar's gap between the attach button, selects, branch and
-/// send button.
-const TOOLBAR_GAP: f32 = 8.0;
-/// The attach and send buttons' size.
-const TOOLBAR_BUTTON: f32 = 29.0;
-/// The send button and its gaps around the selects and branch.
-const TOOLBAR_FIXED: f32 = TOOLBAR_BUTTON + TOOLBAR_GAP + TOOLBAR_GAP;
-/// The branch label's cap in the toolbar.
-const BRANCH_MAX: f32 = 115.0;
-
 /// Points the settings selects may take in one toolbar row: the main pane
 /// between the open panes, less the composer's margins and the toolbar's other
 /// items.
 fn settings_budget(s: &Desktop, attach: bool, t: &Theme) -> f32 {
+    let button = Size::Default.height();
     let main = s.window_width - s.sidebar.shown_width() - s.changes.pane.shown_width();
-    // `composer` pads 22 on each side; the card has a 1-point border and the
-    // toolbar 7 of padding.
-    let card = (main - 44.0).min(theme::READING_WIDTH) - 2.0 - 14.0;
+    // Both sides: the reading inset, then the card's border and toolbar inset.
+    let card = 2.0f32.mul_add(
+        -(HAIRLINE + TOOLBAR_INSET),
+        2.0f32.mul_add(-READING_INSET, main).min(READING_WIDTH),
+    );
     let branch = s.branch().map_or(0.0, |branch| {
-        // Icon and its gap ahead of the truncated label.
-        (rune::text::measure(branch, &[], t.small, None).0 + 17.0).min(BRANCH_MAX)
+        // Its padding, icon and gap ahead of the truncated label.
+        (S4.mul_add(3.0, rune::text::measure(branch, &[], t.small, None).0) + ICON_SMALL)
+            .min(BRANCH_MAX)
     });
+    let send = TOOLBAR_GAP.mul_add(2.0, button);
     let fixed = if attach {
-        TOOLBAR_FIXED + TOOLBAR_BUTTON + TOOLBAR_GAP
+        send + button + TOOLBAR_GAP
     } else {
-        TOOLBAR_FIXED
+        send
     };
     card - fixed - branch
 }
 
 fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> El {
-    col()
+    Card::Surface
+        .frame(t)
         .key("queue")
         .role("group")
         .label("Queued inputs")
-        .w_full()
-        .max_h(134.0)
-        .padding(7.0)
-        .gap(2.0)
-        .fill(t.surface)
-        .radius(t.k.radius.md)
-        .border(1.0, t.hairline)
+        .max_h(QUEUE_HEIGHT)
+        .pl(CARD_INSET)
+        .pr(TOOLBAR_INSET)
+        .py(S8)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .child(ui::section("Queued", t).px(5.0))
+        .child(
+            row()
+                .h(Size::Small.height())
+                .center_y()
+                .child(ui::section("Queued", t)),
+        )
         .children(inputs.iter().map(|input| {
             let submission = input.submission;
             let title = input
@@ -202,10 +210,9 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
             row()
                 .key(format!("queue-{submission}"))
                 .w_full()
-                .h(25.0)
+                .h(Size::Small.height())
                 .center_y()
-                .gap(5.0)
-                .px(5.0)
+                .gap(S8)
                 .child(
                     text(title)
                         .font(t.ui)
@@ -217,9 +224,10 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
                 )
                 .child(
                     ui::icon_button(
-                        t.k.glyph.close,
+                        &ui::CLOSE,
                         "Remove queued input",
                         IconButtonVariant::GhostMuted,
+                        Size::Small,
                     )
                     .disabled(!s.connected())
                     .on_press_tx(move |s: &mut Desktop, tx| {
@@ -232,27 +240,29 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
                         );
                     })
                     .build(&t.k)
-                    .key("remove")
-                    .size(20.0, 20.0),
+                    .key("remove"),
                 )
         }))
 }
 
 fn send_button(s: &Desktop, t: &Theme) -> El {
     if s.busy() {
-        ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Neutral)
+        ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Neutral, Size::Default)
             .shortcut(format!("{}+.", ui::COMMAND_KEY))
             .disabled(!s.connected())
             .on_press_tx(Desktop::abort)
             .build(&t.k)
             .key("stop")
-            .size(29.0, 29.0)
     } else {
-        ui::icon_button(&theme::ARROW_UP, "Send", IconButtonVariant::Submit)
-            .disabled(!s.can_send())
-            .on_press_tx(Desktop::submit)
-            .build(&t.k)
-            .key("send")
-            .size(29.0, 29.0)
+        ui::icon_button(
+            &ui::ARROW_UP,
+            "Send",
+            IconButtonVariant::Submit,
+            Size::Default,
+        )
+        .disabled(!s.can_send())
+        .on_press_tx(Desktop::submit)
+        .build(&t.k)
+        .key("send")
     }
 }

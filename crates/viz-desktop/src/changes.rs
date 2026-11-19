@@ -7,7 +7,7 @@ pub use dialog::{
 };
 use rune::{Color, El, ScrollSpec, Tx, col, el, icon, row, text};
 use rune_kit::{
-    ButtonVariant, ControlSize, IconButtonVariant, SegmentedControl,
+    ButtonVariant, IconButtonVariant, SegmentedControl,
     diff::{self, DiffState, DiffView, FoldRow},
     shell::PaneState,
 };
@@ -18,12 +18,20 @@ use viz_client::protocol::{
 use crate::{
     app::Desktop,
     backend::Command,
-    theme::{self, Theme},
+    theme::{
+        HAIRLINE, ICON_SMALL, PANEL_INSET, S4, S8, S16, S32, S40, Size, TOOLBAR_HEIGHT, TREE_ROW,
+        Theme,
+    },
     ui,
 };
 
 const SCOPES: [DiffScope; 3] = [DiffScope::Worktree, DiffScope::Turn, DiffScope::Branch];
 const DIFF_KEY: &str = "changes-diff";
+/// The changed-file list shows this many rows before it scrolls.
+const FILE_ROWS: f32 = 5.0;
+/// Where a pressable row's fill starts inside the panel; its text starts at
+/// `PANEL_INSET`.
+const ROW_EDGE: f32 = PANEL_INSET - S8;
 
 /// Git commands sent to the backend for the selected conversation.
 #[derive(Debug)]
@@ -245,26 +253,31 @@ pub fn view(s: &Desktop, t: &Theme, _layer: &mut Vec<El>) -> El {
     })
     .build(&t.k)
     .key("scope");
-    let close = ui::icon_button(t.k.glyph.close, "Close changes", IconButtonVariant::Ghost)
-        .on_press_tx(|s: &mut Desktop, tx| {
-            s.changes.pane.set_open(false);
-            tx.focus("draft", false);
-        })
-        .build(&t.k)
-        .key("close-changes");
+    let close = ui::icon_button(
+        &ui::CLOSE,
+        "Close changes",
+        IconButtonVariant::GhostMuted,
+        Size::Default,
+    )
+    .on_press_tx(|s: &mut Desktop, tx| {
+        s.changes.pane.set_open(false);
+        tx.focus("draft", false);
+    })
+    .build(&t.k)
+    .key("close-changes");
     col()
         .key("changes")
         .w_full()
         .h_full()
         .min_w(0.0)
         .min_h(0.0)
-        .fill(t.k.c.bg_base)
+        .fill(t.bg)
         .child(
             row()
                 .key("changes-tabs")
                 .w_full()
-                .h(48.0)
-                .px(12.0)
+                .h(TOOLBAR_HEIGHT)
+                .px(PANEL_INSET)
                 .center_y()
                 .child(tabs)
                 .child(el().grow(1.0))
@@ -277,6 +290,10 @@ pub fn view(s: &Desktop, t: &Theme, _layer: &mut Vec<El>) -> El {
 }
 
 /// Branch, sync state and the repository actions, above the diff.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one row: the branch picker, sync counts and three actions"
+)]
 fn git_bar(s: &Desktop, t: &Theme) -> Option<El> {
     let git = s.conversation.as_ref()?.git.as_ref()?;
     let live = target(s).is_some();
@@ -286,14 +303,18 @@ fn git_bar(s: &Desktop, t: &Theme) -> Option<El> {
         .role("button")
         .label("Switch branch")
         .description(branch)
-        .h(26.0)
-        .px(6.0)
-        .gap(5.0)
+        .h(Size::Small.height())
+        .px(S8)
+        .gap(S4)
         .center_y()
-        .radius(4.0)
+        .radius(Size::Small.radius())
         .min_w(0.0)
         .shrink()
-        .child(icon(&ui::GIT_BRANCH, 13.0).color(t.muted).a11y_hidden())
+        .child(
+            icon(&ui::GIT_BRANCH, ICON_SMALL)
+                .color(t.muted)
+                .a11y_hidden(),
+        )
         .child(
             text(branch)
                 .font(t.ui)
@@ -305,14 +326,14 @@ fn git_bar(s: &Desktop, t: &Theme) -> Option<El> {
                 .a11y_hidden(),
         )
         .child(
-            icon(&theme::CHEVRON_OPEN, 10.0)
+            icon(&ui::CHEVRON_OPEN, ICON_SMALL)
                 .color(t.faint)
                 .a11y_hidden(),
         );
     if live {
         picker = picker
             .focusable(true)
-            .focus_ring(1.0, 1.0, t.accent)
+            .focus_ring(HAIRLINE, HAIRLINE, t.accent)
             .hover(t.hover)
             .on_press_tx(branch_dialog);
     }
@@ -320,7 +341,7 @@ fn git_bar(s: &Desktop, t: &Theme) -> Option<El> {
         let ink = |count: u64| if count == 0 { t.faint } else { t.muted };
         row()
             .key("git-sync")
-            .gap(5.0)
+            .gap(S4)
             .center_y()
             .help(git.upstream.clone().unwrap_or_default())
             .child(
@@ -339,8 +360,7 @@ fn git_bar(s: &Desktop, t: &Theme) -> Option<El> {
             .child(text("Unpublished").font(t.small).color(t.faint))
     };
     let action = |label: &str, key: &str, enabled: bool, press: fn(&mut Desktop, &mut Tx)| {
-        ui::button(label, ButtonVariant::Ghost)
-            .control_size(ControlSize::Small)
+        ui::button(label, ButtonVariant::Ghost, Size::Small)
             .disabled(!live || !enabled)
             .on_press_tx(press)
             .build(&t.k)
@@ -351,10 +371,9 @@ fn git_bar(s: &Desktop, t: &Theme) -> Option<El> {
         row()
             .key("git-bar")
             .w_full()
-            .h(40.0)
-            .pl(6.0)
-            .pr(8.0)
-            .gap(6.0)
+            .h(S40)
+            .px(ROW_EDGE)
+            .gap(S4)
             .center_y()
             .child(picker)
             .child(sync)
@@ -384,7 +403,13 @@ fn turn_label(scope: DiffScope, turn: Option<EntryId>, t: &Theme) -> Option<El> 
     if scope != DiffScope::Turn {
         return None;
     }
-    let mut label = row().w_full().px(12.0).py(4.0).gap(4.0).center_y();
+    let mut label = row()
+        .w_full()
+        .h(S32)
+        .pl(PANEL_INSET)
+        .pr(ROW_EDGE)
+        .gap(S4)
+        .center_y();
     if let Some(turn) = turn {
         label = label
             .child(
@@ -394,8 +419,7 @@ fn turn_label(scope: DiffScope, turn: Option<EntryId>, t: &Theme) -> Option<El> 
             )
             .child(el().grow(1.0))
             .child(
-                ui::button("Show latest", ButtonVariant::Ghost)
-                    .control_size(ControlSize::Small)
+                ui::button("Show latest", ButtonVariant::Ghost, Size::Small)
                     .on_press_tx(|s: &mut Desktop, tx| select_scope(s, tx, DiffScope::Turn, None))
                     .build(&t.k),
             );
@@ -411,51 +435,45 @@ fn content(s: &Desktop, t: &Theme) -> El {
         Ok(files) if !files.is_empty() => file_view(s, files, t),
         _ if c.pending.is_some() && s.connected() => centered(
             row()
-                .gap(8.0)
+                .gap(S8)
                 .center_y()
-                .child(ui::spinner(14.0, t))
-                .child(text("Loading changes…").font(t.ui).color(t.muted)),
+                .child(ui::spinner(t))
+                .child(text("Loading changes").font(t.ui).color(t.muted)),
         ),
-        Err(error) => centered(
-            col()
-                .items_center()
-                .gap(10.0)
-                .child(ui::empty("Couldn’t load changes", error, t))
-                .child(
-                    ui::button("Retry", ButtonVariant::Ghost)
-                        .disabled(!s.connected())
-                        .on_press_tx(refresh)
-                        .build(&t.k),
-                ),
-        ),
+        Err(error) => centered(ui::empty(
+            None,
+            "Couldn’t load changes",
+            error,
+            Some(
+                ui::button("Retry", ButtonVariant::Outline, Size::Default)
+                    .disabled(!s.connected())
+                    .on_press_tx(refresh)
+                    .build(&t.k),
+            ),
+            t,
+        )),
         Ok(_) => {
             let (title, detail) = if !s.connected() {
-                (
-                    "Backend offline",
-                    "Connect to the backend to review changes.",
-                )
+                ("Offline", "Connect to the backend to review changes.")
             } else if s.selected.is_none() {
-                (
-                    "No conversation",
-                    "Open a conversation to review its Git changes.",
-                )
+                ("No chat", "Open a chat to review its changes.")
             } else if s.conversation.is_none() {
-                ("Loading conversation", "Waiting for its repository state.")
+                ("Loading", "Waiting for the repository’s state.")
             } else if let Some(state) = &s.conversation
                 && state.git.is_none()
             {
                 (
                     "No Git repository",
-                    "This conversation isn’t in a Git working tree.",
+                    "This chat isn’t in a Git working tree.",
                 )
             } else {
                 match c.scope {
                     DiffScope::Worktree => ("No changes", "The working tree is clean."),
-                    DiffScope::Turn => ("No changes", "This turn has no file changes."),
+                    DiffScope::Turn => ("No changes", "This turn changed no files."),
                     DiffScope::Branch => ("No changes", "This branch matches its base."),
                 }
             };
-            centered(ui::empty(title, detail, t))
+            centered(ui::empty(None, title, detail, None, t))
         }
     }
 }
@@ -465,7 +483,7 @@ fn centered(body: El) -> El {
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .padding(16.0)
+        .padding(S16)
         .center()
         .child(body)
 }
@@ -480,19 +498,19 @@ fn file_view(s: &Desktop, files: &[DiffFile], t: &Theme) -> El {
     let summary = row()
         .key("change-summary")
         .w_full()
-        .h(32.0)
-        .px(12.0)
+        .h(S32)
+        .px(PANEL_INSET)
         .center_y()
-        .gap(8.0)
+        .gap(S8)
         .child(
             text(format!("{count} {noun} changed"))
-                .font(t.small)
+                .font(t.small_medium)
                 .color(t.muted),
         )
         .child(el().grow(1.0))
         .children(
             c.pending
-                .map(|_| ui::spinner(12.0, t).label("Refreshing changes")),
+                .map(|_| ui::spinner(t).label("Refreshing changes")),
         )
         .child(counts(added, deleted, t));
     let list = col()
@@ -501,10 +519,9 @@ fn file_view(s: &Desktop, files: &[DiffFile], t: &Theme) -> El {
         .label("Changed files")
         .focus_group()
         .w_full()
-        .max_h(142.0)
-        .px(7.0)
-        .pb(6.0)
-        .gap(1.0)
+        .max_h(FILE_ROWS.mul_add(TREE_ROW, S8))
+        .px(ROW_EDGE)
+        .pb(S8)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
@@ -516,8 +533,10 @@ fn file_view(s: &Desktop, files: &[DiffFile], t: &Theme) -> El {
         );
     let diff = if c.unified.files().is_empty() {
         centered(ui::empty(
+            None,
             "No text diff",
-            "There’s no patch to display for this file.",
+            "There’s no patch to show for this file.",
+            None,
             t,
         ))
     } else {
@@ -531,7 +550,7 @@ fn file_view(s: &Desktop, files: &[DiffFile], t: &Theme) -> El {
         .focusable(true)
         .role("group")
         .label("Unified diff")
-        .focus_ring(1.0, -1.0, t.accent)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .on_key(|s: &mut Desktop, ev, tx| s.changes.unified.key(ev, tx))
     };
     col()
@@ -564,13 +583,13 @@ fn file_row(file: &DiffFile, index: usize, count: usize, selected: bool, t: &The
         .position_in_set(index + 1, count)
         .focusable(true)
         .focus_selected(selected)
-        .focus_ring(1.0, -1.0, t.accent)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .w_full()
-        .h(25.0)
-        .px(5.0)
+        .h(TREE_ROW)
+        .px(PANEL_INSET - ROW_EDGE)
         .center_y()
-        .gap(7.0)
-        .radius(4.0)
+        .gap(S8)
+        .radius(Size::Default.radius())
         .fill(if selected {
             t.selected
         } else {
@@ -582,7 +601,7 @@ fn file_row(file: &DiffFile, index: usize, count: usize, selected: bool, t: &The
             text(mark)
                 .font(t.mono_small)
                 .color(color)
-                .w(12.0)
+                .w(ICON_SMALL)
                 .a11y_hidden(),
         )
         .child(
@@ -607,7 +626,7 @@ fn file_row(file: &DiffFile, index: usize, count: usize, selected: bool, t: &The
 fn counts(added: i64, deleted: i64, t: &Theme) -> El {
     let ink = |value, color| if value == 0 { t.faint } else { color };
     row()
-        .gap(6.0)
+        .gap(S4)
         .center_y()
         .child(
             text(format!("+{added}"))

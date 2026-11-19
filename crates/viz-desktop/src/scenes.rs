@@ -27,6 +27,11 @@ pub const SCENES: &[Scene] = &[
     ("queue", queue),
     ("empty", empty),
     ("onboarding", onboarding),
+    ("orchestrator", orchestrator),
+    ("subagents", subagents),
+    ("agents", agents),
+    ("subagent", subagent),
+    ("delete", delete),
 ];
 
 const CHAT: ConversationId = ConversationId(11);
@@ -122,7 +127,9 @@ fn list() -> Vec<ConversationSummary> {
             harness: (kind != Orchestrator).then(|| "omp".into()),
             status,
             archived: false,
-            updated_at: i64::try_from(id).unwrap_or_default(),
+            // Minutes ago, newest first by id, so "last activity" reads
+            // like a live session.
+            updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
             unread: id == 9,
             pinned: id == 4,
             worktree: (id == 10).then(|| "/work/workbench/.viz/worktrees/trim-export".into()),
@@ -293,15 +300,79 @@ fn empty(s: &mut Desktop) {
 }
 
 fn onboarding(s: &mut Desktop) {
-    workspace(s);
+    orchestrator(s);
     s.projects.clear();
     s.conversations
         .retain(|chat| chat.kind == ConversationKind::Orchestrator);
+}
+
+/// The orchestrator open on its intro.
+fn orchestrator(s: &mut Desktop) {
+    workspace(s);
     s.show(ConversationId(1));
     let mut state = conversation();
     state.project = None;
     state.git = None;
+    state.harness = None;
+    state.options.clear();
     s.conversation = Some(state);
+}
+
+/// A chat that delegated: a running and a finished subagent, one spawned and
+/// one messaged, and the subagent menu open.
+fn subagents(s: &mut Desktop) {
+    workspace(s);
+    s.thread = Thread::from_view(&json!({
+        "entries": [
+            {"id":1,"kind":"viz.agent.prompt","data":{"text":"Compare the export against the old CLI, and review line endings."}},
+            {"id":2,"kind":"viz.agent.text","data":{"text":"I’ll split this: one subagent compares exports, another reviews line endings."}},
+            {"id":3,"kind":"viz.agent.tool","data":{
+                "id":"spawn-1","title":"Compare exports","kind":"other","status":"in_progress",
+                "viz":"spawn_subagent","child":20
+            }},
+            {"id":4,"kind":"viz.agent.tool","data":{
+                "id":"spawn-2","title":"Review line endings","kind":"other","status":"completed",
+                "viz":"spawn_subagent","child":21,
+                "output":"CRLF survives the join; only the final newline was missing.\nNo other changes needed."
+            }},
+            {"id":5,"kind":"viz.agent.tool","data":{
+                "id":"message-1","title":"Compare exports","kind":"other","status":"completed",
+                "viz":"message_subagent","child":20
+            }},
+        ],
+    }));
+    s.toggle("e3-group");
+    if let Some(state) = &mut s.conversation {
+        state.status = ConversationStatus::Working;
+    }
+}
+
+/// The same chat with its Agents card open.
+fn agents(s: &mut Desktop) {
+    subagents(s);
+    s.toggle("agents-previous");
+    s.open_picker = Some("agents".into());
+}
+
+/// A subagent's own conversation, under its parent.
+fn subagent(s: &mut Desktop) {
+    workspace(s);
+    s.show(ConversationId(20));
+    let mut state = conversation();
+    state.status = ConversationStatus::Working;
+    s.conversation = Some(state);
+    s.thread = Thread::from_view(&json!({
+        "entries": [
+            {"id":1,"kind":"viz.agent.prompt","data":{"text":"Compare the markdown export with the old CLI’s output for the sample notes."}},
+            {"id":2,"kind":"viz.agent.text","data":{"text":"Running both exporters over `samples/` now."}},
+        ],
+    }));
+}
+
+/// The delete confirmation for the open chat.
+fn delete(s: &mut Desktop) {
+    workspace(s);
+    sidebar::preview_delete(s, CHAT);
 }
 
 fn queue(s: &mut Desktop) {
@@ -344,4 +415,12 @@ fn option(
             })
             .collect(),
     }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|now| i64::try_from(now.as_millis()).ok())
+        .unwrap_or_default()
 }

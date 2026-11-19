@@ -10,7 +10,7 @@ use crate::{
     app::{Desktop, chat_title},
     backend::{ChatChange, Command},
     changes, sidebar,
-    theme::{self, Theme},
+    theme::{DIALOG_INSET, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
     ui,
 };
 
@@ -19,6 +19,8 @@ const LIST: &str = "palette-results";
 const SEARCH_DELAY: Duration = Duration::from_millis(180);
 const RECENT_LIMIT: usize = 6;
 const CHAT_LIMIT: usize = 24;
+/// The result list's height: eight one-line rows.
+const LIST_HEIGHT: f32 = S32 * 8.0;
 
 #[derive(Debug, Default)]
 enum Search {
@@ -156,10 +158,11 @@ enum Local {
     PullRequest,
     Pin,
     Archive,
+    Delete,
     Stop,
 }
 
-const COMMANDS: [Local; 11] = [
+const COMMANDS: [Local; 12] = [
     Local::NewChat,
     Local::NewWorktree,
     Local::AddProject,
@@ -170,6 +173,7 @@ const COMMANDS: [Local; 11] = [
     Local::PullRequest,
     Local::Pin,
     Local::Archive,
+    Local::Delete,
     Local::Stop,
 ];
 
@@ -189,19 +193,22 @@ impl Local {
             Self::Pin => "Pin chat",
             Self::Archive if chat.is_some_and(|chat| chat.archived) => "Unarchive chat",
             Self::Archive => "Archive chat",
+            Self::Delete => "Delete chat",
             Self::Stop => "Stop response",
         }
     }
 
     const fn glyph(self) -> &'static Icon {
         match self {
-            Self::NewChat => &theme::PLUS,
+            Self::NewChat => &ui::COMPOSE,
             Self::NewWorktree | Self::Commit | Self::PullRequest => &ui::GIT_BRANCH,
-            Self::AddProject | Self::Archive => &ui::FOLDER,
+            Self::AddProject => &ui::FOLDER,
+            Self::Archive => &ui::ARCHIVE,
             Self::Sidebar => &ui::SIDEBAR,
             Self::Changes => &ui::INSPECTOR,
-            Self::Push => &theme::ARROW_UP,
+            Self::Push => &ui::ARROW_UP,
             Self::Pin => &ui::PIN,
+            Self::Delete => &ui::TRASH,
             Self::Stop => &ui::STOP,
         }
     }
@@ -242,8 +249,7 @@ impl Local {
                         .as_ref()
                         .is_some_and(|state| !state.read_only && state.git.is_some())
             }
-            Self::Pin => s.new_chat.is_none() && chat.is_some(),
-            Self::Archive => {
+            Self::Pin | Self::Archive | Self::Delete => {
                 s.new_chat.is_none()
                     && chat.is_some_and(|chat| chat.kind != ConversationKind::Orchestrator)
             }
@@ -273,6 +279,11 @@ impl Local {
             Self::Archive => {
                 if let Some((id, _, archived)) = chat {
                     s.send(Command::Update(id, ChatChange::Archive(!archived)), tx);
+                }
+            }
+            Self::Delete => {
+                if let Some((id, _, _)) = chat {
+                    sidebar::open_delete_chat(s, id, tx);
                 }
             }
             Self::Stop => s.abort(tx),
@@ -454,9 +465,12 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
     let choice = result.choice();
     let (glyph, title) = match result {
         ResultRow::Command(command) => (command.glyph(), command.label(s)),
-        ResultRow::Chat(chat) if s.root == Some(chat.id) => (&theme::STAR, chat_title(chat)),
+        ResultRow::Chat(chat) if s.root == Some(chat.id) => (&ui::STAR, chat_title(chat)),
+        ResultRow::Chat(chat) if chat.kind == ConversationKind::Subagent => {
+            (&ui::BOT, chat_title(chat))
+        }
         ResultRow::Chat(chat) => (&ui::CHAT, chat_title(chat)),
-        ResultRow::Message(hit) => (t.k.glyph.search, s.title(hit.conversation)),
+        ResultRow::Message(hit) => (&ui::SEARCH, s.title(hit.conversation)),
     };
     let label = text(title).font(t.ui).color(t.text).truncate();
     let labels = col().grow(1.0).shrink().min_w(0.0).child(label);
@@ -473,13 +487,14 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         .focusable(false)
         .preserve_focus_on_press(true)
         .w_full()
-        .px(8.0)
-        .py(5.0)
-        .gap(8.0)
+        .min_h(S32)
+        .px(S8)
+        .py(S4)
+        .gap(S8)
         .center_y()
-        .radius(t.k.radius.sm)
+        .radius(Size::Default.radius())
         .hover(t.hover)
-        .child(icon(glyph, 14.0).color(t.muted).a11y_hidden())
+        .child(icon(glyph, ICON).color(t.muted).a11y_hidden())
         .child(labels)
         .on_press_tx(move |s: &mut Desktop, tx| choice.choose(s, tx));
     if active {
@@ -510,8 +525,8 @@ fn search_note(s: &Desktop, any_choices: bool, t: &Theme) -> Option<El> {
         .role("status")
         .font(t.small)
         .color(t.faint)
-        .px(8.0)
-        .py(6.0);
+        .px(S8)
+        .py(S8);
     Some(if let Some(detail) = detail {
         hint.help(detail)
     } else {
@@ -522,9 +537,9 @@ fn search_note(s: &Desktop, any_choices: bool, t: &Theme) -> Option<El> {
 fn footer(t: &Theme) -> El {
     row()
         .w_full()
-        .h(34.0)
-        .px(16.0)
-        .gap(14.0)
+        .h(Size::Large.height())
+        .px(DIALOG_INSET)
+        .gap(S16)
         .center_y()
         .children(
             [
@@ -534,7 +549,7 @@ fn footer(t: &Theme) -> El {
             ]
             .map(|(keys, name)| {
                 row()
-                    .gap(5.0)
+                    .gap(S4)
                     .center_y()
                     .child(Keybind::new(keys).build(&t.k))
                     .child(text(name).font(t.small).color(t.faint))
@@ -559,9 +574,8 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .role("listbox")
         .label("Palette results")
         .w_full()
-        .h(252.0)
-        .padding(8.0)
-        .gap(1.0)
+        .h(LIST_HEIGHT)
+        .padding(S8)
         .scroll(ScrollSpec {
             stick_bottom: false,
         });
@@ -571,7 +585,14 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         let name = result.group(recent);
         if name != group {
             group = name;
-            list = list.child(ui::section(name, t).key(name).px(8.0).py(4.0));
+            list = list.child(
+                row()
+                    .key(name)
+                    .h(S24)
+                    .px(S8)
+                    .center_y()
+                    .child(ui::section(name, t)),
+            );
         }
         let choice = result.choice();
         choices.push(choice);
@@ -584,9 +605,9 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .label("Search commands, chats, and messages")
         .placeholder("Type a command or search chats…")
         .plain()
-        .leading_icon(t.k.glyph.search)
+        .leading_icon(&ui::SEARCH)
         .width(None)
-        .height(38.0)
+        .height(Size::Large.height())
         .active_descendant(active.map(Choice::key))
         .on_edit(|s: &mut Desktop| &mut s.palette.input)
         .on_change(changed)
@@ -596,9 +617,9 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     Dialog::new("palette", "Command palette")
         .open(true)
         .fit()
-        .width(524.0)
+        .width(PALETTE_WIDTH)
         .on_close(close)
-        .child(row().w_full().px(8.0).child(field))
+        .child(row().w_full().px(S8).child(field))
         .child(ui::rule(t))
         .child(list)
         .child(ui::rule(t))

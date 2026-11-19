@@ -5,7 +5,7 @@ use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary
 use crate::{
     app::Desktop,
     backend::{ChatChange, Command, ProjectChange},
-    theme::Theme,
+    theme::{Size, Theme},
     ui::{self, DialogForm},
 };
 
@@ -39,6 +39,7 @@ pub(super) enum Edit {
     RenameProject(String),
     RemoveProject(String),
     RenameChat(ConversationId),
+    DeleteChat(ConversationId),
 }
 
 fn open_edit(s: &mut Desktop, edit: Edit, value: &str, tx: &mut Tx) {
@@ -56,6 +57,16 @@ pub(super) fn add_project(s: &mut Desktop, tx: &mut Tx) {
     open_edit(s, Edit::AddProject, "", tx);
 }
 
+/// Asks to delete chat `id` and its subagents. The orchestrator can't be
+/// deleted.
+pub(super) fn delete_chat(s: &mut Desktop, id: ConversationId, tx: &mut Tx) {
+    if s.summary(id)
+        .is_some_and(|chat| chat.kind != ConversationKind::Orchestrator)
+    {
+        open_edit(s, Edit::DeleteChat(id), "", tx);
+    }
+}
+
 fn edit_submit(s: &mut Desktop, tx: &mut Tx) {
     if !s.connected() {
         return;
@@ -64,7 +75,7 @@ fn edit_submit(s: &mut Desktop, tx: &mut Tx) {
         return;
     };
     let value = s.navigation.value.text.trim();
-    if value.is_empty() && !matches!(edit, Edit::RemoveProject(_)) {
+    if value.is_empty() && !matches!(edit, Edit::RemoveProject(_) | Edit::DeleteChat(_)) {
         return;
     }
     let command = match edit {
@@ -75,6 +86,7 @@ fn edit_submit(s: &mut Desktop, tx: &mut Tx) {
         }),
         Edit::RemoveProject(id) => Command::Project(ProjectChange::Remove(id.clone())),
         Edit::RenameChat(id) => Command::Update(*id, ChatChange::Title(value.into())),
+        Edit::DeleteChat(id) => Command::Delete(*id),
     };
     if s.send(command, tx) {
         s.navigation.edit = None;
@@ -86,6 +98,7 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         return;
     };
     let field = Some((&s.navigation.value, "Name"));
+    let delete_title;
     let form = match edit {
         Edit::AddProject => DialogForm {
             title: "Add project",
@@ -116,6 +129,16 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
             action: "Remove project",
             variant: ButtonVariant::Danger,
         },
+        Edit::DeleteChat(id) => {
+            delete_title = format!("Delete “{}”?", s.title(*id));
+            DialogForm {
+                title: &delete_title,
+                detail: Some("Its subagents are deleted too. This can't be undone."),
+                field: None,
+                action: "Delete",
+                variant: ButtonVariant::Danger,
+            }
+        }
     };
     form.build(
         |s: &mut Desktop| &mut s.navigation.value,
@@ -126,43 +149,48 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     );
 }
 
-fn menu<'a>(s: &'a Desktop, key: &str, selected: bool, t: &Theme) -> (Menu, Option<&'a Context>) {
+/// Whether the row `key`'s menu is open.
+pub(super) fn menu_open(s: &Desktop, key: &str) -> bool {
+    s.connected()
+        && s.navigation
+            .menu
+            .as_ref()
+            .is_some_and(|context| context.key == key)
+}
+
+fn menu<'a>(s: &'a Desktop, key: &str, t: &Theme) -> (Menu, Option<&'a Context>) {
     let context = s
         .navigation
         .menu
         .as_ref()
         .filter(|context| context.key == key && s.connected());
     let target = key.to_owned();
-    let trigger = ui::icon_button(&ui::MORE, "Actions", IconButtonVariant::GhostMuted)
-        .disabled(!s.connected())
-        .on_press(move |s: &mut Desktop| {
-            s.navigation.menu = if s
-                .navigation
-                .menu
-                .as_ref()
-                .is_some_and(|context| context.key == target)
-            {
-                None
-            } else {
-                Some(Context::new(&target))
-            };
-        })
-        .build(&t.k)
-        .key(format!("{key}-actions"))
-        .size(20.0, 23.0)
-        .group_opacity(
-            if selected || context.is_some() {
-                1.0
-            } else {
-                0.0
-            },
-            1.0,
-        );
+    let trigger = ui::icon_button(
+        &ui::MORE,
+        "Actions",
+        IconButtonVariant::GhostMuted,
+        Size::Small,
+    )
+    .disabled(!s.connected())
+    .on_press(move |s: &mut Desktop| {
+        s.navigation.menu = if s
+            .navigation
+            .menu
+            .as_ref()
+            .is_some_and(|context| context.key == target)
+        {
+            None
+        } else {
+            Some(Context::new(&target))
+        };
+    })
+    .build(&t.k)
+    .key(format!("{key}-actions"));
     let mut menu = Menu::new(format!("{key}-context"))
         .trigger(trigger)
         .standard()
         .placement(Placement::BottomEnd)
-        .min_width(158.0)
+        .min_width(ui::MENU_WIDTH)
         .open(context.is_some())
         .on_close(|s: &mut Desktop| s.navigation.menu = None);
     if let Some((x, y)) = context.and_then(|context| context.point) {
@@ -171,15 +199,16 @@ fn menu<'a>(s: &'a Desktop, key: &str, selected: bool, t: &Theme) -> (Menu, Opti
     (menu, context)
 }
 
+/// A top-level chat's actions. The orchestrator has none and never gets a
+/// row menu.
 pub(super) fn chat_menu(
     s: &Desktop,
     chat: &ConversationSummary,
     key: &str,
-    selected: bool,
     t: &Theme,
     layer: &mut Vec<El>,
 ) -> El {
-    let (mut menu, context) = menu(s, key, selected, t);
+    let (mut menu, context) = menu(s, key, t);
     let Some(context) = context else {
         return menu.build(&t.k, layer);
     };
@@ -212,9 +241,6 @@ pub(super) fn chat_menu(
                 },
             ),
         );
-        if chat.kind == ConversationKind::Orchestrator {
-            return menu.build(&t.k, layer);
-        }
         let archived = chat.archived;
         menu = menu
             .item(
@@ -243,6 +269,11 @@ pub(super) fn chat_menu(
                 }),
             );
         }
+        menu = menu.separator().item(
+            MenuItem::new("Delete")
+                .danger(true)
+                .on_select_tx(move |s: &mut Desktop, tx| delete_chat(s, id, tx)),
+        );
     }
     menu.build(&t.k, layer)
 }
@@ -273,7 +304,7 @@ pub(super) fn project_menu(
     t: &Theme,
     layer: &mut Vec<El>,
 ) -> El {
-    let (mut menu, context) = menu(s, key, false, t);
+    let (mut menu, context) = menu(s, key, t);
     if context.is_some() {
         let new = project.id.clone();
         let worktree = project.id.clone();

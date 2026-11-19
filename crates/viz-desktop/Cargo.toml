@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 base64.workspace = true
+lucide-static-svg.workspace = true
 mime_guess.workspace = true
 notify-rust = { workspace = true, features = ["z-with-tokio"] }
 rfd.workspace = true

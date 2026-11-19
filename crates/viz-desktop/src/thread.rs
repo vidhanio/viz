@@ -133,8 +133,10 @@ pub struct Tool {
     pub output: String,
     /// How long it ran, once done.
     pub duration_ms: Option<u64>,
-    /// The conversation a `subagent` call delegated to.
+    /// The conversation a subagent call delegated to.
     pub child: Option<ConversationId>,
+    /// The viz tool an ACP call ran (`spawn_subagent`, `read_subagent`, …).
+    pub viz: Option<String>,
     pub diffs: Vec<ToolDiff>,
     pub locations: Vec<String>,
 }
@@ -352,7 +354,11 @@ impl Reader {
                     status,
                     output: str_at(data, "output").unwrap_or_default().to_owned(),
                     duration_ms: None,
-                    child: None,
+                    child: data
+                        .get("child")
+                        .and_then(Value::as_u64)
+                        .map(ConversationId),
+                    viz: str_at(data, "viz").map(str::to_owned),
                     diffs: array(data.get("diffs"))
                         .iter()
                         .filter_map(|diff| {
@@ -540,6 +546,7 @@ fn tool_call(key: String, part: &Value, status: ToolStatus) -> Tool {
         output: String::new(),
         duration_ms: None,
         child: None,
+        viz: None,
         diffs: Vec::new(),
         locations: Vec::new(),
     }

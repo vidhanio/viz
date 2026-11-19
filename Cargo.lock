@@ -1886,6 +1886,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4050469837a6ff301cd14c1f8f24f88549e6d548f24f64e2148eb0f72cebc51f"
 
 [[package]]
+name = "lucide-static-svg"
+version = "1.76.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6bcb4ecb783f58404bcd5d43ea172e123f17ac5f13111b6236d1341099b41949"
+
+[[package]]
 name = "mac-notification-sys"
 version = "0.6.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4759,6 +4765,7 @@ name = "viz-desktop"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "lucide-static-svg",
  "mime_guess",
  "notify-rust",
  "rfd",

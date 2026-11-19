@@ -1,96 +1,207 @@
-//! The desktop's shared presentation on Rune and rune-kit.
+//! The desktop's components on Rune and rune-kit. Each takes a [`Size`] or a
+//! variant and owns its insets; views compose them and add no padding of
+//! their own beyond the layout tokens in `theme`.
 
-use rune::{Color, El, Icon, TextEdit, TextStyle, Tx, col, el, row, text};
+use rune::{Color, El, Icon, TextEdit, Tx, col, el, row, text};
 use rune_kit::{
-    Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant,
-    Keybind, Loader, Menu, MenuItem, Placement, PopupList, Select, SelectAppearance, TextInput,
-    TreeItem, TreeRow, TreeStyle,
+    Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
+    Placement, PopupList, Select, SelectAppearance, TextInput,
 };
 use viz_client::protocol::ConversationStatus;
 
-use crate::theme::Theme;
+use crate::theme::{
+    CARD_INSET, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL,
+    RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S4, S8, S12, Size, TRAILING, TREE_ROW,
+    TREE_STEP, Theme,
+};
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
     "⌘"
 } else {
     "Ctrl"
 };
+/// The sidebar toggle's shortcut, as its tooltip shows it.
+pub const SIDEBAR_SHORTCUT: &str = if cfg!(target_os = "macos") {
+    "⌘B"
+} else {
+    "Ctrl+B"
+};
+/// The Agents card's shortcut.
+pub const AGENTS_SHORTCUT: &str = if cfg!(target_os = "macos") {
+    "⇧⌘B"
+} else {
+    "Ctrl+Shift+B"
+};
 
-pub fn button(label: impl Into<String>, variant: ButtonVariant) -> Button {
-    Button::new(label)
+pub fn button(label: impl Into<String>, variant: ButtonVariant, size: Size) -> Button {
+    Button::new(label).variant(variant).control_size(size.kit())
+}
+
+pub fn icon_button(
+    glyph: &'static Icon,
+    label: &str,
+    variant: IconButtonVariant,
+    size: Size,
+) -> IconButton {
+    IconButton::new(glyph)
         .variant(variant)
-        .control_size(ControlSize::Regular)
-}
-
-pub fn icon_button(glyph: &'static Icon, label: &str, variant: IconButtonVariant) -> IconButton {
-    IconButton::new(glyph).variant(variant).label(label)
-}
-
-pub fn chip(label: impl Into<String>, t: &Theme) -> El {
-    Badge::new(label).variant(BadgeVariant::Subtle).build(&t.k)
+        .label(label)
+        .control_size(size.kit())
 }
 
 pub fn kbd(key: &str, t: &Theme) -> El {
     Keybind::new(&[COMMAND_KEY, key]).build(&t.k)
 }
 
+/// A horizontal hairline across its parent.
 pub fn rule(t: &Theme) -> El {
-    el().w_full().h(1.0).fill(t.hairline).a11y_hidden()
+    el().w_full().h(HAIRLINE).fill(t.hairline).a11y_hidden()
 }
 
+/// A short vertical hairline between inline metadata.
+pub fn divider(t: &Theme) -> El {
+    el().w(HAIRLINE)
+        .h(ICON_SMALL)
+        .fill(t.hairline)
+        .a11y_hidden()
+}
+
+/// A section title: small, medium, muted.
 pub fn section(label: &str, t: &Theme) -> El {
-    text(label).font(t.k.ty.small_medium).color(t.muted)
+    text(label).font(t.small_medium).color(t.muted)
 }
 
-pub fn empty(title: &str, detail: &str, t: &Theme) -> El {
+/// Secondary one-line text that truncates.
+pub fn quiet(label: &str, t: &Theme) -> El {
+    text(label)
+        .font(t.small)
+        .color(t.muted)
+        .min_w(0.0)
+        .shrink()
+        .truncate()
+        .help_when_truncated(label)
+}
+
+/// A glyph centered in an icon-wide box one line tall, so it sits on the
+/// first line of the text beside it.
+pub fn lead(mark: El, line: f32) -> El {
+    el().size(ICON, line).center().child(mark).a11y_hidden()
+}
+
+/// The centered reading column's frame; its parent owns the vertical spacing.
+pub fn reading(child: El) -> El {
     col()
+        .w_full()
+        .px(READING_INSET)
+        .items_center()
+        .child(child.w_full().max_w(READING_WIDTH))
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum Card {
+    /// A raised surface with a hairline: tool output, the composer.
+    Surface,
+    /// A hairline only: plans, subagents.
+    Outline,
+    /// The quiet wash behind my messages.
+    Message,
+}
+
+impl Card {
+    /// The surface alone, for compound cards whose children own their insets.
+    pub fn frame(self, t: &Theme) -> El {
+        self.paint(col(), t)
+    }
+
+    /// [`Card::frame`] laid out as a row.
+    pub fn row(self, t: &Theme) -> El {
+        self.paint(row(), t)
+    }
+
+    fn paint(self, frame: El, t: &Theme) -> El {
+        let frame = frame.w_full().radius(RADIUS_CARD);
+        match self {
+            Self::Surface => frame.fill(t.surface).border(HAIRLINE, t.hairline),
+            Self::Outline => frame.border(HAIRLINE, t.hairline),
+            Self::Message => frame.fill(t.mine),
+        }
+    }
+
+    /// The surface with the card inset and gap.
+    pub fn build(self, t: &Theme) -> El {
+        self.frame(t).padding(CARD_INSET).gap(S8)
+    }
+}
+
+/// An empty state: an optional mark, a title, a line of detail, an optional
+/// action.
+pub fn empty(mark: Option<El>, title: &str, detail: &str, action: Option<El>, t: &Theme) -> El {
+    let mut body = col()
         .key("empty")
         .w_full()
-        .max_w(360.0)
-        .gap(6.0)
-        .items_center()
-        .child(text(title).font(t.title).color(t.text))
-        .child(
+        .max_w(EMPTY_WIDTH)
+        .gap(S8)
+        .items_center();
+    if let Some(mark) = mark {
+        body = body.child(mark.mb(S4));
+    }
+    body = body.child(text(title).font(t.title).color(t.text));
+    if !detail.is_empty() {
+        body = body.child(
             text(detail)
                 .font(t.ui)
                 .color(t.muted)
                 .wrap()
                 .align(rune::Align::Center),
-        )
+        );
+    }
+    body.children(action.map(|action| action.mt(S8)))
 }
 
-pub fn dot(color: Color, size: f32) -> El {
-    el().size(size, size)
-        .radius(size / 2.0)
+pub fn dot(color: Color) -> El {
+    el().size(DOT, DOT)
+        .radius(DOT / 2.0)
         .fill(color)
         .a11y_hidden()
 }
 
-pub fn spinner(size: f32, t: &Theme) -> El {
-    Loader::new().size(size).color(t.muted).build(&t.k)
+pub fn spinner(t: &Theme) -> El {
+    Loader::new().size(ICON_SMALL).color(t.muted).build(&t.k)
 }
 
+/// A subagent's state as a mark and a word: a spinner while it runs, a
+/// success dot when done, a danger dot when it failed.
+pub fn agent_state(status: ConversationStatus, t: &Theme) -> (El, &'static str) {
+    match status {
+        ConversationStatus::Working => (spinner(t), "Running"),
+        ConversationStatus::Failed => (dot(t.danger), "Failed"),
+        ConversationStatus::Idle => (dot(t.success), "Done"),
+    }
+}
+
+/// A conversation's run state as an icon-sized mark: a spinner while it works,
+/// a danger dot after a failure, nothing while idle.
 pub fn status(status: ConversationStatus, t: &Theme) -> Option<El> {
-    let (icon, label) = match status {
+    let (mark, label) = match status {
         ConversationStatus::Idle => return None,
-        ConversationStatus::Working => (spinner(13.0, t), "Working"),
-        ConversationStatus::Failed => (dot(t.danger, 6.0), "Failed"),
+        ConversationStatus::Working => (spinner(t), "Working"),
+        ConversationStatus::Failed => (dot(t.danger), "Failed"),
     };
     Some(
-        el().size(14.0, 14.0)
+        el().size(ICON, ICON)
             .center()
-            .child(icon)
+            .child(mark)
             .role("status")
             .label(label)
             .help(label),
     )
 }
 
-pub fn text_field(edit: &TextEdit, label: &str, placeholder: &str) -> TextInput {
+pub fn text_field(edit: &TextEdit, label: &str, placeholder: &str, size: Size) -> TextInput {
     TextInput::new(edit)
         .label(label)
         .placeholder(placeholder)
-        .height(29.0)
+        .height(size.height())
         .width(None)
 }
 
@@ -104,19 +215,106 @@ pub fn code(body: &str, t: &Theme) -> El {
         .selection_color(t.k.selection())
 }
 
-pub fn tree_row(row: &TreeRow<'_>, item: TreeItem, t: &Theme, font: TextStyle) -> El {
-    let mut style = TreeStyle::from_kit(&t.k)
-        .label(font, t.muted, t.text)
-        .gap(5.0)
-        .hover(t.hover);
-    style.row_height = 29.0;
-    style.indent = 14.0;
-    style.guides = false;
-    style.selected = t.selected;
-    item.build(&t.k, row, &style)
-        .key(row.id)
-        .focusable(true)
-        .focus_ring(1.0, -1.0, t.accent)
+/// A sidebar row. Labels start at `SIDEBAR_INSET` plus one `TREE_STEP` per
+/// depth (a leading icon takes one step), only the label shrinks, and the row
+/// ends in its [`trailing`] slot.
+pub struct TreeLine<'a> {
+    pub key: &'a str,
+    pub label: &'a str,
+    pub depth: u16,
+    /// Unread: the medium weight in full ink.
+    pub strong: bool,
+    /// Archived: faint.
+    pub dim: bool,
+    pub selected: bool,
+}
+
+impl TreeLine<'_> {
+    pub fn build(
+        self,
+        leading: Option<El>,
+        markers: impl IntoIterator<Item = El>,
+        slot: El,
+        t: &Theme,
+    ) -> El {
+        let color = if self.dim {
+            t.faint
+        } else if self.selected || self.strong {
+            t.text
+        } else {
+            t.muted
+        };
+        row()
+            .key(self.key)
+            .role("treeitem")
+            .label(self.label)
+            .level(u32::from(self.depth) + 1)
+            .h(TREE_ROW)
+            .w_full()
+            .pl(f32::from(self.depth).mul_add(TREE_STEP, ROW_INSET))
+            .gap(S8)
+            .center_y()
+            .radius(Size::Default.radius())
+            .fill(if self.selected {
+                t.selected
+            } else {
+                Color::TRANSPARENT
+            })
+            .hover(if self.selected { t.selected } else { t.hover })
+            .hover_group_focus()
+            .focusable(true)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            .children(leading.map(|mark| lead(mark, TREE_ROW)))
+            .child(
+                text(self.label)
+                    .font(if self.strong { t.ui_medium } else { t.ui })
+                    .color(color)
+                    .truncate()
+                    .min_w(0.0)
+                    .shrink()
+                    .grow(1.0)
+                    .a11y_hidden()
+                    .help_when_truncated(self.label),
+            )
+            .children(markers)
+            .child(slot)
+    }
+}
+
+/// A row's fixed trailing slot. `rest` shows until the row is hovered or
+/// focused, then `action` takes its place; `reveal` keeps the action up (its
+/// menu is open).
+pub fn trailing(rest: Option<El>, action: Option<El>, reveal: bool) -> El {
+    let layer = |child: El| {
+        el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+            .center()
+            .child(child)
+    };
+    let mut slot = el().key("trailing").size(TRAILING, TRAILING);
+    if let Some(rest) = rest {
+        let hovered = if action.is_some() { 0.0 } else { 1.0 };
+        let shown = if reveal { 0.0 } else { 1.0 };
+        slot = slot.child(layer(rest).group_opacity(shown, hovered));
+    }
+    if let Some(action) = action {
+        slot = slot.child(layer(action).group_opacity(if reveal { 1.0 } else { 0.0 }, 1.0));
+    }
+    slot
+}
+
+/// A sidebar section's title row, with an optional action in the trailing
+/// slot.
+pub fn section_row(key: &str, label: &str, action: Option<El>, t: &Theme) -> El {
+    row()
+        .key(key)
+        .w_full()
+        .h(TREE_ROW)
+        .mt(S12)
+        .pl(ROW_INSET)
+        .gap(S8)
+        .center_y()
+        .child(section(label, t).grow(1.0))
+        .child(trailing(None, action, true))
 }
 
 /// The combobox trigger is separate from its menu: server ids can differ even
@@ -139,16 +337,25 @@ pub fn picker<S: 'static>(
         .on_toggle(toggle);
     let trigger = trigger
         .trigger(&t.k)
-        .max_w(154.0)
-        .focus_ring(1.0, -1.0, t.accent);
+        .h(Size::Default.height())
+        .max_w(PICKER_TRIGGER_MAX)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent);
     Menu::new(format!("{id}-picker"))
         .standard()
         .placement(Placement::TopStart)
-        .min_width(196.0)
+        .min_width(MENU_WIDTH)
         .open(open)
         .on_close(close)
         .trigger(trigger)
 }
+
+/// The widest an inline select's trigger gets; rune-kit truncates its label
+/// there.
+pub const PICKER_TRIGGER_MAX: f32 = 156.0;
+/// A menu's narrowest width.
+pub const MENU_WIDTH: f32 = 196.0;
+const COMPLETION_HEIGHT: f32 = 240.0;
+pub const COMPLETION_WIDTH: f32 = 360.0;
 
 pub fn menu_items(menu: Menu, items: impl IntoIterator<Item = MenuItem>) -> Menu {
     items.into_iter().fold(menu, Menu::item)
@@ -157,12 +364,48 @@ pub fn menu_items(menu: Menu, items: impl IntoIterator<Item = MenuItem>) -> Menu
 pub fn popup_list<S: 'static>(key: &str, anchor: &str) -> PopupList<S> {
     PopupList::new(key, anchor)
         .placement(Placement::TopStart)
-        .offset(6.0)
-        .max_height(238.0)
+        .offset(S4)
+        .max_height(COMPLETION_HEIGHT)
         .animate_filtering(false)
         .open(true)
 }
 
+/// A dialog's frame: title, optional description, and a body inset like
+/// rune-kit's header.
+pub fn dialog(key: &str, title: &str, detail: Option<&str>) -> Dialog {
+    let dialog = Dialog::new(key, title).width(DIALOG_WIDTH).open(true).fit();
+    match detail {
+        Some(detail) => dialog.description(detail),
+        None => dialog,
+    }
+}
+
+/// A dialog's body: its fields, then its actions, at the dialog inset.
+pub fn dialog_body(fields: impl IntoIterator<Item = El>, actions: El) -> El {
+    col()
+        .w_full()
+        .px(DIALOG_INSET)
+        .pb(DIALOG_INSET)
+        .gap(DIALOG_INSET)
+        .children(fields)
+        .child(actions)
+}
+
+/// A dialog's buttons, right-aligned, the primary last.
+pub fn dialog_actions(buttons: impl IntoIterator<Item = El>) -> El {
+    row().w_full().justify_end().gap(S8).children(buttons)
+}
+
+/// A labelled field in a dialog.
+pub fn field(label: &str, input: El, t: &Theme) -> El {
+    col()
+        .w_full()
+        .gap(S4)
+        .child(text(label).font(t.small_medium).color(t.muted))
+        .child(input)
+}
+
+/// A one-field (or no-field) confirmation dialog.
 pub struct DialogForm<'a> {
     pub title: &'a str,
     pub detail: Option<&'a str>,
@@ -180,88 +423,104 @@ impl DialogForm<'_> {
         t: &Theme,
         layer: &mut Vec<El>,
     ) {
-        let mut dialog = Dialog::new("edit", self.title)
-            .width(392.0)
-            .open(true)
-            .fit()
-            .on_close(close.clone());
-        if let Some(detail) = self.detail {
-            dialog = dialog.description(detail);
-        }
-        let mut body = col().w_full().px(16.0).pb(16.0).gap(16.0);
-        if let Some((text, placeholder)) = self.field {
-            body = body.child(
-                text_field(text, placeholder, placeholder)
-                    .on_edit(edit)
-                    .on_submit(submit.clone())
-                    .build(&t.k)
-                    .key("edit-value"),
-            );
-        }
+        let input = self.field.map(|(value, placeholder)| {
+            text_field(value, placeholder, placeholder, Size::Default)
+                .on_edit(edit)
+                .on_submit(submit.clone())
+                .build(&t.k)
+                .key("edit-value")
+        });
         let disabled = self
             .field
-            .is_some_and(|(text, _)| text.text.trim().is_empty());
-        dialog
-            .child(
-                body.child(
-                    row()
-                        .w_full()
-                        .justify_end()
-                        .gap(6.0)
-                        .child(
-                            button("Cancel", ButtonVariant::Ghost)
-                                .on_press(close)
-                                .build(&t.k),
-                        )
-                        .child(
-                            button(self.action, self.variant)
-                                .disabled(disabled)
-                                .on_press_tx(submit)
-                                .build(&t.k),
-                        ),
-                ),
-            )
+            .is_some_and(|(value, _)| value.text.trim().is_empty());
+        let actions = dialog_actions([
+            button("Cancel", ButtonVariant::Ghost, Size::Default)
+                .on_press(close.clone())
+                .build(&t.k),
+            button(self.action, self.variant, Size::Default)
+                .disabled(disabled)
+                .on_press_tx(submit)
+                .build(&t.k),
+        ]);
+        dialog("edit", self.title, self.detail)
+            .on_close(close)
+            .child(dialog_body(input, actions))
             .build(&t.k, layer);
     }
 }
 
-pub static MORE: Icon = Icon {
-    name: "viz-more",
-    view: 16.0,
-    body: r#"<path d="M3.5 8h.01M8 8h.01M12.5 8h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>"#,
-};
-pub static FOLDER: Icon = Icon {
-    name: "viz-folder",
-    view: 16.0,
-    body: r#"<path d="M1.75 4.5h5l1.25 1.5h6.25v6.5H1.75z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>"#,
-};
-pub static CHAT: Icon = Icon {
-    name: "viz-chat",
-    view: 16.0,
-    body: r#"<path d="M2.25 3.5h11.5v7.25H7l-3.25 2v-2H2.25z" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/>"#,
-};
-pub static GIT_BRANCH: Icon = Icon {
-    name: "viz-git-branch",
-    view: 16.0,
-    body: r#"<path d="M4.5 6v4m1.5 1.4h1a4.5 4.5 0 0 0 4.5-4.5V6" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="4.5" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="4.5" cy="11.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/><circle cx="11.5" cy="4.5" r="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/>"#,
-};
-pub static STOP: Icon = Icon {
-    name: "viz-stop",
-    view: 16.0,
-    body: r#"<rect x="4" y="4" width="8" height="8" rx="1.25" fill="currentColor"/>"#,
-};
-pub static INSPECTOR: Icon = Icon {
-    name: "viz-inspector",
-    view: 16.0,
-    body: r#"<rect x="2.25" y="3.5" width="11.5" height="9" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M9.5 4v8.25" stroke="currentColor" stroke-width="1.2"/>"#,
-};
-pub static SIDEBAR: Icon = Icon {
-    name: "viz-sidebar",
-    view: 16.0,
-    body: r#"<rect x="2.25" y="3.5" width="11.5" height="9" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6.5 4v8.25" stroke="currentColor" stroke-width="1.2"/>"#,
-};
-pub static PIN: Icon = Icon {
-    name: "viz-pin",
-    view: 16.0,
-    body: r#"<path d="M6 2.75h4M6.75 2.75v3.5L4.5 8.75h7L9.25 6.25v-3.5M8 8.75v4.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>"#,
-};
+/// Declares Lucide icons as Rune icons: Lucide's own SVG on its 24-point
+/// grid, one stroke width throughout, drawn at the `ICON*` token sizes.
+macro_rules! lucide {
+    ($($(#[$doc:meta])* $name:ident = $icon:ident;)*) => {$(
+        $(#[$doc])*
+        pub static $name: Icon = Icon {
+            name: concat!("lucide-", stringify!($icon)),
+            view: 24.0,
+            body: lucide_static_svg::Icon::$icon.svg_str(),
+        };
+    )*};
+}
+
+lucide! {
+    /// The orchestrator's mark.
+    STAR = Sparkle;
+    /// New chat.
+    COMPOSE = SquarePen;
+    PLUS = Plus;
+    /// Send.
+    ARROW_UP = ArrowUp;
+    /// A subagent, and the Agents card.
+    BOT = Bot;
+    /// Back to a subagent's parent.
+    CORNER_LEFT_UP = CornerLeftUp;
+    CHEVRON = ChevronRight;
+    CHEVRON_OPEN = ChevronDown;
+    CHEVRON_UP = ChevronUp;
+    MORE = Ellipsis;
+    FOLDER = Folder;
+    CHAT = MessageSquare;
+    GIT_BRANCH = GitBranch;
+    STOP = Square;
+    INSPECTOR = PanelRight;
+    SIDEBAR = PanelLeft;
+    PIN = Pin;
+    ARCHIVE = Archive;
+    TRASH = Trash;
+    PAPERCLIP = Paperclip;
+    CHECK = Check;
+    CLOSE = X;
+    CIRCLE_X = CircleX;
+    COPY = Copy;
+    SEARCH = Search;
+    LOCK = Lock;
+    EYE = Eye;
+    EYE_OFF = EyeOff;
+    MINUS = Minus;
+}
+
+/// rune-kit's own glyphs, as Lucide.
+pub fn kit_glyphs(glyph: &mut rune_kit::Glyphs) {
+    glyph.check = &CHECK;
+    glyph.check_small = &CHECK;
+    glyph.chevron_down = &CHEVRON_OPEN;
+    glyph.chevron_up = &CHEVRON_UP;
+    glyph.caret_right = &CHEVRON;
+    glyph.triangle_down = &CHEVRON_OPEN;
+    glyph.triangle_right = &CHEVRON;
+    glyph.close = &CLOSE;
+    glyph.clear = &CIRCLE_X;
+    glyph.copy = &COPY;
+    glyph.search = &SEARCH;
+    glyph.lock = &LOCK;
+    glyph.eye = &EYE;
+    glyph.eye_off = &EYE_OFF;
+    glyph.circle_x = &CIRCLE_X;
+    glyph.dash = &MINUS;
+}
+
+/// For `rune::set_icon_swap`: the icons rune-kit draws outside its glyph set
+/// (the shell's sidebar toggle), as Lucide.
+pub fn swap_kit_icon(icon: &Icon) -> Option<&'static Icon> {
+    (icon.name == rune_kit::shell::SIDEBAR.name).then_some(&SIDEBAR)
+}

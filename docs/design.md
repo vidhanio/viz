@@ -24,7 +24,7 @@ Out of scope until a job above needs it: permission prompts, in-app settings for
 ## Interface
 
 - **Layout.** Sidebar (orchestrator, pinned, chats), the chat, and an optional right panel (changes). Overlays: palette, the Agents card, menus, dialogs, toasts. Nothing else.
-- **Sidebar.** Two modes: *Recent* (chats newest first, project under each title) and *Projects* (collapsible projects, chats newest first). Subagents never appear in it; they live in their parent chat (timeline cards and the Agents card).
+- **Sidebar.** Two modes: _Recent_ (chats newest first, project under each title) and _Projects_ (collapsible projects, chats newest first). Subagents never appear in it; they live in their parent chat (timeline cards and the Agents card).
 - **Orchestrator.** Visually distinct and never managed like a chat: no pin, archive, rename, move or delete.
 - **Copy.** Short, plain, sentence case. No exclamation marks, filler or marketing. Labels name the thing; buttons name the action.
 

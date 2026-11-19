@@ -127,6 +127,9 @@ pub struct Desktop {
     /// The window's width in view points, as last drawn; layout that has to
     /// choose what fits reads it.
     pub window_width: f32,
+    /// Chats left by navigating, newest last, for back and forward.
+    back: Vec<ConversationId>,
+    forward: Vec<ConversationId>,
 }
 
 impl Desktop {
@@ -163,6 +166,8 @@ impl Desktop {
             next_toast: 0,
             focused: true,
             window_width: WINDOW_SIZE.0,
+            back: Vec::new(),
+            forward: Vec::new(),
         }
     }
 
@@ -203,7 +208,29 @@ impl Desktop {
                 tx,
             );
         }
+        // The selected chat may have been deleted by any client. Use the old
+        // list to find its nearest surviving parent before discarding it.
+        let fallback = self
+            .selected
+            .and_then(|id| self.summary(id))
+            .filter(|chat| !conversations.iter().any(|current| current.id == chat.id))
+            .and_then(|old| {
+                let mut ancestor = old.parent;
+                while let Some(id) = ancestor {
+                    if conversations.iter().any(|current| current.id == id) {
+                        return Some(id);
+                    }
+                    ancestor = self.summary(id).and_then(|parent| parent.parent);
+                }
+                self.root
+            });
         self.conversations = conversations;
+        if let Some(fallback) = fallback
+            && self.connected()
+            && self.new_chat.is_none()
+        {
+            self.select(fallback, tx);
+        }
     }
 
     /// The window gained or lost focus; coming back reads the open chat.
@@ -337,8 +364,45 @@ impl Desktop {
         false
     }
 
-    /// Opens `conversation` in the main pane.
+    /// Opens `conversation` in the main pane, remembering where it came from
+    /// for [`Desktop::go_back`].
     pub fn select(&mut self, conversation: ConversationId, tx: &mut Tx) {
+        if let Some(current) = self.selected.filter(|current| *current != conversation) {
+            self.back.push(current);
+            self.forward.clear();
+        }
+        self.open(conversation, tx);
+    }
+
+    /// The chat open before this one.
+    pub fn go_back(&mut self, tx: &mut Tx) {
+        self.travel(true, tx);
+    }
+
+    /// The chat [`Desktop::go_back`] left.
+    pub fn go_forward(&mut self, tx: &mut Tx) {
+        self.travel(false, tx);
+    }
+
+    fn travel(&mut self, back: bool, tx: &mut Tx) {
+        let (from, to) = if back {
+            (&mut self.back, &mut self.forward)
+        } else {
+            (&mut self.forward, &mut self.back)
+        };
+        // Deleted chats drop out of the history as it's walked.
+        let Some(next) = std::iter::from_fn(|| from.pop())
+            .find(|id| self.conversations.iter().any(|chat| chat.id == *id))
+        else {
+            return;
+        };
+        if let Some(current) = self.selected {
+            to.push(current);
+        }
+        self.open(next, tx);
+    }
+
+    fn open(&mut self, conversation: ConversationId, tx: &mut Tx) {
         self.show(conversation);
         self.update_title(tx);
         tx.focus("draft", false);

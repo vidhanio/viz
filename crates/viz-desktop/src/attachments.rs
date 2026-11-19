@@ -7,11 +7,18 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rune::{ClipboardContent, ClipboardImage, El, Icon, Tx, icon, row, text};
+use rune::{ClipboardContent, ClipboardImage, El, Tx, icon, row, text};
 use rune_kit::IconButtonVariant;
 use viz_client::protocol::Attachment;
 
-use crate::{app::Desktop, theme::Theme, ui};
+use crate::{
+    app::Desktop,
+    theme::{CARD_INSET, HAIRLINE, ICON_SMALL, S4, S8, Size, Theme},
+    ui,
+};
+
+/// The widest an attachment chip gets before its name truncates.
+const CHIP_MAX: f32 = 180.0;
 
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
 // Leave room for JSON metadata and the prompt under the server's 128 MiB frame
@@ -139,12 +146,16 @@ pub fn button(s: &Desktop, t: &Theme) -> El {
     } else {
         "Attach files"
     };
-    ui::icon_button(&PAPERCLIP, title, IconButtonVariant::GhostMuted)
-        .disabled(!s.can_attach())
-        .on_press_tx(choose)
-        .build(&t.k)
-        .key("attach")
-        .size(29.0, 29.0)
+    ui::icon_button(
+        &ui::PAPERCLIP,
+        title,
+        IconButtonVariant::GhostMuted,
+        Size::Default,
+    )
+    .disabled(!s.can_attach())
+    .on_press_tx(choose)
+    .build(&t.k)
+    .key("attach")
 }
 
 pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
@@ -155,18 +166,20 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
         row()
             .key("draft-attachments")
             .w_full()
-            .px(12.0)
-            .pt(9.0)
-            .gap(5.0)
+            .px(CARD_INSET)
+            .pt(CARD_INSET)
+            .gap(S4)
             .flex_wrap()
             .children(s.attachments.iter().enumerate().map(|(index, attachment)| {
                 chip(&attachment.name, t)
                     .key(format!("attachment-{index}"))
+                    .pr(0.0)
                     .child(
                         ui::icon_button(
-                            t.k.glyph.close,
+                            &ui::CLOSE,
                             "Remove attachment",
                             IconButtonVariant::GhostMuted,
+                            Size::Small,
                         )
                         .on_press(move |s: &mut Desktop| {
                             if index < s.attachments.len() {
@@ -174,31 +187,25 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
                             }
                         })
                         .build(&t.k)
-                        .key("remove")
-                        .size(18.0, 20.0),
+                        .key("remove"),
                     )
             })),
     )
 }
 
+/// An attachment's name with a paperclip, one small control tall.
 pub fn chip(name: &str, t: &Theme) -> El {
     row()
-        .h(25.0)
-        .px(6.0)
-        .gap(5.0)
+        .h(Size::Small.height())
+        .px(S8)
+        .gap(S4)
         .center_y()
-        .max_w(178.0)
+        .max_w(CHIP_MAX)
         .min_w(0.0)
         .shrink()
-        .radius(t.k.radius.sm)
-        .border(1.0, t.hairline)
+        .radius(Size::Small.radius())
+        .border(HAIRLINE, t.hairline)
         .help(name)
-        .child(icon(&PAPERCLIP, 12.0).color(t.muted))
+        .child(icon(&ui::PAPERCLIP, ICON_SMALL).color(t.muted))
         .child(text(name).font(t.small).color(t.text).shrink().truncate())
 }
-
-static PAPERCLIP: Icon = Icon {
-    name: "viz-paperclip",
-    view: 16.0,
-    body: r#"<path d="M6 9.75 10.5 5.2a1.45 1.45 0 0 1 2.05 2.05L7.35 12.5a2.65 2.65 0 0 1-3.75-3.75L9.1 3.25" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round"/>"#,
-};

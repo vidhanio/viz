@@ -30,6 +30,7 @@ use crate::{
 
 /// How long to wait between connection attempts.
 const RETRY: Duration = Duration::from_secs(3);
+const NOT_FOUND: i64 = -32001;
 
 /// What the UI asks of the backend.
 #[derive(Debug)]
@@ -42,6 +43,7 @@ pub enum Command {
         params: CreateConversation,
     },
     Update(ConversationId, ChatChange),
+    Delete(ConversationId),
     Configure {
         conversation: ConversationId,
         option: String,
@@ -262,7 +264,6 @@ async fn session(
         hello,
     } = connection;
     let watched = selected.unwrap_or(hello.root);
-    *selected = Some(watched);
     let mut session = Session {
         ui,
         client,
@@ -272,11 +273,24 @@ async fn session(
     };
     let (version, root) = (hello.version, hello.root);
     let started = async {
-        let ((), harnesses, ()) = tokio::try_join!(
+        let watch = async {
+            match session.client.watch(watched).await {
+                Err(Error::Rpc {
+                    code: NOT_FOUND, ..
+                }) if watched != root => {
+                    session.client.watch(root).await?;
+                    Ok(root)
+                }
+                result => result.map(|()| watched),
+            }
+        };
+        let ((), harnesses, watched) = tokio::try_join!(
             session.refresh_list(),
             session.client.list_harnesses(),
-            session.client.watch(watched)
+            watch
         )?;
+        session.watched = watched;
+        *selected = Some(watched);
         ui.update(move |s, tx| {
             s.status = Status::Connected { version };
             s.root = Some(root);
@@ -340,6 +354,13 @@ impl Session<'_> {
                 result.map(drop)
             }
             Command::Update(conversation, change) => self.update_chat(conversation, &change).await,
+            Command::Delete(conversation) => {
+                let kept = self.client.delete_conversation(conversation).await?;
+                if !kept.is_empty() {
+                    toast(self.ui, "Worktrees kept on disk", kept.join("\n"));
+                }
+                Ok(())
+            }
             Command::Configure {
                 conversation,
                 option,
