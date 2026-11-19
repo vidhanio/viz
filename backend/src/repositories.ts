@@ -5,7 +5,7 @@ import { ChatDoc } from "./agents/chat.ts";
 import type { ChangeFeed } from "./changes.ts";
 import type { Conversations } from "./conversations.ts";
 import type { Git } from "./git/index.ts";
-import { MetaDoc } from "./projects.ts";
+import { MetaDoc, projectIn } from "./projects.ts";
 import type { Params } from "./protocol.ts";
 
 /** Serializes backend writes to a working tree, across chats that share it. */
@@ -52,11 +52,18 @@ export class Repositories {
     }
   }
 
-  async branches(id: ConversationId, context: Context) {
+  async branches(target: { conversation: ConversationId } | { project: string }, context: Context) {
+    if ("project" in target) {
+      const path = await this.harness.commit(
+        async (tx) => (await projectIn(tx, this.root, target.project)).path,
+        context,
+      );
+      return this.git.branches(path);
+    }
     try {
-      return await this.git.branches(await this.conversations.cwdFor(id, context));
+      return await this.git.branches(await this.conversations.cwdFor(target.conversation, context));
     } finally {
-      this.changes.refresh(id);
+      this.changes.refresh(target.conversation);
     }
   }
 

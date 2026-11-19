@@ -83,6 +83,14 @@ async function config(cwd: string, key: string) {
   return (await optionalGit(cwd, ["config", "--get", key]))?.slice(0, -1);
 }
 
+async function defaultWorktreeBase(root: string, current?: Promise<string | null>) {
+  const target = await optionalGit(root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+  const origin = target?.slice(0, -1);
+  if (origin && (await optionalGit(root, ["rev-parse", "--verify", "--quiet", `${origin}^{commit}`]))) return origin;
+  const branch = await (current ?? currentBranch(root));
+  return branch === null ? null : `refs/heads/${branch}`;
+}
+
 export class Git {
   readonly #refNamespace: string;
 
@@ -153,15 +161,9 @@ export class Git {
         throw new Error("Invalid base ref");
       }
     } else {
-      const target = await optionalGit(root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
-      const origin = target?.slice(0, -1);
-      if (origin && (await optionalGit(root, ["rev-parse", "--verify", "--quiet", `${origin}^{commit}`]))) {
-        requested = origin;
-      } else {
-        const branch = await currentBranch(root);
-        if (branch === null) throw new Error("No default or current branch; specify a worktree base");
-        requested = `refs/heads/${branch}`;
-      }
+      const ref = await defaultWorktreeBase(root);
+      if (ref === null) throw new Error("No default or current branch; specify a worktree base");
+      requested = ref;
     }
     const commit = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${requested}^{commit}`])).trimEnd();
     const ref =
@@ -329,15 +331,19 @@ export class Git {
     return diffTrees(root, from, to, spec.path);
   }
 
-  async branches(cwd: string): Promise<Result<"git.branches">> {
-    const root = await repositoryRoot(cwd);
-    const [current, names] = await Promise.all([
-      optionalGit(root, ["symbolic-ref", "--quiet", "HEAD"]),
+  async branches(cwd: string): Promise<Result<"git.branches"> | null> {
+    const root = await this.root(cwd);
+    if (root === null) return null;
+    const head = currentBranch(root);
+    const [current, names, base] = await Promise.all([
+      head,
       git(root, ["for-each-ref", "--format=%(refname:lstrip=2)", "refs/heads/"]),
+      defaultWorktreeBase(root, head),
     ]);
     return {
-      current: current?.slice("refs/heads/".length, -1) ?? null,
+      current,
       branches: names.split("\n").filter(Boolean),
+      defaultBase: base?.replace(/^refs\/(?:(?:heads|remotes|tags)\/)?/, "") ?? null,
     };
   }
 

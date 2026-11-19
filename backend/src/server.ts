@@ -197,8 +197,13 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     }),
     "git.diff": async (_ws, { conversation: id, ...params }) =>
       viz.repositories.diff((await conversation(id)).id, params, context),
-    "git.branches": async (_ws, { conversation: id }) =>
-      viz.repositories.branches((await conversation(id)).id, context),
+    "git.branches": async (_ws, target) => {
+      const selected =
+        "conversation" in target ? { conversation: (await conversation(target.conversation)).id } : target;
+      const branches = await viz.repositories.branches(selected, context);
+      if (branches === null) throw new RpcError(ErrorCode.NotARepository, "Not a Git repository");
+      return branches;
+    },
     "git.checkout": async (_ws, { conversation: id, branch, create }) => {
       await viz.repositories.checkout((await conversation(id)).id, branch, create, context);
       return {};

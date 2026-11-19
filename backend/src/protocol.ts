@@ -319,8 +319,12 @@ export const Methods = {
     }),
   },
   "git.branches": {
-    params: ConversationTarget,
-    result: obj({ current: nullable(str()), branches: arr(str()) }),
+    params: union([ConversationTarget, obj({ project: ProjectId })]),
+    result: obj({
+      current: nullable(str()),
+      branches: arr(str()),
+      defaultBase: nullable(str({ description: "Short name of the default worktree base ref, or null if none" })),
+    }),
   },
   "git.checkout": {
     params: obj({ conversation: ConversationId, branch: str({ minLength: 1 }), create: opt(bool()) }),
@@ -386,4 +390,5 @@ export const ErrorCode = {
   Internal: -32603,
   NotHello: -32000,
   NotFound: -32001,
+  NotARepository: -32002,
 } as const;
