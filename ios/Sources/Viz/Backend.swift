@@ -51,6 +51,9 @@ enum VizProtocol {
     let status: Status
     let archived: Bool
     let updatedAt: Int64
+    let unread: Bool
+    let pinned: Bool
+    let worktree: String?
   }
 
   enum OptionValue {
@@ -63,6 +66,23 @@ enum VizProtocol {
       case .bool(let value): value
       }
     }
+  }
+
+  struct Worktree {
+    let branch: String
+    let base: String?
+  }
+
+  struct SearchHit: Decodable, Identifiable {
+    let conversation: Int
+    let entry: Int
+    let snippet: String
+
+    var id: Int { entry }
+  }
+
+  struct SearchResults: Decodable {
+    let hits: [SearchHit]
   }
 
   struct Projects: Decodable {
@@ -148,14 +168,42 @@ final class Backend {
   func create(
     project: String? = nil,
     harness: String? = nil,
-    options: [String: VizProtocol.OptionValue]? = nil
+    options: [String: VizProtocol.OptionValue]? = nil,
+    worktree: VizProtocol.Worktree? = nil
   ) async throws -> Int {
     var params: [String: Any] = [:]
     if let project { params["project"] = project }
     if let harness { params["harness"] = harness }
     if let options { params["options"] = options.mapValues(\.json) }
+    if let worktree {
+      var value = ["branch": worktree.branch]
+      if let base = worktree.base { value["base"] = base }
+      params["worktree"] = value
+    }
     let data = try await call("conversation.create", params: params)
     return try JSONDecoder().decode(VizProtocol.Created.self, from: data).conversation
+  }
+
+  func update(
+    conversation: Int,
+    title: String? = nil,
+    archived: Bool? = nil,
+    pinned: Bool? = nil,
+    unread: Bool? = nil
+  ) async throws {
+    var params: [String: Any] = ["conversation": conversation]
+    if let title { params["title"] = title }
+    if let archived { params["archived"] = archived }
+    if let pinned { params["pinned"] = pinned }
+    if let unread { params["unread"] = unread }
+    _ = try await call("conversation.update", params: params)
+  }
+
+  func search(query: String, limit: Int? = nil) async throws -> [VizProtocol.SearchHit] {
+    var params: [String: Any] = ["query": query]
+    if let limit { params["limit"] = limit }
+    let data = try await call("conversations.search", params: params)
+    return try JSONDecoder().decode(VizProtocol.SearchResults.self, from: data).hits
   }
 
   func abort(conversation: Int) async throws {
