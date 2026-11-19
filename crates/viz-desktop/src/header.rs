@@ -41,6 +41,20 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
     if let Some(agents) = agents(s, t, layer) {
         toolbar = toolbar.trailing(agents);
     }
+    if s.worktree().is_some() && s.project().is_some() {
+        toolbar = toolbar.trailing(
+            ui::icon_button(
+                &ui::COMPOSE,
+                "New chat in this worktree",
+                IconButtonVariant::GhostMuted,
+                Size::Default,
+            )
+            .disabled(!s.connected())
+            .on_press_tx(Desktop::create_in_worktree)
+            .build(&t.k)
+            .key("new-chat-in-worktree"),
+        );
+    }
     let open = s.changes.pane.is_open();
     toolbar.trailing(metadata(s, t)).trailing(
         ui::icon_button(
@@ -323,7 +337,9 @@ fn metadata(s: &Desktop, t: &Theme) -> El {
     if let Some(project) = project {
         metadata = metadata.child(quiet("header-project", &project.name, t).help(&project.path));
     }
-    if let Some(branch) = s.branch() {
+    if s.new_chat.is_none()
+        && let Some(branch) = s.branch()
+    {
         let mut item = row()
             .key("header-branch")
             .center_y()

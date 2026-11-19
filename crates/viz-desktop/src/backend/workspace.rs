@@ -159,11 +159,11 @@ pub(super) fn notify(title: &str, body: &'static str) {
     });
 }
 
-pub(super) fn attach(ui: &AppHandle<Desktop>, conversation: ConversationId, source: Source) {
+pub(super) fn attach(ui: &AppHandle<Desktop>, target: crate::attachments::Target, source: Source) {
     let ui = ui.clone();
     tokio::task::spawn_blocking(move || {
         let loaded = source.load();
-        ui.update(move |s, tx| s.loaded_attachments(conversation, loaded, tx));
+        ui.update(move |s, tx| s.loaded_attachments(target, loaded, tx));
     });
 }
 
@@ -219,7 +219,7 @@ async fn git_request(ui: &AppHandle<Desktop>, client: &Client, request: Request)
         }
         Request::Branches(conversation) => {
             let result = client
-                .git_branches(conversation)
+                .git_branches(viz_client::protocol::GitBranches::Conversation { conversation })
                 .await
                 .map_err(|error| error.to_string());
             selected_update(ui, conversation, move |s, _| s.changes.set_branches(result));

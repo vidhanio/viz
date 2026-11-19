@@ -29,9 +29,9 @@ use crate::{
         ConversationId, ConversationSummary, CreateConversation, CreateProject, DeleteConversation,
         DiffFile, EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff, GitPr, GitPush,
         GitRevert, Harness, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses,
-        ListProjects, Method, Notification, PROTOCOL_VERSION, PrResult, Project, RemoveProject,
-        RemoveQueuedInput, SearchConversations, SearchFiles, SearchHit, SubmissionId, Submit,
-        Unwatch, UpdateConversation, UpdateProject, Watch,
+        ListProjects, ListWorktrees, ManagedWorktree, Method, Notification, PROTOCOL_VERSION,
+        PrResult, Project, RemoveProject, RemoveQueuedInput, SearchConversations, SearchFiles,
+        SearchHit, SubmissionId, Submit, Unwatch, UpdateConversation, UpdateProject, Watch,
     },
 };
 
@@ -211,7 +211,7 @@ impl Client {
         Ok(self.request(params).await?.project)
     }
 
-    /// Renames a project.
+    /// Updates a project's name or default workspace.
     ///
     /// # Errors
     ///
@@ -227,6 +227,14 @@ impl Client {
     /// See [`Client::submit`].
     pub async fn remove_project(&self, params: &RemoveProject<'_>) -> Result<()> {
         self.request(params).await.map(drop)
+    }
+
+    /// Lists managed worktrees available to reuse in a project.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn list_worktrees(&self, project: &str) -> Result<Vec<ManagedWorktree>> {
+        Ok(self.request(&ListWorktrees { project }).await?.worktrees)
     }
 
     /// Lists configured ACP runners.
@@ -286,8 +294,8 @@ impl Client {
     ///
     /// # Errors
     /// See [`Client::submit`].
-    pub async fn git_branches(&self, conversation: ConversationId) -> Result<Branches> {
-        self.request(&GitBranches { conversation }).await
+    pub async fn git_branches(&self, target: GitBranches<'_>) -> Result<Branches> {
+        self.request(&target).await
     }
 
     /// Switches branches or creates and checks out a new branch.

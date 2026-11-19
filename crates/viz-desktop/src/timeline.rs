@@ -390,15 +390,19 @@ fn chat_hint(s: &Desktop, t: &Theme) -> El {
     let title = s
         .project()
         .map_or("New chat", |project| project.name.as_str());
-    let status = s.new_chat.as_ref().and_then(|chat| {
-        if chat.request.is_some() {
-            Some("Opening session…")
-        } else {
-            (s.harnesses.len() > 1).then_some("Choose a harness below")
-        }
+    let choose_harness = s.new_chat.as_ref().is_some_and(|chat| {
+        !chat.sending
+            && chat.harness.is_none()
+            && s.harnesses.len() > 1
+            && s.harnesses.iter().all(|harness| !harness.default)
     });
-    let mut hint = ui::empty(None, title, status.unwrap_or_default(), None, t);
-    if status.is_none()
+    let status = if choose_harness {
+        "Choose a harness below"
+    } else {
+        ""
+    };
+    let mut hint = ui::empty(None, title, status, None, t);
+    if s.new_chat.is_none()
         && let Some(branch) = s.branch()
     {
         hint = hint.child(

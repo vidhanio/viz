@@ -13,16 +13,16 @@ use viz_client::{
     Client, Connection, Endpoint, Error, delta,
     protocol::{
         ClientInfo, ClientKind, ConfigureConversation, ConversationId, CreateConversation,
-        CreateProject, EntryId, Notification, OptionValue, RemoveProject, RemoveQueuedInput,
-        Revision, SearchFiles, SubmissionId, Submit, UpdateConversation, UpdateProject,
-        ViewRevision,
+        CreateProject, DefaultWorkspace, EntryId, GitBranches, Notification, OptionValue,
+        RemoveProject, RemoveQueuedInput, Revision, SearchFiles, SubmissionId, Submit,
+        UpdateConversation, UpdateProject, ViewRevision, Workspace,
     },
 };
 
 use self::workspace::History;
 use crate::{
     app::{Desktop, Status},
-    attachments::Source,
+    attachments::{Source, Target as AttachmentTarget},
     changes::Request as GitRequest,
     thread::Thread,
 };
@@ -30,16 +30,22 @@ use crate::{
 /// How long to wait between connection attempts.
 const RETRY: Duration = Duration::from_secs(3);
 const NOT_FOUND: i64 = -32001;
+const NOT_A_REPOSITORY: i64 = -32002;
 
 /// What the UI asks of the backend.
 #[derive(Debug)]
 pub enum Command {
     /// Watch this conversation instead.
     Select(ConversationId),
-    /// Bind the fresh composer to a new conversation.
+    /// Bind and send the first input of the fresh composer.
     Create {
-        request: u64,
+        draft: u64,
         params: CreateConversation,
+        submit: Submit,
+    },
+    LoadDraft {
+        id: u64,
+        project: Option<String>,
     },
     Update(ConversationId, ChatChange),
     Delete(ConversationId),
@@ -69,7 +75,7 @@ pub enum Command {
     },
     Git(GitRequest),
     Attach {
-        conversation: ConversationId,
+        target: AttachmentTarget,
         source: Source,
     },
     /// Submit an input, including any locally prepared attachments.
@@ -96,6 +102,7 @@ pub enum ChatChange {
 pub enum ProjectChange {
     Add(String),
     Rename { id: String, name: String },
+    DefaultWorkspace { id: String, value: DefaultWorkspace },
     Remove(String),
 }
 
@@ -209,11 +216,14 @@ fn offline(
 ) -> bool {
     match command {
         Command::Select(conversation) => *selected = Some(conversation),
-        Command::Create { request, .. } => {
+        Command::Create { draft, submit, .. } => {
             ui.update(move |s, tx| {
-                s.created(request, None, tx);
+                s.restore_first_message(draft, submit);
                 s.toast(tx, "Offline", None);
             });
+        }
+        Command::LoadDraft { id, .. } => {
+            ui.update(move |s, _| s.set_draft_workspace(id, None, Vec::new()));
         }
         Command::Submit(submit) => {
             ui.update(move |s, tx| {
@@ -228,10 +238,7 @@ fn offline(
         Command::LoadEarlier { conversation, .. } => {
             ui.update(move |s, tx| s.loaded_earlier(conversation, None, tx));
         }
-        Command::Attach {
-            conversation,
-            source,
-        } => workspace::attach(ui, conversation, source),
+        Command::Attach { target, source } => workspace::attach(ui, target, source),
         Command::Notify { title, body } => workspace::notify(&title, body),
         Command::Git(request) => workspace::git_offline(ui, &request),
         Command::Reconnect => return false,
@@ -345,11 +352,27 @@ impl Session<'_> {
                 *selected = Some(conversation);
                 self.switch(conversation).await
             }
-            Command::Create { request, params } => {
-                let result = self.client.create_conversation(&params).await;
-                let id = result.as_ref().ok().copied();
-                self.ui.update(move |s, tx| s.created(request, id, tx));
-                result.map(drop)
+            Command::Create {
+                draft,
+                params,
+                mut submit,
+            } => {
+                let conversation = match self.client.create_conversation(&params).await {
+                    Ok(id) => id,
+                    Err(error) => {
+                        self.ui
+                            .update(move |s, _| s.restore_first_message(draft, submit));
+                        return Err(error);
+                    }
+                };
+                self.ui
+                    .update(move |s, tx| s.created(draft, conversation, tx));
+                submit.conversation = Some(conversation);
+                self.submit(submit).await
+            }
+            Command::LoadDraft { id, project } => {
+                self.load_draft(id, project);
+                Ok(())
             }
             Command::Update(conversation, change) => self.update_chat(conversation, &change).await,
             Command::Delete(conversation) => {
@@ -409,23 +432,72 @@ impl Session<'_> {
                 workspace::notify(&title, body);
                 Ok(())
             }
-            Command::Attach {
-                conversation,
-                source,
-            } => {
-                workspace::attach(self.ui, conversation, source);
+            Command::Attach { target, source } => {
+                workspace::attach(self.ui, target, source);
                 Ok(())
             }
-            Command::Submit(submit) => {
-                let result = self.client.submit(&submit).await;
-                if result.is_err() {
-                    self.ui.update(move |s, _| s.restore_message(submit));
-                }
-                result.map(drop)
-            }
+            Command::Submit(submit) => self.submit(submit).await,
             // Already connected.
             Command::Reconnect => Ok(()),
         }
+    }
+
+    async fn submit(&self, submit: Submit) -> viz_client::Result<()> {
+        let result = self.client.submit(&submit).await;
+        if result.is_err() {
+            self.ui.update(move |s, _| s.restore_message(submit));
+        }
+        result.map(drop)
+    }
+
+    fn load_draft(&self, id: u64, project: Option<String>) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let workspace = async {
+                let Some(project) = project.as_deref() else {
+                    return (None, Ok(Vec::new()));
+                };
+                let branches = client.git_branches(GitBranches::Project { project }).await;
+                let worktrees = if branches.is_ok() {
+                    client.list_worktrees(project).await
+                } else {
+                    Ok(Vec::new())
+                };
+                (Some(branches), worktrees)
+            };
+            let ((branches, worktrees), harnesses) =
+                tokio::join!(workspace, client.list_harnesses());
+            ui.update(move |s, tx| {
+                let Some(chat) = s.new_chat.as_mut().filter(|chat| chat.id == id) else {
+                    return;
+                };
+                let branches = match branches {
+                    Some(Ok(branches)) => Some(branches),
+                    Some(Err(Error::Rpc {
+                        code: NOT_A_REPOSITORY,
+                        ..
+                    })) => {
+                        chat.workspace = Workspace::Local;
+                        None
+                    }
+                    Some(Err(error)) => {
+                        s.toast(tx, "Couldn't load branches", Some(error.to_string()));
+                        None
+                    }
+                    None => None,
+                };
+                let worktrees = worktrees.unwrap_or_else(|error| {
+                    s.toast(tx, "Couldn't load worktrees", Some(error.to_string()));
+                    Vec::new()
+                });
+                match harnesses {
+                    Ok(harnesses) => s.harnesses = harnesses,
+                    Err(error) => s.toast(tx, "Couldn't load harnesses", Some(error.to_string())),
+                }
+                s.set_draft_workspace(id, branches, worktrees);
+            });
+        });
     }
 
     async fn update_chat(
@@ -542,7 +614,20 @@ impl Session<'_> {
                 .map(drop),
             ProjectChange::Rename { id, name } => self
                 .client
-                .update_project(&UpdateProject { project: id, name })
+                .update_project(&UpdateProject {
+                    project: id,
+                    name: Some(name),
+                    default_workspace: None,
+                })
+                .await
+                .map(drop),
+            ProjectChange::DefaultWorkspace { id, value } => self
+                .client
+                .update_project(&UpdateProject {
+                    project: id,
+                    name: None,
+                    default_workspace: Some(*value),
+                })
                 .await
                 .map(drop),
             ProjectChange::Remove(id) => {

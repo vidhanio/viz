@@ -3,7 +3,6 @@
 //! Subagents live in their parent chat, not here.
 
 mod actions;
-mod worktree;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -57,7 +56,6 @@ pub struct Navigation {
     menu: Option<actions::Context>,
     edit: Option<actions::Edit>,
     value: TextEdit,
-    worktree: worktree::Form,
     /// Where the mode and collapsed projects persist, once restored from it.
     store: Option<PathBuf>,
 }
@@ -72,7 +70,6 @@ impl Default for Navigation {
             menu: None,
             edit: None,
             value: TextEdit::new(""),
-            worktree: worktree::Form::default(),
             store: None,
         }
     }
@@ -273,7 +270,7 @@ impl<'a> Outline<'a> {
     }
 
     /// A top-level chat's row. With `detail`, a quiet second line names its
-    /// project and worktree.
+    /// project and branch.
     fn chat(
         &self,
         chat: &ConversationSummary,
@@ -296,26 +293,20 @@ impl<'a> Outline<'a> {
             })
         });
         let menu = actions::chat_menu(s, chat, &key, t, layer);
-        let worktree = chat.worktree.as_deref().map(|path| {
-            std::path::Path::new(path)
-                .file_name()
-                .map_or_else(|| path.into(), |name| name.to_string_lossy())
-        });
         let place = detail.then(|| {
             let project = chat
                 .project
                 .as_deref()
                 .and_then(|id| s.projects.iter().find(|p| p.id == id))
                 .map(|project| project.name.as_str());
-            match (project, &worktree) {
-                (Some(project), Some(worktree)) => format!("{project} · {worktree}"),
+            match (project, chat.branch.as_deref()) {
+                (Some(project), Some(branch)) => format!("{project} · {branch}"),
                 (Some(project), None) => project.to_owned(),
-                (None, Some(worktree)) => worktree.to_string(),
+                (None, Some(branch)) => branch.to_owned(),
                 (None, None) => "No project".to_owned(),
             }
         });
-        // On one-line rows a worktree shows as a mark.
-        let marker = chat.worktree.as_ref().filter(|_| !detail).map(|path| {
+        let marker = chat.worktree.as_ref().map(|path| {
             icon(&ui::GIT_BRANCH, ICON_SMALL)
                 .key("worktree")
                 .color(t.faint)
@@ -450,7 +441,6 @@ pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// Mounts sidebar dialogs independently of whether the sidebar is visible.
 pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     actions::dialog(s, t, layer);
-    worktree::dialog(s, t, layer);
 }
 
 /// Opens the add-project dialog from the sidebar or palette.
@@ -461,20 +451,6 @@ pub fn open_add_project(s: &mut Desktop, tx: &mut Tx) {
 /// Opens the confirmation for deleting a chat from the command palette.
 pub fn open_delete_chat(s: &mut Desktop, id: ConversationId, tx: &mut Tx) {
     actions::delete_chat(s, id, tx);
-}
-
-/// Opens the worktree dialog for the current project, if it has a Git branch.
-pub fn open_worktree(s: &mut Desktop, tx: &mut Tx) {
-    if let Some(id) = s.project_id().map(str::to_owned) {
-        worktree::open(s, &id, tx);
-    }
-}
-
-/// Shows the worktree form for the current project's preview scene.
-pub fn preview_worktree(s: &mut Desktop) {
-    if let Some(form) = s.project().and_then(worktree::Form::for_project) {
-        s.navigation.worktree = form;
-    }
 }
 
 /// Shows the delete confirmation for `id` in a preview scene.

@@ -95,6 +95,8 @@ pub const DIALOG_WIDTH: f32 = 400.0;
 /// Floating cards anchored to a control: the Agents card.
 pub const CARD_WIDTH: f32 = 320.0;
 pub const PALETTE_WIDTH: f32 = 560.0;
+/// Wide enough to show a previous-worktree label and a typical branch together.
+pub const WORKSPACE_MENU_WIDTH: f32 = 280.0;
 /// Empty states sit this far down the transcript.
 pub const EMPTY_TOP: f32 = S32 * 4.0;
 /// Empty states' text measure.
@@ -201,12 +203,21 @@ pub struct Theme {
 #[serde(transparent)]
 pub struct ThemeConfig(toml::Table);
 
-static THEMES: OnceLock<[Theme; 2]> = OnceLock::new();
+static THEMES: OnceLock<(Theme, Option<Theme>)> = OnceLock::new();
 
 /// Builds both appearances from `config`, once, before the window opens. A
 /// side that fails gets its default scheme; the returned message says what
 /// was wrong, for a toast.
-pub fn install(config: &ThemeConfig) -> Option<String> {
+pub fn install(config: &ThemeConfig, scene_theme: Option<&str>) -> Option<String> {
+    if let Some(name) = scene_theme {
+        match Scheme::builtin(name) {
+            Ok(scheme) => {
+                _ = THEMES.set((Theme::new(&scheme), None));
+                return None;
+            }
+            Err(error) => return Some(format!("VIZ_SCENE_THEME: {error}")),
+        }
+    }
     let mut errors: Vec<_> = config
         .0
         .keys()
@@ -223,8 +234,8 @@ pub fn install(config: &ThemeConfig) -> Option<String> {
                 builtin(default)
             })
     };
-    let themes = [side("dark", DEFAULT_DARK), side("light", DEFAULT_LIGHT)].map(|s| Theme::new(&s));
-    _ = THEMES.set(themes);
+    let [dark, light] = [side("dark", DEFAULT_DARK), side("light", DEFAULT_LIGHT)];
+    _ = THEMES.set((Theme::new(&dark), Some(Theme::new(&light))));
     (!errors.is_empty()).then(|| errors.join("\n"))
 }
 
@@ -325,9 +336,17 @@ impl Theme {
     /// The theme for the window's appearance: the scheme [`install`] picked,
     /// or the default.
     pub fn get(dark: bool) -> &'static Self {
-        let [night, day] = THEMES
-            .get_or_init(|| [builtin(DEFAULT_DARK), builtin(DEFAULT_LIGHT)].map(|s| Self::new(&s)));
-        if dark { night } else { day }
+        let (night, day) = THEMES.get_or_init(|| {
+            (
+                Self::new(&builtin(DEFAULT_DARK)),
+                Some(Self::new(&builtin(DEFAULT_LIGHT))),
+            )
+        });
+        if dark {
+            night
+        } else {
+            day.as_ref().unwrap_or(night)
+        }
     }
 
     /// Every color from `scheme`'s base16 roles:
@@ -336,7 +355,7 @@ impl Theme {
     /// |---|---|
     /// | `base00` | `bg`, the main pane |
     /// | `base01` | `surface`: the sidebar, cards, code |
-    /// | `base02` | washes: `hover`, `selected`, `mine` |
+    /// | `base02` | `mine`; mixed with `base05` for interactive washes |
     /// | `base03` | `faint` |
     /// | `base04` | `muted` |
     /// | `base05` | `text`; hairlines are it at low alpha |
@@ -350,9 +369,8 @@ impl Theme {
     /// | `base0E` | keywords |
     /// | `base0F` | (unused) |
     ///
-    /// Text and status colors are lifted to a contrast floor on `bg` and
-    /// `surface` (see [`legible`]): text and muted 4.5, faint 3.5, the accent
-    /// 3, status and code colors 4.5.
+    /// Text and statuses meet contrast floors on both backgrounds and the
+    /// selected wash; code also accounts for tinted diff lines.
     #[expect(
         clippy::too_many_lines,
         reason = "the scheme's roles, then each kit token they set"
@@ -361,15 +379,30 @@ impl Theme {
         let b = scheme.base;
         let (bg, surface, wash) = (b[0x0], b[0x1], b[0x2]);
         let dark = b[0x5].luminance() > bg.luminance();
-        let surfaces = [bg, surface];
+        let interactive = wash.mix(b[0x5], 0.35);
+        // A wash must remain visible on the sidebar as well as the main pane.
+        let tint = |step: f32| {
+            interactive.alpha(reach(bg, interactive, step).max(reach(surface, interactive, step)))
+        };
+        let hover = tint(0.026);
+        let pressed = tint(0.040);
+        let selected = tint(0.055);
+        let raised = bg.mix(wash, reach(bg, wash, 0.05));
+        let surfaces = [
+            bg,
+            surface,
+            raised,
+            bg.mix(interactive, selected.a),
+            surface.mix(interactive, selected.a),
+        ];
         let legible = |c: Color, min: f32| legible(c, &surfaces, dark, min);
         let by_luminance = |x: &Color, y: &Color| x.luminance().total_cmp(&y.luminance());
         let lightest = b[..8].iter().copied().max_by(by_luminance).unwrap_or(bg);
         let darkest = b[..8].iter().copied().min_by(by_luminance).unwrap_or(bg);
-        let text = legible(b[0x5], 4.5);
-        let strong = legible(b[0x6], 4.5);
-        let muted = legible(b[0x4], 4.5);
-        let faint = legible(b[0x3], 3.5);
+        let text = legible(b[0x5], 5.5);
+        let strong = legible(b[0x6], 5.5);
+        let muted = legible(b[0x4], 5.2);
+        let faint = legible(b[0x3], 4.5);
         let accent = legible(b[0xD], 3.0);
         let on_accent = [bg, b[0x7], lightest, darkest]
             .into_iter()
@@ -381,7 +414,6 @@ impl Theme {
             legible(b[0xB], 4.5),
             legible(b[0xC], 4.5),
         );
-        let raised = bg.mix(wash, reach(bg, wash, 0.05));
         let mut k = Kit::from_palette_focus(
             PaletteSeed {
                 bg,
@@ -393,10 +425,6 @@ impl Theme {
         let ink = |a: f32| k.alpha(text, a);
         let hairline = ink(if dark { 0.11 } else { 0.12 });
         let rule = ink(if dark { 0.15 } else { 0.17 });
-        let tint = |step: f32| k.alpha(wash, reach(bg, wash, step));
-        let hover = tint(0.025);
-        let pressed = tint(0.035);
-        let selected = tint(0.045);
         let state = |fg: Color| StateColors {
             bg: surface.mix(fg, 0.12),
             fg,
@@ -474,25 +502,40 @@ impl Theme {
             std_icon_strong: strong,
             std_text: muted,
         };
-        let code = |c: Color| legible(c, 4.5);
+        // rune-kit uses Oklab tints for diff words; they are the closest
+        // those backgrounds get to the syntax ink. Use the stronger tint for
+        // both appearances to leave a margin on the lighter diff washes.
+        let bg_lab = bg.to_oklab();
+        let diff_word = |ink: Color| {
+            let lab = ink.to_oklab();
+            Color::from_oklab(std::array::from_fn(|i| {
+                (lab[i] - bg_lab[i]).mul_add(0.32, bg_lab[i])
+            }))
+        };
+        let syntax_surfaces = [bg, surface, diff_word(success), diff_word(danger)];
+        let code = |ink: Color| crate::theme::legible(ink, &syntax_surfaces, dark, 4.5);
+        let blue = code(b[0xD]);
+        let orange = code(b[0x9]);
+        let neutral = code(text);
+        let punctuation = code(muted);
         let syntax = [
             (Syntax::Keyword, code(b[0xE])),
             (Syntax::String, code(b[0xB])),
-            (Syntax::Number, code(b[0x9])),
-            (Syntax::Comment, faint),
+            (Syntax::Number, orange),
+            (Syntax::Comment, code(faint)),
             (Syntax::Type, code(b[0xA])),
-            (Syntax::Function, code(b[0xD])),
+            (Syntax::Function, blue),
             (Syntax::Property, code(b[0x8])),
-            (Syntax::Punctuation, muted),
-            (Syntax::Inserted, success),
-            (Syntax::Deleted, danger),
-            (Syntax::Parameter, text),
-            (Syntax::Heading, code(b[0xD])),
-            (Syntax::Link, code(b[0xD])),
-            (Syntax::Operator, muted),
+            (Syntax::Punctuation, punctuation),
+            (Syntax::Inserted, code(success)),
+            (Syntax::Deleted, code(danger)),
+            (Syntax::Parameter, neutral),
+            (Syntax::Heading, blue),
+            (Syntax::Link, blue),
+            (Syntax::Operator, punctuation),
             (Syntax::Regex, code(b[0xC])),
-            (Syntax::Attribute, code(b[0x9])),
-            (Syntax::Variable, text),
+            (Syntax::Attribute, orange),
+            (Syntax::Variable, neutral),
         ]
         .into_iter()
         .fold(SyntaxTheme::from_kit(&k), |theme, (kind, c)| {

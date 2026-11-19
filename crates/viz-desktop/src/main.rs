@@ -201,6 +201,10 @@ fn main() {
     let tooling = rune::tooling::Args::parse_from(rune_args.clone());
     let headless = tooling.headless();
     let preview = headless && tooling.scene.is_some();
+    let scene_theme = preview
+        .then(|| std::env::var("VIZ_SCENE_THEME").ok())
+        .flatten();
+    let headless_dark = headless.then_some(tooling.theme.as_deref() != Some("light"));
     let (theme_error, endpoint) = match viz_config::load::<DesktopConfig>(&file) {
         Ok(config) => {
             let endpoint = Paths::from_env()
@@ -208,10 +212,13 @@ fn main() {
                 .and_then(|paths| {
                     Endpoint::from_connection(&config.backend, &paths).map_err(|e| e.to_string())
                 });
-            (theme::install(&config.theme), endpoint)
+            (
+                theme::install(&config.theme, scene_theme.as_deref()),
+                endpoint,
+            )
         }
         Err(error) => {
-            let _ = theme::install(&DesktopConfig::default().theme);
+            let _ = theme::install(&DesktopConfig::default().theme, scene_theme.as_deref());
             let detail = error.to_string();
             (Some(detail.clone()), Err(detail))
         }
@@ -240,6 +247,10 @@ fn main() {
     .init(move || {
         let mut desktop = Desktop::new(commands);
         desktop.navigation.restore();
+        // Offscreen snapshots can draw only once, before the frame callback.
+        if let Some(dark) = headless_dark {
+            desktop.changes.set_dark(dark);
+        }
         desktop
     })
     .on_focus(Desktop::set_focus);

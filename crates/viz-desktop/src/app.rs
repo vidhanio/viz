@@ -2,7 +2,7 @@
 //! it in through the app handle; the views only read it.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     mem,
     time::Duration,
 };
@@ -11,12 +11,13 @@ use rune::{TextEdit, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, ConversationId, ConversationKind, ConversationState, ConversationStatus,
-    ConversationSummary, CreateConversation, Harness, Project, Submit, Worktree,
+    Attachment, Branches, ConversationId, ConversationKind, ConversationState, ConversationStatus,
+    ConversationSummary, CreateConversation, DefaultWorkspace, Harness, ManagedWorktree,
+    OptionValue, Project, Submit, Workspace,
 };
 
 use crate::{
-    attachments::{self, Loaded, Source},
+    attachments::{self, Loaded, Source, Target as AttachmentTarget},
     backend::{ChatChange, Command},
     changes::{self, Changes},
     composer::Completion,
@@ -59,12 +60,47 @@ pub struct Toast {
     due: f64,
 }
 
-/// A fresh composer while the ACP runner is being chosen or bound.
+/// A local draft. No ACP session is open until its first send.
 #[derive(Debug)]
 pub struct NewChat {
+    pub id: u64,
     pub project: Option<String>,
-    worktree: Option<Worktree>,
-    pub request: Option<u64>,
+    pub workspace: Workspace,
+    pub branches: Option<Branches>,
+    pub worktrees: Vec<ManagedWorktree>,
+    pub harness: Option<String>,
+    pub options: BTreeMap<String, OptionValue>,
+    pub sending: bool,
+    loading_choices: bool,
+}
+
+impl NewChat {
+    pub fn new(id: u64, project: Option<&Project>, workspace: Option<Workspace>) -> Self {
+        Self {
+            id,
+            project: project.map(|project| project.id.clone()),
+            workspace: workspace.unwrap_or_else(|| {
+                match project.map(|project| project.default_workspace) {
+                    Some(DefaultWorkspace::Worktree) => Workspace::Worktree { base: None },
+                    _ => Workspace::Local,
+                }
+            }),
+            branches: None,
+            worktrees: Vec::new(),
+            harness: None,
+            options: BTreeMap::new(),
+            sending: false,
+            loading_choices: false,
+        }
+    }
+
+    pub fn active_harness<'a>(&self, runners: &'a [Harness]) -> Option<&'a Harness> {
+        runners.iter().find(|runner| {
+            self.harness
+                .as_deref()
+                .map_or(runner.default, |name| name == runner.name)
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -103,13 +139,13 @@ pub struct Desktop {
     pub history_loading: bool,
     pub conversation: Option<ConversationState>,
     pub new_chat: Option<NewChat>,
-    next_create: u64,
+    next_draft: u64,
     /// Timeline rows the user opened (tool calls, thinking), by key.
     pub expanded: HashSet<String>,
     /// The composer's text.
     pub draft: TextEdit,
     pub attachments: Vec<Attachment>,
-    attachment_reads: HashSet<ConversationId>,
+    attachment_reads: HashSet<AttachmentTarget>,
     drafts: HashMap<ConversationId, Draft>,
     pub completion: Completion,
     pub open_picker: Option<String>,
@@ -150,7 +186,7 @@ impl Desktop {
             history_loading: false,
             conversation: None,
             new_chat: None,
-            next_create: 0,
+            next_draft: 0,
             expanded: HashSet::new(),
             draft,
             attachments: Vec::new(),
@@ -414,78 +450,79 @@ impl Desktop {
 
     /// Prepares a chat in the current project.
     pub fn create_here(&mut self, tx: &mut Tx) {
-        self.create(self.project_id().map(str::to_owned), tx);
+        let chat = NewChat::new(self.next_draft, self.project(), None);
+        self.prepare_chat(chat, tx);
     }
 
-    /// Prepares a chat; select a runner before committing to a session.
-    pub fn create(&mut self, project: Option<String>, tx: &mut Tx) {
-        self.prepare_chat(project, None, tx);
+    /// Open a draft for a project without creating its backend session.
+    pub fn create_in_project(&mut self, id: &str, tx: &mut Tx) {
+        if let Some(project) = self.projects.iter().find(|project| project.id == id) {
+            let chat = NewChat::new(self.next_draft, Some(project), None);
+            self.prepare_chat(chat, tx);
+        }
     }
 
-    pub fn create_worktree(&mut self, project: String, worktree: Worktree, tx: &mut Tx) {
-        self.prepare_chat(Some(project), Some(worktree), tx);
+    pub fn create_in_worktree(&mut self, tx: &mut Tx) {
+        let Some((project, (path, _))) = self.project().zip(self.worktree()) else {
+            return;
+        };
+        let workspace = Workspace::Existing {
+            path: path.to_owned(),
+        };
+        let chat = NewChat::new(self.next_draft, Some(project), Some(workspace));
+        self.prepare_chat(chat, tx);
     }
 
-    fn prepare_chat(&mut self, project: Option<String>, worktree: Option<Worktree>, tx: &mut Tx) {
+    fn prepare_chat(&mut self, mut chat: NewChat, tx: &mut Tx) {
         if !self.connected() || self.new_chat.is_some() {
             return;
         }
+        self.next_draft += 1;
+        chat.loading_choices = self.send(
+            Command::LoadDraft {
+                id: chat.id,
+                project: chat.project.clone(),
+            },
+            tx,
+        );
         self.save_draft();
         self.reset_thread();
-        self.new_chat = Some(NewChat {
-            project,
-            worktree,
-            request: None,
-        });
+        self.new_chat = Some(chat);
         self.update_title(tx);
         tx.focus("draft", false);
-        if self.harnesses.len() == 1 {
-            self.bind_harness(None, tx);
+    }
+
+    pub fn set_draft_workspace(
+        &mut self,
+        id: u64,
+        branches: Option<Branches>,
+        worktrees: Vec<ManagedWorktree>,
+    ) {
+        if let Some(chat) = self.new_chat.as_mut().filter(|chat| chat.id == id) {
+            chat.loading_choices = false;
+            chat.branches = branches;
+            chat.worktrees = worktrees;
         }
     }
 
-    pub fn bind_harness(&mut self, harness: Option<String>, tx: &mut Tx) {
-        let Some(chat) = self.new_chat.as_ref().filter(|chat| chat.request.is_none()) else {
+    pub fn created(&mut self, draft: u64, conversation: ConversationId, tx: &mut Tx) {
+        let Some(chat) = self.new_chat.as_ref().filter(|chat| chat.id == draft) else {
             return;
         };
-        let params = CreateConversation {
-            project: chat.project.clone(),
-            worktree: chat.worktree.clone(),
-            harness,
-            ..CreateConversation::default()
-        };
-        let request = self.next_create;
-        self.next_create += 1;
-        if self.send(Command::Create { request, params }, tx)
-            && let Some(chat) = &mut self.new_chat
-        {
-            chat.request = Some(request);
+        if let Some(project) = &chat.project {
+            self.navigation.expand_project(project);
         }
-        self.open_picker = None;
-    }
-
-    pub fn created(&mut self, request: u64, conversation: Option<ConversationId>, tx: &mut Tx) {
-        let Some(chat) = self
-            .new_chat
-            .as_mut()
-            .filter(|chat| chat.request == Some(request))
-        else {
-            return;
-        };
-        chat.request = None;
-        if let Some(id) = conversation {
-            if let Some(project) = &chat.project {
-                self.navigation.expand_project(project);
-            }
-            self.new_chat = None;
-            self.select_bound(id, tx);
-        }
-    }
-
-    fn select_bound(&mut self, id: ConversationId, tx: &mut Tx) {
-        self.selected = Some(id);
+        self.new_chat = None;
+        self.selected = Some(conversation);
         tx.focus("draft", false);
-        self.send(Command::Select(id), tx);
+        self.send(Command::Select(conversation), tx);
+    }
+
+    pub fn restore_first_message(&mut self, id: u64, submit: Submit) {
+        if let Some(chat) = self.new_chat.as_mut().filter(|chat| chat.id == id) {
+            chat.sending = false;
+            restore_draft(&mut self.draft, &mut self.attachments, submit);
+        }
     }
 
     pub fn project_id(&self) -> Option<&str> {
@@ -506,6 +543,21 @@ impl Desktop {
     pub fn project(&self) -> Option<&Project> {
         let id = self.project_id()?;
         self.projects.iter().find(|project| project.id == id)
+    }
+
+    /// A managed checkout used by the selected conversation.
+    pub fn worktree(&self) -> Option<(&str, Option<&str>)> {
+        let git = self
+            .conversation
+            .as_ref()
+            .and_then(|state| state.git.as_ref());
+        if let Some((git, path)) =
+            git.and_then(|git| git.worktree.as_deref().map(|path| (git, path)))
+        {
+            return Some((path, git.branch.as_deref()));
+        }
+        let summary = self.summary(self.selected?)?;
+        Some((summary.worktree.as_deref()?, summary.branch.as_deref()))
     }
 
     pub fn busy(&self) -> bool {
@@ -531,42 +583,53 @@ impl Desktop {
         self.send(Command::Reconnect, tx);
     }
 
+    fn attachment_target(&self) -> Option<AttachmentTarget> {
+        if !self.connected() {
+            return None;
+        }
+        if let Some(chat) = &self.new_chat {
+            return (!chat.sending).then_some(AttachmentTarget::Draft(chat.id));
+        }
+        self.conversation
+            .as_ref()
+            .filter(|state| !state.read_only)?;
+        self.selected.map(AttachmentTarget::Conversation)
+    }
+
     pub fn can_attach(&self) -> bool {
-        self.connected()
-            && self
-                .conversation
-                .as_ref()
-                .is_some_and(|state| !state.read_only)
-            && self
-                .selected
-                .is_some_and(|id| !self.attachment_reads.contains(&id))
+        self.attachment_target()
+            .is_some_and(|target| !self.attachment_reads.contains(&target))
     }
 
     pub fn start_attachments(&mut self, source: Source, tx: &mut Tx) -> bool {
-        if self.can_attach()
-            && let Some(conversation) = self.selected
-            && self.send(
-                Command::Attach {
-                    conversation,
-                    source,
-                },
-                tx,
-            )
+        if let Some(target) = self
+            .attachment_target()
+            .filter(|target| !self.attachment_reads.contains(target))
+            && self.send(Command::Attach { target, source }, tx)
         {
-            self.attachment_reads.insert(conversation);
+            self.attachment_reads.insert(target);
             return true;
         }
         false
     }
 
-    pub fn loaded_attachments(&mut self, id: ConversationId, loaded: Loaded, tx: &mut Tx) {
-        self.attachment_reads.remove(&id);
+    pub fn loaded_attachments(&mut self, target: AttachmentTarget, loaded: Loaded, tx: &mut Tx) {
+        self.attachment_reads.remove(&target);
         let mut errors = loaded.errors;
         if !loaded.attachments.is_empty() {
-            let existing = if self.selected == Some(id) {
-                &mut self.attachments
-            } else {
-                &mut self.drafts.entry(id).or_default().attachments
+            let existing = match target {
+                AttachmentTarget::Draft(id) => {
+                    if self.new_chat.as_ref().is_none_or(|chat| chat.id != id) {
+                        return;
+                    }
+                    &mut self.attachments
+                }
+                AttachmentTarget::Conversation(id) if self.selected == Some(id) => {
+                    &mut self.attachments
+                }
+                AttachmentTarget::Conversation(id) => {
+                    &mut self.drafts.entry(id).or_default().attachments
+                }
             };
             let mut size = existing.iter().map(|file| file.data.len()).sum::<usize>();
             for file in loaded.attachments {
@@ -587,37 +650,64 @@ impl Desktop {
     }
 
     pub fn can_send(&self) -> bool {
-        self.can_attach() && (!self.draft.text.trim().is_empty() || !self.attachments.is_empty())
+        self.can_attach()
+            && self.new_chat.as_ref().is_none_or(|chat| {
+                !chat.loading_choices && chat.active_harness(&self.harnesses).is_some()
+            })
+            && (!self.draft.text.trim().is_empty() || !self.attachments.is_empty())
     }
 
-    /// Sends the composer's text and files to the selected conversation.
+    /// Creates a draft's session on first send, or sends to an existing chat.
     pub fn submit(&mut self, tx: &mut Tx) {
-        if self.can_send()
-            && let Some(conversation) = self.selected
-        {
-            let submit = Submit {
-                conversation: Some(conversation),
-                text: self.draft.text.clone(),
-                attachments: mem::take(&mut self.attachments),
-                ..Submit::default()
-            };
-            match self.commands.send(Command::Submit(submit)) {
-                Ok(()) => {
-                    self.draft.clear();
-                    self.completion.reset();
-                    tx.scroll_to_bottom("timeline");
-                }
-                Err(error) => {
-                    if let Command::Submit(submit) = error.0 {
+        if !self.can_send() {
+            return;
+        }
+        let submit = Submit {
+            conversation: self.selected,
+            text: self.draft.text.clone(),
+            attachments: mem::take(&mut self.attachments),
+            ..Submit::default()
+        };
+        let command = if let Some(chat) = &mut self.new_chat {
+            let workspace = chat.project.as_ref().map(|_| chat.workspace.clone());
+            chat.sending = true;
+            Command::Create {
+                draft: chat.id,
+                params: CreateConversation {
+                    project: chat.project.clone(),
+                    workspace,
+                    harness: chat.harness.clone(),
+                    options: chat.options.clone(),
+                },
+                submit,
+            }
+        } else {
+            Command::Submit(submit)
+        };
+        match self.commands.send(command) {
+            Ok(()) => {
+                self.draft.clear();
+                self.completion.reset();
+                self.open_picker = None;
+                tx.scroll_to_bottom("timeline");
+            }
+            Err(error) => {
+                match error.0 {
+                    Command::Create { draft, submit, .. } => {
+                        if let Some(chat) = self.new_chat.as_mut().filter(|chat| chat.id == draft) {
+                            chat.sending = false;
+                        }
                         self.attachments = submit.attachments;
                     }
-                    self.toast(tx, "Offline", None);
+                    Command::Submit(submit) => self.attachments = submit.attachments,
+                    _ => unreachable!("only inputs are sent by the composer"),
                 }
+                self.toast(tx, "Offline", None);
             }
         }
     }
 
-    pub fn restore_message(&mut self, mut submit: Submit) {
+    pub fn restore_message(&mut self, submit: Submit) {
         let Some(conversation) = submit.conversation else {
             return;
         };
@@ -627,16 +717,7 @@ impl Desktop {
             let draft = self.drafts.entry(conversation).or_default();
             (&mut draft.edit, &mut draft.attachments)
         };
-        if !submit.text.is_empty() {
-            if !draft.text.is_empty() {
-                draft.set_caret(0);
-                draft.insert("\n\n");
-                draft.set_caret(0);
-            }
-            draft.insert(&submit.text);
-        }
-        submit.attachments.append(attachments);
-        *attachments = submit.attachments;
+        restore_draft(draft, attachments, submit);
     }
 
     /// The conversation as listed, once the list has it.
@@ -695,6 +776,19 @@ impl Desktop {
             self.expanded.insert(key.to_owned());
         }
     }
+}
+
+fn restore_draft(draft: &mut TextEdit, attachments: &mut Vec<Attachment>, mut submit: Submit) {
+    if !submit.text.is_empty() {
+        if !draft.text.is_empty() {
+            draft.set_caret(0);
+            draft.insert("\n\n");
+            draft.set_caret(0);
+        }
+        draft.insert(&submit.text);
+    }
+    submit.attachments.append(attachments);
+    *attachments = submit.attachments;
 }
 
 pub fn chat_title(chat: &ConversationSummary) -> &str {

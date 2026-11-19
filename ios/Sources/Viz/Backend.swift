@@ -25,11 +25,16 @@ enum VizProtocol {
     let submission: Int
   }
 
+  enum DefaultWorkspace: String, Decodable {
+    case local, worktree
+  }
+
   struct Project: Decodable, Identifiable {
     let id: String
     let name: String
     let path: String
     let branch: String?
+    let defaultWorkspace: DefaultWorkspace
     let createdAt: Int64
   }
 
@@ -54,6 +59,7 @@ enum VizProtocol {
     let unread: Bool
     let pinned: Bool
     let worktree: String?
+    let branch: String?
   }
 
   enum OptionValue {
@@ -68,9 +74,36 @@ enum VizProtocol {
     }
   }
 
-  struct Worktree {
-    let branch: String
-    let base: String?
+  enum Workspace {
+    case local
+    case worktree(base: String? = nil)
+    case existing(path: String)
+
+    var json: [String: String] {
+      switch self {
+      case .local:
+        ["kind": "local"]
+      case .worktree(let base):
+        base.map { ["kind": "worktree", "base": $0] } ?? ["kind": "worktree"]
+      case .existing(let path):
+        ["kind": "existing", "path": path]
+      }
+    }
+  }
+
+  struct ManagedWorktree: Decodable {
+    let path: String
+    let branch: String?
+    let conversation: Int
+    let updatedAt: Int64
+  }
+
+  struct Worktrees: Decodable {
+    let worktrees: [ManagedWorktree]
+  }
+
+  struct ProjectResult: Decodable {
+    let project: Project
   }
 
   struct SearchHit: Decodable, Identifiable {
@@ -173,19 +206,32 @@ final class Backend {
     project: String? = nil,
     harness: String? = nil,
     options: [String: VizProtocol.OptionValue]? = nil,
-    worktree: VizProtocol.Worktree? = nil
+    workspace: VizProtocol.Workspace? = nil
   ) async throws -> Int {
     var params: [String: Any] = [:]
     if let project { params["project"] = project }
     if let harness { params["harness"] = harness }
     if let options { params["options"] = options.mapValues(\.json) }
-    if let worktree {
-      var value = ["branch": worktree.branch]
-      if let base = worktree.base { value["base"] = base }
-      params["worktree"] = value
-    }
+    if let workspace { params["workspace"] = workspace.json }
     let data = try await call("conversation.create", params: params)
     return try JSONDecoder().decode(VizProtocol.Created.self, from: data).conversation
+  }
+
+  func updateProject(
+    project: String,
+    name: String? = nil,
+    defaultWorkspace: VizProtocol.DefaultWorkspace? = nil
+  ) async throws -> VizProtocol.Project {
+    var params: [String: Any] = ["project": project]
+    if let name { params["name"] = name }
+    if let defaultWorkspace { params["defaultWorkspace"] = defaultWorkspace.rawValue }
+    let data = try await call("project.update", params: params)
+    return try JSONDecoder().decode(VizProtocol.ProjectResult.self, from: data).project
+  }
+
+  func listWorktrees(project: String) async throws -> [VizProtocol.ManagedWorktree] {
+    let data = try await call("worktrees.list", params: ["project": project])
+    return try JSONDecoder().decode(VizProtocol.Worktrees.self, from: data).worktrees
   }
 
   func update(

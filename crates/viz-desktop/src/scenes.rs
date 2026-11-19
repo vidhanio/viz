@@ -3,26 +3,27 @@
 
 use serde_json::json;
 use viz_client::protocol::{
-    Attachment, AttachmentCapabilities, ConfigOption, ConversationId, ConversationKind,
-    ConversationState, ConversationStatus, ConversationSummary, EntryId, GitFile, GitFileStatus,
-    GitState, OptionChoice, OptionKind, OptionValue, Project, QueuedInput, SearchHit, SlashCommand,
-    SubmissionId,
+    Attachment, AttachmentCapabilities, Branches, ConfigOption, ConversationId, ConversationKind,
+    ConversationState, ConversationStatus, ConversationSummary, DefaultWorkspace, EntryId, GitFile,
+    GitFileStatus, GitState, Harness, ManagedWorktree, OptionChoice, OptionKind, OptionValue,
+    Project, QueuedInput, SearchHit, SlashCommand, SubmissionId,
 };
 
 use crate::{
-    app::{Desktop, Status},
+    app::{Desktop, NewChat, Status},
     changes, palette, sidebar,
     thread::Thread,
 };
 
 type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
-    ("workspace", workspace),
+    ("workspace", workspace_review),
+    ("workspace-open", workspace_open),
+    ("workspace-locked", workspace_locked),
     ("selectors", selectors),
     ("palette", palette),
     ("diff", diff),
     ("commit", commit),
-    ("worktree", worktree),
     ("attachments", attachments),
     ("queue", queue),
     ("empty", empty),
@@ -51,6 +52,11 @@ fn workspace(s: &mut Desktop) {
         name: name.into(),
         path: path.into(),
         branch: Some(branch.into()),
+        default_workspace: if id == "workbench" {
+            DefaultWorkspace::Worktree
+        } else {
+            DefaultWorkspace::Local
+        },
         created_at: 0,
     })
     .into();
@@ -134,6 +140,7 @@ fn list() -> Vec<ConversationSummary> {
             unread: id == 9,
             pinned: id == 4,
             worktree: (id == 10).then(|| "/work/workbench/.viz/worktrees/trim-export".into()),
+            branch: (id == 10).then(|| "viz/trim-export".into()),
         },
     )
     .into()
@@ -277,9 +284,59 @@ fn commit(s: &mut Desktop) {
     changes::preview_commit(s);
 }
 
-fn worktree(s: &mut Desktop) {
+fn workspace_open(s: &mut Desktop) {
     workspace(s);
-    sidebar::preview_worktree(s);
+    let id = 0;
+    let chat = NewChat::new(id, s.project(), None);
+    let previous = s.conversations.iter().find_map(|chat| {
+        Some(ManagedWorktree {
+            path: chat.worktree.clone()?,
+            branch: chat.branch.clone(),
+            conversation: chat.id,
+            updated_at: chat.updated_at,
+        })
+    });
+    s.selected = None;
+    let options = s
+        .conversation
+        .take()
+        .map_or_else(Vec::new, |state| state.options);
+    s.thread = Thread::default();
+    s.new_chat = Some(chat);
+    s.harnesses = vec![Harness {
+        name: "omp".into(),
+        default: true,
+        options,
+    }];
+    s.set_draft_workspace(
+        id,
+        Some(Branches {
+            current: Some("main".into()),
+            default_base: Some("main".into()),
+            branches: ["main", "export-v2", "release"].map(str::to_owned).into(),
+        }),
+        previous.into_iter().collect(),
+    );
+    s.open_picker = Some("workspace".into());
+}
+
+fn workspace_locked(s: &mut Desktop) {
+    workspace(s);
+    let id = ConversationId(10);
+    let mut state = conversation();
+    if let (Some(summary), Some(git)) = (s.summary(id), &mut state.git) {
+        git.branch.clone_from(&summary.branch);
+        git.worktree.clone_from(&summary.worktree);
+        state.cwd.clone_from(&summary.worktree);
+    }
+    s.show(id);
+    s.conversation = Some(state);
+    s.thread = transcript(&[]);
+}
+
+fn workspace_review(s: &mut Desktop) {
+    workspace_locked(s);
+    changes::preview(s);
 }
 
 fn attachments(s: &mut Desktop) {

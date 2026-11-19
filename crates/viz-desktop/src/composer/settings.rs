@@ -3,14 +3,14 @@ use rune_kit::MenuItem;
 use viz_client::protocol::{ConfigOption, ConversationId, OptionKind, OptionValue};
 
 use crate::{
-    app::Desktop,
+    app::{Desktop, NewChat},
     backend::Command,
-    theme::{S2, S8, S32, Size, Theme},
+    composer::workspace,
+    theme::{S2, S32, Size, Theme},
     ui,
 };
 
 const CATEGORIES: [&str; 3] = ["model", "thought_level", "mode"];
-const HARNESS_PICKER: &str = "harness";
 
 fn category(option: &ConfigOption) -> Option<usize> {
     match option.category.as_deref() {
@@ -22,56 +22,76 @@ fn category(option: &ConfigOption) -> Option<usize> {
 
 /// An inline select's chrome around its label: padding, gap and chevron.
 const PICKER_CHROME: f32 = S32;
-const GAP: f32 = S2;
+pub(super) const GAP: f32 = S2;
 
 /// The width an inline select takes for `label`.
-fn picker_width(label: &str, t: &Theme) -> f32 {
+pub(super) fn picker_width(label: &str, t: &Theme) -> f32 {
     (rune::text::measure(label, &[], t.ui_medium, None).0 + PICKER_CHROME)
         .min(ui::PICKER_TRIGGER_MAX)
 }
 
-/// The session's selects in one row no wider than `budget`: model, effort and
-/// mode in that priority, the ones that don't fit folded into More with the
-/// uncategorized options.
+/// The draft or session's selects: model, effort and mode in that priority.
+/// Options that don't fit fold into More with the uncategorized options.
 pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) -> El {
     let bar = row()
         .key("settings")
         .h(Size::Default.height())
         .gap(GAP)
         .center_y();
-    if let Some(new) = &s.new_chat {
-        return harness_bar(s, new.request.is_some(), bar, t, layer);
-    }
-    let mut bar = bar;
-    let Some((conversation, state)) = s.selected.zip(s.conversation.as_ref()) else {
-        return bar;
-    };
     if !s.connected() {
         return bar;
     }
-    let mut primary: Vec<&ConfigOption> = state
-        .options
+    let (bar, budget, target, options) = if let Some(chat) = &s.new_chat {
+        let (bar, width) = workspace::toolbar(s, chat, bar, t, layer);
+        let Some(harness) = chat.active_harness(&s.harnesses).filter(|_| !chat.sending) else {
+            return bar;
+        };
+        (
+            bar,
+            budget - width,
+            Options::Draft(chat),
+            harness.options.as_slice(),
+        )
+    } else if let Some((conversation, state)) = s.selected.zip(s.conversation.as_ref()) {
+        (
+            bar,
+            budget,
+            Options::Conversation(conversation),
+            state.options.as_slice(),
+        )
+    } else {
+        return bar;
+    };
+    session_options(s, t, layer, budget, bar, target, options)
+}
+
+fn session_options(
+    s: &Desktop,
+    t: &Theme,
+    layer: &mut Vec<El>,
+    budget: f32,
+    mut bar: El,
+    target: Options<'_>,
+    options: &[ConfigOption],
+) -> El {
+    let mut primary: Vec<&ConfigOption> = options
         .iter()
         .filter(|option| category(option).is_some())
         .collect();
     primary.sort_by_key(|option| category(option));
-    let extra = state
-        .options
-        .iter()
-        .filter(|option| category(option).is_none());
+    let extra = options.iter().filter(|option| category(option).is_none());
     let more = picker_width("More", t) + GAP;
     let mut used = 0.0;
     let mut shown = 0;
     for (index, option) in primary.iter().enumerate() {
-        let width = picker_width(value_name(option), t) + GAP;
+        let width = picker_width(value_name(option, target), t) + GAP;
         // Room for More whenever something is left for it.
         let reserve = if index + 1 < primary.len() || extra.clone().next().is_some() {
             more
         } else {
             0.0
         };
-        // The model always shows; it's what a chat is mostly about.
-        if index > 0 && used + width + reserve > budget {
+        if used + width + reserve > budget {
             break;
         }
         used += width;
@@ -80,9 +100,9 @@ pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) 
     let (inline, folded) = primary.split_at(shown);
     for option in inline {
         let key = format!("option-{}", option.id);
-        let menu = picker(s, &key, &option.name, Some(value_name(option)), t);
+        let menu = picker(s, &key, &option.name, Some(value_name(option, target)), t);
         let menu = if is_open(s, &key) {
-            add_choices(menu, conversation, option)
+            add_choices(menu, target, option)
         } else {
             menu
         };
@@ -97,11 +117,11 @@ pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) 
                     menu = menu.separator();
                 }
                 let label = if folded.iter().any(|folded| folded.id == option.id) {
-                    format!("{} · {}", option.name, value_name(option))
+                    format!("{} · {}", option.name, value_name(option, target))
                 } else {
                     option.name.clone()
                 };
-                menu = add_choices(menu.group_label(&label), conversation, option);
+                menu = add_choices(menu.group_label(&label), target, option);
             }
         }
         bar = bar.child(menu.build(&t.k, layer));
@@ -109,55 +129,17 @@ pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) 
     bar
 }
 
-/// A fresh composer's row: the runner to bind, or the binding in flight.
-fn harness_bar(s: &Desktop, opening: bool, bar: El, t: &Theme, layer: &mut Vec<El>) -> El {
-    use rune_kit::ButtonVariant;
-    if opening {
-        return bar
-            .gap(S8)
-            .child(ui::lead(ui::spinner(t), Size::Default.height()))
-            .child(ui::section("Opening session", t));
-    }
-    if s.harnesses.is_empty() {
-        return bar.child(ui::section("No harness configured", t));
-    }
-    if s.harnesses.len() == 1 {
-        return bar.child(
-            ui::button("Open session", ButtonVariant::Ghost, Size::Default)
-                .disabled(!s.connected())
-                .on_press_tx(|s: &mut Desktop, tx| s.bind_harness(None, tx))
-                .build(&t.k),
-        );
-    }
-    if !s.connected() {
-        return bar;
-    }
-    let menu = picker(s, HARNESS_PICKER, "Choose harness", None, t);
-    let menu = if is_open(s, HARNESS_PICKER) {
-        ui::menu_items(
-            menu,
-            s.harnesses.iter().map(|harness| {
-                let name = harness.name.clone();
-                let mut item = MenuItem::new(&name);
-                if harness.default {
-                    item = item.badge("Default");
-                }
-                item.on_select_tx(move |s: &mut Desktop, tx| {
-                    s.bind_harness(Some(name.clone()), tx);
-                })
-            }),
-        )
-    } else {
-        menu
-    };
-    bar.child(menu.build(&t.k, layer))
-}
-
-fn is_open(s: &Desktop, key: &str) -> bool {
+pub(super) fn is_open(s: &Desktop, key: &str) -> bool {
     s.open_picker.as_deref() == Some(key)
 }
 
-fn picker(s: &Desktop, key: &str, name: &str, value: Option<&str>, t: &Theme) -> rune_kit::Menu {
+pub(super) fn picker(
+    s: &Desktop,
+    key: &str,
+    name: &str,
+    value: Option<&str>,
+    t: &Theme,
+) -> rune_kit::Menu {
     let target = key.to_owned();
     ui::picker(
         key,
@@ -176,8 +158,23 @@ fn picker(s: &Desktop, key: &str, name: &str, value: Option<&str>, t: &Theme) ->
     )
 }
 
-fn value_name(option: &ConfigOption) -> &str {
-    match &option.value {
+#[derive(Clone, Copy)]
+enum Options<'a> {
+    Draft(&'a NewChat),
+    Conversation(ConversationId),
+}
+
+impl<'a> Options<'a> {
+    fn value(self, option: &'a ConfigOption) -> &'a OptionValue {
+        match self {
+            Self::Draft(chat) => chat.options.get(&option.id).unwrap_or(&option.value),
+            Self::Conversation(_) => &option.value,
+        }
+    }
+}
+
+fn value_name<'a>(option: &'a ConfigOption, target: Options<'a>) -> &'a str {
+    match target.value(option) {
         OptionValue::Boolean(true) => "On",
         OptionValue::Boolean(false) => "Off",
         OptionValue::Select(value) => option
@@ -190,13 +187,13 @@ fn value_name(option: &ConfigOption) -> &str {
 
 fn add_choices(
     mut menu: rune_kit::Menu,
-    conversation: ConversationId,
+    target: Options<'_>,
     option: &ConfigOption,
 ) -> rune_kit::Menu {
     if option.kind == OptionKind::Boolean {
         return [false, true].into_iter().fold(menu, |menu, value| {
             menu.item(choice(
-                conversation,
+                target,
                 option,
                 if value { "On" } else { "Off" },
                 OptionValue::Boolean(value),
@@ -212,7 +209,7 @@ fn add_choices(
             }
         }
         let mut item = choice(
-            conversation,
+            target,
             option,
             &entry.name,
             OptionValue::Select(entry.value.clone()),
@@ -228,20 +225,26 @@ fn add_choices(
     menu
 }
 
-fn choice(
-    conversation: ConversationId,
-    option: &ConfigOption,
-    label: &str,
-    value: OptionValue,
-) -> MenuItem {
+fn choice(target: Options<'_>, option: &ConfigOption, label: &str, value: OptionValue) -> MenuItem {
     let id = option.id.clone();
-    let checked = option.value == value;
+    let checked = *target.value(option) == value;
+    let draft = match target {
+        Options::Draft(chat) => Some(chat.id),
+        Options::Conversation(_) => None,
+    };
+    let conversation = match target {
+        Options::Draft(_) => None,
+        Options::Conversation(id) => Some(id),
+    };
     MenuItem::new(label)
         .checked(checked)
         .on_select_tx(move |s: &mut Desktop, tx| {
             s.open_picker = None;
             tx.focus("draft", false);
-            if !checked {
+            if checked {
+                return;
+            }
+            if let Some(conversation) = conversation {
                 s.send(
                     Command::Configure {
                         conversation,
@@ -250,6 +253,8 @@ fn choice(
                     },
                     tx,
                 );
+            } else if let Some(chat) = s.new_chat.as_mut().filter(|chat| Some(chat.id) == draft) {
+                chat.options.insert(id.clone(), value.clone());
             }
         })
 }

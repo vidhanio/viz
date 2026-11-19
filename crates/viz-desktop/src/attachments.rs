@@ -9,7 +9,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rune::{ClipboardContent, ClipboardImage, El, Tx, icon, row, text};
 use rune_kit::IconButtonVariant;
-use viz_client::protocol::Attachment;
+use viz_client::protocol::{Attachment, ConversationId};
 
 use crate::{
     app::Desktop,
@@ -30,6 +30,13 @@ pub enum Source {
     Picker,
     Files(Vec<PathBuf>),
     Clipboard(ClipboardImage),
+}
+
+/// The composer that requested a file read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Target {
+    Draft(u64),
+    Conversation(ConversationId),
 }
 
 #[derive(Debug, Default)]

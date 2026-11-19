@@ -14,7 +14,7 @@ pub use workspace::{
     Attachment, AttachmentCapabilities, Branches, CommitResult, DiffFile, DiffFileStatus,
     DiffFiles, DiffScope, EntryId, EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff,
     GitFile, GitFileStatus, GitPr, GitPush, GitRevert, GitState, ListEntries, PrResult,
-    QueuedInput, RemoveQueuedInput, SearchConversations, SearchHit, SearchHits, Worktree,
+    QueuedInput, RemoveQueuedInput, SearchConversations, SearchHit, SearchHits, Workspace,
 };
 
 /// The protocol version this crate speaks.
@@ -76,6 +76,7 @@ methods! {
     CreateProject<'_> => "project.create", ProjectResult;
     UpdateProject<'_> => "project.update", ProjectResult;
     RemoveProject<'_> => "project.remove", Empty;
+    ListWorktrees<'_> => "worktrees.list", WorktreeList;
     ListHarnesses => "harnesses.list", HarnessList;
     SearchFiles<'_> => "files.search", FileList;
     // `CreateConversation` owns its initial settings for callers that queue creation.
@@ -87,7 +88,7 @@ methods! {
     ListEntries => "conversation.entries", EntryPage;
     RemoveQueuedInput => "queue.remove", Empty;
     GitDiff<'_> => "git.diff", DiffFiles;
-    GitBranches => "git.branches", Branches;
+    GitBranches<'_> => "git.branches", Branches;
     GitCheckout<'_> => "git.checkout", Empty;
     GitCommit<'_> => "git.commit", CommitResult;
     GitPush => "git.push", Empty;
@@ -208,8 +209,10 @@ pub struct ConversationSummary {
     pub unread: bool,
     /// Show the conversation in the pinned section.
     pub pinned: bool,
-    /// The dedicated worktree path, if created with one.
+    /// The managed worktree path, if the chat uses one.
     pub worktree: Option<String>,
+    /// The worktree's checked-out branch, absent when detached.
+    pub branch: Option<String>,
 }
 
 /// `conversation.create` params.
@@ -218,9 +221,9 @@ pub struct CreateConversation {
     /// Project directory; absent uses the default working directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Create the conversation in its own worktree.
+    /// Workspace selection; absent uses the project's default.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<Worktree>,
+    pub workspace: Option<Workspace>,
     /// Configured runner; absent uses the backend default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
@@ -350,8 +353,20 @@ pub struct Project {
     pub path: String,
     /// Checked-out Git branch, if attached on a repository.
     pub branch: Option<String>,
+    /// Workspace mode for new chats.
+    pub default_workspace: DefaultWorkspace,
     /// Creation time in Unix milliseconds.
     pub created_at: i64,
+}
+
+/// A project's default workspace for new chats.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DefaultWorkspace {
+    /// Use the project's existing checkout.
+    Local,
+    /// Make a separate checkout for each chat.
+    Worktree,
 }
 
 /// A configured ACP runner.
@@ -361,6 +376,8 @@ pub struct Harness {
     pub name: String,
     /// Whether this is the backend default.
     pub default: bool,
+    /// Session options advertised the last time the runner reported them.
+    pub options: Vec<ConfigOption>,
 }
 
 /// Empty successful response or notification params.
@@ -442,16 +459,20 @@ pub struct CreateProject<'a> {
     pub name: Option<&'a str>,
 }
 
-/// Rename a project.
+/// Update a project's display name or default workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct UpdateProject<'a> {
     /// Project id.
     pub project: &'a str,
     /// New display name.
-    pub name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
+    /// New default workspace.
+    #[serde(rename = "defaultWorkspace", skip_serializing_if = "Option::is_none")]
+    pub default_workspace: Option<DefaultWorkspace>,
 }
 
-/// The project returned after creation or rename.
+/// The project returned after creation or an update.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ProjectResult {
     /// The resulting project.
@@ -463,6 +484,34 @@ pub struct ProjectResult {
 pub struct RemoveProject<'a> {
     /// Project id.
     pub project: &'a str,
+}
+
+/// List managed worktrees available to reuse in a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ListWorktrees<'a> {
+    /// Project id.
+    pub project: &'a str,
+}
+
+/// Managed worktrees, newest conversation first.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct WorktreeList {
+    /// One entry per worktree.
+    pub worktrees: Vec<ManagedWorktree>,
+}
+
+/// A managed worktree and the latest conversation that uses it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManagedWorktree {
+    /// Full path to the checkout.
+    pub path: String,
+    /// Its current branch, absent when detached.
+    pub branch: Option<String>,
+    /// The latest live conversation using the checkout.
+    pub conversation: ConversationId,
+    /// Time of that conversation's last activity in Unix milliseconds.
+    pub updated_at: i64,
 }
 
 /// List configured ACP runners.

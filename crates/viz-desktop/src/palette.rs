@@ -149,7 +149,6 @@ pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Local {
     NewChat,
-    NewWorktree,
     AddProject,
     Sidebar,
     Changes,
@@ -162,9 +161,8 @@ enum Local {
     Stop,
 }
 
-const COMMANDS: [Local; 12] = [
+const COMMANDS: [Local; 11] = [
     Local::NewChat,
-    Local::NewWorktree,
     Local::AddProject,
     Local::Sidebar,
     Local::Changes,
@@ -182,7 +180,6 @@ impl Local {
         let chat = s.selected.and_then(|id| s.summary(id));
         match self {
             Self::NewChat => "New chat",
-            Self::NewWorktree => "New worktree chat",
             Self::AddProject => "Add project",
             Self::Sidebar => "Toggle sidebar",
             Self::Changes => "Toggle changes",
@@ -201,7 +198,7 @@ impl Local {
     const fn glyph(self) -> &'static Icon {
         match self {
             Self::NewChat => &ui::COMPOSE,
-            Self::NewWorktree | Self::Commit | Self::PullRequest => &ui::GIT_BRANCH,
+            Self::Commit | Self::PullRequest => &ui::GIT_BRANCH,
             Self::AddProject => &ui::FOLDER,
             Self::Archive => &ui::ARCHIVE,
             Self::Sidebar => &ui::SIDEBAR,
@@ -232,9 +229,6 @@ impl Local {
         let chat = s.selected.and_then(|id| s.summary(id));
         match self {
             Self::NewChat => s.new_chat.is_none(),
-            Self::NewWorktree => {
-                s.new_chat.is_none() && s.project().is_some_and(|project| project.branch.is_some())
-            }
             Self::AddProject | Self::Sidebar => true,
             Self::Changes => {
                 s.changes.pane.is_open()
@@ -264,7 +258,6 @@ impl Local {
             .map(|chat| (chat.id, chat.pinned, chat.archived));
         match self {
             Self::NewChat => s.create_here(tx),
-            Self::NewWorktree => sidebar::open_worktree(s, tx),
             Self::AddProject => sidebar::open_add_project(s, tx),
             Self::Sidebar => s.sidebar.toggle(),
             Self::Changes => changes::toggle(s, tx),

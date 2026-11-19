@@ -2,7 +2,7 @@
 //! variant and owns its insets; views compose them and add no padding of
 //! their own beyond the layout tokens in `theme`.
 
-use rune::{Color, El, Icon, TextEdit, Tx, col, el, row, text};
+use rune::{Color, El, Icon, TextEdit, Tx, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
     Placement, PopupList, Select, SelectAppearance, TextInput,
@@ -80,6 +80,33 @@ pub fn quiet(label: &str, t: &Theme) -> El {
         .shrink()
         .truncate()
         .help_when_truncated(label)
+}
+
+/// A quiet read-only value for an inline control that can no longer change.
+pub fn locked_label(key: &str, label: &str, detail: &str, t: &Theme) -> El {
+    row()
+        .key(key)
+        .h(Size::Default.height())
+        .px(S4)
+        .center_y()
+        .gap(S4)
+        .max_w(PICKER_TRIGGER_MAX)
+        .help(detail)
+        .child(icon(&LOCK, ICON_SMALL).color(t.muted).a11y_hidden())
+        .child(
+            text(label)
+                .font(t.small)
+                .color(t.muted)
+                .min_w(0.0)
+                .truncate()
+                .shrink(),
+        )
+}
+
+/// The inline width reserved for a read-only value.
+pub fn locked_label_width(label: &str, t: &Theme) -> f32 {
+    (S4.mul_add(3.0, rune::text::measure(label, &[], t.small, None).0) + ICON_SMALL)
+        .min(PICKER_TRIGGER_MAX)
 }
 
 /// A glyph centered in an icon-wide box one line tall, so it sits on the

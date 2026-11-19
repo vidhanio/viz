@@ -18,14 +18,23 @@ impl fmt::Display for EntryId {
     }
 }
 
-/// Create a worktree on a new branch when creating a chat.
+/// Where the conversation runs.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct Worktree {
-    /// New branch name.
-    pub branch: String,
-    /// Starting ref; absent uses the project's current branch.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base: Option<String>,
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Workspace {
+    /// Use the project's current checkout.
+    Local,
+    /// Create a separate checkout on a new branch.
+    Worktree {
+        /// Starting ref; absent uses origin HEAD, then the checked-out branch.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+    },
+    /// Reuse a managed worktree from the same project.
+    Existing {
+        /// Full path to the worktree.
+        path: String,
+    },
 }
 
 /// A file attached to an input.
@@ -191,10 +200,14 @@ pub struct DiffFiles {
     pub files: Vec<DiffFile>,
 }
 
-/// List available branches in the conversation's repository.
+/// List available branches in a conversation or project's repository.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct GitBranches {
-    pub conversation: ConversationId,
+#[serde(untagged)]
+pub enum GitBranches<'a> {
+    /// List branches in a conversation's working directory.
+    Conversation { conversation: ConversationId },
+    /// List branches in a project's checkout.
+    Project { project: &'a str },
 }
 
 /// Available branches; `current` is absent when detached.
@@ -202,6 +215,9 @@ pub struct GitBranches {
 pub struct Branches {
     pub current: Option<String>,
     pub branches: Vec<String>,
+    /// Ref used to start a new worktree when no base is supplied.
+    #[serde(rename = "defaultBase")]
+    pub default_base: Option<String>,
 }
 
 /// Check out an existing branch or create a new one.
