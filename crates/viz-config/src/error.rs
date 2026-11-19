@@ -11,7 +11,7 @@ pub enum Error {
         /// The XDG variable that was needed, e.g. `XDG_STATE_HOME`.
         var: &'static str,
     },
-    /// A config layer could not be read.
+    /// A config file could not be read.
     #[error("reading {path}: {source}")]
     Read {
         /// The file or directory being read.
@@ -19,19 +19,11 @@ pub enum Error {
         /// The underlying I/O error.
         source: io::Error,
     },
-    /// A config layer is not valid TOML.
+    /// A config file could not be deserialized.
     #[error("parsing {path}: {source}")]
     Parse {
         /// The file being parsed.
         path: PathBuf,
-        /// The underlying TOML error.
-        source: Box<toml::de::Error>,
-    },
-    /// The merged document does not match the requested section's schema.
-    #[error("invalid [{section}]: {source}")]
-    Section {
-        /// The dotted section name, e.g. `connectors.discord`.
-        section: String,
         /// The underlying TOML error.
         source: Box<toml::de::Error>,
     },

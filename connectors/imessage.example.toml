@@ -1,0 +1,9 @@
+# Copy to ~/.config/viz/connectors/imessage.toml.
+server_url = "http://mac.tailnet.ts.net:1234"
+password = { file = "/run/secrets/bluebubbles" }
+allowed_handles = ["+15555550123"]
+
+[backend]
+# socket = "/run/user/1000/viz/backend.sock"
+# url = "https://viz-host.tailnet.ts.net"
+# token = { file = "/run/secrets/viz-token" }

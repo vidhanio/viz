@@ -10,9 +10,8 @@ publish.workspace = true
 [dependencies]
 anyhow.workspace = true
 clap = { workspace = true, features = ["derive"] }
-serde_json.workspace = true
+serde = { workspace = true, features = ["derive"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
-toml.workspace = true
 viz-client.workspace = true
 viz-config.workspace = true
 

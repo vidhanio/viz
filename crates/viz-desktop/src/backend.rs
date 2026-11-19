@@ -18,7 +18,6 @@ use viz_client::{
         ViewRevision,
     },
 };
-use viz_config::Config;
 
 use self::workspace::History;
 use crate::{
@@ -106,13 +105,14 @@ pub fn spawn(
     ui: AppHandle<Desktop>,
     commands: mpsc::UnboundedReceiver<Command>,
     first: std::sync::mpsc::Sender<()>,
+    endpoint: Result<Endpoint, String>,
 ) {
     std::thread::spawn(move || {
         match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
-            Ok(runtime) => runtime.block_on(run(&ui, commands, first)),
+            Ok(runtime) => runtime.block_on(run(&ui, commands, first, endpoint)),
             Err(e) => {
                 set_status(
                     &ui,
@@ -146,12 +146,10 @@ async fn run(
     ui: &AppHandle<Desktop>,
     mut commands: mpsc::UnboundedReceiver<Command>,
     first: std::sync::mpsc::Sender<()>,
+    endpoint: Result<Endpoint, String>,
 ) {
     let mut first = Some(first);
-    let endpoint = match Config::load()
-        .map_err(|e| e.to_string())
-        .and_then(|config| Endpoint::from_config(&config).map_err(|e| e.to_string()))
-    {
+    let endpoint = match endpoint {
         Ok(endpoint) => endpoint,
         Err(detail) => {
             set_status(ui, Status::Error(detail.clone()));

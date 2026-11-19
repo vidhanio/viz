@@ -1,0 +1,6 @@
+# Copy to ~/.config/viz/cli.toml. Omit this table to use the default socket.
+[backend]
+# socket = "/run/user/1000/viz/backend.sock"
+# Or connect remotely:
+# url = "https://viz-host.tailnet.ts.net"
+# token = { file = "/run/secrets/viz-token" }

@@ -8,6 +8,7 @@ mod attachments;
 mod backend;
 mod changes;
 mod composer;
+mod config;
 mod header;
 mod palette;
 mod scenes;
@@ -17,17 +18,21 @@ mod thread;
 mod timeline;
 mod ui;
 
-use std::time::Duration;
+use std::{path::PathBuf, time::Duration};
 
+use clap::Parser;
 use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Tx, col};
 use rune_kit::{
     Toast, ToastRegion,
     shell::{SidebarToggle, SplitView},
 };
 use tokio::sync::mpsc;
+use viz_client::Endpoint;
+use viz_config::{ClientFile, Paths};
 
 use crate::{
     app::Desktop,
+    config::DesktopConfig,
     theme::{S4, SIDEBAR_PAD, Size, Theme},
 };
 
@@ -159,7 +164,58 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     s.expire(clock) || completion || palette
 }
 
+#[derive(Parser)]
+#[command(disable_help_flag = true)]
+struct Args {
+    /// Use this desktop config file instead of the environment or default
+    /// location.
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
+/// Strip viz-specific flags before Rune handles its own tooling arguments.
+fn args() -> (ClientFile, Vec<String>) {
+    let mut input = std::env::args();
+    let mut viz: Vec<_> = input.next().into_iter().collect();
+    let mut rune = Vec::new();
+    while let Some(arg) = input.next() {
+        if arg == "--config" {
+            viz.push(arg);
+            viz.extend(input.next());
+        } else if arg.starts_with("--config=") {
+            viz.push(arg);
+        } else {
+            rune.push(arg);
+        }
+    }
+    let args = Args::parse_from(viz);
+    (
+        args.config
+            .map_or_else(ClientFile::desktop, ClientFile::path),
+        rune,
+    )
+}
+
 fn main() {
+    let (file, rune_args) = args();
+    let tooling = rune::tooling::Args::parse_from(rune_args.clone());
+    let headless = tooling.headless();
+    let preview = headless && tooling.scene.is_some();
+    let (theme_error, endpoint) = match viz_config::load::<DesktopConfig>(&file) {
+        Ok(config) => {
+            let endpoint = Paths::from_env()
+                .map_err(|e| e.to_string())
+                .and_then(|paths| {
+                    Endpoint::from_connection(&config.backend, &paths).map_err(|e| e.to_string())
+                });
+            (theme::install(&config.theme), endpoint)
+        }
+        Err(error) => {
+            let _ = theme::install(&DesktopConfig::default().theme);
+            let detail = error.to_string();
+            (Some(detail.clone()), Err(detail))
+        }
+    };
     rune::text::set_icon_swap(Some(ui::swap_kit_icon));
     let (commands, receiver) = mpsc::unbounded_channel();
     let app = App::new(AppSpec {
@@ -171,6 +227,7 @@ fn main() {
         poll: Some(poll),
         ..AppSpec::new("viz", app::WINDOW_SIZE, Desktop::detached, view)
     })
+    .args(rune_args)
     // macOS: the traffic lights centered on the toolbar's line, at the
     // sidebar's content inset.
     .chrome(Chrome {
@@ -186,20 +243,27 @@ fn main() {
         desktop
     })
     .on_focus(Desktop::set_focus);
-    // Rune has no resize hook; a drawn frame reports the viewport, and a change
-    // re-lays out what depends on it (the composer's selects).
+    if let Some(detail) = theme_error {
+        app.handle()
+            .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
+    }
+    // Rune has no resize or appearance hook; a drawn frame reports the
+    // viewport and appearance, and a change re-lays out what depends on it
+    // (the composer's selects) or recolors it (the diff's code).
     let ui = app.handle();
     let app = app.on_frame_drawn(move |rt| {
         let width = rt.window_viewport().0 / rt.zoom();
         if (rt.state.window_width - width).abs() >= 1.0 {
             ui.update(move |s, _| s.window_width = width);
         }
+        let dark = rt.env.system_dark;
+        if rt.state.changes.dark() != Some(dark) {
+            ui.update(move |s, _| s.changes.set_dark(dark));
+        }
     });
-    let headless = rune::is_headless();
-    let preview = headless && std::env::args_os().any(|arg| arg == "--scene");
     if !preview {
         let (first, connected) = std::sync::mpsc::channel();
-        backend::spawn(app.handle(), receiver, first);
+        backend::spawn(app.handle(), receiver, first, endpoint);
         if headless {
             // The default snapshot shows the first connection attempt's
             // outcome.

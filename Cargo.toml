@@ -25,6 +25,10 @@ notify-rust = { version = "4", default-features = false }
 rfd = "0.18"
 rustls = { version = "0.23", default-features = false }
 serde = "1"
+# Base16 scheme files (tinted-theming YAML) for the desktop's themes.
+serde-saphyr = { version = "2", default-features = false, features = [
+  "deserialize",
+] }
 serde_json = "1"
 serenity = { version = "0.12", default-features = false }
 thiserror = "2"

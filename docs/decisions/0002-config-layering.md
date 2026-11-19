@@ -2,6 +2,8 @@
 
 Status: accepted (2026-11-17)
 
+The shared document and parallel loaders were superseded by [0005](0005-per-component-config.md). Backend layering and writable Home Manager settings remain in effect.
+
 ## Context
 
 viz must be configurable with and without Nix, from one file that connectors can read their own sections from (`[connectors.discord] bot_token = ...`). The backend is TypeScript and every other component is Rust, so the format must be easy to parse in both. With Home Manager, `xdg.configFile` makes the file a read-only store symlink, which blocks hand edits and app-written settings. Upstream Home Manager solves this two ways (`docs/findings/home-manager-module.md`): app-side drop-in directories (mise's `conf.d`) and activation-time merging into a writable file (`lib.hm.generators.mkImpureConfigMerger`, used by herdr, codex, zed, t3code).

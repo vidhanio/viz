@@ -1,0 +1,14 @@
+# Copy to ~/.config/viz/desktop.toml.
+[backend]
+# socket = "/run/user/1000/viz/backend.sock"
+# url = "https://viz-host.tailnet.ts.net"
+# token = { file = "/run/secrets/viz-token" }
+
+[theme]
+dark = "tokyo-night-dark"
+light = "tokyo-night-light"
+
+# Instead of naming a built-in scheme, remove the corresponding key above and
+# supply a tinted-theming YAML file or all 16 colors in a nested colors table.
+# [theme.dark]
+# file = "~/.config/viz/themes/mine.yaml"

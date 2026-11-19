@@ -6,6 +6,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 
 - [x] Flake: dev shell (nightly Rust, Bun + bun2nix, Swift 6.4 + xtool from `nixpkgs-xtool`, Rune libs, treefmt), packages, checks, `homeModules.default`
 - [x] Layered XDG TOML config in Rust (`viz-config`) and TS (`backend/src/config.ts`), secrets as inline/file/env
+- [x] Split backend and client config files; Home Manager generates them separately and shares custom socket paths
 - [x] Backend: pi-durable harness on SQLite (Bun `node:sqlite`), orchestrator root conversation, JSON-RPC/WebSocket server on Unix socket + token-authenticated TCP, connector reply routing
 - [x] `viz-client` (Rust), `viz` CLI (`config`, `status`, `send`)
 - [x] `viz-discord` connector (DMs + mentions from allowed users → orchestrator → reply in place)
@@ -29,6 +30,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 - [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, worktree, timestamps) for the sidebar; rename.
 - [x] **Conversation deletion**: tombstone a chat subtree, stop its turns, remove its search hits, and clean up unshared clean worktrees. Protect the orchestrator from thread management.
 - [x] **ADE workspace** (t3code parity, 2026-11-18): projects, per-chat model/effort/mode from the runner's ACP config options (config = default), slash commands, `@` file search, stop, queue view and removal, attachments, full-text search, history paging, git worktree chats, per-turn checkpoints with diff and revert, commit (generated message) / push / PR.
+- [x] **Chat workspaces**: per-project default, new worktrees named from the first message, reuse of previous worktrees, and opt-in worktree isolation for ACP subagents.
 - [ ] ADE follow-ups (from the t3code gap analysis): terminal panes (server PTYs; Bun lacks openpty), in-thread find, edit-from-here / fork a chat at a message, plan-mode approve → implement, usage and limits panel, settings UI and rebindable keys, harness probe (capabilities and models per runner before a chat exists), scratch directories for project-less chats, multi-model fan-out to parallel worktrees.
 - [ ] Credentials: persist pi-ai `CredentialStore` in the state dir; OAuth login (Claude Pro/Max, ChatGPT, Copilot) driven from a UI.
 - [ ] Auth: per-client tokens, pairing codes (QR for iOS), scopes; `tailscale serve` helper (t3code's `--tailscale-serve`).
@@ -55,7 +57,8 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 - [x] Redesign on rune-kit + OpenCode theme (light/dark): split shell with collapsible sidebar (Orchestrator, Chats, Subagents, busy spinners, connection footer), thread header (model, thinking, usage), Markdown timeline with grouped collapsible tool rows, subagent rows that open the child, turn dividers, streaming answer, auto-growing composer, toasts
 - [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; Ctrl/Cmd+D changes panel (diffs, branch, commit, push, PR, revert); worktree chats; desktop notifications and window-title status. (Its access select and approval card were later removed with ACP approvals.)
 - [x] Delete a chat from its row menu or the command palette, with confirmation and retained-worktree paths.
-- [ ] Settings UI writing `config.d/` drop-ins
+- [x] Configurable dark and light base16 schemes, with Home Manager Stylix integration
+- [ ] Settings UI for desktop preferences in `desktop.toml`
 - [ ] Tray, global shortcut to summon
 
 ## iOS

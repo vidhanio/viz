@@ -2,7 +2,7 @@
 
 use std::{fmt, path::PathBuf};
 
-use viz_config::{Config, ResolveSecretError};
+use viz_config::{Connection, Paths, ResolveSecretError};
 
 /// Where the backend is.
 ///
@@ -21,20 +21,27 @@ pub enum Endpoint {
 }
 
 impl Endpoint {
-    /// `[client].url` with its token if set, else the local socket.
+    /// Uses the remote URL when set, otherwise the configured or default
+    /// socket.
     ///
     /// # Errors
     ///
     /// Returns an error if a remote URL is set but no token resolves.
-    pub fn from_config(config: &Config) -> Result<Self, ResolveEndpointError> {
-        let Some(url) = &config.client.url else {
-            return Ok(Self::Unix(config.backend_socket()));
+    pub fn from_connection(
+        connection: &Connection,
+        paths: &Paths,
+    ) -> Result<Self, ResolveEndpointError> {
+        let Some(url) = &connection.url else {
+            return Ok(Self::Unix(
+                connection
+                    .socket
+                    .clone()
+                    .unwrap_or_else(|| paths.default_socket()),
+            ));
         };
-        let token = config
-            .client
+        let token = connection
             .token
             .as_ref()
-            .or(config.backend.token.as_ref())
             .ok_or(ResolveEndpointError::MissingToken)?
             .resolve()?;
         Ok(Self::Remote {
@@ -65,12 +72,11 @@ impl fmt::Display for Endpoint {
     }
 }
 
-/// Why [`Endpoint::from_config`] failed.
+/// Why [`Endpoint::from_connection`] failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveEndpointError {
-    /// `[client].url` is set but neither `[client].token` nor
-    /// `[backend].token` is.
-    #[error("resolving secret: [client].url requires [client].token")]
+    /// `[backend].url` is set but `[backend].token` is not.
+    #[error("resolving secret: [backend].url requires [backend].token")]
     MissingToken,
     /// The token didn't resolve.
     #[error(transparent)]

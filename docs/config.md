@@ -1,20 +1,24 @@
 # Configuration reference
 
-Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Example: `config.example.toml`.
+Configuration lives in `$VIZ_CONFIG_DIR` or `$XDG_CONFIG_HOME/viz` (`~/.config/viz` by default). Each process reads only its own configuration. Start with the matching `*.example.toml` file.
 
-| Location | Default                                                  | Override                                                 |
-| -------- | -------------------------------------------------------- | -------------------------------------------------------- |
-| Config   | `$XDG_CONFIG_HOME/viz/config.toml` + `config.d/*.toml`   | `$VIZ_CONFIG_DIR`; `$VIZ_CONFIG` (one file, no drop-ins) |
-| State    | `$XDG_STATE_HOME/viz/`                                   | `$STATE_DIRECTORY` (systemd); `[backend].state_dir`      |
-| Socket   | `$XDG_RUNTIME_DIR/viz/backend.sock` (state dir if unset) | `[backend].socket`                                       |
+| Component | File                              | Override                                |
+| --------- | --------------------------------- | --------------------------------------- |
+| Backend   | `config.toml` + `config.d/*.toml` | `$VIZ_CONFIG` (one file, no drop-ins)   |
+| CLI       | `cli.toml`                        | `--config`, then `$VIZ_CLI_CONFIG`      |
+| Desktop   | `desktop.toml`                    | `--config`, then `$VIZ_DESKTOP_CONFIG`  |
+| Discord   | `connectors/discord.toml`         | `--config`, then `$VIZ_DISCORD_CONFIG`  |
+| iMessage  | `connectors/imessage.toml`        | `--config`, then `$VIZ_IMESSAGE_CONFIG` |
 
-`viz config` prints the resolved locations and the merged document.
+Backend drop-ins load in lexical order: tables merge recursively and other values replace earlier ones. A missing client file uses defaults; connectors still require their own credentials and allowlists. `viz config` lists component paths and whether they exist, and shows the CLI's effective connection settings without revealing its token. It does not read other components' configuration.
+
+The default state location is `$XDG_STATE_HOME/viz` (or `$STATE_DIRECTORY` under systemd). The default local socket is `$XDG_RUNTIME_DIR/viz/backend.sock`, falling back to `backend.sock` in the default state directory when `$XDG_RUNTIME_DIR` is unset.
 
 The state directory contains `viz.sqlite`, `memory.sqlite`, the derived `search.sqlite` index, uploaded `attachments/`, and the `worktrees/` created for chats. Git features use `git` on `PATH`; creating a pull request also needs an authenticated `gh`.
 
 **Secret** values are `"inline"`, `{ file = "/path" }` (trailing newline trimmed), or `{ env = "NAME" }`.
 
-## `[backend]` (backend, Rust clients)
+## `[backend]` (in `config.toml`)
 
 | Key               | Type          | Default                             |                                                           |
 | ----------------- | ------------- | ----------------------------------- | --------------------------------------------------------- |
@@ -73,21 +77,28 @@ Set `model`, `effort`, and `mode` to values reported by the runner. viz matches 
 
 The `permissions` key was removed; configs that still set it fail validation like any unknown key, so delete it.
 
-## `[client]` (Rust clients)
+## `[backend]` (in client files)
 
-| Key     | Type               | Default                     |
-| ------- | ------------------ | --------------------------- |
-| `url`   | `http://host:port` | unset: use the local socket |
-| `token` | Secret             | `[backend].token`           |
+| Key      | Type   | Behavior                                                            |
+| -------- | ------ | ------------------------------------------------------------------- |
+| `socket` | path   | Local Unix socket; optional unless the backend uses a custom socket |
+| `url`    | URL    | When set, connects remotely instead of using the socket             |
+| `token`  | Secret | Required when `url` is set                                          |
 
-## `[connectors.discord]` (`viz-discord`)
+For a custom local socket, set `socket` to the same path in both the backend and client files. For remote connections, set `url` and `token` in the client file; there is no fallback to the backend's token.
+
+## `[theme]` (in `desktop.toml`)
+
+The desktop follows the system's light/dark appearance. `dark` and `light` each select a built-in base16 scheme by name (for example `tokyo-night-dark` and `tokyo-night-light`). For a custom scheme, use `[theme.dark.colors]` or `[theme.light.colors]` with all 16 keys `base00` through `base0F`, as `"#RRGGBB"` strings. To load tinted-theming YAML, use a `file` key under `[theme.dark]` or `[theme.light]`. See `desktop.example.toml`.
+
+## Top-level settings in `connectors/discord.toml`
 
 | Key             | Type          |                                                                            |
 | --------------- | ------------- | -------------------------------------------------------------------------- |
 | `bot_token`     | Secret        | Bot token; enable the Message Content intent in the developer portal       |
 | `allowed_users` | integer array | Discord user ids whose DMs and mentions are forwarded; required, non-empty |
 
-## `[connectors.imessage]` (`viz-imessage`, scaffold)
+## Top-level settings in `connectors/imessage.toml` (scaffold)
 
 | Key               | Type         |                                                        |
 | ----------------- | ------------ | ------------------------------------------------------ |
@@ -115,15 +126,23 @@ The `permissions` key was removed; configs that still set it fail validation lik
         token.file = config.sops.secrets."viz/token".path;
         default_harness = "claude";
       };
-      connectors.discord = {
+    };
+    connectors.discord = {
+      enable = true; # runs viz-discord.service
+      settings = {
         bot_token.file = config.sops.secrets."viz/discord".path;
         allowed_users = [ 123456789012345678 ];
       };
     };
-    connectors.discord.enable = true; # runs viz-discord.service
     desktop.enable = true;
   };
 }
 ```
 
-Services: `viz-backend.service` (`StateDirectory=viz`, `RuntimeDirectory=viz`) and `viz-<connector>.service`, restarted when the generated config changes. `mutableSettings = true` merges `settings` into a writable `config.toml` instead of linking it.
+`programs.viz.settings` is backend-only. Set `desktop.settings`, `cli.settings` and `connectors.<name>.settings` to generate the corresponding client files. `programs.viz.socket` sets the backend socket and defaults each client's socket; if unset, clients inherit the socket declared in `settings.backend.socket`, if any. When Stylix is available, `desktop.stylix.enable` defaults to `config.stylix.enable` and uses its palette on the appropriate appearance (`dark`, `light`, or both for `either`). An explicit desktop theme for that appearance wins.
+
+Services: `viz-backend.service` (`StateDirectory=viz`, `RuntimeDirectory=viz`) and `viz-<connector>.service`, restarted when their generated config changes. `mutableSettings = true` merges the backend settings into a writable `config.toml` instead of linking it; it does not change client file generation.
+
+### Migrating from the shared document
+
+Move remote connection settings into each client's `[backend]` table and repeat any custom local socket there. Move connector settings to the top level of the connector's own file (or from backend `settings` to `connectors.<name>.settings` in Home Manager). Remove the old client and connector tables from `config.toml`, including a writable `mutableSettings` file or any drop-ins.

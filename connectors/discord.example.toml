@@ -1,0 +1,8 @@
+# Copy to ~/.config/viz/connectors/discord.toml.
+bot_token = { env = "DISCORD_TOKEN" }
+allowed_users = [123456789012345678]
+
+[backend]
+# socket = "/run/user/1000/viz/backend.sock"
+# url = "https://viz-host.tailnet.ts.net"
+# token = { file = "/run/secrets/viz-token" }

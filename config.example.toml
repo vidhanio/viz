@@ -1,4 +1,4 @@
-# viz configuration. Copy to ~/.config/viz/config.toml (or set programs.viz.settings in Home Manager).
+# viz backend configuration. Copy to ~/.config/viz/config.toml (or set programs.viz.settings in Home Manager).
 # Overrides can go in ~/.config/viz/config.d/*.toml. Reference: docs/config.md.
 #
 # Secrets accept: "inline" | { file = "/run/secrets/x" } | { env = "NAME" }.
@@ -33,17 +33,3 @@ thinking = "high"
 # [harnesses.omp]
 # command = "omp"
 # args = ["acp"]
-
-# How Rust clients reach a remote backend. Unset: the local socket above.
-# [client]
-# url = "http://viz-host.tailnet.ts.net:7420"
-# token = { file = "/run/secrets/viz-token" }
-
-[connectors.discord]
-bot_token = { env = "DISCORD_TOKEN" }
-allowed_users = [123456789012345678]
-
-# [connectors.imessage]
-# server_url = "http://mac.tailnet.ts.net:1234"
-# password = { file = "/run/secrets/bluebubbles" }
-# allowed_handles = ["+15555550123"]

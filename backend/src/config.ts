@@ -3,8 +3,7 @@
  *
  * Layers (later wins): `$VIZ_CONFIG_DIR/config.toml` (default `$XDG_CONFIG_HOME/viz/config.toml`), then
  * `config.d/*.toml` in lexical order. Tables merge recursively; other values replace. `$VIZ_CONFIG` names one file
- * that replaces all layers (e.g. the repo's gitignored `viz.local.toml` for development). Mirrors `crates/viz-config`;
- * keep the two in sync.
+ * that replaces all layers (e.g. the repo's gitignored `viz.local.toml` for development).
  */
 import { readdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -68,7 +67,7 @@ const Harness = obj({
 });
 export type Harness = Static<typeof Harness>;
 
-/** Sections the backend owns. Other sections (`[client]`, `[connectors.*]`) belong to the Rust components. */
+/** Configuration read only by the backend. */
 export const BackendConfig = obj(
   {
     backend: opt(

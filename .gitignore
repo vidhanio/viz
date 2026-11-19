@@ -22,4 +22,5 @@ ios/xtool/
 
 # development config and its state (see AGENTS.md, "Local config")
 viz.local.toml
+/viz.local/
 .viz/

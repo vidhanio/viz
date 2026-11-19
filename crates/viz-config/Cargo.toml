@@ -1,6 +1,6 @@
 [package]
 name = "viz-config"
-description = "Layered XDG/TOML configuration shared by viz's Rust components"
+description = "XDG/TOML configuration shared by viz's Rust clients"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

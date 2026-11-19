@@ -77,6 +77,8 @@ pub struct Changes {
     files: Result<Vec<DiffFile>, String>,
     active: usize,
     unified: DiffState,
+    /// The appearance `unified`'s highlighter colors code for.
+    dark: Option<bool>,
     dialog: dialog::State,
 }
 
@@ -93,6 +95,7 @@ impl Default for Changes {
             files: Ok(Vec::new()),
             active: 0,
             unified,
+            dark: None,
             dialog: dialog::State::default(),
         }
     }
@@ -102,11 +105,30 @@ impl Changes {
     /// Drop the old conversation's data without disturbing the split or reusing
     /// a request id.
     pub fn reset(&mut self) {
+        let dark = self.dark;
         *self = Self {
             pane: self.pane,
             next_request: self.next_request,
             ..Self::default()
         };
+        if let Some(dark) = dark {
+            self.set_dark(dark);
+        }
+    }
+
+    /// The appearance the diff's code is colored for.
+    pub const fn dark(&self) -> Option<bool> {
+        self.dark
+    }
+
+    /// Colors the diff's code in the theme for this appearance. rune-kit's
+    /// diff view takes a highlighter, not a syntax theme, so this follows the
+    /// window (see `main`'s frame hook).
+    pub fn set_dark(&mut self, dark: bool) {
+        if self.dark != Some(dark) {
+            self.dark = Some(dark);
+            self.unified.set_highlighter(Theme::get(dark).highlighter());
+        }
     }
 
     /// Apply the latest diff response and keep the selected file if it still

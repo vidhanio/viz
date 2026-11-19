@@ -17,10 +17,18 @@
 //! - Main pane: one [`READING_WIDTH`] column, [`READING_INSET`] from the pane's
 //!   edges, shared by the toolbar title, the transcript and the composer.
 
-use std::sync::LazyLock;
+mod scheme;
+
+use std::sync::OnceLock;
 
 use rune::{Color, Shadow, TextStyle};
-use rune_kit::{Kit, MarkdownStyle, PaletteFocus, PaletteSeed};
+use rune_kit::{
+    Kit, MarkdownStyle, Palette, PaletteFocus, PaletteSeed, StateColors,
+    syntax::{self, Highlighter, Paint, Syntax, SyntaxTheme},
+};
+use serde::Deserialize;
+
+use self::scheme::{DEFAULT_DARK, DEFAULT_LIGHT, Scheme};
 
 /// Inter and IBM Plex Mono, for `AppSpec::fonts`.
 pub const FONTS: &[&[u8]] = rune_theme_opencode::FONTS;
@@ -163,6 +171,8 @@ pub struct Theme {
     pub success: Color,
     /// Connecting.
     pub warning: Color,
+    /// Code colors: Markdown fences and the changes panel's diff.
+    pub syntax: SyntaxTheme,
     /// Interface text, 13 on 20.
     pub ui: TextStyle,
     /// `ui` at the medium weight: names, emphasis.
@@ -183,72 +193,195 @@ pub struct Theme {
     pub mono_small: TextStyle,
 }
 
-/// One appearance's palette, as hex.
-struct Tones {
-    bg: &'static str,
-    deep: &'static str,
-    surface: &'static str,
-    raised: &'static str,
-    text: &'static str,
-    muted: &'static str,
-    faint: &'static str,
-    accent: &'static str,
-    on_accent: &'static str,
-    danger: &'static str,
-    success: &'static str,
-    warning: &'static str,
+/// `[theme]` in `desktop.toml`: a base16 scheme per appearance, by built-in
+/// name, inline `colors`, or a scheme `file` (`docs/config.md`). Kept as raw
+/// TOML so a mistake here never stops the rest of the file from loading:
+/// [`install`] reports it and falls back to the default scheme.
+#[derive(Debug, Default, Deserialize)]
+#[serde(transparent)]
+pub struct ThemeConfig(toml::Table);
+
+static THEMES: OnceLock<[Theme; 2]> = OnceLock::new();
+
+/// Builds both appearances from `config`, once, before the window opens. A
+/// side that fails gets its default scheme; the returned message says what
+/// was wrong, for a toast.
+pub fn install(config: &ThemeConfig) -> Option<String> {
+    let mut errors: Vec<_> = config
+        .0
+        .keys()
+        .filter(|key| !matches!(key.as_str(), "dark" | "light"))
+        .map(|key| format!("theme.{key}: unknown key; expected dark or light"))
+        .collect();
+    let mut side = |key: &str, default: &str| {
+        config
+            .0
+            .get(key)
+            .map_or_else(|| Ok(builtin(default)), resolve)
+            .unwrap_or_else(|e| {
+                errors.push(format!("theme.{key}: {e}"));
+                builtin(default)
+            })
+    };
+    let themes = [side("dark", DEFAULT_DARK), side("light", DEFAULT_LIGHT)].map(|s| Theme::new(&s));
+    _ = THEMES.set(themes);
+    (!errors.is_empty()).then(|| errors.join("\n"))
 }
 
-/// Dark appearance.
-const NIGHT: Tones = Tones {
-    bg: "#151618",
-    deep: "#101113",
-    surface: "#1c1e21",
-    raised: "#232529",
-    text: "#ebedf0",
-    muted: "#acb0ba",
-    faint: "#858a95",
-    accent: "#96baff",
-    on_accent: "#121f37",
-    danger: "#ee9198",
-    success: "#8ac5a0",
-    warning: "#e8ba72",
-};
+/// One side of `[theme]`: a built-in name, `{ colors = { base00 = … } }` or
+/// `{ file = "…" }`.
+fn resolve(value: &toml::Value) -> Result<Scheme, String> {
+    let table = match value {
+        toml::Value::String(name) => return Scheme::builtin(name),
+        toml::Value::Table(table) => table,
+        _ => return Err("expected a scheme name, or a table with colors or file".into()),
+    };
+    if let Some(key) = table
+        .keys()
+        .find(|key| !matches!(key.as_str(), "colors" | "file"))
+    {
+        return Err(format!("unknown key \"{key}\"; expected colors or file"));
+    }
+    match (table.get("colors"), table.get("file")) {
+        (Some(colors), None) => Scheme::from_colors(
+            &colors
+                .clone()
+                .try_into()
+                .map_err(|_| "colors: expected base00 to base0F as \"#rrggbb\" strings")?,
+        )
+        .map_err(|e| format!("colors: {e}")),
+        (None, Some(toml::Value::String(path))) => Scheme::from_file(path),
+        (None, Some(_)) => Err("file: expected a path".into()),
+        (Some(_), Some(_)) => Err("set colors or file, not both".into()),
+        (None, None) => Err("expected colors or file".into()),
+    }
+}
 
-/// Light appearance.
-const DAY: Tones = Tones {
-    bg: "#fafafb",
-    deep: "#f1f2f4",
-    surface: "#ffffff",
-    raised: "#e9ebef",
-    text: "#202126",
-    muted: "#555b65",
-    faint: "#686f7a",
-    accent: "#275bc2",
-    on_accent: "#ffffff",
-    danger: "#b62d40",
-    success: "#287443",
-    warning: "#8c5b0a",
-};
+/// A default scheme. They are vendored and parse.
+fn builtin(name: &str) -> Scheme {
+    Scheme::builtin(name).unwrap_or_else(|e| unreachable!("built-in scheme {name}: {e}"))
+}
+
+/// WCAG contrast ratio of two opaque colors.
+fn contrast(a: Color, b: Color) -> f32 {
+    let (a, b) = (a.luminance(), b.luminance());
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
+}
+
+/// The lowest contrast of `c` on any of `surfaces`.
+fn worst(c: Color, surfaces: &[Color]) -> f32 {
+    surfaces
+        .iter()
+        .map(|&s| contrast(c, s))
+        .fold(f32::INFINITY, f32::min)
+}
+
+/// `c`, its Oklab lightness pushed away from the surfaces (lighter when
+/// `dark`) just far enough to reach `min` contrast on all of them; hue and
+/// chroma kept. Many base16 schemes' comment greys and light variants' yellows
+/// fall short of legible text.
+fn legible(c: Color, surfaces: &[Color], dark: bool, min: f32) -> Color {
+    if worst(c, surfaces) >= min {
+        return c;
+    }
+    let [l, a, b, _] = c.to_oklab();
+    let end = if dark { 1.0 } else { 0.0 };
+    let at = |t: f32| Color::from_oklab([(end - l).mul_add(t, l), a, b, 1.0]);
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..20 {
+        let mid = f32::midpoint(low, high);
+        if worst(at(mid), surfaces) >= min {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    at(high)
+}
+
+/// How far (0 to 1) from `from` toward `to` moves Oklab lightness by `step`:
+/// 1 when even `to` doesn't. Washes are this much of `base02`, so they read
+/// alike across schemes whose `base02` sits near or far from `base00`, and in
+/// both appearances.
+fn reach(from: Color, to: Color, step: f32) -> f32 {
+    let lightness = |c: Color| c.to_oklab()[0];
+    let distance = |c: Color| (lightness(c) - lightness(from)).abs();
+    if distance(to) <= step {
+        return 1.0;
+    }
+    let (mut low, mut high) = (0.0, 1.0);
+    for _ in 0..20 {
+        let mid = f32::midpoint(low, high);
+        if distance(from.mix(to, mid)) >= step {
+            high = mid;
+        } else {
+            low = mid;
+        }
+    }
+    high
+}
 
 impl Theme {
-    /// The theme for the window's appearance.
+    /// The theme for the window's appearance: the scheme [`install`] picked,
+    /// or the default.
     pub fn get(dark: bool) -> &'static Self {
-        static DARK: LazyLock<Theme> = LazyLock::new(|| Theme::new(true));
-        static LIGHT: LazyLock<Theme> = LazyLock::new(|| Theme::new(false));
-        if dark { &DARK } else { &LIGHT }
+        let [night, day] = THEMES
+            .get_or_init(|| [builtin(DEFAULT_DARK), builtin(DEFAULT_LIGHT)].map(|s| Self::new(&s)));
+        if dark { night } else { day }
     }
 
+    /// Every color from `scheme`'s base16 roles:
+    ///
+    /// | Role | Tokens |
+    /// |---|---|
+    /// | `base00` | `bg`, the main pane |
+    /// | `base01` | `surface`: the sidebar, cards, code |
+    /// | `base02` | washes: `hover`, `selected`, `mine` |
+    /// | `base03` | `faint` |
+    /// | `base04` | `muted` |
+    /// | `base05` | `text`; hairlines are it at low alpha |
+    /// | `base06`/`07` | strong text, ink on the accent |
+    /// | `base08` | `danger`, deleted lines, properties |
+    /// | `base09` | numbers, attributes |
+    /// | `base0A` | `warning`, types |
+    /// | `base0B` | `success`, inserted lines, strings |
+    /// | `base0C` | info, regexes |
+    /// | `base0D` | `accent`, functions, headings |
+    /// | `base0E` | keywords |
+    /// | `base0F` | (unused) |
+    ///
+    /// Text and status colors are lifted to a contrast floor on `bg` and
+    /// `surface` (see [`legible`]): text and muted 4.5, faint 3.5, the accent
+    /// 3, status and code colors 4.5.
     #[expect(
         clippy::too_many_lines,
-        reason = "the palette, then each kit token it sets"
+        reason = "the scheme's roles, then each kit token they set"
     )]
-    fn new(dark: bool) -> Self {
-        let hex = |s: &str| rune::color::hex(s).unwrap_or(Color::BLACK);
-        let t = if dark { NIGHT } else { DAY };
-        let (bg, deep, surface, raised) = (hex(t.bg), hex(t.deep), hex(t.surface), hex(t.raised));
-        let (text, muted, faint) = (hex(t.text), hex(t.muted), hex(t.faint));
-        let (accent, on_accent, danger) = (hex(t.accent), hex(t.on_accent), hex(t.danger));
+    fn new(scheme: &Scheme) -> Self {
+        let b = scheme.base;
+        let (bg, surface, wash) = (b[0x0], b[0x1], b[0x2]);
+        let dark = b[0x5].luminance() > bg.luminance();
+        let surfaces = [bg, surface];
+        let legible = |c: Color, min: f32| legible(c, &surfaces, dark, min);
+        let by_luminance = |x: &Color, y: &Color| x.luminance().total_cmp(&y.luminance());
+        let lightest = b[..8].iter().copied().max_by(by_luminance).unwrap_or(bg);
+        let darkest = b[..8].iter().copied().min_by(by_luminance).unwrap_or(bg);
+        let text = legible(b[0x5], 4.5);
+        let strong = legible(b[0x6], 4.5);
+        let muted = legible(b[0x4], 4.5);
+        let faint = legible(b[0x3], 3.5);
+        let accent = legible(b[0xD], 3.0);
+        let on_accent = [bg, b[0x7], lightest, darkest]
+            .into_iter()
+            .max_by(|x, y| contrast(*x, accent).total_cmp(&contrast(*y, accent)))
+            .unwrap_or(bg);
+        let (danger, warning, success, info) = (
+            legible(b[0x8], 4.5),
+            legible(b[0xA], 4.5),
+            legible(b[0xB], 4.5),
+            legible(b[0xC], 4.5),
+        );
+        let raised = bg.mix(wash, reach(bg, wash, 0.05));
         let mut k = Kit::from_palette_focus(
             PaletteSeed {
                 bg,
@@ -259,49 +392,112 @@ impl Theme {
         );
         let ink = |a: f32| k.alpha(text, a);
         let hairline = ink(if dark { 0.11 } else { 0.12 });
-        let hover = ink(if dark { 0.06 } else { 0.05 });
-        let pressed = ink(if dark { 0.09 } else { 0.08 });
-        let selected = ink(if dark { 0.09 } else { 0.075 });
-        let strong = ink(if dark { 0.15 } else { 0.17 });
-        let c = &mut k.c;
-        c.page = bg;
-        c.bg_base = bg;
-        // The shell's backdrop: the sidebar.
-        c.bg_deep = deep;
-        c.layer_01 = surface;
-        c.layer_02 = raised;
-        c.layer_03 = raised;
-        c.surface_raised = surface;
-        c.surface_raised_base = surface;
-        c.bg_button_neutral = raised;
-        c.text_muted = muted;
-        c.text_faint = faint;
-        c.text_weak = muted;
-        c.icon_muted = muted;
-        c.icon_faint = faint;
-        c.icon_weaker = faint;
-        c.std_icon = muted;
-        c.std_text = muted;
-        c.text_accent = accent;
-        c.icon_accent = accent;
-        c.bg_accent = accent;
-        c.border_muted = hairline;
-        c.border_base = hairline;
-        c.border_weak = hairline;
-        c.border_strong = strong;
-        c.std_border = strong;
-        c.hover = hover;
-        c.pressed = pressed;
-        c.surface_hover = hover;
-        c.danger.fg = danger;
-        c.danger.icon = danger;
-        c.success.fg = hex(t.success);
-        c.success.icon = hex(t.success);
-        c.bg_icon_button_contrast = accent;
-        c.submit_icon = on_accent;
-        c.submit_fg = on_accent;
-        c.submit_highlight = Color::WHITE.alpha(0.0);
-        c.submit_hover = Color::WHITE.alpha(if dark { 0.14 } else { 0.12 });
+        let rule = ink(if dark { 0.15 } else { 0.17 });
+        let tint = |step: f32| k.alpha(wash, reach(bg, wash, step));
+        let hover = tint(0.025);
+        let pressed = tint(0.035);
+        let selected = tint(0.045);
+        let state = |fg: Color| StateColors {
+            bg: surface.mix(fg, 0.12),
+            fg,
+            border: surface.mix(fg, 0.35),
+            icon: fg,
+        };
+        k.c = Palette {
+            page: bg,
+            bg_base: bg,
+            // The shell's backdrop: the sidebar.
+            bg_deep: surface,
+            layer_01: surface,
+            layer_02: raised,
+            layer_03: raised,
+            layer_04: raised,
+            bg_inverse: text,
+            bg_contrast: text,
+            bg_button_neutral: raised,
+            bg_icon_button_contrast: accent,
+            bg_accent: accent,
+            submit_highlight: on_accent.alpha(0.0),
+            submit_hover: on_accent.alpha(0.14),
+            submit_fg: on_accent,
+            submit_icon: on_accent,
+            text_base: text,
+            text_muted: muted,
+            text_faint: faint,
+            text_inverse: bg,
+            text_contrast: bg,
+            text_accent: accent,
+            icon_base: text,
+            icon_muted: muted,
+            icon_faint: faint,
+            icon_inverse: bg,
+            icon_contrast: bg,
+            icon_accent: accent,
+            border_muted: hairline,
+            border_base: hairline,
+            border_strong: rule,
+            border_focus: accent,
+            hover,
+            pressed,
+            contrast_hover: bg.alpha(0.10),
+            contrast_pressed: bg.alpha(0.20),
+            scrim: darkest.alpha(if dark { 0.5 } else { 0.3 }),
+            depth_top: lightest,
+            depth_bottom: lightest.alpha(0.0),
+            white: lightest,
+            black: darkest,
+            knob: text,
+            knob_on: on_accent,
+            success: state(success),
+            warning: state(warning),
+            danger: state(danger),
+            info: state(info),
+            surface_base: raised,
+            surface_weak: surface,
+            surface_hover: hover,
+            surface_raised: surface,
+            surface_raised_base: surface,
+            surface_raised_hover: raised,
+            surface_float: text,
+            surface_disabled: raised,
+            border_weak: hairline,
+            border_hover: rule,
+            border_active: rule,
+            border_disabled: hairline,
+            text_strong: strong,
+            text_weak: muted,
+            text_invert_strong: bg,
+            icon_weaker: faint,
+            std_border: rule,
+            std_icon: muted,
+            std_icon_invert: bg,
+            std_icon_strong: strong,
+            std_text: muted,
+        };
+        let code = |c: Color| legible(c, 4.5);
+        let syntax = [
+            (Syntax::Keyword, code(b[0xE])),
+            (Syntax::String, code(b[0xB])),
+            (Syntax::Number, code(b[0x9])),
+            (Syntax::Comment, faint),
+            (Syntax::Type, code(b[0xA])),
+            (Syntax::Function, code(b[0xD])),
+            (Syntax::Property, code(b[0x8])),
+            (Syntax::Punctuation, muted),
+            (Syntax::Inserted, success),
+            (Syntax::Deleted, danger),
+            (Syntax::Parameter, text),
+            (Syntax::Heading, code(b[0xD])),
+            (Syntax::Link, code(b[0xD])),
+            (Syntax::Operator, muted),
+            (Syntax::Regex, code(b[0xC])),
+            (Syntax::Attribute, code(b[0x9])),
+            (Syntax::Variable, text),
+        ]
+        .into_iter()
+        .fold(SyntaxTheme::from_kit(&k), |theme, (kind, c)| {
+            theme.with(kind, c)
+        });
         let medium = |style: TextStyle| TextStyle {
             weight: 500.0,
             ..style
@@ -325,7 +521,7 @@ impl Theme {
         k.radius.lg = Size::Default.radius();
         k.radius.xl = Size::Large.radius();
         let outline = Shadow {
-            color: strong,
+            color: rule,
             spread: HAIRLINE,
             ..Shadow::default()
         };
@@ -348,8 +544,9 @@ impl Theme {
             accent,
             selected,
             danger,
-            success: hex(t.success),
-            warning: hex(t.warning),
+            success,
+            warning,
+            syntax,
             ui,
             ui_medium: medium(ui),
             small,
@@ -361,6 +558,19 @@ impl Theme {
             mono_small: TextStyle::new(11.5, 400.0).mono().lh(16.0),
             k,
         }
+    }
+
+    /// The built-in highlighter in this theme's code colors, for rune-kit
+    /// views that take a highlighter rather than a syntax theme (the diff).
+    pub fn highlighter(&self) -> Highlighter {
+        let theme = self.syntax;
+        Highlighter::new(move |lang, code| {
+            syntax::builtin(lang, code)
+                .into_iter()
+                .map(|(range, paint)| (range, Paint::Color(theme.paint(paint))))
+                .collect()
+        })
+        .key(theme)
     }
 
     /// Assistant prose: the message type, code blocks on `surface`.
@@ -381,6 +591,7 @@ impl Theme {
                 ..self.mono
             })
             .code_block(self.surface, self.hairline)
+            .syntax_theme(self.syntax)
             .code_block_padding(CARD_INSET, CARD_INSET)
             .inline_code_font(0.86, 400.0)
             .code_margin(S12, S16)

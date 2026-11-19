@@ -3,14 +3,14 @@
 //! from.
 //!
 //! ```toml
-//! [connectors.discord]
 //! bot_token = { file = "/run/secrets/viz-discord" }
 //! allowed_users = [123456789012345678]
 //! ```
 
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::HashSet, path::PathBuf, sync::Arc};
 
 use anyhow::Context as _;
+use clap::Parser;
 use serde::Deserialize;
 use serenity::{
     all::{ChannelId, CreateMessage, GatewayIntents, Message, MessageId, Ready, UserId},
@@ -23,17 +23,28 @@ use viz_client::{
     Client, Connection, Endpoint,
     protocol::{ClientInfo, ClientKind, Notification, Origin, Submit},
 };
-use viz_config::{Config, Secret};
+use viz_config::{ClientFile, Connection as BackendConnection, Paths, Secret};
 
-/// The connector's name: its config section, `hello` name and origins.
+/// The connector's name: its config filename, `hello` name and origins.
 const NAME: &str = "discord";
 /// Discord's message length limit, in characters.
 const MAX_MESSAGE: usize = 2000;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Parser)]
+#[command(version, about)]
+struct Args {
+    /// Use this connector config file instead of the environment or default
+    /// location.
+    #[arg(long)]
+    config: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DiscordConfig {
-    bot_token: Secret,
+    #[serde(default)]
+    backend: BackendConnection,
+    bot_token: Option<Secret>,
     /// Users whose messages are forwarded. Everyone else is ignored.
     allowed_users: HashSet<UserId>,
 }
@@ -140,13 +151,20 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let config = Config::load()?;
-    let discord: DiscordConfig = config.connector(NAME)?;
+    let args = Args::parse();
+    let file = args
+        .config
+        .map_or_else(|| ClientFile::connector(NAME), ClientFile::path);
+    let discord: DiscordConfig = viz_config::load(&file)?;
+    let token = discord
+        .bot_token
+        .context("discord: missing bot_token")?
+        .resolve()?;
     anyhow::ensure!(
         !discord.allowed_users.is_empty(),
-        "[connectors.discord].allowed_users is empty: nobody could talk to viz"
+        "discord: allowed_users is empty: nobody could talk to viz"
     );
-    let endpoint = Endpoint::from_config(&config)?;
+    let endpoint = Endpoint::from_connection(&discord.backend, &Paths::from_env()?)?;
     let Connection {
         client: viz,
         mut notifications,
@@ -164,7 +182,7 @@ async fn main() -> anyhow::Result<()> {
     let intents = GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
-    let mut client = serenity::Client::builder(discord.bot_token.resolve()?, intents)
+    let mut client = serenity::Client::builder(token, intents)
         .event_handler(Handler {
             viz,
             allowed_users: discord.allowed_users,

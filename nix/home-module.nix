@@ -17,7 +17,46 @@ let
   vizPackages = self.packages.${pkgs.stdenv.hostPlatform.system};
 
   tomlFormat = pkgs.formats.toml { };
-  generatedSettings = tomlFormat.generate "viz-settings.toml" cfg.settings;
+  socket = if cfg.socket != null then cfg.socket else cfg.settings.backend.socket or null;
+  backendSettings = lib.recursiveUpdate cfg.settings (
+    lib.optionalAttrs (cfg.socket != null) { backend.socket = cfg.socket; }
+  );
+  generatedSettings = tomlFormat.generate "viz-settings.toml" backendSettings;
+  clientSettings =
+    settings:
+    lib.recursiveUpdate (lib.optionalAttrs (socket != null) { backend.socket = socket; }) settings;
+
+  stylixColors = config.lib.stylix.colors or null;
+  stylixPolarity = config.stylix.polarity or "either";
+  applyStylix = cfg.desktop.stylix.enable && stylixColors != null;
+  base16 = lib.genAttrs (map (suffix: "base0${suffix}") (lib.stringToCharacters "0123456789ABCDEF")) (
+    key: "#${stylixColors.${key}}"
+  );
+  desktopSettings = clientSettings (
+    cfg.desktop.settings
+    // lib.optionalAttrs applyStylix {
+      theme =
+        lib.optionalAttrs (stylixPolarity != "light") { dark.colors = base16; }
+        // lib.optionalAttrs (stylixPolarity != "dark") { light.colors = base16; }
+        // (cfg.desktop.settings.theme or { });
+    }
+  );
+  cliSettings = clientSettings cfg.cli.settings;
+  connectorSettings = lib.mapAttrs (_: connector: clientSettings connector.settings) cfg.connectors;
+  connectorSources = lib.mapAttrs (
+    name: settings: tomlFormat.generate "viz-${name}.toml" settings
+  ) connectorSettings;
+
+  settingsOption =
+    file:
+    mkOption {
+      inherit (tomlFormat) type;
+      default = { };
+      description = ''
+        Client settings written to {file}`$XDG_CONFIG_HOME/viz/${file}`.
+        Reference secrets by file or environment variable, not inline.
+      '';
+    };
   # Match the impure merger's TOML serialization, so an unchanged mutable file can be replaced by
   # a store link when `mutableSettings` is turned off again (same as upstream's herdr module).
   settingsSource = pkgs.runCommand "viz-config.toml" { } ''
@@ -32,13 +71,14 @@ let
       package,
       after ? [ ],
       extraService ? { },
+      restartTriggers,
     }:
     {
       Unit = {
         Description = description;
         After = [ "network.target" ] ++ after;
         Wants = after;
-        X-Restart-Triggers = [ settingsSource ];
+        X-Restart-Triggers = restartTriggers;
       };
       Service = {
         ExecStart = lib.getExe package;
@@ -55,6 +95,7 @@ let
     {
       options = {
         enable = mkEnableOption "the viz ${name} connector service";
+        settings = settingsOption "connectors/${name}.toml";
         package = mkOption {
           type = types.package;
           default = vizPackages."viz-${name}";
@@ -92,10 +133,6 @@ in
             token.file = config.sops.secrets."viz/token".path;
             default_harness = "claude";
           };
-          connectors.discord = {
-            bot_token.file = config.sops.secrets."viz/discord".path;
-            allowed_users = [ 123456789012345678 ];
-          };
           harnesses.claude = {
             command = "claude-agent-acp";
             env.ANTHROPIC_API_KEY.env = "ANTHROPIC_API_KEY";
@@ -103,10 +140,20 @@ in
         }
       '';
       description = ''
-        Configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`. Every viz component
-        reads this file plus drop-ins in {file}`$XDG_CONFIG_HOME/viz/config.d/*.toml`, which
-        override it and are never touched by Home Manager. Pass secrets as `{ file = "..."; }`
+        Backend configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`. Only
+        viz-backend reads it, along with unmanaged drop-ins under
+        {file}`$XDG_CONFIG_HOME/viz/config.d/`. Pass secrets as `{ file = "..."; }`
         so they stay out of the Nix store. See `docs/config.md`.
+      '';
+    };
+
+    socket = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        Shared Unix socket path for the backend and clients. When unset, clients
+        inherit the socket declared in {option}`programs.viz.settings.backend.socket`,
+        if any. A client can override it in its own settings.
       '';
     };
 
@@ -150,6 +197,13 @@ in
 
     desktop = {
       enable = mkEnableOption "the viz desktop app";
+      settings = settingsOption "desktop.toml";
+      stylix.enable = mkOption {
+        type = types.bool;
+        default = config.stylix.enable or false;
+        defaultText = lib.literalExpression "config.stylix.enable or false";
+        description = "Default to the Stylix base16 colors for the configured Stylix polarity.";
+      };
       package = mkOption {
         type = types.package;
         default = vizPackages.viz-desktop;
@@ -158,13 +212,15 @@ in
       };
     };
 
+    cli.settings = settingsOption "cli.toml";
+
     connectors = mkOption {
       type = types.attrsOf (types.submodule connectorModule);
       default = { };
       example = lib.literalExpression "{ discord.enable = true; }";
       description = ''
-        Connector services. Each reads `[connectors.<name>]` from the config and runs as
-        `viz-<name>.service`. Known connectors: `discord`, `imessage`.
+        Connector settings and services. Each reads `connectors/<name>.toml` and runs
+        as `viz-<name>.service` when enabled. Known connectors: `discord`, `imessage`.
       '';
     };
   };
@@ -172,11 +228,25 @@ in
   config = mkIf cfg.enable {
     home.packages = [ cfg.package ] ++ lib.optional cfg.desktop.enable cfg.desktop.package;
 
-    xdg.configFile."viz/config.toml" = mkIf (!cfg.mutableSettings && cfg.settings != { }) {
-      source = settingsSource;
-    };
+    xdg.configFile = {
+      "viz/config.toml" = mkIf (!cfg.mutableSettings && backendSettings != { }) {
+        source = settingsSource;
+      };
+      "viz/desktop.toml" = mkIf (desktopSettings != { }) {
+        source = tomlFormat.generate "viz-desktop.toml" desktopSettings;
+      };
+      "viz/cli.toml" = mkIf (cliSettings != { }) {
+        source = tomlFormat.generate "viz-cli.toml" cliSettings;
+      };
+    }
+    // lib.mapAttrs' (
+      name: _settings:
+      lib.nameValuePair "viz/connectors/${name}.toml" {
+        source = connectorSources.${name};
+      }
+    ) (lib.filterAttrs (_: settings: settings != { }) connectorSettings);
 
-    home.activation.vizMutableSettings = mkIf (cfg.mutableSettings && cfg.settings != { }) (
+    home.activation.vizMutableSettings = mkIf (cfg.mutableSettings && backendSettings != { }) (
       lib.hm.dag.entryAfter [ "linkGeneration" ] (
         lib.hm.generators.mkImpureConfigMerger {
           inherit pkgs;
@@ -190,7 +260,7 @@ in
       )
     );
 
-    home.activation.vizImmutableSettings = mkIf (!cfg.mutableSettings && cfg.settings != { }) (
+    home.activation.vizImmutableSettings = mkIf (!cfg.mutableSettings && backendSettings != { }) (
       lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] (
         lib.hm.generators.mkImpureConfigCleanup {
           file = config.xdg.configFile."viz/config.toml";
@@ -202,6 +272,7 @@ in
       viz-backend = mkIf cfg.backend.enable (service {
         description = "viz backend (pi-durable orchestrator)";
         inherit (cfg.backend) package;
+        restartTriggers = [ settingsSource ];
         extraService = {
           # $XDG_STATE_HOME/viz (exported as $STATE_DIRECTORY) and $XDG_RUNTIME_DIR/viz.
           StateDirectory = "viz";
@@ -217,6 +288,7 @@ in
         description = "viz ${name} connector";
         inherit (connector) package;
         after = lib.optional cfg.backend.enable "viz-backend.service";
+        restartTriggers = lib.optional (connectorSettings.${name} != { }) connectorSources.${name};
       })
     ) enabledConnectors;
   };
