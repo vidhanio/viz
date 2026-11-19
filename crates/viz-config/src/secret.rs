@@ -52,13 +52,21 @@ impl Secret {
     pub fn resolve(&self) -> Result<String, ResolveSecretError> {
         let value = match self {
             Self::Inline(value) => value.clone(),
-            Self::File { file } => fs::read_to_string(file)
-                .map_err(|source| ResolveSecretError::File {
-                    path: file.clone(),
-                    source,
-                })?
-                .trim_end_matches(['\n', '\r'])
-                .to_owned(),
+            // One trailing line ending, as the backend's `resolveSecret` does.
+            Self::File { file } => {
+                let mut value =
+                    fs::read_to_string(file).map_err(|source| ResolveSecretError::File {
+                        path: file.clone(),
+                        source,
+                    })?;
+                if value.ends_with('\n') {
+                    value.pop();
+                    if value.ends_with('\r') {
+                        value.pop();
+                    }
+                }
+                value
+            }
             Self::Env { env } => env::var(env).map_err(|source| ResolveSecretError::Env {
                 name: env.clone(),
                 source,

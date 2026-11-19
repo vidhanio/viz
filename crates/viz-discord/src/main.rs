@@ -18,6 +18,7 @@ use serenity::{
     client::{Context, EventHandler},
     http::Http,
 };
+use unicode_segmentation::UnicodeSegmentation as _;
 use viz_client::{
     Client, Connection, Endpoint,
     protocol::{ClientInfo, ClientKind, Notification, Origin, Submit},
@@ -84,9 +85,8 @@ async fn post_reply(http: &Http, origin: &Origin, text: &str) -> anyhow::Result<
         .as_deref()
         .and_then(|message| message.parse().ok())
         .map(MessageId::new);
-    let chars: Vec<char> = text.chars().collect();
-    for (i, chunk) in chars.chunks(MAX_MESSAGE).enumerate() {
-        let mut message = CreateMessage::new().content(chunk.iter().collect::<String>());
+    for (i, chunk) in chunks(text, MAX_MESSAGE).into_iter().enumerate() {
+        let mut message = CreateMessage::new().content(chunk);
         if i == 0
             && let Some(reference) = reference
         {
@@ -95,6 +95,43 @@ async fn post_reply(http: &Http, origin: &Origin, text: &str) -> anyhow::Result<
         channel.send_message(http, message).await?;
     }
     Ok(())
+}
+
+/// `text` cut into pieces of at most `max` characters, never inside a
+/// grapheme cluster: each cut goes after the piece's last newline, else its
+/// last whitespace, else its last whole grapheme.
+fn chunks(text: &str, max: usize) -> Vec<&str> {
+    let mut pieces = Vec::new();
+    let mut rest = text;
+    while rest.chars().count() > max {
+        // Byte offset after each grapheme that still fits, and the best break.
+        let (mut fit, mut newline, mut space, mut chars) = (0, None, None, 0);
+        for (at, grapheme) in rest.grapheme_indices(true) {
+            chars += grapheme.chars().count();
+            if chars > max {
+                break;
+            }
+            fit = at + grapheme.len();
+            if grapheme.contains('\n') {
+                newline = Some(fit);
+            } else if grapheme.chars().all(char::is_whitespace) {
+                space = Some(fit);
+            }
+        }
+        // A grapheme longer than `max` on its own is cut at `max` characters.
+        let cut = match newline.or(space) {
+            Some(cut) => cut,
+            None if fit > 0 => fit,
+            None => rest.char_indices().nth(max).map_or(rest.len(), |(i, _)| i),
+        };
+        let (piece, tail) = rest.split_at(cut);
+        pieces.push(piece);
+        rest = tail;
+    }
+    if !rest.is_empty() {
+        pieces.push(rest);
+    }
+    pieces
 }
 
 #[tokio::main]

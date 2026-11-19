@@ -13,7 +13,10 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync"] }
-tokio-tungstenite.workspace = true
+# `https://` backends (e.g. behind `tailscale serve`) connect over `wss://`; `ring` is rustls' process-wide
+# crypto provider (tokio-tungstenite enables none).
+rustls = { workspace = true, features = ["ring", "std", "tls12"] }
+tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 tracing.workspace = true
 viz-config.workspace = true
 

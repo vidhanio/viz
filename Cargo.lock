@@ -4250,8 +4250,12 @@ checksum = "d25a406cddcc431a75d3d9afc6a7c0f7428d4891dd973e4d54c56b46127bf857"
 dependencies = [
  "futures-util",
  "log",
+ "rustls 0.23.46",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls 0.26.6",
  "tungstenite 0.28.0",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -4484,6 +4488,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.9.5",
+ "rustls 0.23.46",
+ "rustls-pki-types",
  "sha1",
  "thiserror 2.0.21",
  "utf-8",
@@ -4645,6 +4651,7 @@ name = "viz-client"
 version = "0.1.0"
 dependencies = [
  "futures-util",
+ "rustls 0.23.46",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -4686,6 +4693,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "unicode-segmentation",
  "viz-client",
  "viz-config",
 ]
