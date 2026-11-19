@@ -18,14 +18,17 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 - [ ] **Durable connector outbox.** Replies to connectors are routed in memory and dropped if the connector is offline or the backend restarts mid-run. Persist pending replies (pi-durable document keyed by connector), deliver on reconnect, let connectors ack; dedupe by submission id.
 - [x] **uniichat memory** for the orchestrator (`backend/src/memory/`, `docs/architecture.md` "Memory"): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
 - [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
-- [ ] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): list/read/search conversations, send to a conversation (`queue`/`steer`), background subagents that report back as messages, abort, schedule tasks (pi-durable timers).
+- [x] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): `list_conversations`, `read_conversation`, `search_conversations`, `spawn_chat` (background, reports back as a `[chat N]` input), `message_conversation` (queues), `cancel_conversation`.
+- [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers), an approval route for spawned chats nobody watches, recover a worktree left by a crash between creation and saving it.
 - [x] **ACP delegation** (`docs/findings/acp.md`): run a named harness via `subagent`, store its child transcript, map updates for the desktop, and cancel with the owning tool.
 - [x] **Scoped MCP progress** for ACP delegations: loopback HTTP or stdio bridge, per-turn token, no access to unrelated conversations.
 - [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
-- [ ] **Long-lived ACP subagents**: explicit start/send/status/cancel controls for multistep delegation.
-- [ ] **ACP approvals**: route ACP permission requests to approvals in the UI.
+- [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP (`docs/decisions/0004-ade-workspace.md`).
+- [x] **ACP approvals**: per-chat `access` option (full / ask / read-only); `ask` holds permission requests as approvals until a client answers.
 - [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
-- [ ] Conversation metadata document (title, origin, pinned/archived/unread) for the sidebar; title generation.
+- [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, worktree, timestamps) for the sidebar; rename.
+- [x] **ADE workspace** (t3code parity, 2026-11-18): projects, per-chat model/effort/mode from the runner's ACP config options (config = default), slash commands, `@` file search, stop, queue view and removal, attachments, full-text search, history paging, git worktree chats, per-turn checkpoints with diff and revert, commit (generated message) / push / PR.
+- [ ] ADE follow-ups (from the t3code gap analysis): terminal panes (server PTYs; Bun lacks openpty), in-thread find, edit-from-here / fork a chat at a message, plan-mode approve → implement, usage and limits panel, settings UI and rebindable keys, harness probe (capabilities and models per runner before a chat exists), scratch directories for project-less chats, multi-model fan-out to parallel worktrees.
 - [ ] Approvals: `beforeTool` hook + memo for dangerous tools, surfaced as protocol requests.
 - [ ] Credentials: persist pi-ai `CredentialStore` in the state dir; OAuth login (Claude Pro/Max, ChatGPT, Copilot) driven from a UI.
 - [ ] Auth: per-client tokens, pairing codes (QR for iOS), scopes; `tailscale serve` helper (t3code's `--tailscale-serve`).
@@ -36,7 +39,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 ## Protocol
 
 - [ ] Generate Rust (`typify`) and Swift (`quicktype` or hand-rolled from schema) types from `protocol/schema.json` instead of mirroring by hand.
-- [ ] Methods: abort, compact, configure (model/thinking), fork, archive; approvals; paging older entries (`ConversationTranscript.loadEarlier`).
+- [ ] Methods: compact, fork. (Done: abort, configure, archive, approvals, paging via `conversation.entries`.)
 - [ ] Protocol version negotiation beyond the `hello` equality check.
 
 ## Connectors
@@ -50,9 +53,9 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 
 - [x] Skeleton: sidebar + transcript + input, live view via delta ops
 - [x] Redesign on rune-kit + OpenCode theme (light/dark): split shell with collapsible sidebar (Orchestrator, Chats, Subagents, busy spinners, connection footer), thread header (model, thinking, usage), Markdown timeline with grouped collapsible tool rows, subagent rows that open the child, turn dividers, streaming answer, auto-growing composer, toasts
-- [ ] Desktop follow-ups: Stop button (needs a protocol `conversation.abort`), busy state for unwatched conversations (needs per-conversation status in `conversations.list` or a task-graph watch), diffs for edit/write tool results, approvals, conversation titles from the backend
+- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode/access selects, `/` commands, `@` files, attachments, stop, queue rows; approval card; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; Ctrl/Cmd+D changes panel (diffs, branch, commit, push, PR, revert); worktree chats; desktop notifications and window-title status
 - [ ] Settings UI writing `config.d/` drop-ins
-- [ ] Tray/notifications (Rune `dbus` feature), global shortcut to summon
+- [ ] Tray, global shortcut to summon
 
 ## iOS
 
@@ -65,6 +68,7 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 - [ ] Watch conversations: Chord delta apply in Swift, transcript rendering, sidebar from `conversations.list`
 - [ ] Pairing (QR from desktop/CLI), token in Keychain instead of `@AppStorage`
 - [ ] Push notifications (needs a relay; out of scope until remote auth exists)
+- [ ] Replace the hand-rolled JSON-RPC correlation in `Backend.swift` with `ChimeHQ/JSONRPC` (needs a small custom `DataChannel` to send the `Authorization` header); blocked on a device build to verify
 
 ## Nix / ops
 

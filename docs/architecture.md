@@ -34,7 +34,7 @@ flowchart LR
 
 `viz-backend` is the only process that owns state. It opens a pi-durable `Harness` over SQLite (`openNodeSqliteStorage`, which runs on Bun's `node:sqlite`) at `$STATE_DIRECTORY` or `$XDG_STATE_HOME/viz/viz.sqlite`. pi-durable is single-writer: other processes never open the database; they talk to the backend.
 
-- **Orchestrator**: pi-durable's reserved root conversation (`harness.root()`) and viz's only native model loop. It uses `CodingTools` and the `viz.memory`, `viz.orchestrator`, and `viz.subagent` extensions. `viz.settings` stores the selected model and thinking level; config supplies defaults, instructions, cwd, and extensions. Its memory makes the history unbounded.
+- **Orchestrator**: pi-durable's reserved root conversation (`harness.root()`) and viz's only native model loop. It uses `CodingTools` and the `viz.memory`, `viz.orchestrator`, `viz.subagent`, and `viz.orchestrator.tools` extensions. `viz.settings` stores the selected model and thinking level; config supplies defaults, instructions, cwd, and extensions. Its memory makes the history unbounded.
 - **Durability**: the orchestrator's model requests and tool calls are checkpointed pi-durable tasks. `requestId` on `conversation.submit` makes admission idempotent (connectors use the platform message id).
 
 ### ACP app chats
@@ -67,7 +67,15 @@ Cancellation sends `session/cancel` and closes the process. An interrupted exter
 
 Each ACP process gets a per-conversation token for viz's MCP tools over loopback HTTP, or a local stdio bridge for runners without HTTP support. An active turn can call `report_progress`, `spawn_subagent`, `list_subagents`, `read_subagent`, `message_subagent`, and `cancel_subagent`. The token never grants access outside the caller's descendants. Spawning creates an ownerless ACP chat nested under the caller and inherits its project and cwd; spawn and message can optionally return without waiting for the answer.
 
+The MCP endpoint (`mcp/server.ts`) is the official SDK (`@modelcontextprotocol/server`, `createMcpHandler`), serving the 2026-07-28 protocol and stateless 2025-era clients. viz refuses browser origins and checks the bearer token before a request reaches the SDK; the SDK builds a server per request whose tools act as the token's conversation. Tool inputs are pi-schema JSON Schemas wrapped with `fromJsonSchema`. The bridge (`viz-backend mcp-bridge`) relays the SDK's stdio server transport to its Streamable HTTP client transport, which adds the protocol headers each message needs.
+
 App chats and orchestrator delegation use `[backend].default_harness` when no runner is given. ACP-spawned subagents inherit the caller's runner unless overridden. With exactly one configured runner, it is the implicit default; without a default, new app chats and orchestrator delegations must name a runner.
+
+### Orchestrator tools
+
+`orchestrator-tools.ts` gives the orchestrator `list_conversations` (projects and conversations with status and unread flags), `read_conversation` (recent transcript, native or ACP), `search_conversations` (the FTS index), `spawn_chat` (an ACP chat in a project, optionally in a new worktree), `message_conversation` (queue to a chat or subagent), and `cancel_conversation`. They share transcript reading and answer lookup with the MCP tools (`transcripts.ts`). The orchestrator cannot message or cancel itself.
+
+`spawn_chat` and `message_conversation` return at once. In one commit of the tool's task they create the chat or queue the input, start a background `viz.orchestrator.report` task on the root, and record the conversation in the task-scoped `viz.orchestrator.call` document, so a replay returns the same conversation instead of starting another. A worktree is memoized on the tool task. The report task waits for the input to settle, across restarts, and submits `[chat N "title"] finished: …` or `… stopped (reason)` to the orchestrator once (keyed by its task ID); an idle orchestrator starts a new turn, a busy one gets it steered in. Report tasks are background tasks, so aborting the orchestrator's turn leaves them running.
 
 ## Memory (`backend/src/memory/`)
 

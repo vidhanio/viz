@@ -40,7 +40,7 @@ struct ContentView: View {
         } else {
           searchSection
         }
-CUT_PLACEHOLDER
+        CUT_PLACEHOLDER
       }
       .navigationTitle("viz")
       .searchable(text: $searchText, prompt: "Search conversations")
@@ -150,7 +150,8 @@ CUT_PLACEHOLDER
       if let searchResults, searchResults.query == query {
         switch searchResults.result {
         case .success(let hits):
-          let conversations = Dictionary(uniqueKeysWithValues: visibleConversations.map { ($0.id, $0) })
+          let conversations = Dictionary(
+            uniqueKeysWithValues: visibleConversations.map { ($0.id, $0) })
           let visibleHits = hits.filter { conversations[$0.conversation] != nil }
           if visibleHits.isEmpty {
             Text("No matches")
@@ -158,7 +159,8 @@ CUT_PLACEHOLDER
           }
           ForEach(visibleHits) { hit in
             if let conversation = conversations[hit.conversation] {
-              NavigationLink(value: Selection.hit(conversation: hit.conversation, entry: hit.entry)) {
+              NavigationLink(value: Selection.hit(conversation: hit.conversation, entry: hit.entry))
+              {
                 VStack(alignment: .leading, spacing: 4) {
                   conversationTitle(conversation)
                     .lineLimit(1)
@@ -253,7 +255,9 @@ CUT_PLACEHOLDER
       Button {
         update(conversation, pinned: !conversation.pinned)
       } label: {
-        Label(conversation.pinned ? "Unpin" : "Pin", systemImage: conversation.pinned ? "pin.slash" : "pin")
+        Label(
+          conversation.pinned ? "Unpin" : "Pin",
+          systemImage: conversation.pinned ? "pin.slash" : "pin")
       }
       .tint(.gray)
     }
