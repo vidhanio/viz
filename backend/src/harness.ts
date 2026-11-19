@@ -1,7 +1,7 @@
 /** Opens viz's pi-durable harness over SQLite in the state directory, with the orchestrator's memory beside it. */
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type { Context } from "@earendil-works/chord/context";
 import type { WatchHandle } from "@earendil-works/chord/watch";
@@ -10,42 +10,67 @@ import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
   type Conversation,
+  type ConversationId,
   configure,
   type ConversationView,
   createRegistry,
   Harness,
   ROOT_CONVERSATION_ID,
   LiveDoc,
-  type ModelRef,
   type Submission,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
-import { type ChatInput, chatScheduler } from "./agents/chat.ts";
+import { ChatDoc, type ChatInput, chatScheduler } from "./agents/chat.ts";
+import { AgentDoc } from "./agents/model.ts";
 import { Runners } from "./agents/runners.ts";
 import { AgentSessions } from "./agents/sessions.ts";
+import { agentTools } from "./agents/tools.ts";
+import { type ChangeFeed, observeChanges } from "./changes.ts";
 import { type LoadedConfig, resolveSecret, stateDir } from "./config.ts";
+import { Conversations, descendants, moveConversation } from "./conversations.ts";
+import { FileSearch } from "./files.ts";
 import { type MemoryBinding, memoryExtension } from "./memory/extension.ts";
 import { type Compactor, Memory } from "./memory/memory.ts";
 import { MEMORY_PROMPT } from "./memory/prompt.ts";
 import { Sync } from "./memory/sync.ts";
-import { Orchestrator, subagentExtension } from "./orchestrator.ts";
+import { modelRef, Orchestrator, orchestratorSettings, SettingsDoc, subagentExtension } from "./orchestrator.ts";
+import { MetaDoc, projectIn, projects, type ProjectStore, touch } from "./projects.ts";
+import type { Params } from "./protocol.ts";
 import { ORCHESTRATOR_TITLE, TitleDoc } from "./titles.ts";
 
 export type VizHarness = {
   readonly harness: Harness;
   /** The orchestrator: pi-durable's reserved root conversation. */
   readonly root: Conversation;
+  readonly changes: ChangeFeed;
+  readonly conversations: Conversations;
+  readonly projects: ProjectStore;
+  readonly runners: Runners;
+  readonly approvals: AgentSessions["approvals"];
   /**
    * Submits an input. To the orchestrator, as uniichat turns go: an input while it works joins the running turn
    * (steered in between tool calls); one while it is idle starts a new turn from a fresh context, whose past reaches
    * the model only through the memory's view. Other conversations queue inputs as follow-ups.
    */
   submit(target: Conversation, input: ChatInput, context: Context): Promise<Submission>;
-  /** A new ownerless chat bound to the default ACP harness. */
-  createChat(context: Context): Promise<Conversation>;
+  createChat(options: Params<"conversation.create">, context: Context): Promise<Conversation>;
+  updateConversation(
+    id: ConversationId,
+    options: Omit<Params<"conversation.update">, "conversation">,
+    context: Context,
+  ): Promise<void>;
+  configureConversation(
+    id: ConversationId,
+    option: string,
+    value: Params<"conversation.configure">["value"],
+    context: Context,
+  ): Promise<void>;
+  abortConversation(id: ConversationId, context: Context): Promise<void>;
+  removeProject(id: string, context: Context): Promise<void>;
+  searchFiles(id: ConversationId, query: string, limit: number | undefined, context: Context): Promise<string[]>;
   close(context: Context): Promise<void>;
 };
 
@@ -67,8 +92,6 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     await credentials.modify(provider, async () => ({ type: "api_key", key }));
   }
   const models = options.models ?? builtinModels({ credentials });
-  const ref = ({ provider, model }: { provider: string; model: string }): ModelRef => ({ provider, modelId: model });
-
   const { orchestrator, memory: memoryConfig } = config;
   const compactorModel = models.getModel(memoryConfig.compactor.provider, memoryConfig.compactor.model);
   if (compactorModel === undefined) {
@@ -96,10 +119,10 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   const memory = new Memory(join(dir, "memory.sqlite"), compactor);
   const binding: MemoryBinding = {};
   const Memorize = memoryExtension(memory, binding);
-  const cwd = orchestrator.cwd ?? homedir();
-  const sessions = new AgentSessions(options.version);
+  const cwd = resolve(orchestrator.cwd ?? homedir());
+  const sessions = new AgentSessions();
   const chats = chatScheduler(runners, sessions, cwd);
-  const Subagent = subagentExtension(runners, sessions);
+  const Subagent = subagentExtension(runners, sessions, () => harness);
 
   const registry = createRegistry();
   registry.install(CodingTools);
@@ -108,7 +131,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   registry.install(Subagent);
   registry.install(chats.extension);
 
-  const harness = await Harness.open(
+  const harness: Harness = await Harness.open(
     await openNodeSqliteStorage(join(dir, "viz.sqlite")),
     {
       models,
@@ -130,12 +153,13 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     },
     context,
   );
-  const root = await harness.root(context);
-  // Re-applied on every start, so config changes take effect.
+  const root = await harness.root(context, { init: touch });
+  const overrides = await harness.snapshot(SettingsDoc, root.id, context);
+  // The selected options survive restart; config supplies defaults and host settings.
   await root.configure(
     {
-      model: ref(orchestrator.model),
-      thinkingLevel: orchestrator.thinking ?? null,
+      model: modelRef(overrides?.model ?? orchestrator.model),
+      thinkingLevel: overrides?.thinking ?? orchestrator.thinking ?? null,
       instructions: orchestrator.instructions ?? null,
       cwd,
       extensions: [CodingTools, Memorize, Orchestrator, Subagent],
@@ -162,21 +186,96 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   // Every commit to the orchestrator feeds the memory as it comes, so its summaries build ahead of the next turn.
   const watch: WatchHandle<ConversationView> = await root.watch(context);
   watch.start(async () => void sync.run().catch((error: unknown) => console.error("memory sync:", error)));
-  if (runners.names.length !== 0) sessions.start();
+  const settings = orchestratorSettings(harness, root.id, models, orchestrator);
+  const conversations = new Conversations(harness, root.id, cwd, runners, sessions, settings.options);
+  const projectStore = projects(harness, root.id);
+  const files = new FileSearch();
+  const changes = await observeChanges(harness, root.id, sessions.approvals, context);
+
+  const abortConversation = async (id: ConversationId, context: Context) => {
+    const target = await harness.conversation(id, context);
+    if (!target) throw new Error("Conversation not found");
+    const record = await harness.commit((tx) => tx.conversation(id), context);
+    const agent = record?.owner && (await harness.snapshot(AgentDoc, id, context));
+    if (agent?.outcome?.kind === "running") await sessions.cancelDelegation(id);
+    else await target.abort(context);
+  };
+  sessions.start(
+    options.version,
+    harness,
+    agentTools({
+      harness,
+      conversations,
+      create: (options, context) => chats.create(harness, options, context),
+      submit: (id, input, context) => chats.submit(harness, id, input, context),
+      abort: abortConversation,
+    }),
+  );
   harness.resume();
 
   let lock = Promise.resolve();
   return {
     harness,
     root,
+    changes,
+    conversations,
+    projects: projectStore,
+    runners,
+    approvals: sessions.approvals,
+    abortConversation,
+    updateConversation: async (id, options, context) => {
+      if (id === root.id) throw new Error("The orchestrator cannot be updated here");
+      const moved = await harness.commit(async (tx) => {
+        const { title, archived, project } = options;
+        if (title !== undefined) (await tx.doc(TitleDoc, id)).title = title;
+        if (archived !== undefined) (await tx.doc(MetaDoc, id)).archived = archived;
+        if (project === undefined) return null;
+        const directory = project === null ? cwd : (await projectIn(tx, root.id, project)).path;
+        const ids = new Set([id]);
+        for await (const { record } of descendants(tx, id)) ids.add(record.id);
+        for (const target of ids) await moveConversation(tx, target, project, directory);
+        return { ids, directory };
+      }, context);
+      if (moved) for (const target of moved.ids) sessions.relocate(target, moved.directory);
+    },
+    configureConversation: async (id, option, value, context) => {
+      if (id === root.id) return settings.configure(option, value, context);
+      const chat = await harness.snapshot(ChatDoc, id, context);
+      const agent = chat?.runner ? undefined : await harness.snapshot(AgentDoc, id, context);
+      await sessions.configure(
+        id,
+        option,
+        value,
+        runners.get(chat?.runner?.name ?? (agent?.harness || undefined)),
+        context,
+      );
+    },
+    removeProject: async (id, context) => {
+      const moved: ConversationId[] = [];
+      await projectStore.remove(
+        id,
+        async (tx, target) => {
+          await moveConversation(tx, target, null, cwd);
+          moved.push(target);
+        },
+        context,
+      );
+      for (const target of moved) sessions.relocate(target, cwd);
+    },
+    searchFiles: async (id, query, limit, context) =>
+      files.search(await conversations.cwdFor(id, context), query, limit),
     submit: async (target, { text, content, requestId, origin }, context) => {
       const input = { content, text, ...(requestId !== undefined && { requestId }), ...(origin && { origin }) };
       if (target.id !== root.id) return chats.submit(harness, target.id, input, context);
       // One at a time, so no input starts a turn between the idle check and the reset.
       const turn = lock.then(async () => {
+        if (requestId !== undefined) {
+          const existing = await harness.commit((tx) => tx.submissionByRequest(root.id, requestId), context);
+          if (existing) return (await harness.submission(existing.id, context))!;
+        }
         const live = await harness.snapshot(LiveDoc, root.id, context);
         if (live?.run === undefined) await root.reset(undefined, context);
-        return root.submit(
+        const submission = await root.submit(
           {
             type: "input",
             content,
@@ -186,6 +285,8 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
           },
           context,
         );
+        await harness.commit((tx) => touch(tx, root.id), context);
+        return submission;
       });
       lock = turn.then(
         () => {},
@@ -193,10 +294,11 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       );
       return turn;
     },
-    createChat: (context) => chats.create(harness, context),
+    createChat: (options, context) => chats.create(harness, options, context),
     close: async (context) => {
       await watch.stop();
       memory.stop();
+      await changes.stop();
       await harness.close(context);
       sessions.close();
       memory.close();

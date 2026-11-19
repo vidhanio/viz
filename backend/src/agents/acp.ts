@@ -6,11 +6,10 @@
  */
 import * as acp from "@agentclientprotocol/sdk";
 
-import type { Harness } from "../config.ts";
-
 export type AcpEvents = {
   /** A `session/update` for a session of this process, in arrival order. */
   readonly onUpdate: (sessionId: string, update: acp.SessionUpdate) => void;
+  readonly onPermission: (params: acp.RequestPermissionRequest) => Promise<acp.RequestPermissionResponse>;
   /** The connection closed; `error` unless viz closed it. */
   readonly onClose: (error: Error | null) => void;
   readonly log: (line: string) => void;
@@ -19,7 +18,7 @@ export type AcpEvents = {
 export type Launch = {
   readonly command: readonly string[];
   readonly env: Readonly<Record<string, string>>;
-  readonly permissions: NonNullable<Harness["permissions"]>;
+  readonly cwd: string;
   /** Cancels startup only; after initialization the caller owns the process. */
   readonly signal?: AbortSignal;
 };
@@ -65,12 +64,6 @@ function launchEnv(overrides: Launch["env"]): Record<string, string> {
   return env;
 }
 
-/** Preference order of permission options by kind: viz decides by kind, never by position. */
-const PERMISSION_KINDS = {
-  allow: ["allow_once", "allow_always"],
-  reject: ["reject_once", "reject_always"],
-} as const satisfies Record<Launch["permissions"], readonly acp.PermissionOptionKind[]>;
-
 export class AcpProcess {
   readonly #capabilities: acp.AgentCapabilities;
   readonly #connection: acp.ClientConnection;
@@ -92,6 +85,7 @@ export class AcpProcess {
       stdout: "pipe",
       stderr: "pipe",
       env: launchEnv(launch.env),
+      cwd: launch.cwd,
     });
     void pipeLines(child.stderr, events.log).catch((error: unknown) => events.log(`harness stderr: ${String(error)}`));
 
@@ -106,9 +100,7 @@ export class AcpProcess {
     });
     const connection = acp
       .client({ name: CLIENT_INFO.name })
-      .onRequest(acp.methods.client.session.requestPermission, ({ params }) =>
-        decide(params.options, launch.permissions),
-      )
+      .onRequest(acp.methods.client.session.requestPermission, ({ params }) => events.onPermission(params))
       .onNotification(acp.methods.client.session.update, ({ params }) =>
         events.onUpdate(params.sessionId, params.update),
       )
@@ -164,24 +156,29 @@ export class AcpProcess {
     return this.#capabilities.mcpCapabilities?.http === true;
   }
 
-  async newSession(cwd: string, mcpServers: acp.McpServer[]): Promise<string> {
-    const { sessionId } = await this.#connection.agent.request(acp.methods.agent.session.new, { cwd, mcpServers });
-    return sessionId;
+  newSession(cwd: string, mcpServers: acp.McpServer[]): Promise<acp.NewSessionResponse> {
+    return this.#connection.agent.request(acp.methods.agent.session.new, { cwd, mcpServers });
   }
 
   /** Restores the same session; a successful load has finished sending its history before replying. */
-  async restoreSession(sessionId: string, cwd: string, mcpServers: acp.McpServer[]): Promise<void> {
+  restoreSession(sessionId: string, cwd: string, mcpServers: acp.McpServer[]): Promise<acp.LoadSessionResponse> {
     const params = { sessionId, cwd, mcpServers };
     const methods = acp.methods.agent.session;
-    if (this.#capabilities.sessionCapabilities?.resume) {
-      await this.#connection.agent.request(methods.resume, params);
-    } else if (this.#capabilities.loadSession === true) {
-      await this.#connection.agent.request(methods.load, params);
-    } else {
-      throw new Error(
-        "The ACP harness cannot restore this session: it supports neither session/resume nor session/load",
-      );
-    }
+    if (this.#capabilities.sessionCapabilities?.resume) return this.#connection.agent.request(methods.resume, params);
+    if (this.#capabilities.loadSession === true) return this.#connection.agent.request(methods.load, params);
+    throw new Error("ACP harness cannot restore sessions");
+  }
+
+  setOption(sessionId: string, configId: string, value: string | boolean): Promise<acp.SetSessionConfigOptionResponse> {
+    return this.#connection.agent.request(acp.methods.agent.session.setConfigOption, {
+      sessionId,
+      configId,
+      ...(typeof value === "boolean" ? { type: "boolean", value } : { value }),
+    });
+  }
+
+  async setMode(sessionId: string, modeId: string): Promise<void> {
+    await this.#connection.agent.request(acp.methods.agent.session.setMode, { sessionId, modeId });
   }
 
   /** Runs one prompt turn; resolves with its stop reason when the agent ends it. */
@@ -202,17 +199,6 @@ export class AcpProcess {
     this.#closing = true;
     this.#connection.close();
   }
-}
-
-function decide(
-  options: readonly acp.PermissionOption[],
-  policy: Launch["permissions"],
-): acp.RequestPermissionResponse {
-  for (const kind of policy === "allow" ? PERMISSION_KINDS.allow : PERMISSION_KINDS.reject) {
-    const option = options.find((o) => o.kind === kind);
-    if (option !== undefined) return { outcome: { outcome: "selected", optionId: option.optionId } };
-  }
-  return { outcome: { outcome: "cancelled" } };
 }
 
 function stopProcess(child: Bun.PipedSubprocess): void {

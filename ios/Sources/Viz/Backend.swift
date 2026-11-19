@@ -24,6 +24,58 @@ enum VizProtocol {
   struct Submitted: Decodable {
     let submission: Int
   }
+
+  struct Project: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let path: String
+    let branch: String?
+    let createdAt: Int64
+  }
+
+  struct ConversationSummary: Decodable, Identifiable {
+    enum Kind: String, Decodable {
+      case orchestrator, chat, subagent
+    }
+
+    enum Status: String, Decodable {
+      case idle, working, approval, failed
+    }
+
+    let id: Int
+    let title: String
+    let kind: Kind
+    let parent: Int?
+    let project: String?
+    let harness: String?
+    let status: Status
+    let archived: Bool
+    let updatedAt: Int64
+  }
+
+  enum OptionValue {
+    case string(String)
+    case bool(Bool)
+
+    var json: Any {
+      switch self {
+      case .string(let value): value
+      case .bool(let value): value
+      }
+    }
+  }
+
+  struct Projects: Decodable {
+    let projects: [Project]
+  }
+
+  struct Conversations: Decodable {
+    let conversations: [ConversationSummary]
+  }
+
+  struct Created: Decodable {
+    let conversation: Int
+  }
 }
 
 /// Connection to a viz backend over its TCP listener (tailnet/LAN), with a bearer token.
@@ -41,6 +93,11 @@ final class Backend {
   }
 
   private(set) var state: State = .disconnected
+  private(set) var projects: [VizProtocol.Project] = []
+  private(set) var conversations: [VizProtocol.ConversationSummary] = []
+  private(set) var listError: String?
+  private var refreshing = false
+  private var refreshRequested = false
   private var task: URLSessionWebSocketTask?
   private var nextId = 0
   private var pending: [Int: CheckedContinuation<Data, Error>] = [:]
@@ -53,6 +110,15 @@ final class Backend {
 
   func connect(url: URL, token: String) async {
     task?.cancel(with: .goingAway, reason: nil)
+    for continuation in pending.values {
+      continuation.resume(throwing: URLError(.cancelled))
+    }
+    pending.removeAll()
+    projects = []
+    conversations = []
+    listError = nil
+    refreshing = false
+    refreshRequested = false
     state = .connecting
     var request = URLRequest(url: url.appending(path: "v1/rpc"))
     if var components = URLComponents(url: request.url!, resolvingAgainstBaseURL: false) {
@@ -70,9 +136,59 @@ final class Backend {
         params: ["protocol": VizProtocol.version, "client": ["kind": "app", "name": "ios"]]
       )
       let hello = try JSONDecoder().decode(VizProtocol.Hello.self, from: data)
+      guard self.task === task else { return }
       state = .connected(version: hello.version, root: hello.root)
+      await refreshLists(on: task)
     } catch {
+      guard self.task === task else { return }
       state = .failed(error.localizedDescription)
+    }
+  }
+
+  func create(
+    project: String? = nil,
+    harness: String? = nil,
+    options: [String: VizProtocol.OptionValue]? = nil
+  ) async throws -> Int {
+    var params: [String: Any] = [:]
+    if let project { params["project"] = project }
+    if let harness { params["harness"] = harness }
+    if let options { params["options"] = options.mapValues(\.json) }
+    let data = try await call("conversation.create", params: params)
+    return try JSONDecoder().decode(VizProtocol.Created.self, from: data).conversation
+  }
+
+  func abort(conversation: Int) async throws {
+    _ = try await call("conversation.abort", params: ["conversation": conversation])
+  }
+
+  private func refreshLists(on task: URLSessionWebSocketTask) async {
+    guard self.task === task, case .connected = state else { return }
+    refreshRequested = true
+    guard !refreshing else { return }
+    refreshing = true
+    defer {
+      if self.task === task { refreshing = false }
+    }
+    while refreshRequested {
+      refreshRequested = false
+      do {
+        let projectData = try await call("projects.list", params: [:])
+        guard self.task === task else { return }
+        let conversationData = try await call("conversations.list", params: [:])
+        guard self.task === task else { return }
+        let decoder = JSONDecoder()
+        let projects = try decoder.decode(VizProtocol.Projects.self, from: projectData).projects
+        let conversations = try decoder.decode(
+          VizProtocol.Conversations.self, from: conversationData
+        ).conversations
+        self.projects = projects
+        self.conversations = conversations
+        listError = nil
+      } catch {
+        guard self.task === task else { return }
+        listError = error.localizedDescription
+      }
     }
   }
 
@@ -106,11 +222,14 @@ final class Backend {
       do {
         message = try await task.receive()
       } catch {
+        guard self.task === task else { return }
+        self.task = nil
         for continuation in pending.values { continuation.resume(throwing: error) }
         pending.removeAll()
-        if self.task === task { state = .failed(error.localizedDescription) }
+        state = .failed(error.localizedDescription)
         return
       }
+      guard self.task === task else { return }
       guard case .string(let text) = message,
         let object = try? JSONSerialization.jsonObject(with: Data(text.utf8)) as? [String: Any]
       else { continue }
@@ -130,7 +249,9 @@ final class Backend {
           continuation.resume(returning: data)
         }
       }
-      // TODO: `conversation.view` notifications (see TODO.md, "iOS").
+      if object["method"] as? String == "conversations.changed" {
+        Task { await refreshLists(on: task) }
+      }
     }
   }
 }

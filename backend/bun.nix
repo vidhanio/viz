@@ -277,6 +277,10 @@
     url = "https://registry.npmjs.org/formdata-polyfill/-/formdata-polyfill-4.0.10.tgz";
     hash = "sha512-buewHzMvYL29jdeQTVILecSaZKnt/RJWjoZCF5OW60Z67/GmSLBkOFM7qh1PI3zFNtJbaZL5eQu1vLfazOwj4g==";
   };
+  "fuzzysort@4.0.2" = fetchurl {
+    url = "https://registry.npmjs.org/fuzzysort/-/fuzzysort-4.0.2.tgz";
+    hash = "sha512-3c7yD6rK1EXIsqpcu1ZVzXJugODWNMzvUij6yTiziaAHrpNS8kzFOI9mJLE8pmG4K9JOaVgzQRgklfOEk8f4Tg==";
+  };
   "gaxios@7.3.1" = fetchurl {
     url = "https://registry.npmjs.org/gaxios/-/gaxios-7.3.1.tgz";
     hash = "sha512-kB3rzJV7d9juLZh8/56QTXCwQfxyhdOMdyYk1HdQKFtF8TJTDTZQJtixWIwXdE9Jji91mC41DUNpjleo4L4eAQ==";

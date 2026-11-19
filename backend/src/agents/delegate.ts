@@ -1,9 +1,12 @@
 import { type Context, withoutAbortSignal } from "@earendil-works/chord/context";
-import type { ConversationId, ToolExecutionApi, Tx } from "@earendil-works/pi-durable";
+import type { ConversationId, Harness, ToolExecutionApi, Tx } from "@earendil-works/pi-durable";
 
 import type { Harness as HarnessConfig } from "../config.ts";
+import { touch } from "../projects.ts";
 import { TitleDoc, titleFrom } from "../titles.ts";
-import { AgentDoc, PromptEntry, SessionDoc, TurnEntry } from "./model.ts";
+import { ChatDoc } from "./chat.ts";
+import { AgentDoc, PromptEntry, TurnEntry } from "./model.ts";
+import { AcpStateDoc, initialDesired } from "./options.ts";
 import type { AgentSessions, TurnOutcome } from "./sessions.ts";
 
 export async function delegate(
@@ -14,65 +17,76 @@ export async function delegate(
     task: string;
     cwd: string;
     sessions: AgentSessions;
+    harness: Harness;
   },
 ): Promise<{ text: string; conversationId: ConversationId; isError: boolean }> {
-  const { select, task, cwd, sessions } = options;
+  const { select, task, cwd, sessions, harness } = options;
   const { id, runner } = await api.commit(async (tx) => {
     const existing = (await tx.scanConversations({ ownerTaskId: api.taskId }, 1)).items[0];
     if (existing) return { id: existing.id, runner: undefined };
     const runner = select();
     const child = await tx.createConversation({ ownership: { kind: "task", taskId: api.taskId } });
     (await tx.doc(TitleDoc, child.id)).title = titleFrom(task);
+    (await tx.doc(ChatDoc, child.id)).runner = { name: runner.name, cwd };
+    (await tx.doc(AcpStateDoc, child.id)).desired = initialDesired(runner.config);
+    await touch(tx, child.id);
     const state = await tx.doc(AgentDoc, child.id);
     state.harness = runner.name;
     state.outcome = { kind: "running" };
     await tx.appendEntry(PromptEntry, child.id, { data: { text: task } });
     return { id: child.id, runner };
   }, context);
-  await api.details({ conversationId: id }, context);
 
   const cleanup = withoutAbortSignal(context);
-  const commit = (write: (tx: Tx) => Promise<void>) => api.commit(write, cleanup);
+  // Cancelling the parent task disallows its run-mode commits; the child still needs a terminal record.
+  const commit = (write: (tx: Tx) => Promise<void>) => harness.commit(write, cleanup);
   let outcome: TurnOutcome;
-  if (runner === undefined) {
-    const state = await api.snapshot(AgentDoc, id, context);
-    if (!state?.harness) {
-      return result(id, { kind: "failed", error: "This legacy native subagent cannot be replayed" });
-    }
-    const previous = state.outcome;
-    if (previous?.kind === "done" || previous?.kind === "failed") return result(id, previous);
-    // ACP prompts have no idempotency key. An interrupted delegation cannot be replayed safely.
-    outcome = { kind: "failed", error: "viz restarted during the ACP turn; it was not replayed" };
-  } else {
-    try {
+  try {
+    await api.details({ conversationId: id }, context);
+    if (runner === undefined) {
+      const state = await harness.snapshot(AgentDoc, id, context);
+      if (!state?.harness) {
+        return result(id, { kind: "failed", error: "This legacy native subagent cannot be replayed" });
+      }
+      const previous = state.outcome;
+      if (previous?.kind === "done" || previous?.kind === "failed") return result(id, previous);
+      // ACP prompts have no idempotency key. An interrupted delegation cannot be replayed safely.
+      outcome = { kind: "failed", error: "Interrupted ACP turn; prompt not resent" };
+    } else
       outcome = await sessions.turn({
         id,
         ...runner,
         cwd,
-        sessionId: null,
+        delegation: true,
         text: task,
         commit,
-        saveSession: (sessionId) =>
-          commit(async (tx) => {
-            (await tx.doc(SessionDoc, id)).sessionId = sessionId;
-          }),
         context,
         progress: (text) => api.output(`${text}\n`),
       });
-    } finally {
-      sessions.forget(id);
-    }
+  } catch (error) {
+    outcome = context.abortSignal?.aborted
+      ? { kind: "done", answer: "", stopReason: "cancelled" }
+      : { kind: "failed", error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    if (runner) sessions.forget(id);
   }
 
   await commit(async (tx) => {
-    (await tx.doc(AgentDoc, id)).outcome = outcome;
+    const state = await tx.doc(AgentDoc, id);
+    if (state.outcome?.kind !== "running") {
+      if (state.outcome) outcome = state.outcome;
+      return;
+    }
+    state.outcome = outcome;
+    await touch(tx, id);
     await tx.appendEntry(TurnEntry, id, {
       data:
         outcome.kind === "done"
-          ? { stopReason: outcome.stopReason, error: null }
+          ? { stopReason: outcome.stopReason, error: null, answer: outcome.answer }
           : { stopReason: "error", error: outcome.error },
     });
   });
+  sessions.delegationEnded(id);
   return result(id, outcome);
 }
 

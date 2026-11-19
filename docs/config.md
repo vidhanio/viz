@@ -22,7 +22,7 @@ Layering, locations, and rationale: `docs/decisions/0002-config-layering.md`. Ex
 | `state_dir`       | path          | `$XDG_STATE_HOME/viz`               | Backend databases                                         |
 | `default_harness` | string        | the sole configured harness, if any | Named ACP runner for new app chats and default delegation |
 
-With several `[harnesses.<name>]` entries, set `default_harness` to start new default chats or subagents. Existing chats can keep their bound runner, and an explicit `harness` argument to `subagent` overrides the default. Subagents never run natively. Without any configured harness, the orchestrator still works, but creating an app chat fails and the `subagent` tool is unavailable.
+With several `[harnesses.<name>]` entries, set `default_harness` to create chats or orchestrator subagents without choosing a runner. Existing chats keep their runner. ACP subagents started by an ACP chat use that chat's runner unless specified. Without a configured harness, only the orchestrator can run.
 
 ## `[providers.<id>]` (backend)
 
@@ -39,7 +39,7 @@ With several `[harnesses.<name>]` entries, set `default_harness` to start new de
 | `instructions` | string                                        | unset                  |
 | `cwd`          | path                                          | `$HOME`                |
 
-Applied to the root conversation on every backend start. `[orchestrator].model` and `[memory].compactor` must be set explicitly. Provider credentials come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...; see `docs/findings/pi-durable.md`, Q5); with Home Manager use `programs.viz.environmentFile`.
+The configured model and thinking level are defaults. Selections made in the orchestrator are saved and reapplied on restart. `[orchestrator].model` and `[memory].compactor` must be set explicitly. Provider credentials come from the environment (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, ...; see `docs/findings/pi-durable.md`, Q5); with Home Manager use `programs.viz.environmentFile`.
 
 When upgrading, remove the old `[subagents].model` setting and configure ACP runners instead. Legacy native app chats keep their visible transcript, but their next input starts an ACP session without transferring their native history. If you use Home Manager's `mutableSettings`, remove the old setting from the writable TOML as well as from `programs.viz.settings`.
 
@@ -58,12 +58,19 @@ The compactor writes every summary line, so pick a cheap, fast model (uniichat u
 
 Defines a named ACP runner for app chats and the `subagent` tool. A configured harness runs under the backend's OS account. Permission policy only covers requests the ACP harness sends to viz; it is not a sandbox.
 
-| Key           | Type                   | Default                                                              |
-| ------------- | ---------------------- | -------------------------------------------------------------------- |
-| `command`     | string                 | Required; executable on `PATH` or absolute path                      |
-| `args`        | array of strings       | `[]`                                                                 |
-| `env`         | table of Secret values | `{}`; provider keys are not automatically inherited from the backend |
-| `permissions` | `reject` or `allow`    | `reject`; applies to ACP permission requests                         |
+| Key           | Type                        | Default                                                              |
+| ------------- | --------------------------- | -------------------------------------------------------------------- |
+| `command`     | string                      | Required; executable on `PATH` or absolute path                      |
+| `args`        | array of strings            | `[]`                                                                 |
+| `env`         | table of Secret values      | `{}`; provider keys are not automatically inherited from the backend |
+| `model`       | string                      | ACP session's default model                                          |
+| `effort`      | string                      | ACP session's default thinking level                                 |
+| `mode`        | string                      | ACP session's default mode                                           |
+| `permissions` | `allow`, `ask`, or `reject` | `reject`; default Access setting for new chats                       |
+
+Set `model`, `effort`, and `mode` to values reported by the runner. viz matches the option category (`model`, `thought_level`, `mode`), then the option id if there is no matching category. The app's selections override these defaults for that conversation.
+
+Access maps `allow` to **Full**, `ask` to **Ask**, and `reject` to **Read-only**. Ask waits for an app to respond to each ACP permission request; an ended or cancelled turn dismisses its pending requests. Read-only rejects ACP permission requests; it cannot stop a runner that acts without asking.
 
 ## `[client]` (Rust clients)
 

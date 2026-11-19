@@ -101,10 +101,30 @@
                 "parent": {
                   "type": "integer",
                   "minimum": 1,
-                  "description": "For a subagent: the conversation whose tool call owns it"
+                  "description": "For a subagent: the conversation that started it"
+                },
+                "project": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Backend-assigned project id"
+                },
+                "harness": {
+                  "type": "string",
+                  "description": "ACP runner name; absent for the orchestrator"
+                },
+                "status": {
+                  "enum": ["idle", "working", "approval", "failed"],
+                  "description": "working: a turn runs or inputs wait; approval: a permission request waits for the user"
+                },
+                "archived": {
+                  "type": "boolean"
+                },
+                "updatedAt": {
+                  "type": "integer",
+                  "description": "Unix milliseconds of the last input or turn end; 0 when unknown"
                 }
               },
-              "required": ["id", "title", "kind"],
+              "required": ["id", "title", "kind", "status", "archived", "updatedAt"],
               "additionalProperties": false
             }
           }
@@ -116,7 +136,31 @@
     "conversation.create": {
       "params": {
         "type": "object",
-        "properties": {},
+        "properties": {
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Backend-assigned project id"
+          },
+          "harness": {
+            "type": "string",
+            "description": "Configured ACP runner; default [backend].default_harness"
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                }
+              ]
+            },
+            "description": "Initial ConfigOption values by id, e.g. a model picked before the first message"
+          }
+        },
         "additionalProperties": false
       },
       "result": {
@@ -129,6 +173,128 @@
           }
         },
         "required": ["conversation"],
+        "additionalProperties": false
+      }
+    },
+    "conversation.update": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "project": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "description": "Backend-assigned project id"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["conversation"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "conversation.configure": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "option": {
+            "type": "string"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "boolean"
+              }
+            ]
+          }
+        },
+        "required": ["conversation", "option", "value"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "conversation.abort": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          }
+        },
+        "required": ["conversation"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "approval.respond": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "approval": {
+            "type": "string"
+          },
+          "option": {
+            "anyOf": [
+              {
+                "type": "string",
+                "description": "An Approval option id; null cancels the request"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": ["conversation", "approval", "option"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -238,6 +404,262 @@
         "required": ["watching"],
         "additionalProperties": false
       }
+    },
+    "projects.list": {
+      "params": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Backend-assigned project id"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "path": {
+                  "type": "string",
+                  "description": "Absolute directory; the cwd of the project's chats"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "Checked-out git branch, null outside a repository or when detached"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "createdAt": {
+                  "type": "integer",
+                  "description": "Unix milliseconds"
+                }
+              },
+              "required": ["id", "name", "path", "branch", "createdAt"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["projects"],
+        "additionalProperties": false
+      }
+    },
+    "project.create": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "description": "An existing directory; `~` expands to $HOME"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Default: the directory's name"
+          }
+        },
+        "required": ["path"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Backend-assigned project id"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "description": "Absolute directory; the cwd of the project's chats"
+              },
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "description": "Checked-out git branch, null outside a repository or when detached"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Unix milliseconds"
+              }
+            },
+            "required": ["id", "name", "path", "branch", "createdAt"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["project"],
+        "additionalProperties": false
+      }
+    },
+    "project.update": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Backend-assigned project id"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": ["project", "name"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Backend-assigned project id"
+              },
+              "name": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string",
+                "description": "Absolute directory; the cwd of the project's chats"
+              },
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "description": "Checked-out git branch, null outside a repository or when detached"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "createdAt": {
+                "type": "integer",
+                "description": "Unix milliseconds"
+              }
+            },
+            "required": ["id", "name", "path", "branch", "createdAt"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["project"],
+        "additionalProperties": false
+      }
+    },
+    "project.remove": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Backend-assigned project id"
+          }
+        },
+        "required": ["project"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "harnesses.list": {
+      "params": {
+        "type": "object",
+        "properties": {},
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "harnesses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "default": {
+                  "type": "boolean"
+                }
+              },
+              "required": ["name", "default"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["harnesses"],
+        "additionalProperties": false
+      }
+    },
+    "files.search": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "conversation": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "pi-durable ConversationId"
+          },
+          "query": {
+            "type": "string",
+            "description": "Fuzzy path query; empty lists the first files"
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": ["conversation", "query"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "Path relative to the conversation's cwd"
+            }
+          }
+        },
+        "required": ["files"],
+        "additionalProperties": false
+      }
     }
   },
   "notifications": {
@@ -253,6 +675,222 @@
         "ops": {}
       },
       "required": ["conversation"],
+      "additionalProperties": false
+    },
+    "conversation.state": {
+      "type": "object",
+      "properties": {
+        "conversation": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "pi-durable ConversationId"
+        },
+        "state": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "enum": ["idle", "working", "approval", "failed"],
+              "description": "working: a turn runs or inputs wait; approval: a permission request waits for the user"
+            },
+            "harness": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "project": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Backend-assigned project id"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "cwd": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "readOnly": {
+              "type": "boolean",
+              "description": "Inputs are refused: a subagent while its delegating call still runs"
+            },
+            "options": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "model | thought_level | mode | access | other ACP categories"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "type": {
+                    "enum": ["select", "boolean"]
+                  },
+                  "value": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
+                  "choices": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "value": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "description": {
+                          "type": "string"
+                        },
+                        "group": {
+                          "type": "string",
+                          "description": "Group label"
+                        }
+                      },
+                      "required": ["value", "name"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["id", "name", "category", "type", "value", "choices"],
+                "additionalProperties": false
+              },
+              "description": "Empty until the runner's session reports them"
+            },
+            "commands": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Without the leading /"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "hint": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["name", "description", "hint"],
+                "additionalProperties": false
+              }
+            },
+            "approvals": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string",
+                    "description": "The tool call's title"
+                  },
+                  "kind": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "ACP tool kind: read, edit, delete, move, search, execute, fetch, ..."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "detail": {
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "description": "The tool call's input or a diff, as text, capped"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "kind": {
+                          "enum": ["allow_once", "allow_always", "reject_once", "reject_always"]
+                        }
+                      },
+                      "required": ["id", "name", "kind"],
+                      "additionalProperties": false
+                    }
+                  }
+                },
+                "required": ["id", "title", "kind", "detail", "options"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": ["status", "harness", "project", "cwd", "readOnly", "options", "commands", "approvals"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["conversation", "state"],
+      "additionalProperties": false
+    },
+    "conversations.changed": {
+      "type": "object",
+      "properties": {},
       "additionalProperties": false
     },
     "reply": {

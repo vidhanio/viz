@@ -1,165 +1,377 @@
-import type { McpServer as McpDeclaration, SessionUpdate } from "@agentclientprotocol/sdk";
-import { awaitWithContext, type Context, withAbortSignal, withoutAbortSignal } from "@earendil-works/chord/context";
-import type { ConversationId, Tx } from "@earendil-works/pi-durable";
-import { obj, str } from "@earendil-works/pi-schema";
+import type { LoadSessionResponse, McpServer as McpDeclaration, SessionUpdate } from "@agentclientprotocol/sdk";
+import {
+  awaitWithContext,
+  BACKGROUND_CONTEXT,
+  type Context,
+  withAbortSignal,
+  withCancel,
+} from "@earendil-works/chord/context";
+import type { ConversationId, Harness, Tx } from "@earendil-works/pi-durable";
 
 import { type Harness as HarnessConfig, resolveSecret } from "../config.ts";
 import { bridgeEnv } from "../mcp/bridge.ts";
-import { McpServer, tool } from "../mcp/server.ts";
+import { McpServer, type McpTool } from "../mcp/server.ts";
+import type { ConfigOption } from "../protocol.ts";
 import { AcpProcess } from "./acp.ts";
+import { Approvals, CANCELLED } from "./approvals.ts";
+import { type Outcome, PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
 import {
-  type Outcome,
-  PlanEntry,
-  ProgressEntry,
-  TextEntry,
-  ThoughtEntry,
-  ToolEntry,
-  type ToolRecord,
-} from "./model.ts";
+  type Access,
+  access,
+  accessOption,
+  AcpStateDoc,
+  defaults,
+  legacyMode,
+  normalize,
+  type OptionValue,
+  validValue,
+} from "./options.ts";
+import { ToolContent } from "./tool-record.ts";
 
 export type TurnOutcome = Exclude<Outcome, { kind: "running" }>;
 
-type TurnOptions = {
-  id: ConversationId;
-  name: string;
-  config: HarnessConfig;
-  cwd: string;
-  sessionId: string | null;
+type SessionOptions = { id: ConversationId; name: string; config: HarnessConfig; cwd: string };
+type TurnOptions = SessionOptions & {
   text: string;
   commit: (write: (tx: Tx) => Promise<void>) => Promise<void>;
-  saveSession: (id: string) => Promise<void>;
   context: Context;
   progress?: (text: string) => void;
+  delegation?: true;
 };
 
 type Update = SessionUpdate | { sessionUpdate: "viz_progress"; text: string };
-type Progress = (text: string) => Promise<void>;
 type TextRun = { kind: "text" | "thought"; text: string };
 
+type ActiveTurn = { context: Context; report: (text: string) => Promise<void> };
+export type ToolScope = { id: ConversationId; active: () => ActiveTurn };
+
 type LiveSession = {
+  readonly id: ConversationId;
+  readonly name: string;
+  readonly cwd: string;
   readonly lifetime: AbortController;
   readonly token: string;
+  readonly ready: Promise<void>;
   process?: AcpProcess;
   sessionId: string | null;
-  active?: { update: (update: SessionUpdate) => void; report: Progress };
+  options: ConfigOption[];
+  legacyMode?: ConfigOption;
+  access: Access;
+  configuring: Promise<void>;
+  cancelled: boolean;
+  active?: ActiveTurn & { update: (update: SessionUpdate) => void };
 };
 
 /** One process per conversation. Callers serialize turns and persist their prompt and terminal state. */
 export class AgentSessions {
-  readonly #mcp: McpServer<Progress>;
+  readonly approvals = new Approvals();
   readonly #sessions = new Map<ConversationId, LiveSession>();
+  readonly #cancelledDelegations = new Set<ConversationId>();
+  #mcp!: McpServer<ToolScope>;
+  #harness!: Harness;
 
-  constructor(version: string) {
+  start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[]): void {
+    this.#harness = harness;
     this.#mcp = new McpServer(
-      { name: "viz", version, instructions: "Report significant progress to the viz conversation." },
-      [
-        tool<Progress, { text: string }>({
-          name: "report_progress",
-          description: "Record a short progress note in this turn's transcript.",
-          input: obj({ text: str({ minLength: 1, maxLength: 4096 }) }),
-          call: async ({ text }, report) => {
-            await report(text);
-            return "Progress recorded.";
-          },
-        }),
-      ],
+      { name: "viz", version, instructions: "Manage your subagents and record progress." },
+      tools,
     );
-  }
-
-  start(): void {
     this.#mcp.start();
   }
 
   close(): void {
-    for (const [id, live] of this.#sessions) this.#release(id, live);
-    this.#mcp.stop();
+    for (const live of this.#sessions.values()) this.#release(live);
+    this.#mcp?.stop();
+    this.#cancelledDelegations.clear();
   }
 
   forget(id: ConversationId): void {
     const live = this.#sessions.get(id);
-    if (live !== undefined) this.#release(id, live);
+    if (live) this.#release(live);
   }
 
-  #release(id: ConversationId, live: LiveSession, error?: unknown): void {
+  relocate(id: ConversationId, cwd: string): void {
+    const live = this.#sessions.get(id);
+    if (live && live.cwd !== cwd) this.#release(live);
+  }
+
+  async cancelDelegation(id: ConversationId): Promise<void> {
+    this.#cancelledDelegations.add(id);
+    const live = this.#sessions.get(id);
+    if (live) await this.#cancel(live);
+  }
+
+  delegationEnded(id: ConversationId): void {
+    this.#cancelledDelegations.delete(id);
+  }
+
+  async #cancel(live: LiveSession): Promise<void> {
+    if (live.cancelled) return;
+    live.cancelled = true;
+    delete live.active;
+    this.approvals.cancel(live.id);
+    if (live.process && live.sessionId !== null) {
+      const cancel = withAbortSignal(AbortSignal.timeout(250), BACKGROUND_CONTEXT);
+      await awaitWithContext(live.process.cancel(live.sessionId), cancel).catch(() => {});
+    }
+    this.#release(live);
+  }
+
+  #release(live: LiveSession, error?: unknown): void {
+    const { id } = live;
     if (this.#sessions.get(id) !== live) return;
     this.#sessions.delete(id);
     delete live.active;
+    this.approvals.cancel(id);
     this.#mcp.revoke(live.token);
     live.lifetime.abort(error ?? new Error("ACP session closed"));
     live.process?.close();
   }
 
-  #allocate(id: ConversationId): LiveSession {
-    // The MCP declaration lasts as long as the process. Its token reaches only this session's active turn.
+  #session(options: SessionOptions): LiveSession {
+    const { id, name, cwd, config } = options;
+    const existing = this.#sessions.get(id);
+    if (existing && existing.name === name && existing.cwd === cwd) return existing;
+    if (existing) this.#release(existing);
     const live: LiveSession = {
+      id,
+      name,
+      cwd,
       lifetime: new AbortController(),
       sessionId: null,
-      token: this.#mcp.grant(async (text) => {
-        const active = live.active;
-        if (active === undefined) throw new Error("No active ACP turn");
-        await active.report(text);
+      options: [],
+      access: access(undefined, config),
+      configuring: Promise.resolve(),
+      cancelled: false,
+      ready: Promise.resolve()
+        .then(() => this.#open(live, config))
+        .catch((error: unknown) => {
+          this.#release(live, error);
+          throw error;
+        }),
+      token: this.#mcp.grant({
+        id,
+        active: () => {
+          if (!live.active || live.active.context.abortSignal?.aborted) throw new Error("No active ACP turn");
+          return live.active;
+        },
       }),
     };
     this.#sessions.set(id, live);
     return live;
   }
 
-  async #open(live: LiveSession, options: TurnOptions, context: Context): Promise<void> {
-    const { id, name, config, cwd, saveSession, sessionId } = options;
-    const url = this.#mcp.url;
-    const signal = context.abortSignal;
-    signal?.throwIfAborted();
+  async prepare(options: SessionOptions): Promise<void> {
+    await this.#session(options).ready;
+  }
+
+  async configure(
+    id: ConversationId,
+    option: string,
+    value: OptionValue,
+    config: HarnessConfig | undefined,
+    context: Context,
+  ) {
+    await this.#harness.commit(async (tx) => {
+      const doc = await tx.doc(AcpStateDoc, id);
+      const setting =
+        option === "access"
+          ? accessOption(access(doc.desired.access, config))
+          : doc.options.find((item) => item.id === option);
+      if (!setting) throw new Error("Option not found");
+      if (!validValue(setting, value)) throw new Error("Invalid option value");
+      doc.desired = { ...doc.desired, [option]: value };
+      if (option !== "access") setting.value = value;
+    }, context);
+    const live = this.#sessions.get(id);
+    if (!live) return;
+    if (option === "access") {
+      live.access = access(value, config);
+      return;
+    }
+    const job = live.configuring.then(async () => {
+      await live.ready;
+      await this.#setOption(live, option, value);
+      await this.#saveOptions(live);
+    });
+    live.configuring = job.catch(() => {});
+    await job;
+  }
+
+  async #open(live: LiveSession, config: HarnessConfig): Promise<void> {
+    const {
+      id,
+      name,
+      cwd,
+      lifetime: { signal },
+    } = live;
+    const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
+    const [session, saved] = await Promise.all([
+      this.#harness.snapshot(SessionDoc, id, context),
+      this.#harness.snapshot(AcpStateDoc, id, context),
+    ]);
+    const sessionId = session?.sessionId ?? null;
+    live.access = access(saved?.desired.access, config);
     const env = Object.fromEntries(
       await awaitWithContext(
         Promise.all(Object.entries(config.env ?? {}).map(async ([key, value]) => [key, await resolveSecret(value)])),
         context,
       ),
     );
+    const early: [string, SessionUpdate][] = [];
+    let opening = true;
     const process = await AcpProcess.start(
-      {
-        command: [config.command, ...(config.args ?? [])],
-        env,
-        permissions: config.permissions ?? "reject",
-        ...(signal && { signal }),
-      },
+      { command: [config.command, ...(config.args ?? [])], cwd, env, signal },
       {
         onUpdate: (source, update) => {
-          if (source === live.sessionId) live.active?.update(update);
+          if (opening) {
+            if (
+              update.sessionUpdate === "config_option_update" ||
+              update.sessionUpdate === "current_mode_update" ||
+              update.sessionUpdate === "available_commands_update"
+            )
+              early.push([source, update]);
+          } else if (source === live.sessionId && !signal.aborted) {
+            void this.#onUpdate(live, update).catch((error: unknown) => this.#release(live, error));
+          }
         },
+        onPermission: (params) =>
+          params.sessionId === live.sessionId && live.active && !live.active.context.abortSignal?.aborted
+            ? this.approvals.request(id, live.access, params)
+            : Promise.resolve(CANCELLED),
         onClose: (error) => {
           if (error) {
             console.error(`ACP ${name}:`, error.message);
-            this.#release(id, live, error);
+            this.#release(live, error);
           }
         },
         log: (line) => console.error(`ACP ${name}: ${line}`),
       },
     );
-    if (signal?.aborted) {
+    if (signal.aborted) {
       process.close();
       signal.throwIfAborted();
     }
     live.process = process;
-    const mcpServers = [declaration(process, url, live.token)];
-    // Do not attach the turn's update sink until after setup: session/load replays historical updates.
+    const mcp = [declaration(process, this.#mcp.url, live.token)];
+    // No transcript sink during restore: session/load replays history.
     if (sessionId === null) {
-      live.sessionId = await awaitWithContext(process.newSession(cwd, mcpServers), context);
-      await saveSession(live.sessionId);
+      const response = await awaitWithContext(process.newSession(cwd, mcp), context);
+      live.sessionId = response.sessionId;
+      await this.#harness.commit(async (tx) => {
+        (await tx.doc(SessionDoc, id)).sessionId = response.sessionId;
+      }, context);
+      this.#refresh(live, response);
     } else {
-      await awaitWithContext(process.restoreSession(sessionId, cwd, mcpServers), context);
+      const response = await awaitWithContext(process.restoreSession(sessionId, cwd, mcp), context);
       live.sessionId = sessionId;
+      live.options = saved?.options ?? [];
+      if (session?.legacyMode) {
+        const mode = live.options.find((option) => option.id === "mode");
+        if (mode) {
+          live.legacyMode = mode;
+          live.options = live.options.filter((item) => item !== mode);
+        }
+      }
+      this.#refresh(live, response);
+    }
+    opening = false;
+    for (const [source, update] of early) if (source === live.sessionId) await this.#onUpdate(live, update);
+    const desired = await this.#harness.commit(async (tx) => {
+      const doc = await tx.doc(AcpStateDoc, id);
+      doc.desired = {
+        ...(sessionId === null && defaults(config, this.#options(live))),
+        ...doc.desired,
+        access: access(doc.desired.access, config),
+      };
+      return { ...doc.desired };
+    }, context);
+    live.access = access(desired.access, config);
+    for (const [option, value] of Object.entries(desired)) {
+      if (option === "access" || !this.#options(live).some((item) => item.id === option && validValue(item, value)))
+        continue;
+      await awaitWithContext(this.#setOption(live, option, value), context);
+    }
+    await this.#saveOptions(live);
+  }
+
+  #refresh(live: LiveSession, { configOptions, modes }: LoadSessionResponse): void {
+    if (modes) live.legacyMode = legacyMode(modes);
+    if (configOptions) live.options = normalize(configOptions);
+  }
+
+  #options(live: LiveSession): ConfigOption[] {
+    return live.legacyMode && !live.options.some((item) => item.id === "mode" || item.category === "mode")
+      ? [...live.options, live.legacyMode]
+      : live.options;
+  }
+
+  async #saveOptions(live: LiveSession): Promise<void> {
+    const context = withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT);
+    await this.#harness.commit(async (tx) => {
+      const doc = await tx.doc(AcpStateDoc, live.id);
+      const options = this.#options(live);
+      if (JSON.stringify(doc.options) !== JSON.stringify(options)) doc.options = options;
+      (await tx.doc(SessionDoc, live.id)).legacyMode = options !== live.options;
+    }, context);
+  }
+
+  async #onUpdate(live: LiveSession, update: SessionUpdate): Promise<void> {
+    switch (update.sessionUpdate) {
+      case "config_option_update":
+        this.#refresh(live, update);
+        await this.#saveOptions(live);
+        break;
+      case "current_mode_update":
+        if (live.legacyMode) {
+          live.legacyMode = { ...live.legacyMode, value: update.currentModeId };
+          await this.#saveOptions(live);
+        }
+        break;
+      case "available_commands_update":
+        await this.#harness.commit(
+          async (tx) => {
+            const commands = update.availableCommands.map(({ name, description, input }) => ({
+              name,
+              description,
+              hint: input?.hint ?? null,
+            }));
+            const doc = await tx.doc(AcpStateDoc, live.id);
+            if (JSON.stringify(doc.commands) !== JSON.stringify(commands)) doc.commands = commands;
+          },
+          withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT),
+        );
+        break;
+      default:
+        live.active?.update(update);
+    }
+  }
+
+  async #setOption(live: LiveSession, id: string, value: OptionValue): Promise<void> {
+    if (!live.process || live.sessionId === null) throw new Error("ACP session is closed");
+    live.lifetime.signal.throwIfAborted();
+    const option = this.#options(live).find((item) => item.id === id);
+    if (!option || option.value === value) return;
+    if (option === live.legacyMode && typeof value === "string") {
+      await live.process.setMode(live.sessionId, value);
+      if (live.legacyMode) live.legacyMode = { ...live.legacyMode, value };
+    } else {
+      const response = await live.process.setOption(live.sessionId, id, value);
+      this.#refresh(live, response);
     }
   }
 
   async turn(options: TurnOptions): Promise<TurnOutcome> {
-    const { id, sessionId, text, commit, context, progress } = options;
+    const { id, text, commit, context, progress } = options;
+    if (options.delegation && this.#cancelledDelegations.has(id))
+      return { kind: "done", answer: "", stopReason: "cancelled" };
     const transcript: { text?: TextRun } = {};
     let pending: Update[] = [];
     const answer: string[] = [];
-    const tools = new Map<string, ToolRecord>();
+    const tools = new Map<string, ToolContent>();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let saved = Promise.resolve();
-    let live = this.#sessions.get(id);
+    let live: LiveSession | undefined;
     const flush = (final = false) => {
       clearTimeout(timer);
       timer = undefined;
@@ -167,15 +379,18 @@ export class AgentSessions {
       const batch = pending;
       pending = [];
       saved = saved.then(async () => {
-        if (batch.length === 0 && !transcript.text) return;
+        if (batch.length === 0 && !transcript.text && !(final && tools.size)) return;
         await commit(async (tx) => {
           await apply(tx, id, batch, tools, transcript);
-          if (final) await appendText(tx, id, transcript);
+          if (final) {
+            await appendText(tx, id, transcript);
+            for (const { record } of tools.values()) await tx.appendEntry(ToolEntry, id, { data: record });
+          }
         });
       });
       // A failed transcript write invalidates the live turn. The final flush observes the same error.
       void saved.catch((error: unknown) => {
-        if (live !== undefined) this.#release(id, live, error);
+        if (live !== undefined) this.#release(live, error);
       });
       return saved;
     };
@@ -185,17 +400,18 @@ export class AgentSessions {
     };
 
     let outcome: TurnOutcome;
+    const toolTurn = withCancel(context);
     try {
-      if (live === undefined || live.process?.closed !== false || live.sessionId !== sessionId) {
-        if (live !== undefined) this.#release(id, live);
-        live = this.#allocate(id);
-      }
+      context.abortSignal?.throwIfAborted();
+      live = this.#session(options);
       const turn = withAbortSignal(live.lifetime.signal, context);
-      if (live.process === undefined) await this.#open(live, options, turn);
+      await awaitWithContext(live.ready, turn);
+      await awaitWithContext(live.configuring, turn);
       turn.abortSignal?.throwIfAborted();
       const { process, sessionId: session } = live;
       if (process === undefined || session === null) throw new Error("ACP session setup did not complete");
       live.active = {
+        context: withAbortSignal(live.lifetime.signal, toolTurn.context),
         update: (update) => {
           if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text")
             answer.push(update.content.text);
@@ -211,16 +427,17 @@ export class AgentSessions {
       const stopReason = await awaitWithContext(process.prompt(session, text), turn);
       outcome = { kind: "done", answer: answer.join(""), stopReason };
     } catch (error) {
-      outcome = failure(error);
-      if (context.abortSignal?.aborted && live?.active && live.process && live.sessionId !== null) {
-        // Give the cancellation notification a chance to reach the agent, without waiting on a blocked pipe.
-        const cancel = withAbortSignal(AbortSignal.timeout(250), withoutAbortSignal(context));
-        await awaitWithContext(live.process.cancel(live.sessionId), cancel).catch(() => {});
-      }
+      if (context.abortSignal?.aborted && live) await this.#cancel(live);
+      outcome =
+        live?.cancelled || context.abortSignal?.aborted
+          ? { kind: "done", answer: answer.join(""), stopReason: "cancelled" }
+          : failure(error);
     }
+    toolTurn.cancel();
     if (live !== undefined) {
       delete live.active;
-      if (outcome.kind === "failed" || outcome.stopReason === "cancelled") this.#release(id, live);
+      this.approvals.cancel(id);
+      if (outcome.kind === "failed" || outcome.stopReason === "cancelled") this.#release(live);
     }
     try {
       await flush(true);
@@ -260,7 +477,7 @@ async function apply(
   tx: Tx,
   id: ConversationId,
   updates: Update[],
-  tools: Map<string, ToolRecord>,
+  tools: Map<string, ToolContent>,
   transcript: { text?: TextRun },
 ) {
   for (const update of updates) {
@@ -279,18 +496,13 @@ async function apply(
       }
       case "tool_call":
       case "tool_call_update": {
-        const old = tools.get(update.toolCallId);
-        const record: ToolRecord = {
-          id: update.toolCallId,
-          title: update.title ?? old?.title ?? update.toolCallId,
-          kind: update.kind ?? old?.kind ?? null,
-          status: update.status ?? old?.status ?? "pending",
-        };
+        const tool = tools.get(update.toolCallId) ?? new ToolContent(update.toolCallId);
+        const record = tool.update(update);
         if (record.status === "completed" || record.status === "failed") {
           await appendText(tx, id, transcript);
           await tx.appendEntry(ToolEntry, id, { data: record });
           tools.delete(record.id);
-        } else tools.set(record.id, record);
+        } else tools.set(record.id, tool);
         break;
       }
       case "plan":

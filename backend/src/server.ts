@@ -33,7 +33,6 @@ import {
   PROTOCOL_VERSION,
   type Result,
 } from "./protocol.ts";
-import { TitleDoc } from "./titles.ts";
 
 export type ServeOptions = {
   readonly socket: string;
@@ -44,7 +43,8 @@ export type ServeOptions = {
 };
 
 type Client = Params<"hello">["client"];
-type SocketData = { readonly remote: boolean; client?: Client; readonly watches: Map<number, ConversationWatch> };
+type Watch = { view: ConversationWatch; previous?: string; sending: boolean; dirty: boolean };
+type SocketData = { client?: Client; closed?: true; readonly watches: Map<ConversationId, Watch> };
 type Socket = ServerWebSocket<SocketData>;
 type RpcId = string | number | null;
 
@@ -70,6 +70,7 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
   const { harness, root } = viz;
   /** Connected connectors by name, for routing replies. */
   const connectors = new Map<string, Set<Socket>>();
+  const clients = new Set<Socket>();
   /** Submissions whose reply is routed already: an idempotent retry returns the same submission. */
   const routed = new Set<SubmissionId>();
 
@@ -82,6 +83,29 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     if (!found) throw new RpcError(ErrorCode.NotFound, `no conversation ${id}`);
     return found;
   };
+
+  function refreshState(ws: Socket, id: ConversationId, watch: Watch) {
+    watch.dirty = true;
+    if (watch.sending) return;
+    watch.sending = true;
+    void (async () => {
+      while (watch.dirty && ws.data.watches.get(id) === watch) {
+        watch.dirty = false;
+        const state = await viz.conversations.state(id, context);
+        if (ws.data.watches.get(id) !== watch) break;
+        const json = JSON.stringify(state);
+        if (watch.previous !== json) {
+          watch.previous = json;
+          notify(ws, "conversation.state", { conversation: id, state });
+        }
+      }
+    })()
+      .catch((error: unknown) => console.error("Conversation state:", error))
+      .finally(() => {
+        watch.sending = false;
+        if (watch.dirty && ws.data.watches.get(id) === watch) refreshState(ws, id, watch);
+      });
+  }
 
   /** Waits for a connector input's answer and delivers it to that connector. */
   const routeReply = async (conversationId: ConversationId, submission: SubmissionId, origin: Origin) => {
@@ -106,6 +130,9 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
 
   const handlers: { [M in MethodName]: (ws: Socket, params: Params<M>) => Promise<Result<M>> } = {
     hello: async (ws, { client }) => {
+      const previous = ws.data.client;
+      if (previous?.kind === "connector") connectors.get(previous.name)?.delete(ws);
+      clients.add(ws);
       ws.data.client = client;
       if (client.kind === "connector") {
         const sockets = connectors.get(client.name) ?? new Set();
@@ -113,27 +140,40 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       }
       return { protocol: PROTOCOL_VERSION, version: options.version, root: root.id };
     },
-    "conversations.list": async () => {
-      const page = await harness.commit((tx) => tx.scanConversations({}, 1000), context);
-      const conversations = await Promise.all(
-        page.items.map(async (record) => ({
-          id: record.id,
-          title: (await harness.snapshot(TitleDoc, record.id, context))?.title ?? "",
-          kind:
-            record.id === root.id
-              ? ("orchestrator" as const)
-              : record.owner
-                ? ("subagent" as const)
-                : ("chat" as const),
-          ...(record.owner && { parent: record.owner.conversationId }),
-        })),
-      );
-      return { conversations };
-    },
-    "conversation.create": async () => {
-      const created = await viz.createChat(context);
+    "conversations.list": async () => ({ conversations: await viz.conversations.list(context) }),
+    "conversation.create": async (_ws, params) => {
+      const created = await viz.createChat(params, context);
       return { conversation: created.id };
     },
+    "conversation.update": async (_ws, { conversation: id, ...update }) => {
+      await viz.updateConversation((await conversation(id)).id, update, context);
+      return {};
+    },
+    "conversation.configure": async (_ws, { conversation: id, option, value }) => {
+      await viz.configureConversation((await conversation(id)).id, option, value, context);
+      return {};
+    },
+    "conversation.abort": async (_ws, { conversation: id }) => {
+      await viz.abortConversation((await conversation(id)).id, context);
+      return {};
+    },
+    "approval.respond": async (_ws, { conversation: id, approval, option }) => {
+      viz.approvals.respond((await conversation(id)).id, approval, option);
+      return {};
+    },
+    "projects.list": async () => ({ projects: await viz.projects.list(context) }),
+    "project.create": async (_ws, { path, name }) => ({ project: await viz.projects.create(path, name, context) }),
+    "project.update": async (_ws, { project, name }) => ({
+      project: await viz.projects.update(project, name, context),
+    }),
+    "project.remove": async (_ws, { project }) => {
+      await viz.removeProject(project, context);
+      return {};
+    },
+    "harnesses.list": async () => ({ harnesses: viz.runners.list() }),
+    "files.search": async (_ws, { conversation: id, query, limit }) => ({
+      files: await viz.searchFiles((await conversation(id)).id, query, limit, context),
+    }),
     "conversation.submit": async (_ws, { conversation: id, text, requestId, origin }) => {
       const target = await conversation(id);
       const content = origin
@@ -155,19 +195,28 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       }
       return { submission: submission.id };
     },
-    "conversation.watch": async (ws, { conversation: id }) => {
+    "conversation.watch": async (ws, { conversation: value }) => {
+      const id = value as ConversationId;
       if (ws.data.watches.has(id)) return { watching: true };
-      const watch = await (await conversation(id)).watch(context);
+      const view = await (await conversation(id)).watch(context);
+      if (ws.data.closed || ws.data.watches.has(id)) {
+        await view.stop();
+        return { watching: !ws.data.closed };
+      }
+      const watch = { view, sending: false, dirty: false };
       ws.data.watches.set(id, watch);
-      notify(ws, "conversation.view", { conversation: id, value: watch.value });
-      watch.start(async (call) => {
+      notify(ws, "conversation.view", { conversation: id, value: view.value });
+      view.start(async (call) => {
         if (call.kind === "value") notify(ws, "conversation.view", { conversation: id, ops: call.ops });
       });
+      refreshState(ws, id, watch);
       return { watching: true };
     },
-    "conversation.unwatch": async (ws, { conversation: id }) => {
-      await ws.data.watches.get(id)?.stop();
+    "conversation.unwatch": async (ws, { conversation: value }) => {
+      const id = value as ConversationId;
+      const watch = ws.data.watches.get(id);
       ws.data.watches.delete(id);
+      await watch?.view.stop();
       return { watching: false };
     },
   };
@@ -226,7 +275,7 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       return Response.json({ ok: true, version: options.version, protocol: PROTOCOL_VERSION });
     }
     if (pathname === "/v1/rpc") {
-      if (server.upgrade(request, { data: { remote, watches: new Map() } })) return undefined;
+      if (server.upgrade(request, { data: { watches: new Map() } })) return undefined;
       return new Response("expected a WebSocket upgrade\n", { status: 426 });
     }
     return new Response("not found\n", { status: 404 });
@@ -235,9 +284,12 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
   const websocket = {
     message: (ws: Socket, raw: string | Buffer) => void dispatch(ws, raw),
     close: (ws: Socket) => {
+      ws.data.closed = true;
+      clients.delete(ws);
       const { client, watches } = ws.data;
       if (client?.kind === "connector") connectors.get(client.name)?.delete(ws);
-      for (const watch of watches.values()) void watch.stop();
+      for (const { view } of watches.values()) void view.stop();
+      watches.clear();
     },
   };
 
@@ -252,10 +304,21 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     tcp = Bun.serve<SocketData>({ hostname, port: Number(port), fetch: fetch(true), websocket });
   }
 
+  const stopChanges = viz.changes.subscribe(({ list, state }) => {
+    for (const ws of clients) {
+      if (list && ws.data.client?.kind === "app") notify(ws, "conversations.changed", {});
+      for (const id of state) {
+        const watch = ws.data.watches.get(id);
+        if (watch) refreshState(ws, id, watch);
+      }
+    }
+  });
+
   return {
     socket: options.socket,
     ...(tcp && { url: tcp.url.origin }),
     stop: async () => {
+      stopChanges();
       await Promise.all([local.stop(true), tcp?.stop(true)]);
       await rm(options.socket, { force: true });
     },

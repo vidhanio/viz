@@ -9,6 +9,10 @@ export type ToolRecord = {
   title: string;
   kind: ToolKind | null;
   status: ToolCallStatus;
+  input?: string;
+  output?: string;
+  diffs?: { path: string; oldText: string | null; newText: string }[];
+  locations?: string[];
 };
 
 export type Outcome =
@@ -30,7 +34,7 @@ export const AgentDoc = defineDoc<AgentState>({
   checkpointWhen: () => true,
 });
 
-export const SessionDoc = defineDoc<{ sessionId: string | null }>({
+export const SessionDoc = defineDoc<{ sessionId: string | null; legacyMode?: boolean }>({
   kind: "viz.acp.session",
   version: 1,
   scope: "conversation",

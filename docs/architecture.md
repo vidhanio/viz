@@ -27,31 +27,37 @@ flowchart LR
   server --> acp
   harness --> acp
   acp -- ACP over stdio --> harnesses
-  harnesses -- scoped MCP progress --> acp
+  harnesses -- scoped MCP tools --> acp
 ```
 
 ## Backend (`backend/`)
 
 `viz-backend` is the only process that owns state. It opens a pi-durable `Harness` over SQLite (`openNodeSqliteStorage`, which runs on Bun's `node:sqlite`) at `$STATE_DIRECTORY` or `$XDG_STATE_HOME/viz/viz.sqlite`. pi-durable is single-writer: other processes never open the database; they talk to the backend.
 
-- **Orchestrator**: pi-durable's reserved root conversation (`harness.root()`) and viz's only native model loop. It uses the `CodingTools`, `viz.memory`, `viz.orchestrator` (turns prompt) and `viz.subagent` extensions. Model, thinking level, instructions, cwd and extensions are re-applied from config on every start. Its history is unbounded through its memory (below).
+- **Orchestrator**: pi-durable's reserved root conversation (`harness.root()`) and viz's only native model loop. It uses `CodingTools` and the `viz.memory`, `viz.orchestrator`, and `viz.subagent` extensions. `viz.settings` stores the selected model and thinking level; config supplies defaults, instructions, cwd, and extensions. Its memory makes the history unbounded.
 - **Durability**: the orchestrator's model requests and tool calls are checkpointed pi-durable tasks. `requestId` on `conversation.submit` makes admission idempotent (connectors use the platform message id).
 
 ### ACP app chats
 
-`conversation.create` makes an ownerless conversation for an app chat. The backend binds the chat to an ACP runner and retains its subprocess and session across turns. After a backend restart, it reconnects to the same session using ACP `session/resume` or `session/load`. If it cannot restore the session, the turn fails instead of silently starting a fresh chat.
+`conversation.create` makes an ownerless chat bound to an ACP runner and opens its session in the background. `viz.projects` on the root stores the project directories; `viz.meta` on each conversation stores its project, ACP parent, archive flag, and timestamps. Project branches come from Git's symbolic `HEAD`, including in linked worktrees. A project's chats run in its directory; unprojected chats use the orchestrator cwd. Moving a chat moves its descendants and requires affected turns to stop before their cwd changes. Removing a project leaves its conversations unprojected.
 
-One durable worker drains each chat's inputs in order. The backend stores the runner's session ID before sending its first prompt and records progress in that chat's transcript. An interrupted prompt is never sent twice.
+One durable worker drains each chat's inputs in order. The backend stores the runner's session id before its first prompt, keeps the process across turns, and reconnects with `session/resume` or `session/load` after restart or a cwd change. If the runner cannot restore the session, the turn fails instead of silently starting over. An interrupted prompt is never sent twice.
+
+The runner advertises configuration options, modes, and slash commands. `viz.acp.state` stores the last options and commands and the user's desired values. The backend reapplies choices that differ on open or restore. Slash commands go to the runner as typed. Full and Read-only answer ACP permission requests automatically; Ask exposes them to apps until a user responds, the turn ends or is aborted, or the process closes. The access setting is not a sandbox.
+
+File mentions search within the chat's cwd. With Git on `PATH`, its index and ignore rules determine candidates in a checkout; elsewhere a bounded walk excludes hidden directories, `node_modules`, and `target`. Searches cache file lists briefly and rank fuzzy basename matches before path-only matches.
 
 Legacy native app chats keep their visible transcript. Their next input starts an ACP session; their old native history is not sent to the new runner.
 
 ### ACP delegation
 
-The `subagent` tool creates a task-owned conversation; UIs can attach through `details.conversationId`. The calling conversation supplies the working directory. Each delegation runs one turn in its own ACP process and session. The child is a read-only transcript of text, reasoning, tool status, plans, and progress. The subprocess gets only a scoped `report_progress` tool over loopback HTTP MCP (a local stdio bridge for harnesses without HTTP capability). Its token is revoked when the turn ends.
+The orchestrator's `subagent` tool creates a task-owned conversation; UIs can attach through `details.conversationId`. The child runs one ACP turn in the caller's cwd and records text, reasoning, tool details, plans, and progress. While the delegation runs, the transcript is read-only. After it settles, the app can send follow-ups through the chat worker, which restores the saved session.
 
 Cancellation sends `session/cancel` and closes the process. An interrupted external prompt is not resent after restart: ACP has no idempotency key for prompts, so replaying could repeat side effects. A committed outcome is reused when pi-durable replays the parent tool.
 
-Both app chats and delegation use `[backend].default_harness` unless the chat is already bound to a runner or the delegation names another configured harness. With exactly one configured harness it is the implicit default. With several and no explicit default, existing chats can still use their bound runner and delegations can name one; starting a new default chat or subagent requires a default. With none configured, the orchestrator still works, but app chat creation fails and `subagent` is unavailable.
+Each ACP process gets a per-conversation token for viz's MCP tools over loopback HTTP, or a local stdio bridge for runners without HTTP support. An active turn can call `report_progress`, `spawn_subagent`, `list_subagents`, `read_subagent`, `message_subagent`, and `cancel_subagent`. The token never grants access outside the caller's descendants. Spawning creates an ownerless ACP chat nested under the caller and inherits its project and cwd; spawn and message can optionally return without waiting for the answer.
+
+App chats and orchestrator delegation use `[backend].default_harness` when no runner is given. ACP-spawned subagents inherit the caller's runner unless overridden. With exactly one configured runner, it is the implicit default; without a default, new app chats and orchestrator delegations must name a runner.
 
 ## Memory (`backend/src/memory/`)
 
@@ -78,7 +84,7 @@ Listeners (see `docs/decisions/0001-remote-transport.md`):
 Every connector input goes into the orchestrator (or a named conversation) with an `origin` (`connector`, `channel`, optional `thread`/`message`/`author`). The backend stores the origin with the transcript entry (`kind: "viz.input"`, `data.origin`) and prefixes the model-visible text with a tag like `[discord #123 @alice]`, so the orchestrator knows where an input came from.
 
 - **Connectors** receive only `reply` notifications for inputs whose `origin.connector` is their own `hello` name, and render just those replies.
-- **Apps** (desktop, iOS) `conversation.watch` conversations and receive the full view (`conversation.view`: full value, then Chord delta ops): every message from every source, tool calls, subagents, live state.
+- **Apps** watch conversations for `conversation.view` (snapshot, then Chord deltas) and `conversation.state` (status, cwd, options, commands, and approvals). Stored pi-durable commits and in-memory approval changes drive debounced `conversations.changed` notifications; apps then reload their conversation and project lists.
 
 Reply routing is in-memory today: a reply to a connector that is disconnected when the answer lands is dropped (durable outbox: `TODO.md`).
 
