@@ -1,10 +1,11 @@
 //! Conversation tree, its filter and disclosure state.
 
 mod actions;
+mod worktree;
 
 use std::collections::{HashMap, HashSet};
 
-use rune::{El, TextEdit, Tx, col, row, text};
+use rune::{El, TextEdit, TextStyle, Tx, col, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, TreeItem, TreeRow, shell::Sidebar};
 use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary, Project};
 
@@ -23,6 +24,7 @@ pub struct Navigation {
     menu: Option<actions::Context>,
     edit: Option<actions::Edit>,
     value: TextEdit,
+    worktree: worktree::Form,
 }
 
 impl Default for Navigation {
@@ -35,6 +37,7 @@ impl Default for Navigation {
             menu: None,
             edit: None,
             value: TextEdit::new(""),
+            worktree: worktree::Form::default(),
         }
     }
 }
@@ -79,6 +82,7 @@ struct Outline<'a> {
     children: HashMap<ConversationId, Vec<&'a ConversationSummary>>,
     projects: HashMap<&'a str, Vec<&'a ConversationSummary>>,
     loose: Vec<&'a ConversationSummary>,
+    pinned: Vec<&'a ConversationSummary>,
     query: String,
 }
 
@@ -90,6 +94,7 @@ impl<'a> Outline<'a> {
             children: HashMap::new(),
             projects: HashMap::new(),
             loose: Vec::new(),
+            pinned: Vec::new(),
             query,
         };
         let chats: HashMap<_, _> = state
@@ -115,7 +120,10 @@ impl<'a> Outline<'a> {
                 {
                     let mut cursor = Some(chat.id);
                     while let Some(id) = cursor.filter(|id| keep.insert(*id)) {
-                        cursor = chats.get(&id).and_then(|chat| chat.parent);
+                        cursor = chats
+                            .get(&id)
+                            .filter(|chat| !chat.pinned)
+                            .and_then(|chat| chat.parent);
                     }
                 }
             }
@@ -124,8 +132,14 @@ impl<'a> Outline<'a> {
         for chat in &state.conversations {
             if !chats.contains_key(&chat.id)
                 || (!outline.query.is_empty() && !keep.contains(&chat.id))
-                || chat.kind == ConversationKind::Orchestrator
             {
+                continue;
+            }
+            if chat.pinned {
+                outline.pinned.push(chat);
+                continue;
+            }
+            if chat.kind == ConversationKind::Orchestrator {
                 continue;
             }
             if let Some(parent) = chat
@@ -165,25 +179,49 @@ impl<'a> Outline<'a> {
         let children = self.children.get(&id);
         let open = children.is_some()
             && (!self.query.is_empty() || !s.navigation.collapsed_chats.contains(&id));
-        let icon = match chat.kind {
+        let glyph = match chat.kind {
             ConversationKind::Orchestrator => &theme::STAR,
             ConversationKind::Chat => &ui::CHAT,
             ConversationKind::Subagent => &theme::BRANCH,
         };
-        let mut item = TreeItem::new(chat_title(chat)).icon(icon);
+        let mut item = TreeItem::new(chat_title(chat)).icon(glyph);
         if chat.archived {
             item = item.label_color(t.faint);
+        } else if chat.unread {
+            item = item.label_color(t.text);
+        }
+        if chat.unread {
+            item = item.dot(t.accent);
+        }
+        if let Some(path) = &chat.worktree {
+            item = item.trailing(
+                icon(&ui::GIT_BRANCH, 13.0)
+                    .key("worktree")
+                    .color(t.faint)
+                    .help(path)
+                    .a11y_hidden(),
+            );
         }
         if let Some(status) = ui::status(chat.status, t) {
             item = item.trailing(status.key("status"));
         }
-        if chat.kind != ConversationKind::Orchestrator {
-            item = item.trailing(actions::chat_menu(s, chat, &key, selected, t, layer));
-        }
-        let mut node = ui::tree_row(&TreeRow::new(&key, depth).selected(selected), item, t)
+        item = item.trailing(actions::chat_menu(s, chat, &key, selected, t, layer));
+        let font = if chat.unread {
+            TextStyle {
+                weight: t.title.weight,
+                ..t.ui
+            }
+        } else {
+            t.ui
+        };
+        let row = TreeRow::new(&key, depth).selected(selected);
+        let mut node = ui::tree_row(&row, item, t, font)
             .hover_group_focus()
             .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
-        if chat.kind != ConversationKind::Orchestrator && s.connected() {
+        if chat.unread {
+            node = node.description("Unread");
+        }
+        if s.connected() {
             let key = key.clone();
             node = node.on_secondary_press(move |s: &mut Desktop, at, _| {
                 s.navigation.menu = Some(actions::Context::at(&key, at));
@@ -201,7 +239,7 @@ impl<'a> Outline<'a> {
                     .build(&t.k)
                     .key("disclose")
                     .size(20.0, 25.0)
-                    // Follow the indent lane in ui::tree_row.
+                    // Follow the tree row's indent lane.
                     .absolute(
                         f32::from(u16::try_from(depth).unwrap_or_default()).mul_add(14.0, 4.0),
                         2.0,
@@ -239,7 +277,7 @@ impl<'a> Outline<'a> {
             item
         };
         let item = item.trailing(actions::project_menu(s, project, &key, t, layer));
-        let mut node = ui::tree_row(&TreeRow::new(&key, 0).expanded(Some(open)), item, t)
+        let mut node = ui::tree_row(&TreeRow::new(&key, 0).expanded(Some(open)), item, t, t.ui)
             .hover_group_focus()
             .help(&project.path)
             .on_press(move |s: &mut Desktop| s.navigation.toggle_project(&id));
@@ -257,11 +295,6 @@ impl<'a> Outline<'a> {
         }
         branch
     }
-}
-
-pub fn focus_filter(s: &mut Desktop, tx: &mut Tx) {
-    s.sidebar.set_open(true);
-    tx.focus_when_shown("chat-filter", true);
 }
 
 fn open_match(s: &mut Desktop, tx: &mut Tx) {
@@ -290,7 +323,6 @@ fn open_match(s: &mut Desktop, tx: &mut Tx) {
 
 pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let tree = conversation_tree(s, t, layer);
-    actions::dialog(s, t, layer);
     Sidebar::new()
         .label("Workspace")
         .header_padding(0.0, 8.0)
@@ -300,37 +332,51 @@ pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .build(&t.k)
 }
 
-fn controls(s: &Desktop, t: &Theme) -> El {
-    let create = ui::button("New chat", ButtonVariant::Outline)
+/// Mounts sidebar dialogs independently of whether the sidebar is visible.
+pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
+    actions::dialog(s, t, layer);
+    worktree::dialog(s, t, layer);
+}
+
+/// Opens the add-project dialog from the sidebar or palette.
+pub fn open_add_project(s: &mut Desktop, tx: &mut Tx) {
+    actions::add_project(s, tx);
+}
+
+/// Opens the worktree dialog for the current project, if it has a Git branch.
+pub fn open_worktree(s: &mut Desktop, tx: &mut Tx) {
+    if let Some(id) = s.project_id().map(str::to_owned) {
+        worktree::open(s, &id, tx);
+    }
+}
+
+/// Shows the worktree form for the current project's preview scene.
+pub fn preview_worktree(s: &mut Desktop) {
+    if let Some(form) = s.project().and_then(worktree::Form::for_project) {
+        s.navigation.worktree = form;
+    }
+}
+
+/// The shell toolbar's new-chat button.
+pub fn new_chat_button(s: &Desktop, t: &Theme) -> El {
+    ui::button("New chat", ButtonVariant::Outline)
         .icon(&theme::PLUS)
         .disabled(!s.connected() || s.new_chat.is_some())
         .on_press_tx(Desktop::create_here)
         .build(&t.k)
         .key("new-chat")
-        .grow(1.0)
-        .justify_start();
-    col()
-        .w_full()
-        .gap(8.0)
-        .pt(8.0)
-        .child(
-            row()
-                .w_full()
-                .center_y()
-                .gap(6.0)
-                .child(create)
-                .child(ui::kbd("N", t)),
-        )
-        .child(
-            ui::text_field(&s.navigation.filter, "Filter chats", "Filter chats")
-                .leading_icon(t.k.glyph.search)
-                .trailing(ui::kbd("K", t))
-                .on_edit(|s: &mut Desktop| &mut s.navigation.filter)
-                .on_submit(open_match)
-                .build(&t.k)
-                .key("chat-filter")
-                .border(1.0, t.hairline),
-        )
+}
+
+fn controls(s: &Desktop, t: &Theme) -> El {
+    col().w_full().pt(8.0).child(
+        ui::text_field(&s.navigation.filter, "Filter chats", "Filter chats")
+            .leading_icon(t.k.glyph.search)
+            .on_edit(|s: &mut Desktop| &mut s.navigation.filter)
+            .on_submit(open_match)
+            .build(&t.k)
+            .key("chat-filter")
+            .border(1.0, t.hairline),
+    )
 }
 
 fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
@@ -341,12 +387,30 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .label("Conversations")
         .w_full()
         .gap(1.0);
-    if let Some(root) = s
-        .root
-        .and_then(|root| s.summary(root))
-        .filter(|root| outline.matches(chat_title(root)) || outline.children.contains_key(&root.id))
-    {
+    if let Some(root) = s.root.and_then(|root| s.summary(root)).filter(|root| {
+        !root.pinned
+            && (outline.matches(chat_title(root)) || outline.children.contains_key(&root.id))
+    }) {
         tree = tree.child(outline.chat(root, 0, t, layer));
+    }
+    if !outline.pinned.is_empty() {
+        tree = tree
+            .child(
+                row()
+                    .key("pinned-heading")
+                    .w_full()
+                    .h(28.0)
+                    .px(8.0)
+                    .mt(9.0)
+                    .center_y()
+                    .child(ui::section("Pinned", t)),
+            )
+            .children(
+                outline
+                    .pinned
+                    .iter()
+                    .map(|chat| outline.chat(chat, 0, t, layer)),
+            );
     }
     tree = tree.child(
         row()
@@ -360,7 +424,7 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             .child(
                 ui::icon_button(&theme::PLUS, "Add project", IconButtonVariant::Ghost)
                     .disabled(!s.connected())
-                    .on_press_tx(actions::add_project)
+                    .on_press_tx(open_add_project)
                     .build(&t.k)
                     .key("add-project"),
             ),

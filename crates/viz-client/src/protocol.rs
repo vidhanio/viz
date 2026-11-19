@@ -4,10 +4,18 @@
 //! Each request's params type implements [`Method`], which names the method on
 //! the wire and its result type.
 
+mod workspace;
+
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::Value;
+pub use workspace::{
+    Attachment, AttachmentCapabilities, Branches, CommitResult, DiffFile, DiffFileStatus,
+    DiffFiles, DiffScope, EntryId, EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff,
+    GitFile, GitFileStatus, GitPr, GitPush, GitRevert, GitState, ListEntries, PrResult,
+    QueuedInput, RemoveQueuedInput, SearchConversations, SearchHit, SearchHits, Worktree,
+};
 
 /// The protocol version this crate speaks.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -75,6 +83,16 @@ methods! {
     Submit => "conversation.submit", Submitted;
     Watch => "conversation.watch", Watching;
     Unwatch => "conversation.unwatch", Watching;
+    SearchConversations<'_> => "conversations.search", SearchHits;
+    ListEntries => "conversation.entries", EntryPage;
+    RemoveQueuedInput => "queue.remove", Empty;
+    GitDiff<'_> => "git.diff", DiffFiles;
+    GitBranches => "git.branches", Branches;
+    GitCheckout<'_> => "git.checkout", Empty;
+    GitCommit<'_> => "git.commit", CommitResult;
+    GitPush => "git.push", Empty;
+    GitPr<'_> => "git.pr", PrResult;
+    GitRevert => "git.revert", Empty;
 }
 
 /// What kind of client is connecting; decides which notifications it receives.
@@ -186,6 +204,13 @@ pub struct ConversationSummary {
     /// Time of the last input or turn end in Unix milliseconds; zero if
     /// unknown.
     pub updated_at: i64,
+    /// A turn settled while no app was watching, or this chat was manually
+    /// marked unread.
+    pub unread: bool,
+    /// Show the conversation in the pinned section.
+    pub pinned: bool,
+    /// The dedicated worktree path, if created with one.
+    pub worktree: Option<String>,
 }
 
 /// `conversation.create` params.
@@ -194,6 +219,9 @@ pub struct CreateConversation {
     /// Project directory; absent uses the default working directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// Create the conversation in its own worktree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<Worktree>,
     /// Configured runner; absent uses the backend default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
@@ -347,6 +375,12 @@ pub struct ConversationState {
     pub commands: Vec<SlashCommand>,
     /// The pending permission requests.
     pub approvals: Vec<Approval>,
+    /// Inputs waiting for their turn.
+    pub queue: Vec<QueuedInput>,
+    /// Git state of the current working directory.
+    pub git: Option<GitState>,
+    /// What kind of attachment the current runner accepts directly.
+    pub attachments: AttachmentCapabilities,
 }
 
 /// A working directory shared by a group of chats.
@@ -389,6 +423,12 @@ pub struct UpdateConversation<'a> {
     /// A new archive status, if changing it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
+    /// A new pinned status, if changing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pinned: Option<bool>,
+    /// A new unread status, if changing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unread: Option<bool>,
     /// `None` leaves the project alone; `Some(None)` clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<Option<&'a str>>,
@@ -511,6 +551,9 @@ pub struct Submit {
     /// Where the input came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
+    /// Files to attach to this input.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
 }
 
 /// `conversation.submit` result.

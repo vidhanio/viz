@@ -6,10 +6,11 @@ mod settings;
 pub use completion::{Completion, poll};
 use rune::{El, ScrollSpec, col, icon, row, text, text_input};
 use rune_kit::{ButtonVariant, Collapsible, IconButtonVariant};
-use viz_client::protocol::{Approval, ApprovalKind, ConversationId};
+use viz_client::protocol::{Approval, ApprovalKind, ConversationId, QueuedInput};
 
 use crate::{
     app::Desktop,
+    attachments,
     backend::Command,
     theme::{self, Theme},
     ui,
@@ -42,6 +43,11 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
                         .map(|approval| approval_card(s, id, approval, t)),
                 ),
         );
+    }
+    if let Some((id, state)) = s.selected.zip(s.conversation.as_ref())
+        && !state.queue.is_empty()
+    {
+        column = column.child(queue(s, id, &state.queue, t));
     }
     let editor = if s.conversation.as_ref().is_some_and(|state| state.read_only) {
         let mut notice = row()
@@ -96,10 +102,11 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .caret(t.accent, t.k.selection())
         .placeholder(placeholder, t.faint)
         .on_edit(|s: &mut Desktop| &mut s.draft)
+        .on_input_paste(attachments::paste)
         .on_key(completion::on_key)
         .on_submit(Desktop::submit);
     let mut metadata = row().key("composer-metadata").gap(6.0).center_y();
-    if let Some(branch) = s.project().and_then(|project| project.branch.as_deref()) {
+    if let Some(branch) = s.branch() {
         metadata = metadata.child(
             row()
                 .key("branch")
@@ -117,15 +124,13 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 ),
         );
     }
-    if s.thread.queued > 0 {
-        metadata = metadata.child(ui::chip(format!("{} queued", s.thread.queued), t).key("queued"));
-    }
-    col()
+    let card = col()
         .key("composer-card")
         .w_full()
         .radius(t.k.radius.lg)
         .fill(t.surface)
         .border(1.0, t.hairline)
+        .children(attachments::draft_chips(s, t))
         .child(
             col()
                 .w_full()
@@ -143,10 +148,78 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .pb(7.0)
                 .gap(8.0)
                 .items_end()
+                .children(s.conversation.as_ref().map(|_| attachments::button(s, t)))
                 .child(settings::toolbar(s, t, layer).grow(1.0).shrink().min_w(0.0))
                 .child(metadata.mb(4.0))
                 .child(send_button(s, t)),
-        )
+        );
+    if s.can_attach() {
+        card.on_drop_files(attachments::drop_files)
+    } else {
+        card
+    }
+}
+
+fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> El {
+    col()
+        .key("queue")
+        .role("group")
+        .label("Queued inputs")
+        .w_full()
+        .max_h(134.0)
+        .padding(7.0)
+        .gap(2.0)
+        .fill(t.surface)
+        .radius(t.k.radius.md)
+        .border(1.0, t.hairline)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(ui::section("Queued", t).px(5.0))
+        .children(inputs.iter().map(|input| {
+            let submission = input.submission;
+            let title = input
+                .text
+                .lines()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or("Attachment");
+            row()
+                .key(format!("queue-{submission}"))
+                .w_full()
+                .h(25.0)
+                .center_y()
+                .gap(5.0)
+                .px(5.0)
+                .child(
+                    text(title)
+                        .font(t.ui)
+                        .color(t.muted)
+                        .grow(1.0)
+                        .shrink()
+                        .truncate()
+                        .help(&input.text),
+                )
+                .child(
+                    ui::icon_button(
+                        t.k.glyph.close,
+                        "Remove queued input",
+                        IconButtonVariant::GhostMuted,
+                    )
+                    .disabled(!s.connected())
+                    .on_press_tx(move |s: &mut Desktop, tx| {
+                        s.send(
+                            Command::RemoveQueued {
+                                conversation: id,
+                                submission,
+                            },
+                            tx,
+                        );
+                    })
+                    .build(&t.k)
+                    .key("remove")
+                    .size(20.0, 20.0),
+                )
+        }))
 }
 
 fn send_button(s: &Desktop, t: &Theme) -> El {

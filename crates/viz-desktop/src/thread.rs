@@ -1,12 +1,12 @@
 //! The watched conversation as the window shows it, read from a pi-durable
 //! `ConversationView` (`value.entries` and `value.docs`). Shapes are
-//! pi-durable's `EntryRecord`, pi-ai messages and live and queue documents;
+//! pi-durable's `EntryRecord`, pi-ai messages and live document;
 //! an unexpected entry is skipped rather than failing the whole view.
 
 use std::collections::HashMap;
 
 use serde_json::Value;
-use viz_client::protocol::ConversationId;
+use viz_client::protocol::{ConversationId, EntryId};
 
 /// Longest tool-call summary, in characters.
 const SUMMARY_CHARS: usize = 96;
@@ -21,12 +21,10 @@ const OUTPUT_CHARS: usize = 6_000;
 pub struct Thread {
     /// Timeline items in transcript order.
     pub items: Vec<Item>,
-    /// The window starts after the transcript's first entry.
-    pub earlier: bool,
+    /// Exclusive cursor for the next page of older entries.
+    pub before: Option<EntryId>,
     /// What's happening right now (`pi.live`).
     pub live: Live,
-    /// Inputs waiting for the current run (`pi.inbox`).
-    pub queued: usize,
 }
 
 /// One timeline row.
@@ -81,8 +79,26 @@ pub struct User {
     pub key: String,
     /// What I wrote.
     pub text: String,
+    /// Prompt entry used by the turn diff and revert RPCs.
+    pub turn: Option<EntryId>,
+    /// Names of the stored attachments carried by this prompt.
+    pub attachments: Vec<String>,
 }
 
+impl Item {
+    pub fn key(&self) -> &str {
+        match self {
+            Self::User(user) => &user.key,
+            Self::Tool(tool) => &tool.key,
+            Self::Text { key, .. }
+            | Self::Thinking { key, .. }
+            | Self::Plan { key, .. }
+            | Self::Progress { key, .. }
+            | Self::Divider { key, .. }
+            | Self::Notice { key, .. } => key,
+        }
+    }
+}
 /// A tool call's progress.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolStatus {
@@ -155,6 +171,10 @@ pub struct Live {
 impl Thread {
     /// Reads a conversation view's value.
     pub fn from_view(view: &Value) -> Self {
+        Self::from_history(view, &[], before_cursor(view))
+    }
+
+    pub fn from_history(view: &Value, earlier: &[Value], before: Option<EntryId>) -> Self {
         let live = view.pointer("/docs/pi.live");
         let slots = live
             .and_then(|live| live.get("tools"))
@@ -166,7 +186,7 @@ impl Thread {
             plan: None,
         };
         let mut acp_busy = false;
-        for entry in array(view.get("entries")) {
+        for entry in earlier.iter().chain(array(view.get("entries"))) {
             match str_at(entry, "kind") {
                 Some("viz.agent.prompt") => acp_busy = true,
                 Some("viz.agent.turn") => {
@@ -193,15 +213,16 @@ impl Thread {
         live.busy |= acp_busy;
         Self {
             items,
-            earlier: view.get("before").is_some(),
+            before,
             live,
-            queued: array(view.pointer("/docs/viz.acp.chat/queue")).len()
-                + array(view.pointer("/docs/pi.inbox/items"))
-                    .iter()
-                    .filter(|item| str_at(item, "mode") != Some("write"))
-                    .count(),
         }
     }
+}
+
+pub fn before_cursor(view: &Value) -> Option<EntryId> {
+    // pi-durable's cursor is the last omitted entry, while conversation.entries
+    // uses an exclusive upper bound.
+    view.get("before")?.as_u64()?.checked_add(1).map(EntryId)
 }
 
 /// Builds items from entries in order, pairing tool results with their calls.
@@ -229,29 +250,7 @@ impl Reader {
                 label: Some("Earlier context summarized"),
             }),
             "pi.user" | "viz.input" | "viz.agent.prompt" => {
-                // A connector's input reaches the model with a routing prefix;
-                // `data.text` is what I actually wrote.
-                let raw = entry
-                    .pointer("/data/text")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned);
-                let texts: Vec<String> = raw.map_or_else(
-                    || {
-                        messages
-                            .iter()
-                            .map(|message| content_text(message.get("content")))
-                            .collect()
-                    },
-                    |raw| vec![raw],
-                );
-                for (m, text) in texts.into_iter().enumerate() {
-                    if !text.trim().is_empty() {
-                        self.items.push(Item::User(User {
-                            key: format!("e{id}-{m}"),
-                            text,
-                        }));
-                    }
-                }
+                self.prompt(&id, entry, messages);
             }
             "pi.assistant" => {
                 for (m, message) in messages.iter().enumerate() {
@@ -272,6 +271,39 @@ impl Reader {
             }
             kind if kind.starts_with("viz.agent.") => self.acp_entry(kind, &id, entry),
             _ => {}
+        }
+    }
+
+    fn prompt(&mut self, id: &str, entry: &Value, messages: &[Value]) {
+        let turn = entry.get("id").and_then(Value::as_u64).map(EntryId);
+        let attachments: Vec<_> = array(entry.pointer("/data/attachments"))
+            .iter()
+            .filter_map(|file| str_at(file, "name"))
+            .map(str::to_owned)
+            .collect();
+        // A connector's input reaches the model with a routing prefix; show
+        // the unmodified text and only the attachment names.
+        if let Some(text) = entry.pointer("/data/text").and_then(Value::as_str) {
+            if !text.trim().is_empty() || !attachments.is_empty() {
+                self.items.push(Item::User(User {
+                    key: format!("e{id}-0"),
+                    text: text.to_owned(),
+                    turn,
+                    attachments,
+                }));
+            }
+            return;
+        }
+        for (index, message) in messages.iter().enumerate() {
+            let text = content_text(message.get("content"));
+            if !text.trim().is_empty() {
+                self.items.push(Item::User(User {
+                    key: format!("e{id}-{index}"),
+                    text,
+                    turn,
+                    attachments: Vec::new(),
+                }));
+            }
         }
     }
 

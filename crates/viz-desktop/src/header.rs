@@ -1,9 +1,9 @@
 //! Conversation title and workspace context.
 
 use rune::{El, el, icon, row, text};
-use rune_kit::shell::Toolbar;
+use rune_kit::{IconButtonVariant, shell::Toolbar};
 
-use crate::{app::Desktop, theme::Theme, ui};
+use crate::{app::Desktop, changes, sidebar, theme::Theme, ui};
 
 pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
     let title = s.selected.map_or_else(
@@ -16,7 +16,11 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         },
         |id| s.title(id),
     );
-    let toolbar = Toolbar::new().leading(
+    let mut toolbar = Toolbar::new();
+    if !s.sidebar.is_open() {
+        toolbar = toolbar.leading(sidebar::new_chat_button(s, t));
+    }
+    let toolbar = toolbar.leading(
         text(title)
             .key("title")
             .font(t.title)
@@ -29,17 +33,28 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
     let mut metadata = row().key("header-metadata").center_y().gap(7.0).shrink();
     if let Some(project) = project {
         metadata = metadata.child(quiet("header-project", &project.name, t).help(&project.path));
-        if let Some(branch) = project.branch.as_deref() {
-            metadata = metadata.child(
-                row()
-                    .key("header-branch")
-                    .center_y()
-                    .gap(5.0)
-                    .shrink()
-                    .child(icon(&ui::GIT_BRANCH, 13.0).color(t.muted))
-                    .child(quiet("branch", branch, t)),
-            );
+    }
+    if let Some(branch) = s.branch() {
+        let mut item = row()
+            .key("header-branch")
+            .center_y()
+            .gap(5.0)
+            .shrink()
+            .child(icon(&ui::GIT_BRANCH, 13.0).color(t.muted))
+            .child(quiet("branch", branch, t));
+        if s.connected()
+            && s.conversation
+                .as_ref()
+                .is_some_and(|state| state.git.is_some())
+        {
+            item = item
+                .role("button")
+                .label("Switch branch")
+                .focusable(true)
+                .focus_ring(1.0, 1.0, t.accent)
+                .on_press_tx(changes::branch_dialog);
         }
+        metadata = metadata.child(item);
     }
     if let Some(harness) = s
         .conversation
@@ -63,7 +78,19 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
     {
         metadata = metadata.child(mark.key("header-status"));
     }
-    toolbar.trailing(metadata)
+    let open = s.changes.pane.is_open();
+    toolbar.trailing(metadata).trailing(
+        ui::icon_button(
+            &ui::INSPECTOR,
+            if open { "Hide changes" } else { "Show changes" },
+            IconButtonVariant::GhostMuted,
+        )
+        .shortcut(format!("{}+D", ui::COMMAND_KEY))
+        .on_press_tx(changes::toggle)
+        .build(&t.k)
+        .key("inspector-toggle")
+        .expanded(open),
+    )
 }
 
 fn quiet(key: &str, label: &str, t: &Theme) -> El {

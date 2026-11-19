@@ -8,6 +8,7 @@ use rune_kit::{
 
 use crate::{
     app::{Desktop, Status},
+    attachments, changes,
     theme::{self, Theme},
     thread::{Item, PlanStep, Tool, ToolStatus, User},
     ui,
@@ -56,8 +57,11 @@ impl Rows {
 /// The scrolling timeline, or what to show in its place.
 pub fn timeline(s: &Desktop, t: &Theme) -> El {
     let thread = &s.thread;
-    let empty =
-        thread.items.is_empty() && !s.busy() && !thread.live.busy && thread.live.failure.is_none();
+    let empty = thread.items.is_empty()
+        && thread.before.is_none()
+        && !s.busy()
+        && !thread.live.busy
+        && thread.live.failure.is_none();
     let body = if empty {
         empty_state(s, t)
     } else {
@@ -65,14 +69,22 @@ pub fn timeline(s: &Desktop, t: &Theme) -> El {
             rows: Vec::new(),
             last: None,
         };
-        if thread.earlier {
+        if thread.before.is_some() {
             rows.push(
                 Kind::Notice,
-                text("Earlier messages aren't shown")
-                    .key("earlier")
-                    .font(t.small)
-                    .color(t.faint)
-                    .self_center(),
+                ui::button(
+                    if s.history_loading {
+                        "Loading earlier"
+                    } else {
+                        "Load earlier"
+                    },
+                    ButtonVariant::GhostMuted,
+                )
+                .disabled(s.history_loading || !s.connected())
+                .on_press_tx(Desktop::load_earlier)
+                .build(&t.k)
+                .key("load-earlier")
+                .self_center(),
             );
         }
         items(s, &thread.items, false, &mut rows, t);
@@ -89,6 +101,7 @@ pub fn timeline(s: &Desktop, t: &Theme) -> El {
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom: true })
+        .scroll_anchor()
         .child(
             col()
                 .key("timeline-body")
@@ -106,7 +119,7 @@ pub fn timeline(s: &Desktop, t: &Theme) -> El {
 fn items(s: &Desktop, items: &[Item], streaming: bool, rows: &mut Rows, t: &Theme) {
     for item in items {
         match item {
-            Item::User(user) => rows.push(Kind::Mine, mine(user, t)),
+            Item::User(user) => rows.push(Kind::Mine, mine(s, user, t)),
             Item::Text { key, text } => rows.push(Kind::Prose, prose(key, text, streaming, t)),
             Item::Thinking {
                 key,
@@ -239,24 +252,80 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
 }
 
 /// A user message sits on a neutral surface.
-fn mine(user: &User, t: &Theme) -> El {
-    el().key(user.key.clone())
+fn mine(s: &Desktop, user: &User, t: &Theme) -> El {
+    let mut message = col()
+        .key(&user.key)
         .role("article")
         .label("You")
         .w_full()
-        .px(16.0)
-        .py(11.0)
+        .px(13.0)
+        .py(10.0)
+        .gap(6.0)
         .radius(t.k.radius.md)
         .fill(t.mine)
-        .child(
-            text(user.text.clone())
+        .hover_group_focus();
+    if let Some(turn) = user.turn
+        && s.conversation
+            .as_ref()
+            .is_some_and(|state| state.git.is_some())
+    {
+        message = message.child(
+            row()
+                .key("prompt-actions")
+                .w_full()
+                .center_y()
+                .h(23.0)
+                .gap(6.0)
+                .child(ui::section("You", t).grow(1.0))
+                .child(
+                    row()
+                        .key("actions")
+                        .gap(1.0)
+                        .group_opacity(0.0, 1.0)
+                        .child(
+                            ui::button("Changes", ButtonVariant::GhostMuted)
+                                .disabled(!s.connected())
+                                .on_press_tx(move |s: &mut Desktop, tx| changes::turn(s, tx, turn))
+                                .build(&t.k)
+                                .key("turn-changes"),
+                        )
+                        .child(
+                            ui::button("Revert to here", ButtonVariant::GhostMuted)
+                                .disabled(!s.connected() || s.busy())
+                                .on_press_tx(move |s: &mut Desktop, tx| {
+                                    changes::confirm_revert(s, tx, turn);
+                                })
+                                .build(&t.k)
+                                .key("turn-revert"),
+                        ),
+                ),
+        );
+    }
+    if !user.text.is_empty() {
+        message = message.child(
+            text(&user.text)
+                .key("text")
                 .font(t.body)
                 .color(t.text)
                 .wrap()
                 .w_full()
                 .selectable(true)
                 .selection_color(t.k.selection()),
-        )
+        );
+    }
+    if !user.attachments.is_empty() {
+        message = message.child(
+            row()
+                .key("message-attachments")
+                .w_full()
+                .gap(5.0)
+                .flex_wrap()
+                .children(user.attachments.iter().enumerate().map(|(index, name)| {
+                    attachments::chip(name, t).key(format!("attachment-{index}"))
+                })),
+        );
+    }
+    message
 }
 
 /// Assistant prose.

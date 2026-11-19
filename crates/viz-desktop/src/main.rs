@@ -4,9 +4,12 @@
 //! headless.
 
 mod app;
+mod attachments;
 mod backend;
+mod changes;
 mod composer;
 mod header;
+mod palette;
 mod scenes;
 mod sidebar;
 mod theme;
@@ -16,7 +19,7 @@ mod ui;
 
 use std::time::Duration;
 
-use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col};
+use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, row};
 use rune_kit::{
     Toast, ToastRegion,
     shell::{self, SidebarToggle, SplitView},
@@ -48,13 +51,39 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
             |s: &mut Desktop| &mut s.sidebar,
             sidebar::sidebar(s, t, &mut overlays),
         )
+        .inspector(
+            &s.changes.pane,
+            |s: &mut Desktop| &mut s.changes.pane,
+            changes::view(s, t, &mut overlays),
+        )
         .toolbar(header::toolbar(s, t))
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(0.0)
         .toolbar_in_panel()
-        .sidebar_toggle(SidebarToggle::new().in_header())
+        .sidebar_toggle(
+            SidebarToggle::new().in_header().unread(
+                s.conversations
+                    .iter()
+                    .any(|chat| chat.unread && !chat.archived),
+            ),
+        )
         .reduced_motion(cx.is_reduced_motion())
         .build(&t.shell);
+    let split = if s.sidebar.is_open() {
+        // In the shell's header band, left of the sidebar toggle (macOS: past
+        // the traffic lights).
+        let left = cx.titlebar_inset() + 8.0;
+        split.child(
+            row()
+                .absolute(left, 12.0)
+                .child(sidebar::new_chat_button(s, t)),
+        )
+    } else {
+        split
+    };
+    sidebar::overlays(s, t, &mut overlays);
+    changes::overlays(s, t, &mut overlays);
+    palette::mount(s, t, &mut overlays);
     overlays.extend(toasts(s, t));
     rune_kit::root(split, overlays)
 }
@@ -78,6 +107,13 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
 }
 
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    if ev.is_command('k') && !ev.mods.shift && !ev.mods.alt {
+        palette::toggle(s, tx);
+        return true;
+    }
+    if s.palette.is_open() {
+        return false;
+    }
     if shell::is_sidebar_toggle(ev) {
         s.sidebar.toggle();
         return true;
@@ -89,8 +125,8 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.create_here(tx);
         return true;
     }
-    if ev.is_command('k') {
-        sidebar::focus_filter(s, tx);
+    if ev.is_command('d') {
+        changes::toggle(s, tx);
         return true;
     }
     if ev.is_command('.') && s.busy() {
@@ -102,7 +138,8 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
 fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     let completion = composer::poll(s, clock, tx);
-    s.expire(clock) || completion
+    let palette = palette::poll(s, clock, tx);
+    s.expire(clock) || completion || palette
 }
 
 fn main() {
@@ -114,9 +151,10 @@ fn main() {
         scenes: scenes::SCENES,
         on_key: Some(on_key),
         poll: Some(poll),
-        ..AppSpec::new("viz", (1120.0, 740.0), Desktop::detached, view)
+        ..AppSpec::new("viz", (1240.0, 760.0), Desktop::detached, view)
     })
-    .init(move || Desktop::new(commands));
+    .init(move || Desktop::new(commands))
+    .on_focus(Desktop::set_focus);
     let headless = rune::is_headless();
     let preview = headless && std::env::args_os().any(|arg| arg == "--scene");
     if !preview {

@@ -2,6 +2,8 @@
 //! (retrying while the backend is down), watches the selected conversation, and
 //! pushes state into the UI.
 
+mod workspace;
+
 use std::{cmp::Reverse, time::Duration};
 
 use rune::AppHandle;
@@ -11,14 +13,18 @@ use viz_client::{
     Client, Connection, Endpoint, Error, delta,
     protocol::{
         ClientInfo, ClientKind, ConfigureConversation, ConversationId, CreateConversation,
-        CreateProject, Notification, OptionValue, RemoveProject, RespondApproval, Revision,
-        SearchFiles, Submit, UpdateConversation, UpdateProject, ViewRevision,
+        CreateProject, EntryId, Notification, OptionValue, RemoveProject, RemoveQueuedInput,
+        RespondApproval, Revision, SearchFiles, SubmissionId, Submit, UpdateConversation,
+        UpdateProject, ViewRevision,
     },
 };
 use viz_config::Config;
 
+use self::workspace::History;
 use crate::{
     app::{Desktop, Status},
+    attachments::Source,
+    changes::Request as GitRequest,
     thread::Thread,
 };
 
@@ -53,12 +59,29 @@ pub enum Command {
         request: u64,
         query: String,
     },
-    /// Submit an input to a conversation.
-    Submit {
-        /// The conversation.
+    SearchConversations {
+        request: u64,
+        query: String,
+    },
+    LoadEarlier {
         conversation: ConversationId,
-        /// The input text.
-        text: String,
+        before: EntryId,
+    },
+    RemoveQueued {
+        conversation: ConversationId,
+        submission: SubmissionId,
+    },
+    Git(GitRequest),
+    Attach {
+        conversation: ConversationId,
+        source: Source,
+    },
+    /// Submit an input, including any locally prepared attachments.
+    Submit(Submit),
+    /// Show a desktop notification.
+    Notify {
+        title: String,
+        body: &'static str,
     },
     /// While disconnected: try again now.
     Reconnect,
@@ -68,6 +91,8 @@ pub enum Command {
 pub enum ChatChange {
     Title(String),
     Archive(bool),
+    Pin(bool),
+    Unread(bool),
     Project(Option<String>),
 }
 
@@ -103,7 +128,10 @@ pub fn spawn(
 }
 
 fn set_status(ui: &AppHandle<Desktop>, status: Status) {
-    ui.update(move |s, _| s.status = status);
+    ui.update(move |s, tx| {
+        s.status = status;
+        s.update_title(tx);
+    });
 }
 
 fn toast(ui: &AppHandle<Desktop>, title: &'static str, detail: String) {
@@ -132,7 +160,7 @@ async fn run(
             set_status(ui, Status::Error(detail.clone()));
             signal(&mut first);
             while let Some(command) = commands.recv().await {
-                if !offline(ui, &command, &mut None) {
+                if !offline(ui, command, &mut None) {
                     set_status(ui, Status::Error(detail.clone()));
                 }
             }
@@ -168,7 +196,7 @@ async fn run(
             tokio::select! {
                 () = &mut retry => break,
                 command = commands.recv() => match command {
-                    Some(command) => if !offline(ui, &command, &mut selected) {
+                    Some(command) => if !offline(ui, command, &mut selected) {
                         break;
                     },
                     None => return,
@@ -181,25 +209,36 @@ async fn run(
 /// Handles a command while disconnected; false to try connecting now.
 fn offline(
     ui: &AppHandle<Desktop>,
-    command: &Command,
+    command: Command,
     selected: &mut Option<ConversationId>,
 ) -> bool {
     match command {
-        &Command::Select(conversation) => *selected = Some(conversation),
-        &Command::Create { request, .. } => {
+        Command::Select(conversation) => *selected = Some(conversation),
+        Command::Create { request, .. } => {
             ui.update(move |s, tx| {
                 s.created(request, None, tx);
                 s.toast(tx, "Offline", None);
             });
         }
-        Command::Submit { conversation, text } => {
-            let (conversation, text) = (*conversation, text.clone());
+        Command::Submit(submit) => {
             ui.update(move |s, tx| {
-                s.restore_message(conversation, &text);
+                s.restore_message(submit);
                 s.toast(tx, "Offline", None);
             });
         }
         Command::SearchFiles { .. } => {}
+        Command::SearchConversations { request, .. } => {
+            ui.update(move |s, _| s.palette.set_hits(request, Err("Offline".into())));
+        }
+        Command::LoadEarlier { conversation, .. } => {
+            ui.update(move |s, tx| s.loaded_earlier(conversation, None, tx));
+        }
+        Command::Attach {
+            conversation,
+            source,
+        } => workspace::attach(ui, conversation, source),
+        Command::Notify { title, body } => workspace::notify(&title, body),
+        Command::Git(request) => workspace::git_offline(ui, &request),
         Command::Reconnect => return false,
         _ => toast(ui, "Offline", "Backend disconnected".into()),
     }
@@ -234,6 +273,7 @@ async fn session(
         client,
         watched,
         view: None,
+        history: None,
     };
     let (version, root) = (hello.version, hello.root);
     let started = async {
@@ -250,6 +290,7 @@ async fn session(
                 s.show(watched);
                 tx.focus("draft", false);
             }
+            s.update_title(tx);
         });
         Ok(())
     };
@@ -283,6 +324,7 @@ struct Session<'a> {
     watched: ConversationId,
     /// Its latest view, once the first value arrives.
     view: Option<Value>,
+    history: Option<History>,
 }
 
 impl Session<'_> {
@@ -302,20 +344,7 @@ impl Session<'_> {
                 self.ui.update(move |s, tx| s.created(request, id, tx));
                 result.map(drop)
             }
-            Command::Update(conversation, change) => {
-                let mut params = UpdateConversation {
-                    conversation,
-                    title: None,
-                    archived: None,
-                    project: None,
-                };
-                match &change {
-                    ChatChange::Title(title) => params.title = Some(title),
-                    ChatChange::Archive(archived) => params.archived = Some(*archived),
-                    ChatChange::Project(project) => params.project = Some(project.as_deref()),
-                }
-                self.client.update_conversation(&params).await
-            }
+            Command::Update(conversation, change) => self.update_chat(conversation, &change).await,
             Command::Configure {
                 conversation,
                 option,
@@ -352,22 +381,73 @@ impl Session<'_> {
                 self.search(conversation, request, query);
                 Ok(())
             }
-            Command::Submit { conversation, text } => {
-                let submit = Submit {
-                    conversation: Some(conversation),
-                    text,
-                    ..Submit::default()
-                };
+            Command::SearchConversations { request, query } => {
+                workspace::search(self.ui, &self.client, request, query);
+                Ok(())
+            }
+            Command::LoadEarlier {
+                conversation,
+                before,
+            } => self.load_earlier(conversation, before).await,
+            Command::RemoveQueued {
+                conversation,
+                submission,
+            } => {
+                self.client
+                    .remove_queued_input(&RemoveQueuedInput {
+                        conversation,
+                        submission,
+                    })
+                    .await
+            }
+            Command::Git(request) => {
+                workspace::git(self.ui, &self.client, request);
+                Ok(())
+            }
+            Command::Notify { title, body } => {
+                workspace::notify(&title, body);
+                Ok(())
+            }
+            Command::Attach {
+                conversation,
+                source,
+            } => {
+                workspace::attach(self.ui, conversation, source);
+                Ok(())
+            }
+            Command::Submit(submit) => {
                 let result = self.client.submit(&submit).await;
                 if result.is_err() {
-                    self.ui
-                        .update(move |s, _| s.restore_message(conversation, &submit.text));
+                    self.ui.update(move |s, _| s.restore_message(submit));
                 }
                 result.map(drop)
             }
             // Already connected.
             Command::Reconnect => Ok(()),
         }
+    }
+
+    async fn update_chat(
+        &self,
+        conversation: ConversationId,
+        change: &ChatChange,
+    ) -> viz_client::Result<()> {
+        let mut params = UpdateConversation {
+            conversation,
+            title: None,
+            archived: None,
+            pinned: None,
+            unread: None,
+            project: None,
+        };
+        match change {
+            ChatChange::Title(title) => params.title = Some(title),
+            ChatChange::Archive(archived) => params.archived = Some(*archived),
+            ChatChange::Pin(pinned) => params.pinned = Some(*pinned),
+            ChatChange::Unread(unread) => params.unread = Some(*unread),
+            ChatChange::Project(project) => params.project = Some(project.as_deref()),
+        }
+        self.client.update_conversation(&params).await
     }
 
     async fn on_notification(&mut self, notification: Notification) -> viz_client::Result<()> {
@@ -378,7 +458,7 @@ impl Session<'_> {
                 state,
             } => {
                 self.ui
-                    .update(move |s, _| s.set_conversation(conversation, state));
+                    .update(move |s, tx| s.set_conversation(conversation, state, tx));
                 Ok(())
             }
             Notification::ConversationView(view) => self.on_view(view).await,
@@ -399,11 +479,17 @@ impl Session<'_> {
         let view = match (revision, &mut self.view) {
             (Revision::Full(value), view) => view.insert(value),
             (Revision::Delta(ops), Some(view)) => {
-                if let Err(e) = delta::apply(view, &ops) {
+                let result = if let Some(history) = &mut self.history {
+                    history.apply(view, &ops)
+                } else {
+                    delta::apply(view, &ops)
+                };
+                if let Err(e) = result {
                     // The replica is unusable: start over from a fresh full
                     // value.
                     toast(self.ui, "View out of sync; reloading", e.to_string());
                     self.view = None;
+                    self.history = None;
                     self.client.unwatch(conversation).await?;
                     return self.client.watch(conversation).await;
                 }
@@ -412,7 +498,10 @@ impl Session<'_> {
             // Ignore deltas until a full view arrives.
             (Revision::Delta(_), None) => return Ok(()),
         };
-        let thread = Thread::from_view(view);
+        let thread = self
+            .history
+            .as_ref()
+            .map_or_else(|| Thread::from_view(view), |history| history.thread(view));
         self.ui
             .update(move |s, _| s.set_thread(conversation, thread));
         Ok(())
@@ -425,6 +514,7 @@ impl Session<'_> {
         self.client.unwatch(self.watched).await?;
         self.watched = conversation;
         self.view = None;
+        self.history = None;
         self.client.watch(conversation).await
     }
 
@@ -435,8 +525,8 @@ impl Session<'_> {
         )?;
         conversations.sort_unstable_by_key(|chat| Reverse((chat.updated_at, chat.id)));
         projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-        self.ui.update(move |s, _| {
-            s.conversations = conversations;
+        self.ui.update(move |s, tx| {
+            s.set_conversations(conversations, tx);
             s.projects = projects;
         });
         Ok(())

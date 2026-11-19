@@ -1,9 +1,9 @@
 //! The desktop's shared presentation on Rune and rune-kit.
 
-use rune::{Color, El, Icon, TextEdit, Tx, col, el, row, text};
+use rune::{Color, El, Icon, TextEdit, TextStyle, Tx, col, el, row, text};
 use rune_kit::{
     Badge, BadgeVariant, Button, ButtonVariant, ControlSize, Dialog, IconButton, IconButtonVariant,
-    Keybind, Menu, MenuItem, Placement, PopupList, Select, SelectAppearance, Spinner, TextInput,
+    Keybind, Loader, Menu, MenuItem, Placement, PopupList, Select, SelectAppearance, TextInput,
     TreeItem, TreeRow, TreeStyle,
 };
 use viz_client::protocol::ConversationStatus;
@@ -67,7 +67,7 @@ pub fn dot(color: Color, size: f32) -> El {
 }
 
 pub fn spinner(size: f32, t: &Theme) -> El {
-    Spinner::new().size(size).color(t.muted).build(&t.k)
+    Loader::new().size(size).color(t.muted).build(&t.k)
 }
 
 pub fn status(status: ConversationStatus, t: &Theme) -> Option<El> {
@@ -105,9 +105,9 @@ pub fn code(body: &str, t: &Theme) -> El {
         .selection_color(t.k.selection())
 }
 
-pub fn tree_row(row: &TreeRow<'_>, item: TreeItem, t: &Theme) -> El {
+pub fn tree_row(row: &TreeRow<'_>, item: TreeItem, t: &Theme, font: TextStyle) -> El {
     let mut style = TreeStyle::from_kit(&t.k)
-        .label(t.ui, t.muted, t.text)
+        .label(font, t.muted, t.text)
         .gap(5.0)
         .hover(t.hover);
     style.row_height = 29.0;
@@ -250,4 +250,19 @@ pub static STOP: Icon = Icon {
     name: "viz-stop",
     view: 16.0,
     body: r#"<rect x="4" y="4" width="8" height="8" rx="1.25" fill="currentColor"/>"#,
+};
+pub static INSPECTOR: Icon = Icon {
+    name: "viz-inspector",
+    view: 16.0,
+    body: r#"<rect x="2.25" y="3.5" width="11.5" height="9" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M9.5 4v8.25" stroke="currentColor" stroke-width="1.2"/>"#,
+};
+pub static SIDEBAR: Icon = Icon {
+    name: "viz-sidebar",
+    view: 16.0,
+    body: r#"<rect x="2.25" y="3.5" width="11.5" height="9" rx="1.25" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M6.5 4v8.25" stroke="currentColor" stroke-width="1.2"/>"#,
+};
+pub static PIN: Icon = Icon {
+    name: "viz-pin",
+    view: 16.0,
+    body: r#"<path d="M6 2.75h4M6.75 2.75v3.5L4.5 8.75h7L9.25 6.25v-3.5M8 8.75v4.5" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round" stroke-linecap="round"/>"#,
 };

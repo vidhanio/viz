@@ -8,6 +8,10 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
+base64.workspace = true
+mime_guess.workspace = true
+notify-rust = { workspace = true, features = ["z-with-tokio"] }
+rfd.workspace = true
 rune.workspace = true
 rune-kit = { workspace = true, features = ["markdown"] }
 rune-theme-opencode.workspace = true

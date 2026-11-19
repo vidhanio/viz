@@ -25,11 +25,13 @@ use tokio_tungstenite::{
 use crate::{
     Endpoint, Error, Result,
     protocol::{
-        AbortConversation, ClientInfo, ConfigureConversation, ConversationId, ConversationSummary,
-        CreateConversation, CreateProject, Harness, Hello, HelloParams, ListConversations,
-        ListHarnesses, ListProjects, Method, Notification, PROTOCOL_VERSION, Project,
-        RemoveProject, RespondApproval, SearchFiles, SubmissionId, Submit, Unwatch,
-        UpdateConversation, UpdateProject, Watch,
+        AbortConversation, Branches, ClientInfo, CommitResult, ConfigureConversation,
+        ConversationId, ConversationSummary, CreateConversation, CreateProject, DiffFile,
+        EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff, GitPr, GitPush, GitRevert,
+        Harness, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses, ListProjects,
+        Method, Notification, PROTOCOL_VERSION, PrResult, Project, RemoveProject,
+        RemoveQueuedInput, RespondApproval, SearchConversations, SearchFiles, SearchHit,
+        SubmissionId, Submit, Unwatch, UpdateConversation, UpdateProject, Watch,
     },
 };
 
@@ -239,6 +241,89 @@ impl Client {
     /// See [`Client::submit`].
     pub async fn search_files(&self, params: &SearchFiles<'_>) -> Result<Vec<String>> {
         Ok(self.request(params).await?.files)
+    }
+
+    /// Searches transcript text across conversations.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn search_conversations(
+        &self,
+        params: &SearchConversations<'_>,
+    ) -> Result<Vec<SearchHit>> {
+        Ok(self.request(params).await?.hits)
+    }
+
+    /// Reads a page of earlier transcript entries.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn list_entries(&self, params: &ListEntries) -> Result<EntryPage> {
+        self.request(params).await
+    }
+
+    /// Removes an input that has not yet been dispatched.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn remove_queued_input(&self, params: &RemoveQueuedInput) -> Result<()> {
+        self.request(params).await.map(drop)
+    }
+
+    /// Gets unified patches and their file metadata.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn git_diff(&self, params: &GitDiff<'_>) -> Result<Vec<DiffFile>> {
+        Ok(self.request(params).await?.files)
+    }
+
+    /// Lists branches for the conversation's repository.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn git_branches(&self, conversation: ConversationId) -> Result<Branches> {
+        self.request(&GitBranches { conversation }).await
+    }
+
+    /// Switches branches or creates and checks out a new branch.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn git_checkout(&self, params: &GitCheckout<'_>) -> Result<()> {
+        self.request(params).await.map(drop)
+    }
+
+    /// Commits changes in the conversation's repository.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn git_commit(&self, params: &GitCommit<'_>) -> Result<CommitResult> {
+        self.request(params).await
+    }
+
+    /// Pushes the active branch.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn git_push(&self, conversation: ConversationId) -> Result<()> {
+        self.request(&GitPush { conversation }).await.map(drop)
+    }
+
+    /// Creates a pull request for the active branch.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn git_pr(&self, params: &GitPr<'_>) -> Result<PrResult> {
+        self.request(params).await
+    }
+
+    /// Restores the working tree as it was at the start of a turn.
+    ///
+    /// # Errors
+    /// See [`Client::submit`].
+    pub async fn git_revert(&self, params: &GitRevert) -> Result<()> {
+        self.request(params).await.map(drop)
     }
 
     /// Submits an input; see [`Submit`].

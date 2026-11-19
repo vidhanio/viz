@@ -42,11 +42,14 @@ pub(super) enum Edit {
 }
 
 fn open_edit(s: &mut Desktop, edit: Edit, value: &str, tx: &mut Tx) {
+    if !s.connected() {
+        return;
+    }
     s.navigation.menu = None;
     s.navigation.edit = Some(edit);
     s.navigation.value.replace_text(value);
     s.navigation.value.set_selection(0, value.len());
-    tx.focus("edit-value", false);
+    tx.focus_when_shown("edit-value", false);
 }
 
 pub(super) fn add_project(s: &mut Desktop, tx: &mut Tx) {
@@ -54,6 +57,9 @@ pub(super) fn add_project(s: &mut Desktop, tx: &mut Tx) {
 }
 
 fn edit_submit(s: &mut Desktop, tx: &mut Tx) {
+    if !s.connected() {
+        return;
+    }
     let Some(edit) = s.navigation.edit.as_ref() else {
         return;
     };
@@ -195,6 +201,20 @@ pub(super) fn chat_menu(
                 .map(|project| destination(chat, Some(project))),
         );
     } else {
+        let pinned = chat.pinned;
+        menu = menu.item(
+            MenuItem::new(if pinned { "Unpin" } else { "Pin" }).on_select_tx(
+                move |s: &mut Desktop, tx| {
+                    s.navigation.menu = None;
+                    if s.connected() {
+                        s.send(Command::Update(id, ChatChange::Pin(!pinned)), tx);
+                    }
+                },
+            ),
+        );
+        if chat.kind == ConversationKind::Orchestrator {
+            return menu.build(&t.k, layer);
+        }
         let archived = chat.archived;
         menu = menu
             .item(
@@ -256,7 +276,10 @@ pub(super) fn project_menu(
 ) -> El {
     let (mut menu, context) = menu(s, key, false, t);
     if context.is_some() {
-        let (new, rename, remove) = (project.id.clone(), project.id.clone(), project.id.clone());
+        let new = project.id.clone();
+        let worktree = project.id.clone();
+        let rename = project.id.clone();
+        let remove = project.id.clone();
         let name = project.name.clone();
         menu = menu
             .item(
@@ -265,6 +288,13 @@ pub(super) fn project_menu(
                     .on_select_tx(move |s: &mut Desktop, tx| {
                         s.navigation.menu = None;
                         s.create(Some(new.clone()), tx);
+                    }),
+            )
+            .item(
+                MenuItem::new("New worktree chat")
+                    .disabled(s.new_chat.is_some() || project.branch.is_none())
+                    .on_select_tx(move |s: &mut Desktop, tx| {
+                        super::worktree::open(s, &worktree, tx);
                     }),
             )
             .item(
