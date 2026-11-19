@@ -133,6 +133,10 @@
                 "worktree": {
                   "type": "string",
                   "description": "Path of the viz-created git worktree the conversation runs in"
+                },
+                "branch": {
+                  "type": "string",
+                  "description": "Checked-out branch of a managed worktree; absent when detached"
                 }
               },
               "required": ["id", "title", "kind", "status", "archived", "updatedAt", "unread", "pinned"],
@@ -153,21 +157,49 @@
             "minLength": 1,
             "description": "Backend-assigned project id"
           },
-          "worktree": {
-            "type": "object",
-            "properties": {
-              "branch": {
-                "type": "string",
-                "minLength": 1
+          "workspace": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "local"
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
               },
-              "base": {
-                "type": "string",
-                "description": "Default: the project's current branch"
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "worktree"
+                  },
+                  "base": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Default: origin HEAD, then the checked-out branch"
+                  }
+                },
+                "required": ["kind"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "const": "existing"
+                  },
+                  "path": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "A viz-managed worktree of this project"
+                  }
+                },
+                "required": ["kind", "path"],
+                "additionalProperties": false
               }
-            },
-            "required": ["branch"],
-            "additionalProperties": false,
-            "description": "Run the chat in a new git worktree of the project on a new branch"
+            ]
           },
           "harness": {
             "type": "string",
@@ -492,12 +524,16 @@
                     }
                   ]
                 },
+                "defaultWorkspace": {
+                  "enum": ["local", "worktree"],
+                  "description": "Default workspace for new chats"
+                },
                 "createdAt": {
                   "type": "integer",
                   "description": "Unix milliseconds"
                 }
               },
-              "required": ["id", "name", "path", "branch", "createdAt"],
+              "required": ["id", "name", "path", "branch", "defaultWorkspace", "createdAt"],
               "additionalProperties": false
             }
           }
@@ -553,12 +589,16 @@
                   }
                 ]
               },
+              "defaultWorkspace": {
+                "enum": ["local", "worktree"],
+                "description": "Default workspace for new chats"
+              },
               "createdAt": {
                 "type": "integer",
                 "description": "Unix milliseconds"
               }
             },
-            "required": ["id", "name", "path", "branch", "createdAt"],
+            "required": ["id", "name", "path", "branch", "defaultWorkspace", "createdAt"],
             "additionalProperties": false
           }
         },
@@ -578,9 +618,13 @@
           "name": {
             "type": "string",
             "minLength": 1
+          },
+          "defaultWorkspace": {
+            "enum": ["local", "worktree"],
+            "description": "Default workspace for new chats"
           }
         },
-        "required": ["project", "name"],
+        "required": ["project"],
         "additionalProperties": false
       },
       "result": {
@@ -612,12 +656,16 @@
                   }
                 ]
               },
+              "defaultWorkspace": {
+                "enum": ["local", "worktree"],
+                "description": "Default workspace for new chats"
+              },
               "createdAt": {
                 "type": "integer",
                 "description": "Unix milliseconds"
               }
             },
-            "required": ["id", "name", "path", "branch", "createdAt"],
+            "required": ["id", "name", "path", "branch", "defaultWorkspace", "createdAt"],
             "additionalProperties": false
           }
         },
@@ -641,6 +689,59 @@
       "result": {
         "type": "object",
         "properties": {},
+        "additionalProperties": false
+      }
+    },
+    "worktrees.list": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Backend-assigned project id"
+          }
+        },
+        "required": ["project"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "worktrees": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string"
+                },
+                "branch": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "conversation": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "pi-durable ConversationId"
+                },
+                "updatedAt": {
+                  "type": "integer",
+                  "description": "Unix milliseconds of the latest live conversation using this worktree"
+                }
+              },
+              "required": ["path", "branch", "conversation", "updatedAt"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["worktrees"],
         "additionalProperties": false
       }
     },

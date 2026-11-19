@@ -43,12 +43,24 @@ const ConversationId = int({ minimum: 1, description: "pi-durable ConversationId
 const SubmissionId = int({ minimum: 1, description: "pi-durable SubmissionId" });
 const ProjectId = str({ minLength: 1, description: "Backend-assigned project id" });
 
+const DefaultWorkspace = oneOf(["local", "worktree"], { description: "Default workspace for new chats" });
+export const Workspace = union([
+  obj({ kind: lit("local") }),
+  obj({
+    kind: lit("worktree"),
+    base: opt(str({ minLength: 1, description: "Default: origin HEAD, then the checked-out branch" })),
+  }),
+  obj({ kind: lit("existing"), path: str({ minLength: 1, description: "A viz-managed worktree of this project" }) }),
+]);
+export type Workspace = Static<typeof Workspace>;
+
 /** A directory that chats run in. */
 export const Project = obj({
   id: ProjectId,
   name: str(),
   path: str({ description: "Absolute directory; the cwd of the project's chats" }),
   branch: nullable(str({ description: "Checked-out git branch, null outside a repository or when detached" })),
+  defaultWorkspace: DefaultWorkspace,
   createdAt: int({ description: "Unix milliseconds" }),
 });
 export type Project = Static<typeof Project>;
@@ -71,6 +83,7 @@ export const ConversationSummary = obj({
   unread: bool({ description: "A turn ended while no app watched the conversation; watching clears it" }),
   pinned: bool(),
   worktree: opt(str({ description: "Path of the viz-created git worktree the conversation runs in" })),
+  branch: opt(str({ description: "Checked-out branch of a managed worktree; absent when detached" })),
 });
 export type ConversationSummary = Static<typeof ConversationSummary>;
 
@@ -157,12 +170,7 @@ export const Methods = {
   "conversation.create": {
     params: obj({
       project: opt(ProjectId),
-      worktree: opt(
-        obj(
-          { branch: str({ minLength: 1 }), base: opt(str({ description: "Default: the project's current branch" })) },
-          { description: "Run the chat in a new git worktree of the project on a new branch" },
-        ),
-      ),
+      workspace: opt(Workspace),
       harness: opt(str({ description: "Configured ACP runner; default [backend].default_harness" })),
       options: opt(
         map(OptionValue, {
@@ -229,12 +237,25 @@ export const Methods = {
     result: obj({ project: Project }),
   },
   "project.update": {
-    params: obj({ project: ProjectId, name: str({ minLength: 1 }) }),
+    params: obj({ project: ProjectId, name: opt(str({ minLength: 1 })), defaultWorkspace: opt(DefaultWorkspace) }),
     result: obj({ project: Project }),
   },
   "project.remove": {
     params: obj({ project: ProjectId }),
     result: Empty,
+  },
+  "worktrees.list": {
+    params: obj({ project: ProjectId }),
+    result: obj({
+      worktrees: arr(
+        obj({
+          path: str(),
+          branch: nullable(str()),
+          conversation: ConversationId,
+          updatedAt: int({ description: "Unix milliseconds of the latest live conversation using this worktree" }),
+        }),
+      ),
+    }),
   },
   "harnesses.list": {
     params: Empty,

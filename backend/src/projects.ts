@@ -6,9 +6,10 @@ import { basename, join, resolve } from "node:path";
 import type { Context } from "@earendil-works/chord/context";
 import { type ConversationId, type Cursor, defineDoc, type Harness, type Tx } from "@earendil-works/pi-durable";
 
-import type { Project } from "./protocol.ts";
+import type { Params, Project } from "./protocol.ts";
 
 export type WorktreeBinding = { path: string; base: string };
+export type ChatWorkspace = { worktree: WorktreeBinding; branchToName?: string };
 
 export const MetaDoc = defineDoc<{
   project: string | null;
@@ -22,6 +23,7 @@ export const MetaDoc = defineDoc<{
    */
   deleted?: boolean;
   worktree?: WorktreeBinding;
+  branchToName?: string;
   createdAt: number;
   updatedAt: number;
 }>({
@@ -34,7 +36,7 @@ export const MetaDoc = defineDoc<{
   checkpointWhen: () => true,
 });
 
-type StoredProject = Omit<Project, "branch">;
+type StoredProject = Omit<Project, "branch" | "defaultWorkspace"> & { defaultWorkspace?: Project["defaultWorkspace"] };
 export const ProjectsDoc = defineDoc<{ projects: StoredProject[] }>({
   kind: "viz.projects",
   version: 1,
@@ -86,13 +88,13 @@ async function withBranch(project: StoredProject): Promise<Project> {
   } catch {
     // No readable branch.
   }
-  return { ...project, branch };
+  return { ...project, branch, defaultWorkspace: project.defaultWorkspace ?? "local" };
 }
 
 export type ProjectStore = {
   list(context: Context): Promise<Project[]>;
   create(path: string, name: string | undefined, context: Context): Promise<Project>;
-  update(id: string, name: string, context: Context): Promise<Project>;
+  update(id: string, changes: Omit<Params<"project.update">, "project">, context: Context): Promise<Project>;
   remove(id: string, move: (tx: Tx, id: ConversationId) => Promise<void>, context: Context): Promise<void>;
 };
 
@@ -122,10 +124,11 @@ export function projects(harness: Harness, root: ConversationId): ProjectStore {
       }, context);
       return withBranch(project);
     },
-    async update(id: string, name: string, context: Context) {
+    async update(id: string, { name, defaultWorkspace }, context: Context) {
       const project = await harness.commit(async (tx) => {
         const project = await projectIn(tx, root, id);
-        project.name = name;
+        if (name !== undefined) project.name = name;
+        if (defaultWorkspace !== undefined) project.defaultWorkspace = defaultWorkspace;
         return { ...project };
       }, context);
       return withBranch(project);

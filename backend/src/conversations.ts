@@ -13,6 +13,7 @@ import { ChatDoc } from "./agents/chat.ts";
 import { AgentDoc, TurnEntry } from "./agents/model.ts";
 import { AcpStateDoc } from "./agents/options.ts";
 import type { AgentSessions } from "./agents/sessions.ts";
+import { currentBranch } from "./git/commands.ts";
 import type { Git } from "./git/index.ts";
 import { conversationRecords, MetaDoc, ProjectsDoc } from "./projects.ts";
 import type { ConfigOption, ConversationState, ConversationSummary } from "./protocol.ts";
@@ -93,7 +94,8 @@ export class Conversations {
     }, context);
     // Bound concurrent storage reads regardless of the number of conversations.
     const summaries: ConversationSummary[] = [];
-    for (const record of records) summaries.push(await this.summary(record, context));
+    const branches = new Map<string, string | null>();
+    for (const record of records) summaries.push(await this.summary(record, context, branches));
     return summaries;
   }
 
@@ -126,12 +128,22 @@ export class Conversations {
     return { status, meta, parent, harness: name, cwd: chat?.runner?.cwd, readOnly: false } as const;
   }
 
-  async summary(record: ConversationRecord, context: Context): Promise<ConversationSummary> {
+  async summary(
+    record: ConversationRecord,
+    context: Context,
+    branches?: Map<string, string | null>,
+  ): Promise<ConversationSummary> {
     const info = await this.#info(record, context);
     const title =
       record.id === this.root
         ? ORCHESTRATOR_TITLE
         : ((await this.harness.snapshot(TitleDoc, record.id, context))?.title ?? "");
+    const worktree = info.meta?.worktree?.path;
+    let branch = worktree && branches?.get(worktree);
+    if (worktree && branch === undefined) {
+      branch = await currentBranch(worktree).catch(() => null);
+      branches?.set(worktree, branch);
+    }
     return {
       id: record.id,
       title,
@@ -144,7 +156,8 @@ export class Conversations {
       archived: (record.id !== this.root && info.meta?.archived) || false,
       pinned: (record.id !== this.root && info.meta?.pinned) || false,
       unread: info.meta?.unread ?? false,
-      ...(info.meta?.worktree && { worktree: info.meta.worktree.path }),
+      ...(worktree && { worktree }),
+      ...(branch && { branch }),
       updatedAt: info.meta?.updatedAt ?? 0,
     };
   }

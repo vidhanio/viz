@@ -18,7 +18,7 @@ import {
 
 import type { StoredAttachment } from "../attachments.ts";
 import type { Harness as HarnessConfig } from "../config.ts";
-import { MetaDoc, projectIn, touch, type WorktreeBinding } from "../projects.ts";
+import { type ChatWorkspace, MetaDoc, projectIn, touch, type WorktreeBinding } from "../projects.ts";
 import type { Origin } from "../protocol.ts";
 import { TitleDoc, titleFrom } from "../titles.ts";
 import { AgentDoc, PromptEntry, TurnEntry } from "./model.ts";
@@ -41,6 +41,7 @@ export type ChatOptions = {
   readonly title?: string;
   readonly options?: Desired;
   readonly worktree?: WorktreeBinding;
+  readonly branchToName?: ChatWorkspace["branchToName"];
 };
 
 type ChatRunner = { name: string; cwd: string; config: HarnessConfig };
@@ -81,7 +82,12 @@ export async function withdrawChatInputs(tx: Tx, id: ConversationId): Promise<vo
 
 const completed = { status: "terminal", outcome: { status: "completed", result: null } } as const;
 
-export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: string): ChatScheduler {
+export function chatScheduler(
+  runners: Runners,
+  sessions: AgentSessions,
+  cwd: string,
+  nameBranch: (id: ConversationId, cwd: string, temporary: string, input: ChatInput, context: Context) => Promise<void>,
+): ChatScheduler {
   const Worker = defineTask<null, Phase, null>({
     name: "viz.acp.chat",
     version: 1,
@@ -109,7 +115,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
       prompt: async (task, runtime, context) => {
         const id = runtime.conversationId;
         const { item } = task.state.checkpoint;
-        const claim: { runner?: { name: string; cwd: string; prompt: EntryId } } = {};
+        const claim: { runner?: { name: string; cwd: string; prompt: EntryId; branchToName?: string } } = {};
         let outcome: TurnOutcome;
         try {
           // Claim before making external calls. A rerun may recover the queue but must never resend a claimed prompt.
@@ -121,14 +127,29 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
             const placed = await tx.submission(item.submission);
             if (placed?.status !== "placed" || !placed.entry) throw new Error("ACP prompt is not placed");
             chat.dispatched = true;
-            claim.runner = { name: runner.name, cwd: runner.cwd, prompt: placed.entry };
+            const meta = await tx.doc(MetaDoc, id);
+            const branchToName = meta.branchToName;
+            if (branchToName !== undefined) delete meta.branchToName;
+            claim.runner = {
+              name: runner.name,
+              cwd: runner.cwd,
+              prompt: placed.entry,
+              ...(branchToName && { branchToName }),
+            };
           }, context);
           const active = claim.runner;
           if (active === undefined) {
             sessions.forget(id);
             outcome = { kind: "failed", error: "viz was interrupted during the ACP turn; the prompt was not resent" };
           } else {
-            const { name, cwd, prompt } = active;
+            const { name, cwd, prompt, branchToName } = active;
+            if (branchToName) {
+              await nameBranch(id, cwd, branchToName, item, context).catch((error: unknown) => {
+                if (!context.abortSignal?.aborted) {
+                  console.error(`Naming worktree branch for ${id}:`, error instanceof Error ? error.message : error);
+                }
+              });
+            }
             const { config } = runners.require(name);
             outcome = await sessions.turn({
               id,
@@ -206,8 +227,8 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
       if (parent.deleted) throw new Error("Conversation not found");
       const chat = await tx.doc(ChatDoc, options.parent);
       project = parent.project;
-      directory = chat.runner?.cwd ?? cwd;
-      worktree = parent.worktree;
+      directory = worktree?.path ?? chat.runner?.cwd ?? parent.worktree?.path ?? cwd;
+      worktree ??= parent.worktree;
       inherited = chat.runner?.name;
     } else if (project !== null) {
       const selected = await projectIn(tx, ROOT_CONVERSATION_ID, project);
@@ -221,6 +242,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
     meta.project = project;
     meta.parent = options.parent ?? null;
     if (worktree) meta.worktree = worktree;
+    if (options.branchToName) meta.branchToName = options.branchToName;
     if (options.title !== undefined) (await tx.doc(TitleDoc, id)).title = options.title;
     await touch(tx, id);
     return { name, cwd: directory, config };

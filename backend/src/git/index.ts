@@ -1,13 +1,16 @@
-import { createHash } from "node:crypto";
-import { lstat, mkdir } from "node:fs/promises";
-import { resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdir, realpath } from "node:fs/promises";
+import { basename, dirname, join, resolve } from "node:path";
 
 import type { Context } from "@earendil-works/chord/context";
 import { type ConversationId, defineDoc, type EntryId, type Harness } from "@earendil-works/pi-durable";
 
+import type { WorktreeBinding } from "../projects.ts";
 import type { GitState, Params, Project, Result } from "../protocol.ts";
-import { command, git, optionalGit, repositoryRoot, stagedDiff, withIndex } from "./commands.ts";
+import { command, currentBranch, git, optionalGit, repositoryRoot, stagedDiff, withIndex } from "./commands.ts";
 import { diffTrees } from "./diff.ts";
+
+export type CreatedWorktree = { worktree: WorktreeBinding; branch: string; commit: string };
 
 type Snapshot = { root: string; commit: string };
 const Checkpoints = defineDoc<{ prompts: Record<string, Snapshot> }>({
@@ -112,39 +115,124 @@ export class Git {
     return parseState(output, worktree);
   }
 
+  #workspaceRoot(project: string) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(project)) throw new Error("Invalid project id");
+    return resolve(this.stateDir, "worktrees", project);
+  }
+
+  async #managedRoot(project: string, create: boolean) {
+    const path = this.#workspaceRoot(project);
+    const canonical = join(await realpath(this.stateDir), "worktrees", project);
+    for (const [directory, expected] of [
+      [dirname(path), dirname(canonical)],
+      [path, canonical],
+    ] as const) {
+      if (create) await mkdir(directory, { recursive: true, mode: 0o700 });
+      if ((await realpath(directory)) !== expected) throw new Error("Worktree root cannot use symlinks");
+    }
+    return canonical;
+  }
+
   async createWorktree(
-    project: Project,
-    spec: NonNullable<Params<"conversation.create">["worktree"]>,
-  ): Promise<{ path: string; base: string }> {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*$/.test(project.id)) throw new Error("Invalid project id");
-    const root = await repositoryRoot(project.path);
-    await branchName(root, spec.branch);
-    let requested = spec.base;
-    if (requested === undefined) {
-      requested = (await optionalGit(root, ["symbolic-ref", "--quiet", "HEAD"]))?.slice(0, -1) ?? "HEAD";
-    } else {
-      if (!requested || requested.startsWith("-") || requested.includes("\0")) throw new Error("Invalid base ref");
-      if ((await optionalGit(root, ["check-ref-format", "--allow-onelevel", requested])) === null) {
+    root: string | null,
+    project: string,
+    spec: { base?: string } | { task: string },
+  ): Promise<CreatedWorktree> {
+    if (root === null) throw new Error("A worktree requires a Git repository");
+    let requested: string;
+    if ("task" in spec) {
+      requested = "HEAD";
+    } else if (spec.base !== undefined) {
+      requested = spec.base;
+      if (
+        !requested ||
+        requested.startsWith("-") ||
+        requested.includes("\0") ||
+        (await optionalGit(root, ["check-ref-format", "--allow-onelevel", requested])) === null
+      ) {
         throw new Error("Invalid base ref");
+      }
+    } else {
+      const target = await optionalGit(root, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
+      const origin = target?.slice(0, -1);
+      if (origin && (await optionalGit(root, ["rev-parse", "--verify", "--quiet", `${origin}^{commit}`]))) {
+        requested = origin;
+      } else {
+        const branch = await currentBranch(root);
+        if (branch === null) throw new Error("No default or current branch; specify a worktree base");
+        requested = `refs/heads/${branch}`;
       }
     }
     const commit = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${requested}^{commit}`])).trimEnd();
-    const ref = (
-      await git(root, ["rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", requested])
-    ).slice(0, -1);
+    const ref =
+      "task" in spec
+        ? ""
+        : (await git(root, ["rev-parse", "--symbolic-full-name", "--verify", "--end-of-options", requested])).slice(
+            0,
+            -1,
+          );
     const base = ref.startsWith("refs/") ? ref : commit;
-    let slug = spec.branch.replace(/[^a-zA-Z0-9_.-]+/g, "-").slice(0, 80);
-    if (slug !== spec.branch) slug += `~${createHash("sha256").update(spec.branch).digest("hex").slice(0, 12)}`;
-    const parent = resolve(this.stateDir, "worktrees", project.id);
-    const path = resolve(parent, slug);
-    await mkdir(parent, { recursive: true, mode: 0o700 });
+    const hint =
+      "task" in spec
+        ? spec.task
+            .slice(0, 160)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, "-")
+            .slice(0, 40)
+            .replace(/^-|-$/g, "")
+        : "";
+    const slug = `${hint ? `${hint}-` : ""}${randomUUID().slice(0, 8)}`;
+    const branch = `viz/${slug}`;
+    await this.#managedRoot(project, true);
+    const path = join(this.#workspaceRoot(project), slug);
     const exists = await lstat(path).catch((error: NodeJS.ErrnoException) => {
       if (error.code !== "ENOENT") throw error;
       return null;
     });
     if (exists) throw new Error("Worktree path already exists");
-    await git(root, ["worktree", "add", "--no-track", "-b", spec.branch, "--", path, commit]);
-    return { path, base };
+    await git(root, ["worktree", "add", "--no-track", "-b", branch, "--", path, commit]);
+    return { worktree: { path, base }, branch, commit };
+  }
+
+  /** Returns live, registered linked checkouts from the supplied viz-owned paths, not arbitrary Git worktrees. */
+  async worktreeBranches(project: Pick<Project, "id" | "path">, paths: Pick<ReadonlySet<string>, "has" | "size">) {
+    const branches = new Map<string, string | null>();
+    if (!paths.size) return branches;
+    const managed = await this.#managedRoot(project.id, false).catch(() => null);
+    if (managed === null) return branches;
+    const root = await this.root(project.path);
+    if (root === null) return branches;
+    const [registered, common] = await Promise.all([
+      git(root, ["worktree", "list", "--porcelain", "-z"]),
+      git(root, ["rev-parse", "--path-format=absolute", "--git-common-dir"]),
+    ]);
+    const parent = this.#workspaceRoot(project.id);
+    const admin = join(await realpath(common.slice(0, -1)), "worktrees");
+    for (const record of registered.split("\0\0")) {
+      const fields = record.split("\0");
+      const path = fields[0]?.startsWith("worktree ") && fields[0].slice("worktree ".length);
+      if (!path || (dirname(path) !== managed && dirname(path) !== parent)) continue;
+      const stored = join(parent, basename(path));
+      if (!paths.has(stored) || fields.some((field) => field.startsWith("prunable"))) continue;
+      const actual = await realpath(stored).catch(() => null);
+      if (actual !== join(managed, basename(path))) continue;
+      const [checkout, gitDir] = await Promise.all([
+        this.root(stored),
+        git(stored, ["rev-parse", "--absolute-git-dir"])
+          .then((output) => realpath(output.slice(0, -1)))
+          .catch(() => null),
+      ]);
+      if (checkout !== actual || gitDir === null || dirname(gitDir) !== admin) continue;
+      const branch = fields.find((field) => field.startsWith("branch refs/heads/"));
+      branches.set(stored, branch?.slice("branch refs/heads/".length) ?? null);
+    }
+    return branches;
+  }
+
+  async renameWorktreeBranch(path: string, temporary: string, branch: string) {
+    if (branch === temporary || (await currentBranch(path)) !== temporary) return false;
+    await git(path, ["branch", "-m", temporary, branch]);
+    return true;
   }
 
   /**

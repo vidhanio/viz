@@ -11,7 +11,7 @@ import { TitleDoc } from "./titles.ts";
 export type Changes = { list: boolean; state: ReadonlySet<ConversationId> };
 export type ChangeFeed = {
   subscribe(listener: (changes: Changes) => void): () => void;
-  refresh(id: ConversationId): void;
+  refresh(id: ConversationId, relist?: boolean): void;
   watched(id: ConversationId, active: boolean): void;
   markRead(id: ConversationId, context: Context): Promise<void>;
   clearPendingUnread(id: ConversationId): void;
@@ -131,8 +131,8 @@ export async function observeChanges(harness: Harness, root: ConversationId, con
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    refresh(id) {
-      schedule(id);
+    refresh(id, relist) {
+      schedule(id, relist);
     },
     watched(id, active) {
       const count = (appWatches.get(id) ?? 0) + (active ? 1 : -1);

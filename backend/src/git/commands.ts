@@ -49,6 +49,11 @@ export async function repositoryRoot(cwd: string) {
   return realpath(path.slice(0, -1)); // Git appends exactly one LF, even if the directory name contains one.
 }
 
+export async function currentBranch(cwd: string) {
+  const ref = await optionalGit(cwd, ["symbolic-ref", "--quiet", "HEAD"]);
+  return ref?.startsWith("refs/heads/") ? ref.slice("refs/heads/".length, -1) : null;
+}
+
 export async function withIndex<T>(cwd: string, run: (index: CommandOptions) => Promise<T>) {
   const dir = await mkdtemp(join(tmpdir(), "viz-git-"));
   const file = join(dir, "index");

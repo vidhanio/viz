@@ -183,13 +183,14 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     },
     "projects.list": async () => ({ projects: await viz.projects.list(context) }),
     "project.create": async (_ws, { path, name }) => ({ project: await viz.projects.create(path, name, context) }),
-    "project.update": async (_ws, { project, name }) => ({
-      project: await viz.projects.update(project, name, context),
+    "project.update": async (_ws, { project, ...changes }) => ({
+      project: await viz.projects.update(project, changes, context),
     }),
     "project.remove": async (_ws, { project }) => {
       await viz.removeProject(project, context);
       return {};
     },
+    "worktrees.list": async (_ws, { project }) => viz.listWorktrees(project, context),
     "harnesses.list": async () => ({ harnesses: viz.runners.list() }),
     "files.search": async (_ws, { conversation: id, query, limit }) => ({
       files: await viz.searchFiles((await conversation(id)).id, query, limit, context),

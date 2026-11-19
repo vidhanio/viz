@@ -25,7 +25,8 @@ import { bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 import type { ChatScheduler } from "./agents/chat.ts";
 import type { Runners } from "./agents/runners.ts";
 import { parentOf, type Conversations } from "./conversations.ts";
-import { conversationRecords, MetaDoc, type ProjectStore, type WorktreeBinding } from "./projects.ts";
+import { type ChatWorkspace, conversationRecords, MetaDoc, type ProjectStore } from "./projects.ts";
+import { Workspace } from "./protocol.ts";
 import type { SearchIndex } from "./search.ts";
 import { TitleDoc } from "./titles.ts";
 import { settledAnswer, transcript } from "./transcripts.ts";
@@ -38,8 +39,12 @@ export type ToolkitHost = {
   readonly search: SearchIndex;
   readonly runners: Runners;
   readonly chats: ChatScheduler;
-  /** A new worktree of `project` on new branch `branch`. */
-  worktree(project: string, branch: string, context: Context): Promise<WorktreeBinding>;
+  workspace(
+    project: string | undefined,
+    requested: Workspace | undefined,
+    context: Context,
+  ): Promise<ChatWorkspace | null>;
+  editWorkspaces<T>(use: () => Promise<T>): Promise<T>;
   /** Submits `text` to the orchestrator once per `requestId`. */
   report(text: string, requestId: string, context: Context): Promise<void>;
   abort(id: ConversationId, context: Context): Promise<void>;
@@ -81,18 +86,20 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
     phases: {
       // Waits across restarts: shutdown interrupts the wait, which resumes in the next run.
       wait: async (task, runtime, context) => {
-        const { harness, report } = host();
+        const { harness, conversations, report } = host();
         const id = task.input.conversation as ConversationId;
         const submission = await harness.submission(task.input.submission as SubmissionId, context);
         if (!submission) throw new Error("Input not found");
         const result = await settledAnswer(harness, await submission.wait(context), context);
-        if (await harness.commit((tx) => topLevelRecord(tx, id), context)) {
-          const title = (await harness.snapshot(TitleDoc, id, context))?.title;
+        const record = await harness.commit((tx) => topLevelRecord(tx, id), context);
+        if (record) {
+          const { title, branch, worktree } = await conversations.summary(record, context);
           const head = `[chat ${id}${title ? ` "${title}"` : ""}]`;
+          const checkout = worktree ? `\nWorktree: ${worktree}${branch ? `\nBranch: ${branch}` : ""}\n` : "";
           await report(
             "answer" in result
-              ? `${head} finished:\n\n${result.answer}`
-              : `${head} stopped (${result.unanswered})${result.error ? `: ${result.error}` : ""}`,
+              ? `${head} finished:\n${checkout}\n${result.answer}`
+              : `${head} stopped (${result.unanswered})${result.error ? `: ${result.error}` : ""}${checkout}`,
             `viz.report:${runtime.taskId}`,
             context,
           );
@@ -154,7 +161,13 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
             }));
           return text(
             JSON.stringify({
-              projects: all.map(({ id, name, path, branch }) => ({ id, name, path, branch })),
+              projects: all.map(({ id, name, path, branch, defaultWorkspace }) => ({
+                id,
+                name,
+                path,
+                branch,
+                defaultWorkspace,
+              })),
               conversations: listed,
             }),
           );
@@ -201,41 +214,49 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
       }),
       defineTool({
         name: "spawn_chat",
-        description: "Start an ACP chat on a task in the background. It reports back here when done.",
+        description:
+          "Start an ACP chat on a task in the background. It reports back here when done. Choose a project workspace to override its default. A new worktree excludes uncommitted edits; you integrate the work yourself.",
         parameters: obj({
           task: str({ minLength: 1, description: "Task and context" }),
           project: opt(str({ description: "Project id or name; omit for none" })),
           harness: opt(str({ description: "ACP harness; omit for the default" })),
-          worktree: opt(str({ description: "Run in a new worktree on this new branch" })),
+          workspace: opt(Workspace),
         }),
         replay: "safe",
-        execute: async ({ task, project, harness, worktree }, api, context) => {
-          const { projects, runners, chats } = host();
-          const selected =
-            project === undefined
-              ? undefined
-              : (await projects.list(context)).find(({ id, name }) => id === project || name === project);
-          if (project !== undefined && !selected) throw new Error("Project not found");
-          if (worktree !== undefined && !selected) throw new Error("A worktree requires a project");
-          runners.require(harness);
-          // A rerun reuses the worktree an earlier run created.
-          const binding =
-            worktree === undefined
-              ? undefined
-              : ((await api.memo<WorktreeBinding>("worktree", context)) ??
-                (await api.memo("worktree", await host().worktree(selected!.id, worktree, context), context)));
-          const id = await admit(api, context, async (tx) => {
-            const record = await tx.createConversation({ ownership: { kind: "ownerless" } });
-            await chats.setup(tx, record.id, {
-              ...(harness !== undefined && { harness }),
-              ...(selected && { project: selected.id }),
-              ...(binding && { worktree: binding }),
+        execute: async ({ task, project, harness, workspace }, api, context) => {
+          const { projects, runners, chats, workspace: prepare, editWorkspaces } = host();
+          const { id, selected, binding } = await editWorkspaces(async () => {
+            const selected =
+              project === undefined
+                ? undefined
+                : (await projects.list(context)).find(({ id, name }) => id === project || name === project);
+            if (project !== undefined && !selected) throw new Error("Project not found");
+            runners.require(harness);
+            // A rerun reuses the same workspace rather than creating another checkout.
+            const binding =
+              workspace?.kind === "existing"
+                ? await prepare(selected?.id, workspace, context)
+                : (
+                    (await api.memo<{ binding: ChatWorkspace | null }>("workspace", context)) ??
+                    (await api.memo("workspace", { binding: await prepare(selected?.id, workspace, context) }, context))
+                  ).binding;
+            const id = await admit(api, context, async (tx) => {
+              const record = await tx.createConversation({ ownership: { kind: "ownerless" } });
+              await chats.setup(tx, record.id, {
+                ...(harness !== undefined && { harness }),
+                ...(selected && { project: selected.id }),
+                ...binding,
+              });
+              const submission = await chats.enqueue(tx, record, { text: task, content: task });
+              return { conversation: record.id, submission };
             });
-            const submission = await chats.enqueue(tx, record, { text: task, content: task });
-            return { conversation: record.id, submission };
+            return { id, selected, binding };
           });
           await api.details({ conversationId: id }, context);
-          return text(`Started chat ${id}${selected ? ` in ${selected.name}` : ""}.`);
+          const checkout = binding
+            ? `\nWorktree: ${binding.worktree.path}${binding.branchToName ? `\nInitial branch: ${binding.branchToName}` : ""}`
+            : "";
+          return text(`Started chat ${id}${selected ? ` in ${selected.name}` : ""}.${checkout}`);
         },
       }),
       defineTool({
