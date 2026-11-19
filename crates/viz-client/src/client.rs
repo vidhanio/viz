@@ -25,9 +25,11 @@ use tokio_tungstenite::{
 use crate::{
     Endpoint, Error, Result,
     protocol::{
-        ClientInfo, ConversationId, ConversationSummary, CreateConversation, Hello, HelloParams,
-        ListConversations, Method, Notification, PROTOCOL_VERSION, SubmissionId, Submit, Unwatch,
-        Watch,
+        AbortConversation, ClientInfo, ConfigureConversation, ConversationId, ConversationSummary,
+        CreateConversation, CreateProject, Harness, Hello, HelloParams, ListConversations,
+        ListHarnesses, ListProjects, Method, Notification, PROTOCOL_VERSION, Project,
+        RemoveProject, RespondApproval, SearchFiles, SubmissionId, Submit, Unwatch,
+        UpdateConversation, UpdateProject, Watch,
     },
 };
 
@@ -143,8 +145,100 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::submit`].
-    pub async fn create_conversation(&self) -> Result<ConversationId> {
-        Ok(self.request(&CreateConversation {}).await?.conversation)
+    pub async fn create_conversation(&self, params: &CreateConversation) -> Result<ConversationId> {
+        Ok(self.request(params).await?.conversation)
+    }
+
+    /// Changes a conversation's title, archive status, or project.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn update_conversation(&self, params: &UpdateConversation<'_>) -> Result<()> {
+        self.request(params).await.map(drop)
+    }
+
+    /// Sets a conversation's configuration.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn configure_conversation(&self, params: &ConfigureConversation<'_>) -> Result<()> {
+        self.request(params).await.map(drop)
+    }
+
+    /// Stops a conversation's active turn.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn abort_conversation(&self, conversation: ConversationId) -> Result<()> {
+        self.request(&AbortConversation { conversation })
+            .await
+            .map(drop)
+    }
+
+    /// Answers or cancels an approval.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn respond_approval(&self, params: &RespondApproval<'_>) -> Result<()> {
+        self.request(params).await.map(drop)
+    }
+
+    /// Lists available project directories.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn list_projects(&self) -> Result<Vec<Project>> {
+        Ok(self.request(&ListProjects {}).await?.projects)
+    }
+
+    /// Adds a project directory.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn create_project(&self, params: &CreateProject<'_>) -> Result<Project> {
+        Ok(self.request(params).await?.project)
+    }
+
+    /// Renames a project.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn update_project(&self, params: &UpdateProject<'_>) -> Result<Project> {
+        Ok(self.request(params).await?.project)
+    }
+
+    /// Removes a project.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn remove_project(&self, params: &RemoveProject<'_>) -> Result<()> {
+        self.request(params).await.map(drop)
+    }
+
+    /// Lists configured ACP runners.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn list_harnesses(&self) -> Result<Vec<Harness>> {
+        Ok(self.request(&ListHarnesses {}).await?.harnesses)
+    }
+
+    /// Finds files in the conversation's working directory.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn search_files(&self, params: &SearchFiles<'_>) -> Result<Vec<String>> {
+        Ok(self.request(params).await?.files)
     }
 
     /// Submits an input; see [`Submit`].

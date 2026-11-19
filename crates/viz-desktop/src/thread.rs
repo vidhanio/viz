@@ -1,8 +1,7 @@
 //! The watched conversation as the window shows it, read from a pi-durable
 //! `ConversationView` (`value.entries` and `value.docs`). Shapes are
-//! pi-durable's `EntryRecord`, pi-ai's messages and the `pi.live`, `pi.agent`,
-//! `pi.usage` and `pi.inbox` documents; anything unexpected is skipped rather
-//! than failing the whole view.
+//! pi-durable's `EntryRecord`, pi-ai messages and live and queue documents;
+//! an unexpected entry is skipped rather than failing the whole view.
 
 use std::collections::HashMap;
 
@@ -20,18 +19,12 @@ const OUTPUT_CHARS: usize = 6_000;
 /// The conversation's transcript window, live state and settings.
 #[derive(Debug, Clone, Default)]
 pub struct Thread {
-    /// Whether this conversation is owned by a task, not an app chat.
-    pub read_only: bool,
     /// Timeline items in transcript order.
     pub items: Vec<Item>,
     /// The window starts after the transcript's first entry.
     pub earlier: bool,
     /// What's happening right now (`pi.live`).
     pub live: Live,
-    /// Model and thinking level (`pi.agent`).
-    pub agent: Agent,
-    /// The conversation's own spend (`pi.usage`), once it has any.
-    pub usage: Option<Usage>,
     /// Inputs waiting for the current run (`pi.inbox`).
     pub queued: usize,
 }
@@ -60,6 +53,10 @@ pub enum Item {
     },
     /// A tool call and, once settled, its result.
     Tool(Tool),
+    /// The latest checklist reported in this ACP turn.
+    Plan { key: String, steps: Vec<PlanStep> },
+    /// A harness progress message.
+    Progress { key: String, text: String },
     /// A turn boundary (no label) or another marker that isn't a message.
     Divider {
         /// Stable element key.
@@ -122,6 +119,21 @@ pub struct Tool {
     pub duration_ms: Option<u64>,
     /// The conversation a `subagent` call delegated to.
     pub child: Option<ConversationId>,
+    pub diffs: Vec<ToolDiff>,
+    pub locations: Vec<String>,
+}
+
+#[derive(Debug, Clone, Hash)]
+pub struct ToolDiff {
+    pub path: String,
+    pub old: Option<String>,
+    pub new: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanStep {
+    pub text: String,
+    pub status: ToolStatus,
 }
 
 /// `pi.live`, as the window shows it.
@@ -140,28 +152,6 @@ pub struct Live {
     pub compacting: bool,
 }
 
-/// `pi.agent`'s model and thinking level.
-#[derive(Debug, Clone, Default)]
-pub struct Agent {
-    /// Provider id, e.g. `anthropic`.
-    pub provider: Option<String>,
-    /// Model id.
-    pub model: Option<String>,
-    /// Thinking level, e.g. `high`.
-    pub thinking: Option<String>,
-}
-
-/// `pi.usage` summed over every model and tool bucket.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Usage {
-    /// Input tokens, cached or not.
-    pub input: u64,
-    /// Output tokens.
-    pub output: u64,
-    /// Total cost in dollars.
-    pub cost: f64,
-}
-
 impl Thread {
     /// Reads a conversation view's value.
     pub fn from_view(view: &Value) -> Self {
@@ -173,12 +163,16 @@ impl Thread {
         let mut reader = Reader {
             items: Vec::new(),
             calls: HashMap::new(),
+            plan: None,
         };
         let mut acp_busy = false;
         for entry in array(view.get("entries")) {
             match str_at(entry, "kind") {
                 Some("viz.agent.prompt") => acp_busy = true,
-                Some("viz.agent.turn") => acp_busy = false,
+                Some("viz.agent.turn") => {
+                    acp_busy = false;
+                    reader.plan = None;
+                }
                 _ => {}
             }
             reader.entry(entry);
@@ -189,6 +183,7 @@ impl Thread {
         for item in &mut items {
             if let Item::Tool(tool) = item
                 && !native_busy
+                && !acp_busy
                 && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
             {
                 tool.status = ToolStatus::Abandoned;
@@ -197,25 +192,15 @@ impl Thread {
         let mut live = live.map_or_default(|live| Live::read(live, native_busy));
         live.busy |= acp_busy;
         Self {
-            read_only: view.pointer("/conversation/owner").is_some(),
             items,
             earlier: view.get("before").is_some(),
             live,
-            agent: view.pointer("/docs/pi.agent").map_or_default(Agent::read),
-            usage: view.pointer("/docs/pi.usage").map(Usage::read),
-            queued: array(view.pointer("/docs/pi.inbox/items"))
-                .iter()
-                .filter(|item| str_at(item, "mode") != Some("write"))
-                .count(),
+            queued: array(view.pointer("/docs/viz.acp.chat/queue")).len()
+                + array(view.pointer("/docs/pi.inbox/items"))
+                    .iter()
+                    .filter(|item| str_at(item, "mode") != Some("write"))
+                    .count(),
         }
-    }
-
-    /// The child conversations of its `subagent` calls.
-    pub fn children(&self) -> impl Iterator<Item = ConversationId> + '_ {
-        self.items.iter().filter_map(|item| match item {
-            Item::Tool(tool) => tool.child,
-            _ => None,
-        })
     }
 }
 
@@ -224,6 +209,7 @@ struct Reader {
     items: Vec<Item>,
     /// Item index of each tool call by call id.
     calls: HashMap<String, usize>,
+    plan: Option<usize>,
 }
 
 impl Reader {
@@ -319,6 +305,8 @@ impl Reader {
                 };
                 let title = str_at(data, "title").unwrap_or("Tool");
                 let status = match str_at(data, "status") {
+                    Some("pending") => ToolStatus::Pending,
+                    Some("in_progress") => ToolStatus::Running,
                     Some("completed") => ToolStatus::Done,
                     Some("failed") => ToolStatus::Failed,
                     _ => ToolStatus::Abandoned,
@@ -328,47 +316,85 @@ impl Reader {
                     call_id: str_at(data, "id").unwrap_or_default().to_owned(),
                     name: str_at(data, "kind").unwrap_or("tool").to_owned(),
                     summary: first_line(title, SUMMARY_CHARS),
-                    arguments: String::new(),
+                    arguments: str_at(data, "input").unwrap_or_default().to_owned(),
                     status,
-                    output: String::new(),
+                    output: str_at(data, "output").unwrap_or_default().to_owned(),
                     duration_ms: None,
                     child: None,
+                    diffs: array(data.get("diffs"))
+                        .iter()
+                        .filter_map(|diff| {
+                            Some(ToolDiff {
+                                path: str_at(diff, "path")?.to_owned(),
+                                old: str_at(diff, "oldText").map(str::to_owned),
+                                new: str_at(diff, "newText")?.to_owned(),
+                            })
+                        })
+                        .collect(),
+                    locations: array(data.get("locations"))
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect(),
                 }));
             }
-            "viz.agent.progress" | "viz.agent.turn" | "viz.agent.plan" => {
-                let Some(data) = entry.get("data") else {
-                    return;
-                };
-                let text = match kind {
-                    "viz.agent.progress" => str_at(data, "text").map(str::to_owned),
-                    "viz.agent.turn" => str_at(data, "error").map(str::to_owned).or_else(|| {
-                        str_at(data, "stopReason")
-                            .filter(|reason| *reason != "end_turn")
-                            .map(|reason| format!("ACP turn ended: {}", reason.replace('_', " ")))
-                    }),
-                    _ => {
-                        let plan = array(data.get("entries"))
-                            .iter()
-                            .filter_map(|item| {
-                                Some(format!(
-                                    "[{}] {}",
-                                    str_at(item, "status")?,
-                                    str_at(item, "content")?
-                                ))
-                            })
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        (!plan.is_empty()).then_some(plan)
-                    }
-                };
-                if let Some(text) = text {
-                    self.items.push(Item::Notice {
+            "viz.agent.plan" => self.plan(id, array(entry.pointer("/data/entries"))),
+            "viz.agent.progress" => {
+                if let Some(text) = entry.pointer("/data/text").and_then(Value::as_str) {
+                    self.items.push(Item::Progress {
                         key: format!("e{id}"),
-                        text,
+                        text: text.to_owned(),
                     });
                 }
             }
+            "viz.agent.turn" => {
+                if let Some(data) = entry.get("data") {
+                    let key = format!("e{id}");
+                    if let Some(error) = str_at(data, "error") {
+                        self.items.push(Item::Notice {
+                            key,
+                            text: error.to_owned(),
+                        });
+                    } else if let Some(reason) =
+                        str_at(data, "stopReason").filter(|reason| *reason != "end_turn")
+                    {
+                        let text = match reason {
+                            "cancelled" => "Stopped".to_owned(),
+                            _ => format!("Turn ended: {}", reason.replace('_', " ")),
+                        };
+                        self.items.push(Item::Progress { key, text });
+                    }
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn plan(&mut self, id: &str, entries: &[Value]) {
+        let steps = entries
+            .iter()
+            .filter_map(|entry| {
+                Some(PlanStep {
+                    text: str_at(entry, "content")?.to_owned(),
+                    status: match str_at(entry, "status") {
+                        Some("completed") => ToolStatus::Done,
+                        Some("in_progress") => ToolStatus::Running,
+                        _ => ToolStatus::Pending,
+                    },
+                })
+            })
+            .collect();
+        if let Some(Item::Plan {
+            steps: previous, ..
+        }) = self.plan.and_then(|i| self.items.get_mut(i))
+        {
+            *previous = steps;
+        } else {
+            self.plan = Some(self.items.len());
+            self.items.push(Item::Plan {
+                key: format!("e{id}"),
+                steps,
+            });
         }
     }
 
@@ -482,6 +508,8 @@ fn tool_call(key: String, part: &Value, status: ToolStatus) -> Tool {
         output: String::new(),
         duration_ms: None,
         child: None,
+        diffs: Vec::new(),
+        locations: Vec::new(),
     }
 }
 
@@ -563,52 +591,6 @@ impl Live {
             failure: failure.filter(|_| !busy),
             compacting: !array(live.get("compactions")).is_empty(),
         }
-    }
-}
-
-impl Agent {
-    fn read(agent: &Value) -> Self {
-        Self {
-            provider: agent
-                .pointer("/model/provider")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            model: agent
-                .pointer("/model/modelId")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            thinking: str_at(agent, "thinkingLevel").map(str::to_owned),
-        }
-    }
-}
-
-impl Usage {
-    fn read(usage: &Value) -> Self {
-        let mut sum = Self::default();
-        for bucket in ["models", "tools"] {
-            let Some(Value::Object(entries)) = usage.get(bucket) else {
-                continue;
-            };
-            for entry in entries.values() {
-                sum.add(entry);
-            }
-        }
-        sum
-    }
-
-    fn add(&mut self, usage: &Value) {
-        let count = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
-        self.input += count("input") + count("cacheRead") + count("cacheWrite");
-        self.output += count("output");
-        self.cost += usage
-            .pointer("/cost/total")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0);
-    }
-
-    /// Tokens in and out.
-    pub const fn tokens(self) -> u64 {
-        self.input + self.output
     }
 }
 

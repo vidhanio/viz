@@ -1,25 +1,8 @@
-//! viz's look, "Tidepool": calm water at night (and in daylight).
-//!
-//! - **Surfaces** are ink with a little blue in it rather than neutral grey:
-//!   the sidebar is the deepest pool, the main pane a shade up, cards (the
-//!   composer, expanded tool output, code) a step above that. Light is the same
-//!   scheme on cool paper.
-//! - **One accent**, sea-glass teal: mint on ink, deep teal on paper. It marks
-//!   only what's "mine" or "now": my messages, the open conversation, the send
-//!   button, the caret, the working pulse.
-//! - **The tide line** is the signature: a 2-point accent edge with a soft
-//!   glow, on the open conversation's sidebar row and on my messages, and as
-//!   the composer's glow while it has focus.
-//! - **Two voices**: Inter for people (interface 13, messages 14.5 on a 23
-//!   line), IBM Plex Mono for the machine (tool calls, code, model ids, 12).
-//!
-//! Everything is a rune-kit [`Kit`] from [`Kit::from_palette`] with the tokens
-//! the kit's components read overridden, plus the named colours the app's own
-//! rows use. Only the font files come from rune-theme-opencode.
+//! Shared neutral surfaces, type scale, and one blue accent for light and dark.
 
 use std::sync::LazyLock;
 
-use rune::{Color, El, Icon, LoopSpec, Shadow, TextStyle, el};
+use rune::{Color, Icon, Shadow, TextStyle};
 use rune_kit::{Kit, MarkdownStyle, PaletteFocus, PaletteSeed};
 
 /// Inter and IBM Plex Mono, for `AppSpec::fonts`.
@@ -54,8 +37,6 @@ pub struct Theme {
     pub faint: Color,
     /// The one accent.
     pub accent: Color,
-    /// The accent's glow around the tide line and the focused composer.
-    pub glow: Color,
     /// The open conversation's row.
     pub selected: Color,
     /// Errors.
@@ -98,36 +79,36 @@ struct Tones {
     warning: &'static str,
 }
 
-/// Night: blue-black ink, mint sea glass.
+/// Dark appearance.
 const NIGHT: Tones = Tones {
-    bg: "#0c0f14",
-    deep: "#090b0f",
-    surface: "#131821",
-    raised: "#1a202b",
-    text: "#e4e8ef",
-    muted: "#8a94a6",
-    faint: "#596274",
-    accent: "#5fd4b8",
-    on_accent: "#05221b",
-    danger: "#f2777f",
-    success: "#5fd4b8",
-    warning: "#e9b45c",
+    bg: "#151618",
+    deep: "#101113",
+    surface: "#1c1e21",
+    raised: "#232529",
+    text: "#ebedf0",
+    muted: "#acb0ba",
+    faint: "#858a95",
+    accent: "#96baff",
+    on_accent: "#121f37",
+    danger: "#ee9198",
+    success: "#8ac5a0",
+    warning: "#e8ba72",
 };
 
-/// Day: cool paper, deep teal.
+/// Light appearance.
 const DAY: Tones = Tones {
-    bg: "#f7f8f6",
-    deep: "#eef0ed",
+    bg: "#fafafb",
+    deep: "#f1f2f4",
     surface: "#ffffff",
-    raised: "#eef1ef",
-    text: "#161a20",
-    muted: "#5f6776",
-    faint: "#9aa1ad",
-    accent: "#0d8f7a",
+    raised: "#e9ebef",
+    text: "#202126",
+    muted: "#555b65",
+    faint: "#686f7a",
+    accent: "#275bc2",
     on_accent: "#ffffff",
-    danger: "#d6434f",
-    success: "#0d8f7a",
-    warning: "#c98a1c",
+    danger: "#b62d40",
+    success: "#287443",
+    warning: "#8c5b0a",
 };
 
 impl Theme {
@@ -157,12 +138,11 @@ impl Theme {
             PaletteFocus::Accent,
         );
         let ink = |a: f32| k.alpha(text, a);
-        let hairline = ink(if dark { 0.07 } else { 0.09 });
-        let hover = ink(if dark { 0.045 } else { 0.04 });
+        let hairline = ink(if dark { 0.12 } else { 0.13 });
+        let hover = ink(if dark { 0.07 } else { 0.055 });
         let pressed = ink(if dark { 0.08 } else { 0.07 });
-        let selected = k.alpha(accent, if dark { 0.10 } else { 0.09 });
-        let mine = k.alpha(accent, if dark { 0.055 } else { 0.06 });
-        let glow = accent.alpha(if dark { 0.45 } else { 0.30 });
+        let selected = k.alpha(accent, if dark { 0.15 } else { 0.10 });
+        let mine = raised;
         let strong = ink(if dark { 0.14 } else { 0.16 });
         let c = &mut k.c;
         c.page = bg;
@@ -171,8 +151,10 @@ impl Theme {
         c.bg_deep = deep;
         c.layer_01 = surface;
         c.layer_02 = raised;
+        c.layer_03 = raised;
         c.surface_raised = surface;
         c.surface_raised_base = surface;
+        c.bg_button_neutral = raised;
         c.text_muted = muted;
         c.text_faint = faint;
         c.text_weak = muted;
@@ -188,12 +170,14 @@ impl Theme {
         c.border_base = hairline;
         c.border_weak = hairline;
         c.border_strong = strong;
+        c.std_border = strong;
         c.hover = hover;
         c.pressed = pressed;
         c.surface_hover = hover;
         c.danger.fg = danger;
         c.danger.icon = danger;
-        // The send button: an accent disc.
+        c.success.fg = hex(t.success);
+        c.success.icon = hex(t.success);
         c.bg_icon_button_contrast = accent;
         c.submit_icon = on_accent;
         c.submit_fg = on_accent;
@@ -207,21 +191,18 @@ impl Theme {
             ..ui
         };
         k.ty.mono = mono;
+        k.radius.sm = 5.0;
         k.radius.md = 7.0;
-        k.radius.lg = 10.0;
-        k.radius.xl = 16.0;
-        // Softer, wider drop shadows than the kit's, for the floating composer
-        // and toasts.
-        let drop = |y: f32, blur: f32, a: f32| Shadow {
-            y,
-            blur,
-            color: Color::BLACK.alpha(a),
+        k.radius.lg = 9.0;
+        k.radius.xl = 12.0;
+        let outline = Shadow {
+            color: strong,
+            spread: 1.0,
             ..Shadow::default()
         };
-        k.elevation.floating = vec![
-            drop(8.0, 28.0, if dark { 0.45 } else { 0.10 }),
-            drop(1.0, 3.0, if dark { 0.30 } else { 0.06 }),
-        ];
+        k.elevation = rune_kit::Elevation::default();
+        k.elevation.floating = vec![outline];
+        k.elevation.overlay = vec![outline];
         let mut shell = k.clone();
         shell.radius.lg = 0.0;
         Self {
@@ -234,7 +215,6 @@ impl Theme {
             muted,
             faint,
             accent,
-            glow,
             selected,
             danger,
             success: hex(t.success),
@@ -278,35 +258,12 @@ impl Theme {
             .code_block_padding(14.0, 12.0)
             .inline_code_font(0.86, 400.0)
             .code_margin(12.0, 16.0)
-            .quote_rule(self.accent)
+            .quote_rule(self.hairline)
             .rule(self.hairline)
-            .link(self.accent)
+            .link(self.text)
             .strong_weight(620.0)
             .list(22.0, 6.0)
     }
-
-    /// The tide line: a 2-point accent edge with a soft glow, `height` tall.
-    pub fn tide(&self, height: f32) -> El {
-        el().w(2.0)
-            .h(height)
-            .radius(1.0)
-            .fill(self.accent)
-            .shadow(0.0, 8.0, self.glow)
-            .a11y_hidden()
-    }
-}
-
-/// A small round dot.
-pub fn dot(color: Color, size: f32) -> El {
-    el().size(size, size)
-        .radius(size / 2.0)
-        .fill(color)
-        .a11y_hidden()
-}
-
-/// A dot that breathes, for "working".
-pub fn pulse(color: Color, size: f32) -> El {
-    dot(color, size).looping(LoopSpec::opacity(1.4, 0.0, 0.25, 1.0))
 }
 
 /// The orchestrator's mark: a small four-point star.
@@ -351,19 +308,6 @@ pub static CHEVRON_OPEN: Icon = Icon {
     body: r#"<path d="M4.5 6.5L8 10L11.5 6.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" fill="none"/>"#,
 };
 
-/// Thousands as `12.3k`, millions as `1.2M`.
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "token counts are shown to one decimal"
-)]
-pub fn compact_count(n: u64) -> String {
-    match n {
-        0..1_000 => n.to_string(),
-        1_000..1_000_000 => format!("{:.1}k", n as f64 / 1e3),
-        _ => format!("{:.1}M", n as f64 / 1e6),
-    }
-}
-
 /// A duration as `320ms`, `4.2s` or `2m 5s`.
 #[expect(
     clippy::cast_precision_loss,
@@ -374,14 +318,5 @@ pub fn duration(ms: u64) -> String {
         0..1_000 => format!("{ms}ms"),
         1_000..60_000 => format!("{:.1}s", ms as f64 / 1e3),
         _ => format!("{}m {}s", ms / 60_000, ms % 60_000 / 1_000),
-    }
-}
-
-/// Dollars, with more precision for small amounts.
-pub fn cost(dollars: f64) -> String {
-    if dollars < 0.995 {
-        format!("${dollars:.3}")
-    } else {
-        format!("${dollars:.2}")
     }
 }

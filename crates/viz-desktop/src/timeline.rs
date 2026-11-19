@@ -1,21 +1,16 @@
-//! The timeline: one centred reading column of full-width rows. My messages
-//! sit on a faint accent wash behind the tide line; the assistant's answers
-//! are plain Markdown; tool calls, subagent calls and reasoning are compact
-//! rows that stack tightly between them; turns are set apart by space and a
-//! short rule. The live answer streams in with a caret. It sticks to the
-//! bottom while new content arrives.
-//!
-//! rune-kit has no compact log row, so the message and tool rows are drawn
-//! here; prose is the kit's `Markdown`, reasoning the kit's `Collapsible`,
-//! and the busy marks its `Spinner`.
+//! Transcript, activity, plan checklists, and expandable tool records.
 
-use rune::{Align, El, LoopSpec, ScrollSpec, Tx, col, el, icon, row, text};
-use rune_kit::{Button, ButtonVariant, Collapsible, ControlSize, Markdown, Spinner};
+use rune::{El, LoopSpec, ScrollSpec, Span, Tx, col, el, icon, rich, row, text};
+use rune_kit::{
+    ButtonVariant, Collapsible, Markdown,
+    diff::{FileDiff, LineKind},
+};
 
 use crate::{
     app::{Desktop, Status},
     theme::{self, Theme},
-    thread::{Item, Tool, ToolStatus, User},
+    thread::{Item, PlanStep, Tool, ToolStatus, User},
+    ui,
 };
 
 /// The tallest an expanded tool block gets before it scrolls.
@@ -61,7 +56,8 @@ impl Rows {
 /// The scrolling timeline, or what to show in its place.
 pub fn timeline(s: &Desktop, t: &Theme) -> El {
     let thread = &s.thread;
-    let empty = thread.items.is_empty() && !thread.live.busy && thread.live.failure.is_none();
+    let empty =
+        thread.items.is_empty() && !s.busy() && !thread.live.busy && thread.live.failure.is_none();
     let body = if empty {
         empty_state(s, t)
     } else {
@@ -93,7 +89,6 @@ pub fn timeline(s: &Desktop, t: &Theme) -> El {
         .grow(1.0)
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom: true })
-        .scroll_edge_fade(24.0)
         .child(
             col()
                 .key("timeline-body")
@@ -129,6 +124,16 @@ fn items(s: &Desktop, items: &[Item], streaming: bool, rows: &mut Rows, t: &Them
                     tool_row(s, tool, t)
                 },
             ),
+            Item::Plan { key, steps } => rows.push(Kind::Activity, plan(key, steps, t)),
+            Item::Progress { key, text: words } => rows.push(
+                Kind::Activity,
+                text(words)
+                    .key(key)
+                    .font(t.ui)
+                    .color(t.muted)
+                    .wrap()
+                    .px(6.0),
+            ),
             Item::Divider { key, label } => rows.push(Kind::Turn, divider(key, *label, t)),
             Item::Notice { key, text } => rows.push(Kind::Notice, notice(key, text, t)),
         }
@@ -141,7 +146,7 @@ fn items(s: &Desktop, items: &[Item], streaming: bool, rows: &mut Rows, t: &Them
 fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
     let live = &s.thread.live;
     items(s, &live.partial, true, rows, t);
-    if live.busy {
+    if s.busy() || live.busy {
         let running = s
             .thread
             .items
@@ -149,10 +154,19 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
             .any(|item| matches!(item, Item::Tool(tool) if tool.status == ToolStatus::Running));
         let writing = matches!(live.partial.last(), Some(Item::Text { .. }));
         let status = match (&live.retry, live.compacting) {
-            (Some(error), _) => Some((format!("Retrying after an error: {error}"), t.warning)),
-            (None, true) => Some(("Compacting context…".to_owned(), t.muted)),
+            (Some(error), _) => Some((format!("Retrying: {error}"), t.warning)),
+            (None, true) => Some(("Compacting context".to_owned(), t.muted)),
             (None, false) if live.partial.is_empty() && !running => {
-                Some(("Thinking…".to_owned(), t.faint))
+                let label = if s
+                    .conversation
+                    .as_ref()
+                    .is_some_and(|state| !state.approvals.is_empty())
+                {
+                    "Waiting for approval"
+                } else {
+                    "Working"
+                };
+                Some((label.to_owned(), t.muted))
             }
             (None, false) => None,
         };
@@ -167,11 +181,7 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
                     .px(6.0)
                     .gap(8.0)
                     .center_y()
-                    .child(
-                        el().size(12.0, 12.0)
-                            .center()
-                            .child(theme::pulse(t.accent, 6.0)),
-                    )
+                    .child(ui::spinner(12.0, t))
                     .child(text(label).font(t.ui).color(color).truncate().shrink()),
             );
         } else if writing {
@@ -192,58 +202,43 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
     }
 }
 
-/// The timeline before there's anything in it: the wordmark and a line.
+/// What to show when the timeline has no messages.
 fn empty_state(s: &Desktop, t: &Theme) -> El {
-    let (line, retry) = match (&s.status, s.selected) {
-        (Status::Error(_), _) => (
-            "Can't reach the backend. Start viz-backend; this window reconnects on its own.",
-            true,
+    let (title, detail, retry) = match (&s.status, s.selected, &s.new_chat) {
+        (Status::Error(_), _, _) => ("Offline", "Start viz-backend to reconnect.", true),
+        (Status::Connecting, _, _) => ("Connecting", "", false),
+        (_, _, Some(chat)) => (
+            "New chat",
+            if chat.request.is_some() {
+                "Opening session."
+            } else if s.harnesses.len() > 1 {
+                "Choose a harness below."
+            } else {
+                ""
+            },
+            false,
         ),
-        (Status::Connecting, _) | (_, None) => ("Connecting…", false),
-        (Status::Connected { .. }, Some(_)) => ("What's on your mind?", false),
+        (_, Some(_), None) => (
+            "Start a conversation",
+            "Ask a question or describe a task.",
+            false,
+        ),
+        (_, None, None) => ("No chat selected", "", false),
     };
-    let mark = row()
-        .key("wordmark")
-        .gap(3.0)
-        .items_end()
-        .child(
-            text("viz")
-                .font(rune::TextStyle::new(30.0, 640.0).lh(34.0).tracking(-0.8))
-                .color(t.text),
-        )
-        .child(theme::dot(t.accent, 7.0).mb(8.0).shadow(0.0, 10.0, t.glow));
-    let mut state = col()
-        .key("empty")
-        .w_full()
-        .max_w(420.0)
-        .pt(140.0)
-        .gap(10.0)
-        .items_center()
-        .child(mark)
-        .child(
-            text(line)
-                .key("empty-line")
-                .font(t.ui)
-                .color(t.muted)
-                .wrap()
-                .align(Align::Center)
-                .w_full(),
-        );
+    let mut state = ui::empty(title, detail, t).pt(132.0);
     if retry {
         state = state.child(
-            Button::new("Retry now")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .on_press_tx(|s: &mut Desktop, tx: &mut Tx| s.reconnect(tx))
+            ui::button("Retry", ButtonVariant::Outline)
+                .on_press_tx(Desktop::reconnect)
                 .build(&t.k)
-                .key("retry"),
+                .key("retry")
+                .mt(4.0),
         );
     }
     state
 }
 
-/// Something I wrote: a full-width row on a faint wash, the tide line at its
-/// edge.
+/// A user message sits on a neutral surface.
 fn mine(user: &User, t: &Theme) -> El {
     el().key(user.key.clone())
         .role("article")
@@ -261,14 +256,6 @@ fn mine(user: &User, t: &Theme) -> El {
                 .w_full()
                 .selectable(true)
                 .selection_color(t.k.selection()),
-        )
-        .child(
-            el().w(2.0)
-                .pin(Some(0.0), Some(9.0), None, Some(9.0))
-                .radius(1.0)
-                .fill(t.accent)
-                .shadow(0.0, 8.0, t.glow)
-                .a11y_hidden(),
         )
 }
 
@@ -302,7 +289,7 @@ fn thinking(
         None => "Thought".to_owned(),
     };
     let body = if thought.trim().is_empty() {
-        "The provider redacted this reasoning."
+        "Reasoning hidden"
     } else {
         thought
     };
@@ -310,20 +297,16 @@ fn thinking(
     Collapsible::new(title, open)
         .ghost()
         .child(
-            el().key("thought")
-                .w_full()
+            text(body)
+                .key("thought")
                 .ml(6.0)
                 .mb(6.0)
-                .pl(12.0)
-                .border_sides([0.0, 0.0, 0.0, 1.0], t.hairline)
-                .child(
-                    text(body.to_owned())
-                        .font(t.ui)
-                        .color(t.muted)
-                        .wrap()
-                        .selectable(true)
-                        .selection_color(t.k.selection()),
-                ),
+                .px(12.0)
+                .font(t.ui)
+                .color(t.muted)
+                .wrap()
+                .selectable(true)
+                .selection_color(t.k.selection()),
         )
         .on_toggle(move |s: &mut Desktop| s.toggle(&toggle))
         .build(&t.k)
@@ -335,7 +318,7 @@ fn thinking(
 fn meta(tool: &Tool, t: &Theme) -> Option<El> {
     let faint = |words: String| text(words).font(t.mono_small).color(t.faint);
     match tool.status {
-        ToolStatus::Running => Some(Spinner::new().size(12.0).color(t.accent).build(&t.k)),
+        ToolStatus::Running => Some(ui::spinner(12.0, t)),
         ToolStatus::Pending => Some(faint("queued".to_owned())),
         ToolStatus::Abandoned => Some(faint("no result".to_owned())),
         ToolStatus::Done | ToolStatus::Failed => {
@@ -403,49 +386,37 @@ fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
 
 /// An open tool row's arguments and output, in a scrolling mono block.
 fn output(tool: &Tool, t: &Theme) -> El {
-    let failed = tool.status == ToolStatus::Failed;
-    let empty = match tool.status {
-        ToolStatus::Failed => "No error text",
-        ToolStatus::Running | ToolStatus::Pending => "No output yet",
-        ToolStatus::Done => "No output",
-        ToolStatus::Abandoned => "The run ended before this call finished",
-    };
-    let mut inner = col().key("inner").w_full().padding(12.0).gap(10.0);
+    let mut inner = col().key("inner").w_full().gap(10.0).padding(10.0);
     if !tool.arguments.is_empty() && tool.arguments != "{}" {
-        inner = inner.child(
-            text(tool.arguments.clone())
-                .key("arguments")
-                .font(t.mono)
-                .color(t.faint)
-                .wrap_anywhere()
-                .selectable(true)
-                .selection_color(t.k.selection())
-                .w_full(),
-        );
-        inner = inner.child(el().w_full().h(1.0).fill(t.hairline));
+        inner = inner.child(code_section("Input", &tool.arguments, t));
     }
-    let body = if tool.output.is_empty() {
-        (empty.to_owned(), t.faint)
-    } else {
-        (tool.output.clone(), if failed { t.danger } else { t.text })
-    };
-    inner = inner.child(
-        text(body.0)
-            .key("output")
-            .font(t.mono)
-            .color(body.1)
-            .wrap_anywhere()
-            .selectable(true)
-            .selection_color(t.k.selection())
-            .w_full(),
-    );
+    if !tool.output.is_empty() {
+        inner = inner.child(code_section("Output", &tool.output, t));
+    }
+    if !tool.locations.is_empty() {
+        inner = inner.child(code_section("Paths", &tool.locations.join("\n"), t));
+    }
+    if !tool.diffs.is_empty() {
+        inner = inner.child(rune::memo(
+            format!("{}-diffs", tool.key),
+            (&tool.diffs, t.k.dark),
+            || diff_sections(tool, t),
+        ));
+    }
+    if tool.arguments.trim_matches([' ', '{', '}']).is_empty()
+        && tool.output.is_empty()
+        && tool.locations.is_empty()
+        && tool.diffs.is_empty()
+    {
+        inner = inner.child(ui::section("No details", t));
+    }
     col()
         .key("body")
         .w_full()
         .mt(2.0)
-        .mb(6.0)
-        .ml(26.0)
+        .mb(7.0)
         .max_h(BLOCK_HEIGHT)
+        .min_h(0.0)
         .radius(t.k.radius.md)
         .fill(t.surface)
         .border(1.0, t.hairline)
@@ -454,7 +425,123 @@ fn output(tool: &Tool, t: &Theme) -> El {
             stick_bottom: tool.status == ToolStatus::Running,
         })
         .child(inner)
-        .shrink()
+}
+
+fn code_section(label: &'static str, body: &str, t: &Theme) -> El {
+    col()
+        .key(label)
+        .gap(3.0)
+        .w_full()
+        .child(ui::section(label, t))
+        .child(ui::code(body, t))
+}
+
+fn diff_sections(tool: &Tool, t: &Theme) -> El {
+    col()
+        .role("group")
+        .label("Changes")
+        .w_full()
+        .gap(8.0)
+        .children(tool.diffs.iter().enumerate().map(|(index, diff)| {
+            let file = FileDiff::between(
+                diff.old.as_ref().map(|_| diff.path.clone()),
+                Some(diff.path.clone()),
+                diff.old.as_deref().unwrap_or_default(),
+                &diff.new,
+            );
+            let mut section = col().key(format!("diff-{index}")).w_full().gap(4.0).child(
+                ui::section(file.path(), t)
+                    .truncate()
+                    .help_when_truncated(file.path()),
+            );
+            if file.hunks.is_empty() {
+                section = section.child(ui::section(
+                    if file.binary {
+                        "Binary change"
+                    } else {
+                        "No text changes"
+                    },
+                    t,
+                ));
+            }
+            section.children(file.hunks.iter().enumerate().map(|(i, hunk)| {
+                let mut body = String::new();
+                let mut spans = Vec::new();
+                for line in &hunk.lines {
+                    if !body.is_empty() {
+                        body.push('\n');
+                    }
+                    let start = body.len();
+                    let (prefix, color) = match line.kind {
+                        LineKind::Added => ('+', t.success),
+                        LineKind::Removed => ('-', t.danger),
+                        LineKind::Context => (' ', t.muted),
+                    };
+                    body.push(prefix);
+                    body.push(' ');
+                    body.push_str(&line.text);
+                    spans.push(Span {
+                        color: Some(color),
+                        ..Span::new(start, body.len())
+                    });
+                }
+                col()
+                    .key(format!("hunk-{i}"))
+                    .w_full()
+                    .gap(1.0)
+                    .child(text(hunk.header()).font(t.mono_small).color(t.faint))
+                    .child(
+                        rich(body, spans)
+                            .font(t.mono)
+                            .wrap_anywhere()
+                            .w_full()
+                            .selectable(true)
+                            .selection_color(t.k.selection()),
+                    )
+            }))
+        }))
+}
+
+fn plan(key: &str, steps: &[PlanStep], t: &Theme) -> El {
+    col()
+        .key(key)
+        .role("list")
+        .label("Plan")
+        .w_full()
+        .padding(10.0)
+        .gap(5.0)
+        .radius(t.k.radius.md)
+        .border(1.0, t.hairline)
+        .child(ui::section("Plan", t))
+        .children(steps.iter().enumerate().map(|(index, step)| {
+            let (mark, label) = match step.status {
+                ToolStatus::Done => (icon(t.k.glyph.check_small, 13.0).color(t.success), "Done"),
+                ToolStatus::Running => (ui::spinner(12.0, t), "In progress"),
+                _ => (
+                    el().size(10.0, 10.0).radius(3.0).border(1.0, t.faint),
+                    "Pending",
+                ),
+            };
+            row()
+                .key(format!("step-{index}"))
+                .role("listitem")
+                .description(label)
+                .gap(8.0)
+                .center_y()
+                .child(el().size(14.0, 16.0).center().child(mark).a11y_hidden())
+                .child(
+                    text(&step.text)
+                        .font(t.ui)
+                        .color(if step.status == ToolStatus::Pending {
+                            t.muted
+                        } else {
+                            t.text
+                        })
+                        .grow(1.0)
+                        .shrink()
+                        .wrap(),
+                )
+        }))
 }
 
 /// A subagent call: "↳ title", opening the child conversation.
@@ -476,7 +563,7 @@ fn subagent_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         .gap(8.0)
         .center_y()
         .radius(t.k.radius.md)
-        .child(icon(&theme::BRANCH, 13.0).color(if failed { t.danger } else { t.accent }))
+        .child(icon(&theme::BRANCH, 13.0).color(if failed { t.danger } else { t.muted }))
         .child(
             text(title)
                 .key("title")
@@ -526,11 +613,7 @@ fn notice(key: &str, message: &str, t: &Theme) -> El {
         .px(6.0)
         .gap(10.0)
         .items_start()
-        .child(
-            el().size(12.0, 20.0)
-                .center()
-                .child(theme::dot(t.danger, 6.0)),
-        )
+        .child(el().size(12.0, 20.0).center().child(ui::dot(t.danger, 6.0)))
         .child(
             text(message.to_owned())
                 .font(t.ui)

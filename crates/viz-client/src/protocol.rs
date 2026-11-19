@@ -60,6 +60,17 @@ macro_rules! methods {
 methods! {
     HelloParams => "hello", Hello;
     ListConversations => "conversations.list", ConversationList;
+    UpdateConversation<'_> => "conversation.update", Empty;
+    ConfigureConversation<'_> => "conversation.configure", Empty;
+    AbortConversation => "conversation.abort", Empty;
+    RespondApproval<'_> => "approval.respond", Empty;
+    ListProjects => "projects.list", ProjectList;
+    CreateProject<'_> => "project.create", ProjectResult;
+    UpdateProject<'_> => "project.update", ProjectResult;
+    RemoveProject<'_> => "project.remove", Empty;
+    ListHarnesses => "harnesses.list", HarnessList;
+    SearchFiles<'_> => "files.search", FileList;
+    // `CreateConversation` owns its initial settings for callers that queue creation.
     CreateConversation => "conversation.create", Created;
     Submit => "conversation.submit", Submitted;
     Watch => "conversation.watch", Watching;
@@ -151,6 +162,7 @@ pub enum ConversationKind {
 
 /// A `conversations.list` item.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ConversationSummary {
     /// Its id.
     pub id: ConversationId,
@@ -163,17 +175,326 @@ pub struct ConversationSummary {
     /// For a subagent: the conversation whose tool call owns it.
     #[serde(default)]
     pub parent: Option<ConversationId>,
+    /// The project directory this conversation belongs to, if any.
+    pub project: Option<String>,
+    /// The configured ACP runner, if any.
+    pub harness: Option<String>,
+    /// What this conversation is doing.
+    pub status: ConversationStatus,
+    /// Whether the conversation is archived.
+    pub archived: bool,
+    /// Time of the last input or turn end in Unix milliseconds; zero if
+    /// unknown.
+    pub updated_at: i64,
 }
 
 /// `conversation.create` params.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub struct CreateConversation {}
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct CreateConversation {
+    /// Project directory; absent uses the default working directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Configured runner; absent uses the backend default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    /// Initial configuration by option id.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub options: std::collections::BTreeMap<String, OptionValue>,
+}
 
 /// `conversation.create` result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 pub struct Created {
     /// The new conversation.
     pub conversation: ConversationId,
+}
+
+/// Availability of a conversation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConversationStatus {
+    /// Nothing is running.
+    Idle,
+    /// A turn is running or waiting.
+    Working,
+    /// An approval is pending.
+    Approval,
+    /// The last turn failed.
+    Failed,
+}
+
+/// Config option value, stored as a string choice or a boolean.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum OptionValue {
+    /// A named choice.
+    Select(String),
+    /// On or off.
+    Boolean(bool),
+}
+
+/// The control used for a configuration option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum OptionKind {
+    /// A choice among values.
+    Select,
+    /// A boolean toggle.
+    Boolean,
+}
+
+/// A choice offered by a select option.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct OptionChoice {
+    /// Value to send.
+    pub value: String,
+    /// Display label.
+    pub name: String,
+    /// Optional explanation.
+    pub description: Option<String>,
+    /// Optional group label.
+    pub group: Option<String>,
+}
+
+/// A setting offered by the backend or ACP session.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ConfigOption {
+    /// Identifier for `conversation.configure`.
+    pub id: String,
+    /// Display label.
+    pub name: String,
+    /// Optional explanation.
+    pub description: Option<String>,
+    /// Semantic category supplied by the runner.
+    pub category: Option<String>,
+    /// Type of control.
+    #[serde(rename = "type")]
+    pub kind: OptionKind,
+    /// Current value.
+    pub value: OptionValue,
+    /// Available choices, empty for a boolean.
+    pub choices: Vec<OptionChoice>,
+}
+
+/// A slash command offered by the ACP session.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct SlashCommand {
+    /// Command name without the slash.
+    pub name: String,
+    /// What the command does.
+    pub description: String,
+    /// Optional argument hint.
+    pub hint: Option<String>,
+}
+
+/// Effect and persistence of an approval choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalKind {
+    /// Allow this request.
+    AllowOnce,
+    /// Allow requests of this kind.
+    AllowAlways,
+    /// Reject this request.
+    RejectOnce,
+    /// Reject requests of this kind.
+    RejectAlways,
+}
+
+/// A response offered by an approval.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ApprovalOption {
+    /// Option id to send.
+    pub id: String,
+    /// Display label.
+    pub name: String,
+    /// Effect of the response.
+    pub kind: ApprovalKind,
+}
+
+/// An ACP permission request awaiting a decision.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Approval {
+    /// The request id.
+    pub id: String,
+    /// The tool's display title.
+    pub title: String,
+    /// Optional tool category.
+    pub kind: Option<String>,
+    /// Input or diff summary, if available.
+    pub detail: Option<String>,
+    /// Possible responses.
+    pub options: Vec<ApprovalOption>,
+}
+
+/// The current application state of a watched conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConversationState {
+    /// Status of this conversation.
+    pub status: ConversationStatus,
+    /// The configured ACP runner, if any.
+    pub harness: Option<String>,
+    /// The containing project, if any.
+    pub project: Option<String>,
+    /// Working directory, if known.
+    pub cwd: Option<String>,
+    /// Whether input is refused.
+    pub read_only: bool,
+    /// Configuration reported by the runner or orchestrator.
+    pub options: Vec<ConfigOption>,
+    /// Available slash commands.
+    pub commands: Vec<SlashCommand>,
+    /// The pending permission requests.
+    pub approvals: Vec<Approval>,
+}
+
+/// A working directory shared by a group of chats.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Project {
+    /// Backend-assigned id.
+    pub id: String,
+    /// Display name.
+    pub name: String,
+    /// Absolute directory path.
+    pub path: String,
+    /// Checked-out Git branch, if attached on a repository.
+    pub branch: Option<String>,
+    /// Creation time in Unix milliseconds.
+    pub created_at: i64,
+}
+
+/// A configured ACP runner.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Harness {
+    /// Configured name.
+    pub name: String,
+    /// Whether this is the backend default.
+    pub default: bool,
+}
+
+/// Empty successful response or notification params.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct Empty {}
+
+/// Change a conversation's metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct UpdateConversation<'a> {
+    /// The conversation to change.
+    pub conversation: ConversationId,
+    /// A new title, if changing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<&'a str>,
+    /// A new archive status, if changing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    /// `None` leaves the project alone; `Some(None)` clears it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<Option<&'a str>>,
+}
+
+/// Set a conversation's configuration option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ConfigureConversation<'a> {
+    /// The conversation to configure.
+    pub conversation: ConversationId,
+    /// The option id.
+    pub option: &'a str,
+    /// The new option value.
+    pub value: &'a OptionValue,
+}
+
+/// Stop a conversation's active turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct AbortConversation {
+    /// The conversation to stop.
+    pub conversation: ConversationId,
+}
+
+/// Answer or cancel a pending permission request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RespondApproval<'a> {
+    /// Conversation holding the request.
+    pub conversation: ConversationId,
+    /// The request id.
+    pub approval: &'a str,
+    /// Option id to select; `None` cancels the request.
+    pub option: Option<&'a str>,
+}
+
+/// List projects.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ListProjects {}
+
+/// Projects returned by `projects.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ProjectList {
+    /// All projects.
+    pub projects: Vec<Project>,
+}
+
+/// Add a project directory.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct CreateProject<'a> {
+    /// Existing directory; `~` expands to the backend's home directory.
+    pub path: &'a str,
+    /// Display name; omit to use the directory name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<&'a str>,
+}
+
+/// Rename a project.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct UpdateProject<'a> {
+    /// Project id.
+    pub project: &'a str,
+    /// New display name.
+    pub name: &'a str,
+}
+
+/// The project returned after creation or rename.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct ProjectResult {
+    /// The resulting project.
+    pub project: Project,
+}
+
+/// Remove a project directory from the project list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RemoveProject<'a> {
+    /// Project id.
+    pub project: &'a str,
+}
+
+/// List configured ACP runners.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct ListHarnesses {}
+
+/// ACP runners returned by `harnesses.list`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HarnessList {
+    /// Configured ACP runners.
+    pub harnesses: Vec<Harness>,
+}
+
+/// Search a conversation's working directory for files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct SearchFiles<'a> {
+    /// Conversation whose working directory is searched.
+    pub conversation: ConversationId,
+    /// Fuzzy path query.
+    pub query: &'a str,
+    /// Limit from 1 to 200; omit to use the backend default.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
+}
+
+/// Search results from `files.search`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct FileList {
+    /// Matching relative paths.
+    pub files: Vec<String>,
 }
 
 /// `conversation.submit` params.
@@ -252,6 +573,17 @@ pub enum Notification {
     /// A revision of a watched conversation's view.
     #[serde(rename = "conversation.view")]
     ConversationView(ViewRevision),
+    /// A full update of the application's state for a watched conversation.
+    #[serde(rename = "conversation.state")]
+    ConversationState {
+        /// The conversation that changed.
+        conversation: ConversationId,
+        /// Its latest state.
+        state: ConversationState,
+    },
+    /// Refresh the conversation and project lists.
+    #[serde(rename = "conversations.changed")]
+    ConversationsChanged(Empty),
 }
 
 /// `conversation.view` params: one revision of a watched conversation's view.

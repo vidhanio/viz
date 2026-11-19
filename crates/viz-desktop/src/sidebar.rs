@@ -1,146 +1,429 @@
-//! The sidebar, on rune-kit's `Sidebar`: a new-chat row, the orchestrator,
-//! then chats, each with its subagents nested under it, and the connection's
-//! state at the bottom.
+//! Conversation tree, its filter and disclosure state.
 
-use std::collections::HashSet;
+mod actions;
 
-use rune::{El, Tx, icon, row, text};
-use rune_kit::{
-    Button, ButtonVariant, ControlSize,
-    shell::{RowStatus, Sidebar, SidebarHeader, SidebarRow},
-};
-use viz_client::protocol::{ConversationId, ConversationKind};
+use std::collections::{HashMap, HashSet};
+
+use rune::{El, TextEdit, Tx, col, row, text};
+use rune_kit::{ButtonVariant, IconButtonVariant, TreeItem, TreeRow, shell::Sidebar};
+use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary, Project};
 
 use crate::{
-    app::{Desktop, Status},
+    app::{Desktop, Status, chat_title},
     theme::{self, Theme},
-    thread::{Item, ToolStatus},
+    ui,
 };
 
-/// The deepest a subagent row indents.
-const MAX_DEPTH: u8 = 4;
+#[derive(Debug)]
+pub struct Navigation {
+    filter: TextEdit,
+    archived: bool,
+    collapsed_projects: HashSet<String>,
+    collapsed_chats: HashSet<ConversationId>,
+    menu: Option<actions::Context>,
+    edit: Option<actions::Edit>,
+    value: TextEdit,
+}
 
-/// The sidebar's content.
-pub fn sidebar(s: &Desktop, t: &Theme) -> El {
-    let busy = busy(s);
-    let new_chat = SidebarRow::new("New chat")
-        .icon(&theme::PLUS)
-        .on_select(|s: &mut Desktop, tx: &mut Tx| s.create(tx))
-        .build(&t.k)
-        .key("new-chat");
-    let mut sidebar = Sidebar::new()
-        .label("Conversations")
-        .header_padding(0.0, 10.0)
-        .header(new_chat)
-        .footer(connection(s, t));
-    let mut rows = Vec::new();
-    if let Some(root) = s.root {
-        rows.push(conversation_row(s, root, 0, &busy, t));
-        children(s, root, 1, &busy, &mut rows, t);
+impl Default for Navigation {
+    fn default() -> Self {
+        Self {
+            filter: TextEdit::new(""),
+            archived: false,
+            collapsed_projects: HashSet::new(),
+            collapsed_chats: HashSet::new(),
+            menu: None,
+            edit: None,
+            value: TextEdit::new(""),
+        }
     }
-    let mut chats: Vec<ConversationId> = s
+}
+
+impl Navigation {
+    pub fn reveal(&mut self, id: ConversationId, summaries: &[ConversationSummary]) {
+        let mut cursor = Some(id);
+        // Parents are older than their children. Reject malformed links rather
+        // than looping.
+        while let Some(id) = cursor {
+            let Some(chat) = summaries.iter().find(|chat| chat.id == id) else {
+                break;
+            };
+            self.collapsed_chats.remove(&id);
+            if let Some(project) = &chat.project {
+                self.expand_project(project);
+            }
+            cursor = chat.parent.filter(|parent| *parent < id);
+        }
+    }
+
+    pub fn expand_project(&mut self, project: &str) {
+        self.collapsed_projects.remove(project);
+    }
+
+    fn toggle_chat(&mut self, id: ConversationId) {
+        if !self.collapsed_chats.remove(&id) {
+            self.collapsed_chats.insert(id);
+        }
+    }
+
+    fn toggle_project(&mut self, id: &str) {
+        if !self.collapsed_projects.remove(id) {
+            self.collapsed_projects.insert(id.to_owned());
+        }
+    }
+}
+
+/// Pre-index visible chats so each row is visited once, not once per parent.
+struct Outline<'a> {
+    state: &'a Desktop,
+    children: HashMap<ConversationId, Vec<&'a ConversationSummary>>,
+    projects: HashMap<&'a str, Vec<&'a ConversationSummary>>,
+    loose: Vec<&'a ConversationSummary>,
+    query: String,
+}
+
+impl<'a> Outline<'a> {
+    fn new(state: &'a Desktop) -> Self {
+        let query = state.navigation.filter.text.trim().to_lowercase();
+        let mut outline = Self {
+            state,
+            children: HashMap::new(),
+            projects: HashMap::new(),
+            loose: Vec::new(),
+            query,
+        };
+        let chats: HashMap<_, _> = state
+            .conversations
+            .iter()
+            .filter(|chat| state.navigation.archived || !chat.archived)
+            .map(|chat| (chat.id, chat))
+            .collect();
+        let mut keep = HashSet::new();
+        if !outline.query.is_empty() {
+            let matching_projects: HashSet<_> = state
+                .projects
+                .iter()
+                .filter(|project| outline.matches(&project.name) || outline.matches(&project.path))
+                .map(|project| project.id.as_str())
+                .collect();
+            for chat in chats.values() {
+                if outline.matches(chat_title(chat))
+                    || chat
+                        .project
+                        .as_deref()
+                        .is_some_and(|id| matching_projects.contains(id))
+                {
+                    let mut cursor = Some(chat.id);
+                    while let Some(id) = cursor.filter(|id| keep.insert(*id)) {
+                        cursor = chats.get(&id).and_then(|chat| chat.parent);
+                    }
+                }
+            }
+        }
+        let known_projects: HashSet<_> = state.projects.iter().map(|p| p.id.as_str()).collect();
+        for chat in &state.conversations {
+            if !chats.contains_key(&chat.id)
+                || (!outline.query.is_empty() && !keep.contains(&chat.id))
+                || chat.kind == ConversationKind::Orchestrator
+            {
+                continue;
+            }
+            if let Some(parent) = chat
+                .parent
+                .filter(|id| *id < chat.id && chats.contains_key(id))
+            {
+                outline.children.entry(parent).or_default().push(chat);
+            } else if let Some(project) = chat
+                .project
+                .as_deref()
+                .filter(|id| known_projects.contains(id))
+            {
+                outline.projects.entry(project).or_default().push(chat);
+            } else {
+                outline.loose.push(chat);
+            }
+        }
+        outline
+    }
+
+    fn matches(&self, value: &str) -> bool {
+        self.query.is_empty() || value.to_lowercase().contains(&self.query)
+    }
+
+    fn visible_project(&self, project: &Project) -> bool {
+        self.projects.contains_key(project.id.as_str())
+            || self.matches(&project.name)
+            || self.matches(&project.path)
+    }
+
+    fn chat(&self, chat: &ConversationSummary, depth: u32, t: &Theme, layer: &mut Vec<El>) -> El {
+        let id = chat.id;
+        let s = self.state;
+        let selected = s.selected == Some(id);
+        let key = format!("chat-{id}");
+        let depth = depth.min(5);
+        let children = self.children.get(&id);
+        let open = children.is_some()
+            && (!self.query.is_empty() || !s.navigation.collapsed_chats.contains(&id));
+        let icon = match chat.kind {
+            ConversationKind::Orchestrator => &theme::STAR,
+            ConversationKind::Chat => &ui::CHAT,
+            ConversationKind::Subagent => &theme::BRANCH,
+        };
+        let mut item = TreeItem::new(chat_title(chat)).icon(icon);
+        if chat.archived {
+            item = item.label_color(t.faint);
+        }
+        if let Some(status) = ui::status(chat.status, t) {
+            item = item.trailing(status.key("status"));
+        }
+        if chat.kind != ConversationKind::Orchestrator {
+            item = item.trailing(actions::chat_menu(s, chat, &key, selected, t, layer));
+        }
+        let mut node = ui::tree_row(&TreeRow::new(&key, depth).selected(selected), item, t)
+            .hover_group_focus()
+            .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
+        if chat.kind != ConversationKind::Orchestrator && s.connected() {
+            let key = key.clone();
+            node = node.on_secondary_press(move |s: &mut Desktop, at, _| {
+                s.navigation.menu = Some(actions::Context::at(&key, at));
+            });
+        }
+        if children.is_some() {
+            let (icon, label) = if open {
+                (&theme::CHEVRON_OPEN, "Collapse subagents")
+            } else {
+                (&theme::CHEVRON, "Expand subagents")
+            };
+            node = node.expanded(open).child(
+                ui::icon_button(icon, label, IconButtonVariant::Ghost)
+                    .on_press(move |s: &mut Desktop| s.navigation.toggle_chat(id))
+                    .build(&t.k)
+                    .key("disclose")
+                    .size(20.0, 25.0)
+                    // Follow the indent lane in ui::tree_row.
+                    .absolute(
+                        f32::from(u16::try_from(depth).unwrap_or_default()).mul_add(14.0, 4.0),
+                        2.0,
+                    ),
+            );
+        }
+        let mut branch = col().key(format!("branch-{id}")).w_full().child(node);
+        if let Some(children) = children.filter(|_| open) {
+            branch = branch.children(
+                children
+                    .iter()
+                    .map(|child| self.chat(child, depth + 1, t, layer)),
+            );
+        }
+        branch
+    }
+
+    fn project(&self, project: &Project, t: &Theme, layer: &mut Vec<El>) -> El {
+        let s = self.state;
+        let open = !self.query.is_empty() || !s.navigation.collapsed_projects.contains(&project.id);
+        let id = project.id.clone();
+        let key = format!("project-{id}");
+        let item = TreeItem::new(&project.name)
+            .icon(&ui::FOLDER)
+            .label_color(t.text);
+        let item = if let Some(branch) = &project.branch {
+            item.trailing(
+                ui::chip(branch, t)
+                    .max_w(68.0)
+                    .shrink()
+                    .clip_rounded(4.0)
+                    .help(branch),
+            )
+        } else {
+            item
+        };
+        let item = item.trailing(actions::project_menu(s, project, &key, t, layer));
+        let mut node = ui::tree_row(&TreeRow::new(&key, 0).expanded(Some(open)), item, t)
+            .hover_group_focus()
+            .help(&project.path)
+            .on_press(move |s: &mut Desktop| s.navigation.toggle_project(&id));
+        if s.connected() {
+            node = node.on_secondary_press(move |s: &mut Desktop, at, _| {
+                s.navigation.menu = Some(actions::Context::at(&key, at));
+            });
+        }
+        let mut branch = col()
+            .key(format!("project-branch-{}", project.id))
+            .w_full()
+            .child(node);
+        if let Some(chats) = self.projects.get(project.id.as_str()).filter(|_| open) {
+            branch = branch.children(chats.iter().map(|chat| self.chat(chat, 1, t, layer)));
+        }
+        branch
+    }
+}
+
+pub fn focus_filter(s: &mut Desktop, tx: &mut Tx) {
+    s.sidebar.set_open(true);
+    tx.focus_when_shown("chat-filter", true);
+}
+
+fn open_match(s: &mut Desktop, tx: &mut Tx) {
+    let filter = s.navigation.filter.text.trim().to_lowercase();
+    if filter.is_empty() {
+        return;
+    }
+    let id = s
         .conversations
         .iter()
-        .filter(|summary| summary.kind == ConversationKind::Chat)
-        .map(|summary| summary.id)
-        .collect();
-    chats.sort_unstable_by(|a, b| b.cmp(a));
-    if !chats.is_empty() {
-        rows.push(
-            SidebarHeader::new("Chats")
+        .filter(|chat| s.navigation.archived || !chat.archived)
+        .find(|chat| {
+            chat_title(chat).to_lowercase().contains(&filter)
+                || s.projects.iter().any(|project| {
+                    Some(&project.id) == chat.project.as_ref()
+                        && (project.name.to_lowercase().contains(&filter)
+                            || project.path.to_lowercase().contains(&filter))
+                })
+        })
+        .map(|chat| chat.id);
+    if let Some(id) = id {
+        s.navigation.filter.clear();
+        s.select(id, tx);
+    }
+}
+
+pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+    let tree = conversation_tree(s, t, layer);
+    actions::dialog(s, t, layer);
+    Sidebar::new()
+        .label("Workspace")
+        .header_padding(0.0, 8.0)
+        .header(controls(s, t))
+        .child(tree)
+        .footer(footer(s, t))
+        .build(&t.k)
+}
+
+fn controls(s: &Desktop, t: &Theme) -> El {
+    let create = ui::button("New chat", ButtonVariant::Outline)
+        .icon(&theme::PLUS)
+        .disabled(!s.connected() || s.new_chat.is_some())
+        .on_press_tx(Desktop::create_here)
+        .build(&t.k)
+        .key("new-chat")
+        .grow(1.0)
+        .justify_start();
+    col()
+        .w_full()
+        .gap(8.0)
+        .pt(8.0)
+        .child(
+            row()
+                .w_full()
+                .center_y()
+                .gap(6.0)
+                .child(create)
+                .child(ui::kbd("N", t)),
+        )
+        .child(
+            ui::text_field(&s.navigation.filter, "Filter chats", "Filter chats")
+                .leading_icon(t.k.glyph.search)
+                .trailing(ui::kbd("K", t))
+                .on_edit(|s: &mut Desktop| &mut s.navigation.filter)
+                .on_submit(open_match)
                 .build(&t.k)
-                .key("chats-header")
-                .mt(12.0),
+                .key("chat-filter")
+                .border(1.0, t.hairline),
+        )
+}
+
+fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+    let outline = Outline::new(s);
+    let mut tree = col()
+        .key("conversation-tree")
+        .role("tree")
+        .label("Conversations")
+        .w_full()
+        .gap(1.0);
+    if let Some(root) = s
+        .root
+        .and_then(|root| s.summary(root))
+        .filter(|root| outline.matches(chat_title(root)) || outline.children.contains_key(&root.id))
+    {
+        tree = tree.child(outline.chat(root, 0, t, layer));
+    }
+    tree = tree.child(
+        row()
+            .key("projects-heading")
+            .w_full()
+            .h(28.0)
+            .px(8.0)
+            .mt(9.0)
+            .center_y()
+            .child(ui::section("Projects", t).grow(1.0))
+            .child(
+                ui::icon_button(&theme::PLUS, "Add project", IconButtonVariant::Ghost)
+                    .disabled(!s.connected())
+                    .on_press_tx(actions::add_project)
+                    .build(&t.k)
+                    .key("add-project"),
+            ),
+    );
+    tree = tree.children(
+        s.projects
+            .iter()
+            .filter(|p| outline.visible_project(p))
+            .map(|p| outline.project(p, t, layer)),
+    );
+    if s.projects.is_empty() && outline.query.is_empty() {
+        tree = tree.child(
+            text("No projects")
+                .font(t.small)
+                .color(t.faint)
+                .px(8.0)
+                .py(4.0),
         );
     }
-    for chat in chats {
-        rows.push(conversation_row(s, chat, 0, &busy, t));
-        children(s, chat, 1, &busy, &mut rows, t);
+    if !outline.loose.is_empty() {
+        tree = tree
+            .child(
+                ui::section("Chats", t)
+                    .key("chats-heading")
+                    .px(8.0)
+                    .mt(13.0)
+                    .mb(4.0),
+            )
+            .children(
+                outline
+                    .loose
+                    .iter()
+                    .map(|chat| outline.chat(chat, 0, t, layer)),
+            );
     }
-    for row in rows {
-        sidebar = sidebar.child(row);
-    }
-    sidebar.build(&t.k)
+    tree
 }
 
-/// `parent`'s subagents, depth first, oldest first.
-fn children(
-    s: &Desktop,
-    parent: ConversationId,
-    depth: u8,
-    busy: &HashSet<ConversationId>,
-    rows: &mut Vec<El>,
-    t: &Theme,
-) {
-    let mut subagents: Vec<ConversationId> = s
-        .conversations
-        .iter()
-        .filter(|summary| summary.parent == Some(parent))
-        .map(|summary| summary.id)
-        .collect();
-    subagents.sort_unstable();
-    for child in subagents {
-        rows.push(conversation_row(s, child, depth.min(MAX_DEPTH), busy, t));
-        children(s, child, depth + 1, busy, rows, t);
-    }
-}
-
-/// Conversations known to be working: the watched one while its run lasts,
-/// and the children of its running `subagent` calls. Others' state isn't
-/// watched, so they show none.
-fn busy(s: &Desktop) -> HashSet<ConversationId> {
-    let thread = &s.thread;
-    let children = thread.items.iter().filter_map(|item| match item {
-        Item::Tool(tool) if tool.status == ToolStatus::Running => tool.child,
-        _ => None,
-    });
-    s.selected
-        .filter(|_| thread.live.busy)
-        .into_iter()
-        .chain(children)
-        .collect()
-}
-
-fn conversation_row(
-    s: &Desktop,
-    id: ConversationId,
-    depth: u8,
-    busy: &HashSet<ConversationId>,
-    t: &Theme,
-) -> El {
-    let selected = s.selected == Some(id);
-    let mut row = SidebarRow::new(s.title(id))
-        .depth(depth)
-        .selected(selected)
-        .on_select(move |s: &mut Desktop, tx: &mut Tx| s.select(id, tx));
-    if Some(id) == s.root {
-        row = row
-            .avatar(icon(&theme::STAR, 13.0).color(t.accent))
-            .title_style(t.ui_medium);
-    } else if depth > 0 {
-        row = row.icon(&theme::BRANCH);
-    }
-    if busy.contains(&id) {
-        row = row.status(RowStatus::Other(theme::pulse(t.accent, 6.0)));
-    }
-    let built = row.build(&t.k).key(format!("conversation-{id}"));
-    if selected {
-        // The tide line marks the open conversation.
-        built
-            .fill(t.selected)
-            .child(t.tide(14.0).absolute(0.0, 7.0))
-    } else {
-        built
-    }
+fn footer(s: &Desktop, t: &Theme) -> El {
+    let toggle = ui::button(
+        if s.navigation.archived {
+            "Hide archived"
+        } else {
+            "Show archived"
+        },
+        ButtonVariant::GhostMuted,
+    )
+    .on_press(|s: &mut Desktop| s.navigation.archived = !s.navigation.archived)
+    .build(&t.k);
+    col()
+        .gap(3.0)
+        .child(toggle.key("archived").self_start())
+        .child(ui::rule(t))
+        .child(connection(s, t))
 }
 
 /// The footer: a status dot, one word, and a retry button while
 /// disconnected (the error in its tooltip).
 fn connection(s: &Desktop, t: &Theme) -> El {
     let (color, label, error) = match &s.status {
-        Status::Connecting => (t.warning, "connecting…", None),
-        Status::Connected { .. } => (t.success, "connected", None),
-        Status::Error(message) => (t.danger, "disconnected", Some(message)),
+        Status::Connecting => (t.warning, "Connecting", None),
+        Status::Connected { .. } => (t.success, "Connected", None),
+        Status::Error(message) => (t.danger, "Offline", Some(message)),
     };
     let detail = match (&s.status, &s.endpoint) {
         (Status::Connected { version }, Some(endpoint)) => {
@@ -159,7 +442,7 @@ fn connection(s: &Desktop, t: &Theme) -> El {
         .gap(8.0)
         .center_y()
         .help(detail)
-        .child(theme::dot(color, 6.0))
+        .child(ui::dot(color, 6.0))
         .child(
             text(label)
                 .key("label")
@@ -171,10 +454,8 @@ fn connection(s: &Desktop, t: &Theme) -> El {
         );
     if error.is_some() {
         footer = footer.child(
-            Button::new("Retry")
-                .variant(ButtonVariant::Ghost)
-                .control_size(ControlSize::Small)
-                .on_press_tx(|s: &mut Desktop, tx: &mut Tx| s.reconnect(tx))
+            ui::button("Retry", ButtonVariant::Ghost)
+                .on_press_tx(Desktop::reconnect)
                 .build(&t.k)
                 .key("retry"),
         );

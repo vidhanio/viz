@@ -7,14 +7,16 @@ mod app;
 mod backend;
 mod composer;
 mod header;
+mod scenes;
 mod sidebar;
 mod theme;
 mod thread;
 mod timeline;
+mod ui;
 
 use std::time::Duration;
 
-use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col, el};
+use rune::{App, AppSpec, Cx, El, KeyEvent, Tx, col};
 use rune_kit::{
     Toast, ToastRegion,
     shell::{self, SidebarToggle, SplitView},
@@ -29,25 +31,22 @@ const HEADLESS_CONNECT_WAIT: Duration = Duration::from_secs(5);
 
 fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let t = Theme::get(cx.system_dark());
+    let mut overlays = Vec::new();
     let main = col()
         .key("main")
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(el().key("header-rule").w_full().h(1.0).fill(t.hairline))
+        .child(ui::rule(t).key("header-rule"))
         .child(timeline::timeline(s, t));
-    let main = if s.can_compose() {
-        main.child(composer::composer(s, t))
-    } else {
-        main
-    };
+    let main = main.children(composer::composer(s, t, &mut overlays));
     // The kit's shell, flat: no inset frame, the main pane square against
     // the sidebar, which sits on the deeper backdrop.
     let split = SplitView::new(main)
         .sidebar(
             &s.sidebar,
             |s: &mut Desktop| &mut s.sidebar,
-            sidebar::sidebar(s, t),
+            sidebar::sidebar(s, t, &mut overlays),
         )
         .toolbar(header::toolbar(s, t))
         .titlebar_inset(cx.titlebar_inset())
@@ -56,7 +55,8 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .sidebar_toggle(SidebarToggle::new().in_header())
         .reduced_motion(cx.is_reduced_motion())
         .build(&t.shell);
-    rune_kit::root(split, toasts(s, t))
+    overlays.extend(toasts(s, t));
+    rune_kit::root(split, overlays)
 }
 
 /// The toast stack, when there's anything in it.
@@ -67,7 +67,7 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
     let region = s.toasts.iter().fold(ToastRegion::new(), |region, toast| {
         let id = toast.id;
         let mut built = Toast::new(format!("toast-{id}"), toast.title.clone())
-            .lead(theme::dot(t.danger, 7.0))
+            .lead(ui::dot(t.danger, 7.0))
             .on_close(move |s: &mut Desktop| s.dismiss(id));
         if let Some(detail) = &toast.detail {
             built = built.description(detail.clone());
@@ -82,15 +82,27 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.sidebar.toggle();
         return true;
     }
-    if ev.is_command('n') && !ev.mods.shift {
-        s.create(tx);
+    if ev.mods.shift || ev.mods.alt {
+        return false;
+    }
+    if ev.is_command('n') {
+        s.create_here(tx);
+        return true;
+    }
+    if ev.is_command('k') {
+        sidebar::focus_filter(s, tx);
+        return true;
+    }
+    if ev.is_command('.') && s.busy() {
+        s.abort(tx);
         return true;
     }
     false
 }
 
-fn poll(s: &mut Desktop, clock: f64, _: &mut Tx) -> bool {
-    s.expire(clock)
+fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
+    let completion = composer::poll(s, clock, tx);
+    s.expire(clock) || completion
 }
 
 fn main() {
@@ -99,16 +111,22 @@ fn main() {
         min_size: Some((720.0, 480.0)),
         fonts: theme::FONTS,
         families: theme::FAMILIES,
+        scenes: scenes::SCENES,
         on_key: Some(on_key),
         poll: Some(poll),
         ..AppSpec::new("viz", (1120.0, 740.0), Desktop::detached, view)
     })
     .init(move || Desktop::new(commands));
-    let (first, connected) = std::sync::mpsc::channel();
-    backend::spawn(app.handle(), receiver, first);
-    if rune::is_headless() {
-        // A snapshot shows the first attempt's outcome, not a race with it.
-        _ = connected.recv_timeout(HEADLESS_CONNECT_WAIT);
+    let headless = rune::is_headless();
+    let preview = headless && std::env::args_os().any(|arg| arg == "--scene");
+    if !preview {
+        let (first, connected) = std::sync::mpsc::channel();
+        backend::spawn(app.handle(), receiver, first);
+        if headless {
+            // The default snapshot shows the first connection attempt's
+            // outcome.
+            _ = connected.recv_timeout(HEADLESS_CONNECT_WAIT);
+        }
     }
     app.run();
 }

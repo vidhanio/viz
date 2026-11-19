@@ -2,7 +2,7 @@
 //! (retrying while the backend is down), watches the selected conversation, and
 //! pushes state into the UI.
 
-use std::{collections::HashSet, time::Duration};
+use std::{cmp::Reverse, time::Duration};
 
 use rune::AppHandle;
 use serde_json::Value;
@@ -10,7 +10,9 @@ use tokio::sync::mpsc;
 use viz_client::{
     Client, Connection, Endpoint, Error, delta,
     protocol::{
-        ClientInfo, ClientKind, ConversationId, Notification, Revision, Submit, ViewRevision,
+        ClientInfo, ClientKind, ConfigureConversation, ConversationId, CreateConversation,
+        CreateProject, Notification, OptionValue, RemoveProject, RespondApproval, Revision,
+        SearchFiles, Submit, UpdateConversation, UpdateProject, ViewRevision,
     },
 };
 use viz_config::Config;
@@ -28,8 +30,29 @@ const RETRY: Duration = Duration::from_secs(3);
 pub enum Command {
     /// Watch this conversation instead.
     Select(ConversationId),
-    /// Create a conversation and select it.
-    Create,
+    /// Bind the fresh composer to a new conversation.
+    Create {
+        request: u64,
+        params: CreateConversation,
+    },
+    Update(ConversationId, ChatChange),
+    Configure {
+        conversation: ConversationId,
+        option: String,
+        value: OptionValue,
+    },
+    Abort(ConversationId),
+    Approval {
+        conversation: ConversationId,
+        approval: String,
+        option: String,
+    },
+    Project(ProjectChange),
+    SearchFiles {
+        conversation: ConversationId,
+        request: u64,
+        query: String,
+    },
     /// Submit an input to a conversation.
     Submit {
         /// The conversation.
@@ -39,6 +62,20 @@ pub enum Command {
     },
     /// While disconnected: try again now.
     Reconnect,
+}
+
+#[derive(Debug)]
+pub enum ChatChange {
+    Title(String),
+    Archive(bool),
+    Project(Option<String>),
+}
+
+#[derive(Debug)]
+pub enum ProjectChange {
+    Add(String),
+    Rename { id: String, name: String },
+    Remove(String),
 }
 
 /// Starts the connection thread. `first` hears once the first connection
@@ -149,12 +186,22 @@ fn offline(
 ) -> bool {
     match command {
         &Command::Select(conversation) => *selected = Some(conversation),
-        Command::Create | Command::Submit { .. } => toast(
-            ui,
-            "Not connected",
-            "Start the backend or check [client].url in the config.".into(),
-        ),
+        &Command::Create { request, .. } => {
+            ui.update(move |s, tx| {
+                s.created(request, None, tx);
+                s.toast(tx, "Offline", None);
+            });
+        }
+        Command::Submit { conversation, text } => {
+            let (conversation, text) = (*conversation, text.clone());
+            ui.update(move |s, tx| {
+                s.restore_message(conversation, &text);
+                s.toast(tx, "Offline", None);
+            });
+        }
+        Command::SearchFiles { .. } => {}
         Command::Reconnect => return false,
+        _ => toast(ui, "Offline", "Backend disconnected".into()),
     }
     true
 }
@@ -187,17 +234,24 @@ async fn session(
         client,
         watched,
         view: None,
-        listed: HashSet::new(),
     };
     let (version, root) = (hello.version, hello.root);
-    ui.update(move |s, _| {
-        s.status = Status::Connected { version };
-        s.root = Some(root);
-        s.show(watched);
-    });
     let started = async {
-        session.refresh_list().await?;
-        session.client.watch(watched).await
+        let ((), harnesses, ()) = tokio::try_join!(
+            session.refresh_list(),
+            session.client.list_harnesses(),
+            session.client.watch(watched)
+        )?;
+        ui.update(move |s, tx| {
+            s.status = Status::Connected { version };
+            s.root = Some(root);
+            s.harnesses = harnesses;
+            if s.new_chat.is_none() {
+                s.show(watched);
+                tx.focus("draft", false);
+            }
+        });
+        Ok(())
     };
     if let Err(e) = started.await {
         return Ended::Lost(e);
@@ -229,8 +283,6 @@ struct Session<'a> {
     watched: ConversationId,
     /// Its latest view, once the first value arrives.
     view: Option<Value>,
-    /// Conversations the sidebar lists, to notice new subagents.
-    listed: HashSet<ConversationId>,
 }
 
 impl Session<'_> {
@@ -244,15 +296,61 @@ impl Session<'_> {
                 *selected = Some(conversation);
                 self.switch(conversation).await
             }
-            Command::Create => {
-                let conversation = self.client.create_conversation().await?;
-                self.refresh_list().await?;
-                *selected = Some(conversation);
-                self.ui.update(move |s, _| {
-                    s.show(conversation);
-                    s.draft.focused = true;
-                });
-                self.switch(conversation).await
+            Command::Create { request, params } => {
+                let result = self.client.create_conversation(&params).await;
+                let id = result.as_ref().ok().copied();
+                self.ui.update(move |s, tx| s.created(request, id, tx));
+                result.map(drop)
+            }
+            Command::Update(conversation, change) => {
+                let mut params = UpdateConversation {
+                    conversation,
+                    title: None,
+                    archived: None,
+                    project: None,
+                };
+                match &change {
+                    ChatChange::Title(title) => params.title = Some(title),
+                    ChatChange::Archive(archived) => params.archived = Some(*archived),
+                    ChatChange::Project(project) => params.project = Some(project.as_deref()),
+                }
+                self.client.update_conversation(&params).await
+            }
+            Command::Configure {
+                conversation,
+                option,
+                value,
+            } => {
+                self.client
+                    .configure_conversation(&ConfigureConversation {
+                        conversation,
+                        option: &option,
+                        value: &value,
+                    })
+                    .await
+            }
+            Command::Abort(id) => self.client.abort_conversation(id).await,
+            Command::Approval {
+                conversation,
+                approval,
+                option,
+            } => {
+                self.client
+                    .respond_approval(&RespondApproval {
+                        conversation,
+                        approval: &approval,
+                        option: Some(&option),
+                    })
+                    .await
+            }
+            Command::Project(change) => self.project(change).await,
+            Command::SearchFiles {
+                conversation,
+                request,
+                query,
+            } => {
+                self.search(conversation, request, query);
+                Ok(())
             }
             Command::Submit { conversation, text } => {
                 let submit = Submit {
@@ -260,9 +358,12 @@ impl Session<'_> {
                     text,
                     ..Submit::default()
                 };
-                self.client.submit(&submit).await?;
-                // A chat's first message titles it.
-                self.refresh_list().await
+                let result = self.client.submit(&submit).await;
+                if result.is_err() {
+                    self.ui
+                        .update(move |s, _| s.restore_message(conversation, &submit.text));
+                }
+                result.map(drop)
             }
             // Already connected.
             Command::Reconnect => Ok(()),
@@ -270,13 +371,28 @@ impl Session<'_> {
     }
 
     async fn on_notification(&mut self, notification: Notification) -> viz_client::Result<()> {
-        let Notification::ConversationView(ViewRevision {
+        match notification {
+            Notification::ConversationsChanged(_) => self.refresh_list().await,
+            Notification::ConversationState {
+                conversation,
+                state,
+            } => {
+                self.ui
+                    .update(move |s, _| s.set_conversation(conversation, state));
+                Ok(())
+            }
+            Notification::ConversationView(view) => self.on_view(view).await,
+            Notification::Reply { .. } => Ok(()),
+        }
+    }
+
+    async fn on_view(
+        &mut self,
+        ViewRevision {
             conversation,
             revision,
-        }) = notification
-        else {
-            return Ok(());
-        };
+        }: ViewRevision,
+    ) -> viz_client::Result<()> {
         if conversation != self.watched {
             return Ok(());
         }
@@ -297,18 +413,8 @@ impl Session<'_> {
             (Revision::Delta(_), None) => return Ok(()),
         };
         let thread = Thread::from_view(view);
-        let unlisted: Vec<_> = thread
-            .children()
-            .filter(|child| !self.listed.contains(child))
-            .collect();
         self.ui
             .update(move |s, _| s.set_thread(conversation, thread));
-        if !unlisted.is_empty() {
-            self.refresh_list().await?;
-            // Asked once: a child the list still lacks doesn't ask again on
-            // every revision.
-            self.listed.extend(unlisted);
-        }
         Ok(())
     }
 
@@ -322,11 +428,56 @@ impl Session<'_> {
         self.client.watch(conversation).await
     }
 
-    /// Lists every conversation, titled by the backend, into the sidebar.
-    async fn refresh_list(&mut self) -> viz_client::Result<()> {
-        let conversations = self.client.list_conversations().await?;
-        self.listed = conversations.iter().map(|summary| summary.id).collect();
-        self.ui.update(move |s, _| s.conversations = conversations);
+    async fn refresh_list(&self) -> viz_client::Result<()> {
+        let (mut conversations, mut projects) = tokio::try_join!(
+            self.client.list_conversations(),
+            self.client.list_projects()
+        )?;
+        conversations.sort_unstable_by_key(|chat| Reverse((chat.updated_at, chat.id)));
+        projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        self.ui.update(move |s, _| {
+            s.conversations = conversations;
+            s.projects = projects;
+        });
         Ok(())
+    }
+
+    async fn project(&self, change: ProjectChange) -> viz_client::Result<()> {
+        match &change {
+            ProjectChange::Add(path) => self
+                .client
+                .create_project(&CreateProject { path, name: None })
+                .await
+                .map(drop),
+            ProjectChange::Rename { id, name } => self
+                .client
+                .update_project(&UpdateProject { project: id, name })
+                .await
+                .map(drop),
+            ProjectChange::Remove(id) => {
+                self.client
+                    .remove_project(&RemoveProject { project: id })
+                    .await
+            }
+        }
+    }
+
+    fn search(&self, conversation: ConversationId, request: u64, query: String) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let result = client
+                .search_files(&SearchFiles {
+                    conversation,
+                    query: &query,
+                    limit: Some(24),
+                })
+                .await;
+            ui.update(move |s, _| {
+                if s.selected == Some(conversation) {
+                    s.completion.file_result(request, result);
+                }
+            });
+        });
     }
 }
