@@ -1,4 +1,10 @@
 //! Locations and loading for individual client configuration files.
+//!
+//! Each client loads one file: an explicit `--config` path takes precedence
+//! over its per-client environment variable and the default under
+//! `$VIZ_CONFIG_DIR` (or `$XDG_CONFIG_HOME/viz`, default `~/.config/viz`).
+//! Unlike the backend, clients do not layer `config.d` drop-ins. A missing
+//! file yields defaults; client-specific requirements still apply.
 
 use std::{env, fs, io, path::PathBuf};
 

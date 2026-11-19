@@ -2,7 +2,7 @@
 
 viz is an all-in-one personal agent and meta-harness. The **orchestrator** is the only conversation that runs viz's native agent (pi-durable root with unbounded history and compaction). Connectors send to it by default. App chats and all delegations use external harnesses over ACP; pi-durable stores their transcripts and schedules work without running their models.
 
-Read `docs/architecture.md` before changing anything structural. `TODO.md` is the roadmap; `docs/` holds everything else (see "Where things go").
+The code is the documentation: read it before changing anything structural. `TODO.md` is the roadmap; `docs/` holds only what code can't say (see "Where things go").
 
 ## Layout
 
@@ -40,7 +40,7 @@ For app chats and delegation, configure a real ACP executable under `[harnesses.
 
 ## Verification
 
-**No tests.** Don't write, keep, or run tests of any kind (unit, integration, `bun test`, `cargo test`, `#[cfg(test)]`, test fixtures, faux-model harnesses). A test is a second, worse copy of the logic; read the invariants from the code and get it right there. If a change needs explaining, write it into the code's comments or `docs/`.
+**No tests.** Don't write, keep, or run tests of any kind (unit, integration, `bun test`, `cargo test`, `#[cfg(test)]`, test fixtures, faux-model harnesses). A test is a second, worse copy of the logic; read the invariants from the code and get it right there. If a change needs explaining, write it into the code's comments.
 
 Before declaring a change done, run only the static gate (CI runs the same via `nix flake check`):
 
@@ -55,17 +55,14 @@ After changing `backend/src/protocol.ts`: `cd backend && bun run schema`, then u
 ## Conventions
 
 - Cargo: declare all direct dependencies under `[workspace.dependencies]` in the root `Cargo.toml`. Members inherit them with `dep.workspace = true` or `{ workspace = true, features = [...] }` for crate-specific features.
-- Config: the backend layers `config.toml` and `config.d/*.toml` (later wins, tables merge); clients load separate TOML files under the same config directory. Secrets are `"inline" | { file = "..." } | { env = "..." }`. Reference: `docs/config.md`.
+- Config: the backend layers `config.toml` and `config.d/*.toml` (later wins, tables merge); clients load separate TOML files under the same config directory. Secrets are `"inline" | { file = "..." } | { env = "..." }`. Reference: the `*.example.toml` files.
 - State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); sockets in `$XDG_RUNTIME_DIR/viz`. Only `viz-backend` writes `viz.sqlite` (pi-durable is single-writer).
 - pi-durable extensions and tools are identified by name in storage: never rename an installed extension/tool/task without a migration.
-- Commit often, as soon as a coherent change passes verification. Each commit must stand on its own: keep an API or config change with its callers, generated artifacts, and relevant docs; split independent work. Use lowercase Conventional Commit subjects. Do not include unrelated work or secrets.
+- Commit often, as soon as a coherent change passes verification. Each commit must stand on its own: keep an API or config change with its callers and generated artifacts; split independent work. Use lowercase Conventional Commit subjects. Do not include unrelated work or secrets.
 
 ## Where things go
 
 - `TODO.md`: roadmap and open work, checked off as it lands. Update it in the same change.
 - `docs/design.md`: product scope (what viz is for and leaves out) and the desktop design system rules. Read before adding a feature or UI.
-- `docs/architecture.md`: how the system fits together (current state, not plans).
-- `docs/config.md`: config reference.
-- `docs/decisions/NNNN-title.md`: decision records (context, decision, consequences). Add one for any choice a future reader would question.
 - `docs/findings/<topic>.md`: research about external things (libraries, protocols, reference projects), dated, with sources. Re-verify before relying on old findings.
-- `docs/log/YYYY-MM-DD.md`: progress log per working session: what changed, what was verified, what's next. Append; don't rewrite history.
+- Everything else (how the system fits together, why a choice was made, config keys) lives in code: module doc comments, comments at the decision point, schema descriptions, and the `*.example.toml` files. No architecture docs, decision records or session logs.

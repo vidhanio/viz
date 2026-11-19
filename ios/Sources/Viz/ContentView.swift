@@ -19,8 +19,7 @@ struct ContentView: View {
   }
 
   @Environment(Backend.self) private var backend
-  // HTTPS: App Transport Security blocks cleartext to non-local hosts. Front the backend with
-  // `tailscale serve` (docs/decisions/0001-remote-transport.md).
+  // iOS App Transport Security requires HTTPS for remote hosts; reach the backend through `tailscale serve`.
   @AppStorage("backendURL") private var backendURL = "https://viz.tailnet.ts.net"
   @AppStorage("backendToken") private var backendToken = ""
   @State private var selection: Selection?

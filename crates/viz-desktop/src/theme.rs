@@ -196,8 +196,8 @@ pub struct Theme {
 }
 
 /// `[theme]` in `desktop.toml`: a base16 scheme per appearance, by built-in
-/// name, inline `colors`, or a scheme `file` (`docs/config.md`). Kept as raw
-/// TOML so a mistake here never stops the rest of the file from loading:
+/// name, inline `colors`, or a scheme `file` (see `desktop.example.toml`). Kept
+/// as raw TOML so a mistake here never stops the rest of the file from loading:
 /// [`install`] reports it and falls back to the default scheme.
 #[derive(Debug, Default, Deserialize)]
 #[serde(transparent)]

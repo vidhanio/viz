@@ -1,6 +1,6 @@
 # TODO
 
-Roadmap and open work. Check items off in the same change that lands them; record decisions in `docs/decisions/` and session progress in `docs/log/`.
+Roadmap and open work. Check items off in the same change that lands them.
 
 ## Done (scaffold, 2026-11-17)
 
@@ -12,19 +12,19 @@ Roadmap and open work. Check items off in the same change that lands them; recor
 - [x] `viz-discord` connector (DMs + mentions from allowed users → orchestrator → reply in place)
 - [x] Home Manager module: `settings`, `mutableSettings` (upstream impure merger), `environmentFile`, services for backend and connectors
 - [x] iOS app skeleton (xtool project, WebSocket client, sidebar + chat)
-- [x] AGENTS.md, architecture, config reference, decision records, findings
+- [x] AGENTS.md, findings
 
 ## Backend
 
 - [ ] **Durable connector outbox.** Replies to connectors are routed in memory and dropped if the connector is offline or the backend restarts mid-run. Persist pending replies (pi-durable document keyed by connector), deliver on reconnect, let connectors ack; dedupe by submission id.
-- [x] **uniichat memory** for the orchestrator (`backend/src/memory/`, `docs/architecture.md` "Memory"): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
+- [x] **uniichat memory** for the orchestrator (`backend/src/memory/`): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
 - [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
 - [x] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): `list_conversations`, `read_conversation`, `search_conversations`, `spawn_chat` (background, reports back as a `[chat N]` input), `message_conversation` (queues), `cancel_conversation`.
 - [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers), recover a worktree left by a crash between creation and saving it.
 - [x] **Detached ACP delegation**: the orchestrator delegates only through `spawn_chat`; chat results arrive as inputs, and legacy task-owned chats remain usable.
 - [x] **Scoped MCP progress** for ACP delegations: loopback HTTP or stdio bridge, per-turn token, no access to unrelated conversations.
 - [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
-- [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP. Parent transcript tool records link to the affected child when its runner forwards the result (`docs/decisions/0004-ade-workspace.md`).
+- [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP. Parent transcript tool records link to the affected child when its runner forwards the result.
 - [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`). Per-chat access and approvals existed briefly and were removed as unneeded.
 - [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
 - [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, worktree, timestamps) for the sidebar; rename.

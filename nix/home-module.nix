@@ -54,6 +54,7 @@ let
       default = { };
       description = ''
         Client settings written to {file}`$XDG_CONFIG_HOME/viz/${file}`.
+        See `${lib.removeSuffix ".toml" file}.example.toml` for keys and defaults.
         Reference secrets by file or environment variable, not inline.
       '';
     };
@@ -142,8 +143,11 @@ in
       description = ''
         Backend configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`. Only
         viz-backend reads it, along with unmanaged drop-ins under
-        {file}`$XDG_CONFIG_HOME/viz/config.d/`. Pass secrets as `{ file = "..."; }`
-        so they stay out of the Nix store. See `docs/config.md`.
+        {file}`$XDG_CONFIG_HOME/viz/config.d/`. See `config.example.toml` for keys
+        and defaults. Reference secrets by file or environment variable so the
+        values stay out of the Nix store. Configure clients separately with
+        {option}`programs.viz.cli.settings`, {option}`programs.viz.desktop.settings`,
+        or {option}`programs.viz.connectors.<name>.settings`.
       '';
     };
 
@@ -167,6 +171,7 @@ in
         a declaration does not remove it from the file; comments are not preserved. New files get
         mode 0600. Switching back replaces the file only if it is byte-identical to the declared
         settings. Uses Home Manager's `mkImpureConfigMerger`.
+        Client file generation is unchanged.
       '';
     };
 
@@ -185,7 +190,11 @@ in
       enable = mkOption {
         type = types.bool;
         default = true;
-        description = "Whether to run viz-backend as a systemd user service on this machine.";
+        description = ''
+          Run `viz-backend.service` as a systemd user service with `StateDirectory=viz`
+          and `RuntimeDirectory=viz`. Changes to the generated backend settings
+          trigger a restart.
+        '';
       };
       package = mkOption {
         type = types.package;
@@ -202,7 +211,11 @@ in
         type = types.bool;
         default = config.stylix.enable or false;
         defaultText = lib.literalExpression "config.stylix.enable or false";
-        description = "Default to the Stylix base16 colors for the configured Stylix polarity.";
+        description = ''
+          Default to the Stylix base16 palette for the configured appearance
+          (`dark`, `light`, or both for `either`). An explicit desktop theme
+          for that appearance takes precedence.
+        '';
       };
       package = mkOption {
         type = types.package;
@@ -217,10 +230,19 @@ in
     connectors = mkOption {
       type = types.attrsOf (types.submodule connectorModule);
       default = { };
-      example = lib.literalExpression "{ discord.enable = true; }";
+      example = lib.literalExpression ''
+        {
+          discord.enable = true;
+          discord.settings = {
+            bot_token.file = config.sops.secrets."viz/discord".path;
+            allowed_users = [ 123456789012345678 ];
+          };
+        }
+      '';
       description = ''
         Connector settings and services. Each reads `connectors/<name>.toml` and runs
-        as `viz-<name>.service` when enabled. Known connectors: `discord`, `imessage`.
+        as `viz-<name>.service` when enabled. Changes to its generated settings
+        trigger a restart. Known connectors: `discord`, `imessage`.
       '';
     };
   };
