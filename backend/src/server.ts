@@ -191,7 +191,7 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       return {};
     },
     "worktrees.list": async (_ws, { project }) => viz.listWorktrees(project, context),
-    "harnesses.list": async () => ({ harnesses: viz.runners.list() }),
+    "harnesses.list": async () => viz.listHarnesses(context),
     "files.search": async (_ws, { conversation: id, query, limit }) => ({
       files: await viz.searchFiles((await conversation(id)).id, query, limit, context),
     }),

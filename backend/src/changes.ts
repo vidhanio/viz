@@ -3,7 +3,7 @@ import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-
 
 import { ChatDoc } from "./agents/chat.ts";
 import { TurnEntry } from "./agents/model.ts";
-import { AcpStateDoc } from "./agents/options.ts";
+import { AcpStateDoc, HarnessOptionsDoc } from "./agents/options.ts";
 import { SettingsDoc } from "./orchestrator.ts";
 import { MetaDoc, ProjectsDoc, touch } from "./projects.ts";
 import { TitleDoc } from "./titles.ts";
@@ -84,6 +84,7 @@ export async function observeChanges(harness: Harness, root: ConversationId, con
         else if (change.type === "document") {
           switch (change.record.kind) {
             case ProjectsDoc.definition.kind:
+            case HarnessOptionsDoc.definition.kind:
               schedule(undefined, true);
               break;
             case TitleDoc.definition.kind:

@@ -30,6 +30,7 @@ import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 import { ChatDoc, type ChatInput, chatScheduler, withdrawChatInputs } from "./agents/chat.ts";
 import { AgentDoc, TurnEntry } from "./agents/model.ts";
+import { HarnessOptionsDoc } from "./agents/options.ts";
 import { Runners } from "./agents/runners.ts";
 import { AgentSessions } from "./agents/sessions.ts";
 import { agentTools } from "./agents/tools.ts";
@@ -67,7 +68,6 @@ export type VizHarness = {
   readonly changes: ChangeFeed;
   readonly conversations: Conversations;
   readonly projects: ProjectStore;
-  readonly runners: Runners;
   readonly search: SearchIndex;
   readonly repositories: Repositories;
   saveAttachments(attachments: Attachment[]): Promise<StoredAttachment[]>;
@@ -80,6 +80,7 @@ export type VizHarness = {
   submit(target: Conversation, input: ChatInput, context: Context): Promise<Submission>;
   createChat(options: Params<"conversation.create">, context: Context): Promise<Conversation>;
   listWorktrees(project: string, context: Context): Promise<Result<"worktrees.list">>;
+  listHarnesses(context: Context): Promise<Result<"harnesses.list">>;
   updateConversation(
     id: ConversationId,
     options: Omit<Params<"conversation.update">, "conversation">,
@@ -490,10 +491,18 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     changes,
     conversations,
     projects: projectStore,
-    runners,
     search,
     repositories,
     listWorktrees,
+    listHarnesses: async (context) => {
+      const saved = await harness.snapshot(HarnessOptionsDoc, root.id, context);
+      return {
+        harnesses: runners.list().map((runner) => ({
+          ...runner,
+          options: saved?.harnesses.find(({ name }) => name === runner.name)?.options ?? [],
+        })),
+      };
+    },
     saveAttachments: (attachments) => saveAttachments(dir, attachments),
     removeQueued: (id, submission, context) =>
       harness.commit(async (tx) => {
@@ -543,15 +552,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     },
     configureConversation: async (id, option, value, context) => {
       if (id === root.id) return settings.configure(option, value, context);
-      const chat = await harness.snapshot(ChatDoc, id, context);
-      const agent = chat?.runner ? undefined : await harness.snapshot(AgentDoc, id, context);
-      await sessions.configure(
-        id,
-        option,
-        value,
-        runners.get(chat?.runner?.name ?? (agent?.harness || undefined)),
-        context,
-      );
+      await sessions.configure(id, option, value, context);
     },
     removeProject: (id, context) =>
       editProject(async () => {

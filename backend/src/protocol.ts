@@ -259,7 +259,9 @@ export const Methods = {
   },
   "harnesses.list": {
     params: Empty,
-    result: obj({ harnesses: arr(obj({ name: str(), default: bool() })) }),
+    result: obj({
+      harnesses: arr(obj({ name: str(), default: bool(), options: arr(ConfigOption) })),
+    }),
   },
   "files.search": {
     params: obj({
@@ -363,7 +365,7 @@ export const Notifications = {
   "conversation.view": obj({ conversation: ConversationId, value: opt(unknown()), ops: opt(unknown()) }),
   /** A watched conversation's ConversationState: once after `conversation.watch`, then whole on every change. */
   "conversation.state": obj({ conversation: ConversationId, state: ConversationState }),
-  /** Something `conversations.list` or `projects.list` returns changed; apps list again. Sent to apps only. */
+  /** A conversation, project, or harness list changed. Sent to apps only. */
   "conversations.changed": Empty,
   /** The answer to an input a connector submitted. */
   reply: obj({

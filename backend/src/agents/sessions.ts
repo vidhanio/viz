@@ -13,7 +13,13 @@ import {
   withAbortSignal,
   withCancel,
 } from "@earendil-works/chord/context";
-import type { ConversationId, EntryId, Harness, Tx } from "@earendil-works/pi-durable";
+import {
+  type ConversationId,
+  type EntryId,
+  type Harness,
+  ROOT_CONVERSATION_ID,
+  type Tx,
+} from "@earendil-works/pi-durable";
 
 import { type StoredAttachment, withAttachmentPaths } from "../attachments.ts";
 import { type Harness as HarnessConfig, resolveSecret } from "../config.ts";
@@ -22,7 +28,16 @@ import { McpServer, type McpTool } from "../mcp/server.ts";
 import type { ConfigOption } from "../protocol.ts";
 import { AcpProcess } from "./acp.ts";
 import { type Outcome, PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
-import { AcpStateDoc, defaults, legacyMode, normalize, type OptionValue, validValue } from "./options.ts";
+import {
+  AcpStateDoc,
+  defaults,
+  type Desired,
+  HarnessOptionsDoc,
+  legacyMode,
+  normalize,
+  type OptionValue,
+  validValue,
+} from "./options.ts";
 import { ToolContent, ToolReceipts } from "./tool-record.ts";
 
 export type TurnOutcome = Exclude<Outcome, { kind: "running" }>;
@@ -53,11 +68,13 @@ type LiveSession = {
   readonly name: string;
   readonly cwd: string;
   readonly lifetime: AbortController;
+  readonly config: HarnessConfig;
   readonly token: string;
   readonly ready: Promise<void>;
   process?: AcpProcess;
   sessionId: string | null;
   options: ConfigOption[];
+  openValues?: Desired;
   legacyMode?: ConfigOption;
   configuring: Promise<void>;
   cancelled: boolean;
@@ -127,13 +144,14 @@ export class AgentSessions {
       id,
       name,
       cwd,
+      config,
       lifetime: new AbortController(),
       sessionId: null,
       options: [],
       configuring: Promise.resolve(),
       cancelled: false,
       ready: Promise.resolve()
-        .then(() => this.#open(live, config))
+        .then(() => this.#open(live))
         .catch((error: unknown) => {
           this.#release(live, error);
           throw error;
@@ -155,13 +173,7 @@ export class AgentSessions {
     await this.#session(options).ready;
   }
 
-  async configure(
-    id: ConversationId,
-    option: string,
-    value: OptionValue,
-    config: HarnessConfig | undefined,
-    context: Context,
-  ) {
+  async configure(id: ConversationId, option: string, value: OptionValue, context: Context) {
     await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, id);
       const setting = doc.options.find((item) => item.id === option);
@@ -174,18 +186,18 @@ export class AgentSessions {
     if (!live) return;
     const job = live.configuring.then(async () => {
       await live.ready;
-      await this.#setOption(live, option, value);
-      await this.#saveOptions(live);
+      await this.#saveOptions(live, await this.#setOption(live, option, value));
     });
     live.configuring = job.catch(() => {});
     await job;
   }
 
-  async #open(live: LiveSession, config: HarnessConfig): Promise<void> {
+  async #open(live: LiveSession): Promise<void> {
     const {
       id,
       name,
       cwd,
+      config,
       lifetime: { signal },
     } = live;
     const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
@@ -233,17 +245,19 @@ export class AgentSessions {
     live.process = process;
     const mcp = [declaration(process, this.#mcp.url, live.token)];
     // No transcript sink during restore: session/load replays history.
+    let reported: boolean;
     if (sessionId === null) {
       const response = await awaitWithContext(process.newSession(cwd, mcp), context);
       live.sessionId = response.sessionId;
       await this.#harness.commit(async (tx) => {
         (await tx.doc(SessionDoc, id)).sessionId = response.sessionId;
       }, context);
-      this.#refresh(live, response);
+      reported = this.#refresh(live, response);
     } else {
       const response = await awaitWithContext(process.restoreSession(sessionId, cwd, mcp), context);
       live.sessionId = sessionId;
       live.options = saved?.options ?? [];
+      if (session?.openValues) live.openValues = session.openValues;
       if (session?.legacyMode) {
         const mode = live.options.find((option) => option.id === "mode");
         if (mode) {
@@ -251,31 +265,44 @@ export class AgentSessions {
           live.options = live.options.filter((item) => item !== mode);
         }
       }
-      this.#refresh(live, response);
+      reported = this.#refresh(live, response);
+    }
+    for (const [source, update] of early) {
+      if (source === live.sessionId && (await this.#onUpdate(live, update, false))) reported = true;
     }
     opening = false;
-    for (const [source, update] of early) if (source === live.sessionId) await this.#onUpdate(live, update);
+    const options = this.#options(live);
+    if (reported) live.openValues ??= Object.fromEntries(options.map(({ id, value }) => [id, value]));
     const desired = await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, id);
       doc.images = process.supportsImages;
       // `access` was viz's own option, since removed; never send it to the agent.
       delete doc.desired.access;
       doc.desired = {
-        ...(sessionId === null && defaults(config, this.#options(live))),
+        ...(sessionId === null && defaults(config, options)),
         ...doc.desired,
       };
+      if (reported) {
+        if (live.openValues && !session?.openValues) (await tx.doc(SessionDoc, id)).openValues = live.openValues;
+        await this.#saveHarnessOptions(tx, live, options);
+      }
       return { ...doc.desired };
     }, context);
-    for (const [option, value] of Object.entries(desired)) {
-      if (!this.#options(live).some((item) => item.id === option && validValue(item, value))) continue;
-      await awaitWithContext(this.#setOption(live, option, value), context);
-    }
-    await this.#saveOptions(live);
+    // Model changes can change or reset the runner's available effort choices.
+    const model = options.find((option) => option.category === "model")?.id ?? "model";
+    let configured = false;
+    const apply = async (id: string, value: OptionValue) => {
+      if (await awaitWithContext(this.#setOption(live, id, value), context)) configured = true;
+    };
+    if (Object.hasOwn(desired, model)) await apply(model, desired[model]!);
+    for (const [option, value] of Object.entries(desired)) if (option !== model) await apply(option, value);
+    await this.#saveOptions(live, configured);
   }
 
-  #refresh(live: LiveSession, { configOptions, modes }: LoadSessionResponse): void {
+  #refresh(live: LiveSession, { configOptions, modes }: LoadSessionResponse) {
     if (modes) live.legacyMode = legacyMode(modes);
     if (configOptions) live.options = normalize(configOptions);
+    return configOptions != null || modes != null;
   }
 
   #options(live: LiveSession): ConfigOption[] {
@@ -284,28 +311,46 @@ export class AgentSessions {
       : live.options;
   }
 
-  async #saveOptions(live: LiveSession): Promise<void> {
+  async #saveHarnessOptions(tx: Tx, live: LiveSession, options: ConfigOption[]) {
+    const configured = defaults(live.config, options);
+    const opened = live.openValues;
+    const catalog = options.map((option) => {
+      const value = Object.hasOwn(configured, option.id)
+        ? configured[option.id]
+        : opened && Object.hasOwn(opened, option.id)
+          ? opened[option.id]
+          : undefined;
+      return value !== undefined && option.value !== value && validValue(option, value) ? { ...option, value } : option;
+    });
+    const { harnesses } = await tx.doc(HarnessOptionsDoc, ROOT_CONVERSATION_ID);
+    const previous = harnesses.find(({ name }) => name === live.name);
+    if (previous === undefined) harnesses.push({ name: live.name, options: catalog });
+    else if (JSON.stringify(previous.options) !== JSON.stringify(catalog)) previous.options = catalog;
+  }
+
+  async #saveOptions(live: LiveSession, reported: boolean): Promise<void> {
     const context = withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT);
+    const options = this.#options(live);
     await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, live.id);
-      const options = this.#options(live);
       if (JSON.stringify(doc.options) !== JSON.stringify(options)) doc.options = options;
       (await tx.doc(SessionDoc, live.id)).legacyMode = options !== live.options;
+      if (reported) await this.#saveHarnessOptions(tx, live, options);
     }, context);
   }
 
-  async #onUpdate(live: LiveSession, update: SessionUpdate): Promise<void> {
+  async #onUpdate(live: LiveSession, update: SessionUpdate, save = true) {
     switch (update.sessionUpdate) {
-      case "config_option_update":
-        this.#refresh(live, update);
-        await this.#saveOptions(live);
-        break;
+      case "config_option_update": {
+        const reported = this.#refresh(live, update);
+        if (save) await this.#saveOptions(live, reported);
+        return reported;
+      }
       case "current_mode_update":
-        if (live.legacyMode) {
-          live.legacyMode = { ...live.legacyMode, value: update.currentModeId };
-          await this.#saveOptions(live);
-        }
-        break;
+        if (!live.legacyMode) return false;
+        live.legacyMode = { ...live.legacyMode, value: update.currentModeId };
+        if (save) await this.#saveOptions(live, true);
+        return true;
       case "available_commands_update":
         await this.#harness.commit(
           async (tx) => {
@@ -323,20 +368,21 @@ export class AgentSessions {
       default:
         live.active?.update(update);
     }
+    return false;
   }
 
-  async #setOption(live: LiveSession, id: string, value: OptionValue): Promise<void> {
+  async #setOption(live: LiveSession, id: string, value: OptionValue) {
     if (!live.process || live.sessionId === null) throw new Error("ACP session is closed");
     live.lifetime.signal.throwIfAborted();
     const option = this.#options(live).find((item) => item.id === id);
-    if (!option || option.value === value) return;
+    if (!option || option.value === value || !validValue(option, value)) return false;
     if (option === live.legacyMode && typeof value === "string") {
       await live.process.setMode(live.sessionId, value);
       if (live.legacyMode) live.legacyMode = { ...live.legacyMode, value };
-    } else {
-      const response = await live.process.setOption(live.sessionId, id, value);
-      this.#refresh(live, response);
+      return true;
     }
+    const response = await live.process.setOption(live.sessionId, id, value);
+    return this.#refresh(live, response);
   }
 
   async turn(options: TurnOptions): Promise<TurnOutcome> {

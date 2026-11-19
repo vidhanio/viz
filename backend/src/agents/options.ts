@@ -23,6 +23,16 @@ export const AcpStateDoc = defineDoc<{
   checkpointWhen: () => true,
 });
 
+export const HarnessOptionsDoc = defineDoc<{ harnesses: { name: string; options: ConfigOption[] }[] }>({
+  kind: "viz.harness.options",
+  version: 1,
+  scope: "conversation",
+  history: "latest",
+  fork: "initial",
+  initial: () => ({ harnesses: [] }),
+  checkpointWhen: () => true,
+});
+
 export function validValue(option: ConfigOption, value: OptionValue): boolean {
   return option.type === "boolean"
     ? typeof value === "boolean"

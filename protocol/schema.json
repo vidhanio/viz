@@ -894,11 +894,91 @@
                 },
                 "default": {
                   "type": "boolean"
+                },
+                "options": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "category": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "description": "model | thought_level | mode | other ACP categories"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "type": {
+                        "enum": [
+                          "select",
+                          "boolean"
+                        ]
+                      },
+                      "value": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      },
+                      "choices": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "value": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "group": {
+                              "type": "string",
+                              "description": "Group label"
+                            }
+                          },
+                          "required": [
+                            "value",
+                            "name"
+                          ],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "name",
+                      "category",
+                      "type",
+                      "value",
+                      "choices"
+                    ],
+                    "additionalProperties": false
+                  }
                 }
               },
               "required": [
                 "name",
-                "default"
+                "default",
+                "options"
               ],
               "additionalProperties": false
             }

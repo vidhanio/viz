@@ -4,6 +4,7 @@ import { defineDoc, defineEntry } from "@earendil-works/pi-durable";
 
 import type { StoredAttachment } from "../attachments.ts";
 import type { Origin } from "../protocol.ts";
+import type { Desired } from "./options.ts";
 
 export type ToolRecord = {
   id: string;
@@ -37,7 +38,7 @@ export const AgentDoc = defineDoc<AgentState>({
   checkpointWhen: () => true,
 });
 
-export const SessionDoc = defineDoc<{ sessionId: string | null; legacyMode?: boolean }>({
+export const SessionDoc = defineDoc<{ sessionId: string | null; legacyMode?: boolean; openValues?: Desired }>({
   kind: "viz.acp.session",
   version: 1,
   scope: "conversation",

@@ -13,18 +13,9 @@ export class Runners {
     this.#default = selected ?? (this.#configured.size === 1 ? this.#configured.keys().next().value : undefined);
   }
 
-  get names(): readonly string[] {
-    return [...this.#configured.keys()];
-  }
-
   list(): { name: string; default: boolean }[] {
-    return this.names.map((name) => ({ name, default: name === this.#default }));
+    return Array.from(this.#configured.keys(), (name) => ({ name, default: name === this.#default }));
   }
-
-  get(name = this.#default): Harness | undefined {
-    return name === undefined ? undefined : this.#configured.get(name);
-  }
-
   require(name = this.#default): { name: string; config: Harness } {
     if (name === undefined) {
       throw new Error(
