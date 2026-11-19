@@ -437,11 +437,21 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     );
     if s.projects.is_empty() && outline.query.is_empty() {
         tree = tree.child(
-            text("No projects")
-                .font(t.small)
-                .color(t.faint)
+            col()
+                .key("no-projects")
+                .w_full()
                 .px(8.0)
-                .py(4.0),
+                .pt(2.0)
+                .gap(8.0)
+                .child(
+                    ui::button("Add project", ButtonVariant::Outline)
+                        .icon(&theme::PLUS)
+                        .disabled(!s.connected())
+                        .on_press_tx(open_add_project)
+                        .build(&t.k)
+                        .key("add-first-project")
+                        .w_full(),
+                ),
         );
     }
     if !outline.loose.is_empty() {

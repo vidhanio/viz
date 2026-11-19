@@ -8,7 +8,7 @@ mod workspace;
 
 use std::fmt;
 
-use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 pub use workspace::{
     Attachment, AttachmentCapabilities, Branches, CommitResult, DiffFile, DiffFileStatus,
@@ -185,9 +185,8 @@ pub struct ConversationSummary {
     /// Its id.
     pub id: ConversationId,
     /// Set by the backend: fixed for the orchestrator, a subagent's task, a
-    /// chat's first message. `None` (empty on the wire) until known.
-    #[serde(deserialize_with = "non_empty")]
-    pub title: Option<String>,
+    /// chat's first message; empty until known.
+    pub title: String,
     /// What it is.
     pub kind: ConversationKind,
     /// For a subagent: the conversation whose tool call owns it.
@@ -673,10 +672,4 @@ impl TryFrom<RawViewRevision> for ViewRevision {
             revision,
         })
     }
-}
-
-/// Reads a string that is empty until known as an `Option`.
-fn non_empty<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<String>, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    Ok((!text.is_empty()).then_some(text))
 }

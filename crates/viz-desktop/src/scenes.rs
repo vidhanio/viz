@@ -26,6 +26,8 @@ pub const SCENES: &[Scene] = &[
     ("worktree", worktree),
     ("attachments", attachments),
     ("queue", queue),
+    ("empty", empty),
+    ("onboarding", onboarding),
 ];
 
 const CHAT: ConversationId = ConversationId(11);
@@ -114,7 +116,7 @@ fn list() -> Vec<ConversationSummary> {
     .map(
         |(id, title, kind, parent, project, status)| ConversationSummary {
             id: ConversationId(id),
-            title: Some(title.into()),
+            title: title.into(),
             kind,
             parent: parent.map(ConversationId),
             project: project.map(str::to_owned),
@@ -325,6 +327,23 @@ fn attachments(s: &mut Desktop) {
             data: String::new(),
         })
         .into();
+}
+
+fn empty(s: &mut Desktop) {
+    workspace(s);
+    s.thread = Thread::default();
+}
+
+fn onboarding(s: &mut Desktop) {
+    workspace(s);
+    s.projects.clear();
+    s.conversations
+        .retain(|chat| chat.kind == ConversationKind::Orchestrator);
+    s.show(ConversationId(1));
+    let mut state = conversation();
+    state.project = None;
+    state.git = None;
+    s.conversation = Some(state);
 }
 
 fn queue(s: &mut Desktop) {

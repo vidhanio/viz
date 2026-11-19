@@ -221,8 +221,7 @@ pub(super) fn chat_menu(
                 MenuItem::new("Rename").on_select_tx(move |s: &mut Desktop, tx| {
                     let title = s
                         .summary(id)
-                        .and_then(|chat| chat.title.clone())
-                        .unwrap_or_default();
+                        .map_or_else(String::new, |chat| chat.title.clone());
                     open_edit(s, Edit::RenameChat(id), &title, tx);
                 }),
             )

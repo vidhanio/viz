@@ -124,6 +124,8 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 ),
         );
     }
+    let attach = s.conversation.as_ref().map(|_| attachments::button(s, t));
+    let budget = settings_budget(s, attach.is_some(), t);
     let card = col()
         .key("composer-card")
         .w_full()
@@ -146,11 +148,16 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .w_full()
                 .px(7.0)
                 .pb(7.0)
-                .gap(8.0)
-                .items_end()
-                .children(s.conversation.as_ref().map(|_| attachments::button(s, t)))
-                .child(settings::toolbar(s, t, layer).grow(1.0).shrink().min_w(0.0))
-                .child(metadata.mb(4.0))
+                .gap(TOOLBAR_GAP)
+                .center_y()
+                .children(attach)
+                .child(
+                    settings::toolbar(s, t, layer, budget)
+                        .grow(1.0)
+                        .shrink()
+                        .min_w(0.0),
+                )
+                .child(metadata)
                 .child(send_button(s, t)),
         );
     if s.can_attach() {
@@ -158,6 +165,36 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     } else {
         card
     }
+}
+
+/// The composer toolbar's gap between the attach button, selects, branch and
+/// send button.
+const TOOLBAR_GAP: f32 = 8.0;
+/// The attach and send buttons' size.
+const TOOLBAR_BUTTON: f32 = 29.0;
+/// The send button and its gaps around the selects and branch.
+const TOOLBAR_FIXED: f32 = TOOLBAR_BUTTON + TOOLBAR_GAP + TOOLBAR_GAP;
+/// The branch label's cap in the toolbar.
+const BRANCH_MAX: f32 = 115.0;
+
+/// Points the settings selects may take in one toolbar row: the main pane
+/// between the open panes, less the composer's margins and the toolbar's other
+/// items.
+fn settings_budget(s: &Desktop, attach: bool, t: &Theme) -> f32 {
+    let main = s.window_width - s.sidebar.shown_width() - s.changes.pane.shown_width();
+    // `composer` pads 22 on each side; the card has a 1-point border and the
+    // toolbar 7 of padding.
+    let card = (main - 44.0).min(theme::READING_WIDTH) - 2.0 - 14.0;
+    let branch = s.branch().map_or(0.0, |branch| {
+        // Icon and its gap ahead of the truncated label.
+        (rune::text::measure(branch, &[], t.small, None).0 + 17.0).min(BRANCH_MAX)
+    });
+    let fixed = if attach {
+        TOOLBAR_FIXED + TOOLBAR_BUTTON + TOOLBAR_GAP
+    } else {
+        TOOLBAR_FIXED
+    };
+    card - fixed - branch
 }
 
 fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> El {

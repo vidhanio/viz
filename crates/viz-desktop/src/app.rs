@@ -29,6 +29,8 @@ use crate::{
 const TOAST_LIFE: Duration = Duration::from_secs(6);
 /// The most toasts shown at once; older ones go first.
 const TOAST_MAX: usize = 3;
+/// The window's size on launch, in points; headless renders use it too.
+pub const WINDOW_SIZE: (f32, f32) = (1240.0, 760.0);
 
 /// The backend connection, as the sidebar footer shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +124,9 @@ pub struct Desktop {
     /// The window has keyboard focus; notifications cover what the user can't
     /// see.
     focused: bool,
+    /// The window's width in view points, as last drawn; layout that has to
+    /// choose what fits reads it.
+    pub window_width: f32,
 }
 
 impl Desktop {
@@ -157,6 +162,7 @@ impl Desktop {
             toasts: Vec::new(),
             next_toast: 0,
             focused: true,
+            window_width: WINDOW_SIZE.0,
         }
     }
 
@@ -630,9 +636,12 @@ impl Desktop {
 }
 
 pub fn chat_title(chat: &ConversationSummary) -> &str {
-    chat.title.as_deref().unwrap_or(match chat.kind {
+    if !chat.title.is_empty() {
+        return &chat.title;
+    }
+    match chat.kind {
         ConversationKind::Orchestrator => "Orchestrator",
         ConversationKind::Chat => "New chat",
         ConversationKind::Subagent => "Subagent",
-    })
+    }
 }

@@ -8,7 +8,7 @@ use rune_kit::{
 
 use crate::{
     app::{Desktop, Status},
-    attachments, changes,
+    attachments, changes, sidebar,
     theme::{self, Theme},
     thread::{Item, PlanStep, Tool, ToolStatus, User},
     ui,
@@ -217,38 +217,95 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
 
 /// What to show when the timeline has no messages.
 fn empty_state(s: &Desktop, t: &Theme) -> El {
-    let (title, detail, retry) = match (&s.status, s.selected, &s.new_chat) {
-        (Status::Error(_), _, _) => ("Offline", "Start viz-backend to reconnect.", true),
-        (Status::Connecting, _, _) => ("Connecting", "", false),
-        (_, _, Some(chat)) => (
-            "New chat",
-            if chat.request.is_some() {
-                "Opening session."
-            } else if s.harnesses.len() > 1 {
-                "Choose a harness below."
-            } else {
-                ""
-            },
-            false,
-        ),
-        (_, Some(_), None) => (
-            "Start a conversation",
-            "Ask a question or describe a task.",
-            false,
-        ),
-        (_, None, None) => ("No chat selected", "", false),
-    };
-    let mut state = ui::empty(title, detail, t).pt(132.0);
-    if retry {
-        state = state.child(
-            ui::button("Retry", ButtonVariant::Outline)
-                .on_press_tx(Desktop::reconnect)
+    match s.status {
+        Status::Error(_) => {
+            return ui::empty("Offline", "Start viz-backend to reconnect.", t)
+                .pt(132.0)
+                .child(
+                    ui::button("Retry", ButtonVariant::Outline)
+                        .on_press_tx(Desktop::reconnect)
+                        .build(&t.k)
+                        .key("retry")
+                        .mt(4.0),
+                );
+        }
+        Status::Connecting => return ui::empty("Connecting", "", t).pt(132.0),
+        Status::Connected { .. } => {}
+    }
+    if s.selected.is_none() && s.new_chat.is_none() {
+        return ui::empty("No chat selected", "", t).pt(132.0);
+    }
+    if s.projects.is_empty() && s.new_chat.is_none() {
+        return ui::empty(
+            "Add a project",
+            "Chats run in a project’s folder, on its branch.",
+            t,
+        )
+        .pt(132.0)
+        .child(
+            ui::button("Add project", ButtonVariant::Submit)
+                .icon(&theme::PLUS)
+                .on_press_tx(sidebar::open_add_project)
                 .build(&t.k)
-                .key("retry")
-                .mt(4.0),
+                .key("add-project-empty")
+                .mt(6.0),
         );
     }
-    state
+    chat_hint(s, t)
+}
+
+/// An empty chat: where it runs, and the few keys worth knowing.
+fn chat_hint(s: &Desktop, t: &Theme) -> El {
+    let title = match (s.project(), s.selected) {
+        (Some(project), _) => project.name.as_str(),
+        (None, Some(id)) if s.root == Some(id) => "Orchestrator",
+        _ => "New chat",
+    };
+    let mut hint = col()
+        .key("empty")
+        .items_center()
+        .gap(6.0)
+        .pt(132.0)
+        .child(text(title).font(t.title).color(t.text));
+    let status = s.new_chat.as_ref().and_then(|chat| {
+        if chat.request.is_some() {
+            Some("Opening session…")
+        } else {
+            (s.harnesses.len() > 1).then_some("Choose a harness below")
+        }
+    });
+    if let Some(status) = status {
+        hint = hint.child(text(status).font(t.ui).color(t.muted));
+    } else if let Some(branch) = s.branch() {
+        hint = hint.child(
+            row()
+                .key("empty-branch")
+                .gap(5.0)
+                .center_y()
+                .child(icon(&ui::GIT_BRANCH, 13.0).color(t.muted))
+                .child(text(branch).font(t.ui).color(t.muted)),
+        );
+    }
+    let shortcuts = [("N", "New chat"), ("K", "Commands"), ("D", "Changes")];
+    hint.child(
+        col()
+            .key("shortcuts")
+            .mt(18.0)
+            .gap(8.0)
+            .children(shortcuts.map(|(key, label)| {
+                row()
+                    .gap(10.0)
+                    .center_y()
+                    .child(
+                        text(label)
+                            .font(t.small)
+                            .color(t.faint)
+                            .w(72.0)
+                            .align(rune::Align::End),
+                    )
+                    .child(ui::kbd(key, t))
+            })),
+    )
 }
 
 /// A user message sits on a neutral surface.
@@ -618,7 +675,8 @@ fn subagent_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let title = tool
         .child
         .and_then(|child| s.summary(child))
-        .and_then(|summary| summary.title.as_ref())
+        .map(|summary| &summary.title)
+        .filter(|title| !title.is_empty())
         .unwrap_or(&tool.summary)
         .clone();
     let failed = tool.status == ToolStatus::Failed;

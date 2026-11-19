@@ -151,10 +151,19 @@ fn main() {
         scenes: scenes::SCENES,
         on_key: Some(on_key),
         poll: Some(poll),
-        ..AppSpec::new("viz", (1240.0, 760.0), Desktop::detached, view)
+        ..AppSpec::new("viz", app::WINDOW_SIZE, Desktop::detached, view)
     })
     .init(move || Desktop::new(commands))
     .on_focus(Desktop::set_focus);
+    // Rune has no resize hook; a drawn frame reports the viewport, and a change
+    // re-lays out what depends on it (the composer's selects).
+    let ui = app.handle();
+    let app = app.on_frame_drawn(move |rt| {
+        let width = rt.window_viewport().0 / rt.zoom();
+        if (rt.state.window_width - width).abs() >= 1.0 {
+            ui.update(move |s, _| s.window_width = width);
+        }
+    });
     let headless = rune::is_headless();
     let preview = headless && std::env::args_os().any(|arg| arg == "--scene");
     if !preview {
