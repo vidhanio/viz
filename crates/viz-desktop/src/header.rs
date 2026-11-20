@@ -24,7 +24,13 @@ const PREVIOUS: &str = "agents-previous";
 const AGENTS_WIDTH: f32 = CARD_WIDTH;
 
 pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
-    let mut toolbar = Toolbar::new();
+    // First in the band, under the title and buttons.
+    let mut toolbar = Toolbar::new().center(ui::drag_guard("toolbar-drag-guard").pin(
+        Some(0.0),
+        Some(0.0),
+        Some(0.0),
+        Some(0.0),
+    ));
     let open = s.sidebar.is_open();
     if !open {
         toolbar = toolbar.leading(sidebar::new_chat_button(s, t));
@@ -38,6 +44,11 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
         title
     };
     let mut toolbar = toolbar.leading(title);
+    // The orchestrator owns no agents and no checkout: no Agents card, no
+    // changes panel.
+    if s.orchestrator_open() {
+        return toolbar.trailing(metadata(s, t).mr(READING_INSET - TOOLBAR_PAD));
+    }
     if let Some(agents) = agents(s, t, layer) {
         toolbar = toolbar.trailing(agents);
     }
@@ -65,7 +76,9 @@ pub fn toggle_agents(s: &mut Desktop) {
         None
     } else {
         s.selected
-            .filter(|id| !sidebar::subagents(&s.conversations, *id).is_empty())
+            .filter(|id| {
+                !s.orchestrator_open() && !sidebar::subagents(&s.conversations, *id).is_empty()
+            })
             .map(|_| AGENTS.to_owned())
     };
 }
@@ -168,7 +181,7 @@ fn agents(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         .open(open)
         .on_close(|s: &mut Desktop| s.open_picker = None)
         .child(card)
-        .build(&t.k, layer);
+        .build(&t.overlay, layer);
     Some(toggle)
 }
 
@@ -286,19 +299,21 @@ fn breadcrumb(s: &Desktop, parent: ConversationId, t: &Theme) -> El {
         )
 }
 
-/// Project, branch, harness and run state, quiet and right-aligned.
+/// Project, branch and run state, quiet and right-aligned. The orchestrator
+/// isn't in a checkout: only its run state.
 fn metadata(s: &Desktop, t: &Theme) -> El {
-    let project = s.project();
     let mut metadata = row()
         .key("header-metadata")
         .center_y()
         .gap(S8)
         .min_w(0.0)
         .shrink();
-    if let Some(project) = project {
+    let orchestrator = s.orchestrator_open();
+    if let Some(project) = s.project().filter(|_| !orchestrator) {
         metadata = metadata.child(quiet("header-project", &project.name, t).help(&project.path));
     }
     if s.new_chat.is_none()
+        && !orchestrator
         && let Some(branch) = s.branch()
     {
         let mut item = row()
@@ -322,21 +337,6 @@ fn metadata(s: &Desktop, t: &Theme) -> El {
                 .on_press_tx(changes::branch_dialog);
         }
         metadata = metadata.child(item);
-    }
-    if let Some(harness) = s
-        .conversation
-        .as_ref()
-        .and_then(|state| state.harness.as_deref())
-        .or_else(|| {
-            s.selected
-                .and_then(|id| s.summary(id))
-                .and_then(|summary| summary.harness.as_deref())
-        })
-    {
-        if project.is_some() {
-            metadata = metadata.child(ui::divider(t));
-        }
-        metadata = metadata.child(quiet("header-harness", harness, t));
     }
     if let Some(mark) = s
         .conversation

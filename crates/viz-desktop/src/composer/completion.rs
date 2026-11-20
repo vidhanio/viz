@@ -200,7 +200,7 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
                 PopupItem::new(path, path).leading(icon(&ui::SEARCH, ICON_SMALL).color(t.muted))
             })),
     };
-    popup.build(&t.k, layer);
+    popup.build(&t.overlay, layer);
 }
 
 pub(super) fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {

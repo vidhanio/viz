@@ -1,10 +1,12 @@
 //! Per-conversation composer, settings, completions, and queued input.
 
 mod completion;
+mod model;
 mod settings;
 mod workspace;
 
 pub use completion::{Completion, poll};
+pub use model::{ModelMenu, preview as preview_model_menu};
 use rune::{El, ScrollSpec, col, row, text, text_input};
 use rune_kit::IconButtonVariant;
 use viz_client::protocol::{ConversationId, QueuedInput};
@@ -50,7 +52,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         "Offline"
     } else if s.busy() {
         "Queue a message"
-    } else if s.selected.is_some() && s.selected == s.root {
+    } else if s.orchestrator_open() {
         "Message the orchestrator"
     } else {
         "Ask anything"

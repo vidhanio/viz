@@ -9,8 +9,10 @@
 //! - Icons: 12, 16 and 20 points; status dots are [`DOT`].
 //! - Type: `small` 11.5/16, `ui` 13/20, `title` 14/20, `body` 14.5/23, `mono`
 //!   12/18 (see [`Theme`]).
-//! - Rules: one [`HAIRLINE`], `Theme::hairline` ink; overlays get a hairline
-//!   outline and no shadow.
+//! - Rules: one [`HAIRLINE`], `Theme::hairline` ink.
+//! - Overlays (menus, popovers, dialogs, the palette, toasts): no outline; a
+//!   fill one step above what they float over and a soft two-layer shadow, both
+//!   from [`Theme::overlay`].
 //! - Sidebar: rows fill from [`SIDEBAR_PAD`]; every label, icon and section
 //!   title starts at [`SIDEBAR_INSET`] plus [`TREE_STEP`] per depth; every row
 //!   ends in a [`TRAILING`]-wide slot centered under the sidebar toggle.
@@ -97,6 +99,11 @@ pub const CARD_WIDTH: f32 = 320.0;
 pub const PALETTE_WIDTH: f32 = 560.0;
 /// Wide enough to show a previous-worktree label and a typical branch together.
 pub const WORKSPACE_MENU_WIDTH: f32 = 280.0;
+/// The model picker: wide enough for a provider's long model names beside
+/// the thinking levels.
+pub const MODEL_MENU_WIDTH: f32 = 320.0;
+/// The model list's height before it scrolls: eight rows and a heading.
+pub const MODEL_LIST_HEIGHT: f32 = S32 * 9.0;
 /// Empty states sit this far down the transcript.
 pub const EMPTY_TOP: f32 = S32 * 4.0;
 /// Empty states' text measure.
@@ -147,6 +154,9 @@ pub struct Theme {
     /// `k` with square main-pane corners, for the shell: the main pane sits
     /// flush against the sidebar and the window's edges, not in a card.
     pub shell: Kit,
+    /// `k` for overlays (menus, popovers, the completion list): borderless,
+    /// on their own fill; `overlay.c.layer_01` fills dialogs and toasts.
+    pub overlay: Kit,
     /// The main pane's background.
     pub bg: Color,
     /// Cards on the main pane (composer, expanded tool output, code).
@@ -405,17 +415,27 @@ impl Theme {
         let pressed = tint(0.040);
         let selected = tint(0.055);
         let raised = over(bg, wash, reach(bg, wash, 0.05));
+        let by_luminance = |x: &Color, y: &Color| x.luminance().total_cmp(&y.luminance());
+        let lightest = b[..8].iter().copied().max_by(by_luminance).unwrap_or(bg);
+        let darkest = b[..8].iter().copied().min_by(by_luminance).unwrap_or(bg);
+        // Overlays sit one step above whatever they float over, the sidebar
+        // included: lighter than `surface` in the dark, the scheme's lightest
+        // paper in the light, where the shadow alone lifts it.
+        let overlay = if dark {
+            over(surface, wash, reach(surface, wash, 0.04))
+        } else {
+            lightest
+        };
         let surfaces = [
             bg,
             surface,
             raised,
+            overlay,
             over(bg, interactive, selected.a),
             over(surface, interactive, selected.a),
+            over(overlay, interactive, selected.a),
         ];
         let legible = |c: Color, min: f32| legible(c, &surfaces, dark, min);
-        let by_luminance = |x: &Color, y: &Color| x.luminance().total_cmp(&y.luminance());
-        let lightest = b[..8].iter().copied().max_by(by_luminance).unwrap_or(bg);
-        let darkest = b[..8].iter().copied().min_by(by_luminance).unwrap_or(bg);
         let text = legible(b[0x5], 5.5);
         let strong = legible(b[0x6], 5.5);
         let muted = legible(b[0x4], 5.2);
@@ -580,19 +600,43 @@ impl Theme {
         k.radius.md = Size::Default.radius();
         k.radius.lg = Size::Default.radius();
         k.radius.xl = Size::Large.radius();
-        let outline = Shadow {
-            color: rule,
-            spread: HAIRLINE,
-            ..Shadow::default()
+        // Two layers: a tight contact shadow that defines the edge, and a wide
+        // soft one that lifts the surface. Darker on dark schemes, where a
+        // shadow has less light to take away.
+        let shade = |a: f32| Color::BLACK.alpha(if dark { a * 2.4 } else { a });
+        let lift = |near: f32, far: (f32, f32)| {
+            vec![
+                Shadow {
+                    y: 1.0,
+                    blur: 3.0,
+                    color: shade(near),
+                    ..Shadow::default()
+                },
+                Shadow {
+                    y: far.0,
+                    blur: far.1,
+                    color: shade(0.10),
+                    ..Shadow::default()
+                },
+            ]
         };
         k.elevation = rune_kit::Elevation::default();
-        k.elevation.floating = vec![outline];
-        k.elevation.overlay = vec![outline];
-        k.elevation.md = vec![outline];
+        k.elevation.floating = lift(0.08, (S6, S24));
+        k.elevation.md = k.elevation.floating.clone();
+        k.elevation.overlay = lift(0.10, (S16, S48));
         let mut shell = k.clone();
         shell.radius.lg = 0.0;
+        // rune-kit fills menus, popovers and dialogs from these and outlines
+        // the standard ones in `std_border`.
+        let mut overlay_kit = k.clone();
+        overlay_kit.c.layer_01 = overlay;
+        overlay_kit.c.surface_raised = overlay;
+        overlay_kit.c.surface_raised_hover =
+            over(overlay, interactive, reach(overlay, interactive, 0.04));
+        overlay_kit.c.std_border = Color::TRANSPARENT;
         Self {
             shell,
+            overlay: overlay_kit,
             bg,
             surface,
             hairline,

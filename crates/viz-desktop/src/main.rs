@@ -33,7 +33,7 @@ use viz_config::{ClientFile, Paths};
 use crate::{
     app::Desktop,
     config::DesktopConfig,
-    theme::{S4, SIDEBAR_PAD, Size, Theme},
+    theme::{S4, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT, Theme},
 };
 
 /// Longest a headless run waits for the first connection attempt before
@@ -51,21 +51,36 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .child(ui::rule(t).key("header-rule"))
         .child(timeline::timeline(s, t));
     let main = main.children(composer::composer(s, t, &mut overlays));
+    // The sidebar's header row is a title band above its content: guard it
+    // from below, under the sidebar toggle and new-chat button that float
+    // over it.
+    let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
+        ui::drag_guard("sidebar-drag-guard")
+            .pin(
+                Some(-SIDEBAR_PAD),
+                Some(-TOOLBAR_HEIGHT),
+                Some(-SIDEBAR_PAD),
+                None,
+            )
+            .h(TOOLBAR_HEIGHT),
+    );
     // The kit's shell, flat: no inset frame, the main pane square against
     // the sidebar, which sits on the deeper backdrop. The sidebar toggle ends
     // the sidebar's header row, centered on the toolbar's line and over the
     // rows' trailing slots.
-    let split = SplitView::new(main)
-        .sidebar(
-            &s.sidebar,
-            |s: &mut Desktop| &mut s.sidebar,
-            sidebar::sidebar(s, t, &mut overlays),
-        )
-        .inspector(
+    let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
+    // The orchestrator has no checkout: its chat never shows the changes
+    // panel, which stays as it was for the next chat.
+    let split = if s.orchestrator_open() {
+        split
+    } else {
+        split.inspector(
             &s.changes.pane,
             |s: &mut Desktop| &mut s.changes.pane,
             changes::view(s, t, &mut overlays),
         )
+    };
+    let split = split
         .toolbar(header::toolbar(s, t, &mut overlays))
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(0.0)
@@ -148,7 +163,7 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.create_here(tx);
         return true;
     }
-    if ev.is_command('d') {
+    if ev.is_command('d') && !s.orchestrator_open() {
         changes::toggle(s, tx);
         return true;
     }

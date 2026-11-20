@@ -112,7 +112,7 @@ fn workspace(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El
         }
     }
     (
-        menu.build(&t.k, layer).min_w(0.0).shrink(),
+        menu.build(&t.overlay, layer).min_w(0.0).shrink(),
         picker_width(&label, t),
     )
 }
@@ -151,7 +151,7 @@ fn base_picker(
         menu = ui::menu_items(menu, choices);
     }
     (
-        menu.build(&t.k, layer).min_w(0.0).shrink(),
+        menu.build(&t.overlay, layer).min_w(0.0).shrink(),
         picker_width(&label, t),
     )
 }
@@ -203,7 +203,7 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
         );
     }
     (
-        menu.build(&t.k, layer).min_w(0.0).shrink(),
+        menu.build(&t.overlay, layer).min_w(0.0).shrink(),
         picker_width(name.unwrap_or(label), t),
     )
 }

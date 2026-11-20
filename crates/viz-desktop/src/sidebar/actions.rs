@@ -1,5 +1,5 @@
 use rune::{El, FileDialogOptions, PointerPress, Tx};
-use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement};
+use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuEntry, MenuItem, Placement};
 use viz_client::protocol::{
     ConversationId, ConversationKind, ConversationSummary, DefaultWorkspace, Project,
 };
@@ -24,6 +24,16 @@ impl Context {
             key: key.into(),
             point: None,
             moving: false,
+        }
+    }
+
+    /// A chat's row menu as a secondary press opened it at `(x, y)`, its
+    /// Move to project submenu open, for a preview scene.
+    pub(super) fn preview(key: &str, x: f32, y: f32) -> Self {
+        Self {
+            point: Some((x, y)),
+            moving: true,
+            ..Self::new(key)
         }
     }
 
@@ -225,72 +235,64 @@ pub(super) fn chat_menu(
 ) -> El {
     let (mut menu, context) = menu(s, key, t);
     let Some(context) = context else {
-        return menu.build(&t.k, layer);
+        return menu.build(&t.overlay, layer);
     };
     let id = chat.id;
-    if context.moving {
-        menu = menu
-            .item(MenuItem::new("Back").on_select(|s: &mut Desktop| {
-                if let Some(context) = &mut s.navigation.menu {
-                    context.moving = false;
+    let pinned = chat.pinned;
+    menu = menu.item(
+        MenuItem::new(if pinned { "Unpin" } else { "Pin" }).on_select_tx(
+            move |s: &mut Desktop, tx| {
+                s.navigation.menu = None;
+                if s.connected() {
+                    s.send(Command::Update(id, ChatChange::Pin(!pinned)), tx);
                 }
-            }))
-            .separator()
-            .group_label("Move to project");
-        menu = menu.item(destination(chat, None));
-        menu = ui::menu_items(
-            menu,
-            s.projects
-                .iter()
-                .map(|project| destination(chat, Some(project))),
-        );
-    } else {
-        let pinned = chat.pinned;
-        menu = menu.item(
-            MenuItem::new(if pinned { "Unpin" } else { "Pin" }).on_select_tx(
+            },
+        ),
+    );
+    let archived = chat.archived;
+    menu = menu
+        .item(
+            MenuItem::new("Rename").on_select_tx(move |s: &mut Desktop, tx| {
+                let title = s
+                    .summary(id)
+                    .map_or_else(String::new, |chat| chat.title.clone());
+                open_edit(s, Edit::RenameChat(id), &title, tx);
+            }),
+        )
+        .item(
+            MenuItem::new(if archived { "Unarchive" } else { "Archive" }).on_select_tx(
                 move |s: &mut Desktop, tx| {
                     s.navigation.menu = None;
-                    if s.connected() {
-                        s.send(Command::Update(id, ChatChange::Pin(!pinned)), tx);
-                    }
+                    s.send(Command::Update(id, ChatChange::Archive(!archived)), tx);
                 },
             ),
         );
-        let archived = chat.archived;
-        menu = menu
-            .item(
-                MenuItem::new("Rename").on_select_tx(move |s: &mut Desktop, tx| {
-                    let title = s
-                        .summary(id)
-                        .map_or_else(String::new, |chat| chat.title.clone());
-                    open_edit(s, Edit::RenameChat(id), &title, tx);
-                }),
+    if chat.kind == ConversationKind::Chat && (!s.projects.is_empty() || chat.project.is_some()) {
+        // Its destinations open beside it; pressing it again closes them.
+        let destinations = std::iter::once(destination(chat, None))
+            .chain(
+                s.projects
+                    .iter()
+                    .map(|project| destination(chat, Some(project))),
             )
-            .item(
-                MenuItem::new(if archived { "Unarchive" } else { "Archive" }).on_select_tx(
-                    move |s: &mut Desktop, tx| {
-                        s.navigation.menu = None;
-                        s.send(Command::Update(id, ChatChange::Archive(!archived)), tx);
-                    },
-                ),
-            );
-        if chat.kind == ConversationKind::Chat && (!s.projects.is_empty() || chat.project.is_some())
-        {
-            menu = menu.item(
-                MenuItem::new("Move to project").on_select(|s: &mut Desktop| {
+            .map(MenuEntry::item)
+            .collect();
+        menu = menu.item(
+            MenuItem::new("Move to project")
+                .submenu(destinations, context.moving)
+                .on_select(|s: &mut Desktop| {
                     if let Some(context) = &mut s.navigation.menu {
-                        context.moving = true;
+                        context.moving = !context.moving;
                     }
                 }),
-            );
-        }
-        menu = menu.separator().item(
-            MenuItem::new("Delete")
-                .danger(true)
-                .on_select_tx(move |s: &mut Desktop, tx| delete_chat(s, id, tx)),
         );
     }
-    menu.build(&t.k, layer)
+    menu = menu.separator().item(
+        MenuItem::new("Delete")
+            .danger(true)
+            .on_select_tx(move |s: &mut Desktop, tx| delete_chat(s, id, tx)),
+    );
+    menu.build(&t.overlay, layer)
 }
 
 fn destination(chat: &ConversationSummary, project: Option<&Project>) -> MenuItem {
@@ -363,5 +365,5 @@ pub(super) fn project_menu(
                 },
             ));
     }
-    menu.build(&t.k, layer)
+    menu.build(&t.overlay, layer)
 }

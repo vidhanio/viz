@@ -4,14 +4,15 @@
 use serde_json::json;
 use viz_client::protocol::{
     Attachment, AttachmentCapabilities, Branches, ConfigOption, ConversationId, ConversationKind,
-    ConversationState, ConversationStatus, ConversationSummary, DefaultWorkspace, EntryId, GitFile,
-    GitFileStatus, GitState, Harness, ManagedWorktree, OptionChoice, OptionKind, OptionValue,
-    Project, QueuedInput, SearchHit, SlashCommand, SubmissionId,
+    ConversationState, ConversationStatus, ConversationSummary, DefaultWorkspace, DependentChoice,
+    DependentOption, EntryId, GitFile, GitFileStatus, GitState, Harness, ManagedWorktree,
+    OptionChoice, OptionKind, OptionValue, Project, QueuedInput, SearchHit, SlashCommand,
+    SubmissionId,
 };
 
 use crate::{
     app::{Desktop, NewChat, Status},
-    changes, palette, sidebar,
+    changes, composer, palette, sidebar,
     thread::Thread,
 };
 
@@ -21,6 +22,9 @@ pub const SCENES: &[Scene] = &[
     ("workspace-open", workspace_open),
     ("workspace-locked", workspace_locked),
     ("selectors", selectors),
+    ("model-search", model_search),
+    ("new-agent", new_agent),
+    ("context-menu", context_menu),
     ("palette", palette),
     ("diff", diff),
     ("commit", commit),
@@ -153,42 +157,7 @@ fn conversation() -> ConversationState {
         harness: Some("omp".into()),
         project: Some("workbench".into()),
         cwd: Some("/work/workbench".into()),
-        options: vec![
-            option(
-                "model",
-                "Model",
-                "model",
-                "opus",
-                &[
-                    ("opus", "Claude Opus"),
-                    ("sonnet", "Claude Sonnet"),
-                    ("gpt", "GPT-6"),
-                ],
-            ),
-            option(
-                "effort",
-                "Effort",
-                "thought_level",
-                "high",
-                &[("low", "Low"), ("high", "High")],
-            ),
-            option(
-                "mode",
-                "Mode",
-                "mode",
-                "build",
-                &[("build", "Build"), ("plan", "Plan")],
-            ),
-            ConfigOption {
-                id: "context".into(),
-                name: "Include workspace context".into(),
-                category: None,
-                description: None,
-                kind: OptionKind::Boolean,
-                value: OptionValue::Boolean(true),
-                choices: Vec::new(),
-            },
-        ],
+        options: options(),
         commands: vec![SlashCommand {
             name: "review".into(),
             description: "Review the current changes".into(),
@@ -241,9 +210,136 @@ fn transcript(attachments: &[&str]) -> Thread {
     }))
 }
 
+/// The model picker open on the session's model.
 fn selectors(s: &mut Desktop) {
     workspace(s);
-    s.open_picker = Some("option-model".into());
+    composer::preview_model_menu(s, "");
+}
+
+/// The model picker with a search typed: two providers' matches.
+fn model_search(s: &mut Desktop) {
+    workspace(s);
+    composer::preview_model_menu(s, "fl");
+}
+
+/// A fresh chat in a project with two runners: the harness and the model
+/// picker side by side.
+fn new_agent(s: &mut Desktop) {
+    workspace(s);
+    let chat = NewChat::new(0, s.project());
+    s.selected = None;
+    s.conversation = None;
+    s.thread = Thread::default();
+    s.new_chat = Some(chat);
+    s.harnesses = vec![
+        Harness {
+            name: "omp".into(),
+            default: true,
+            options: options(),
+        },
+        Harness {
+            name: "pi".into(),
+            default: false,
+            options: Vec::new(),
+        },
+    ];
+    s.set_draft_workspace(
+        0,
+        Some(Branches {
+            current: Some("main".into()),
+            default_base: Some("main".into()),
+            branches: vec!["main".into()],
+        }),
+        Vec::new(),
+    );
+}
+
+/// A chat's context menu with its Move to project submenu open.
+fn context_menu(s: &mut Desktop) {
+    workspace(s);
+    sidebar::preview_context_menu(s, ConversationId(10), 120.0, 236.0);
+}
+
+/// A runner's catalog as omp reports it: models from several providers
+/// (two sharing a name), thinking levels for the current model and those it
+/// reported for others, a real mode, and an uncategorized switch.
+fn options() -> Vec<ConfigOption> {
+    let levels = |levels: &[(&str, &str)]| DependentOption {
+        id: "thinking".into(),
+        name: "Thinking".into(),
+        description: None,
+        value: OptionValue::Select(levels[0].0.into()),
+        choices: levels
+            .iter()
+            .map(|(value, name)| DependentChoice {
+                value: (*value).into(),
+                name: (*name).into(),
+                description: None,
+            })
+            .collect(),
+    };
+    let mut model = option(
+        "model",
+        "Model",
+        "model",
+        "anthropic/claude-opus-5-5",
+        &[
+            ("anthropic/claude-fable-5", "Claude Fable 5"),
+            ("anthropic/claude-haiku-4-5", "Claude Haiku 4.5"),
+            ("anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+            ("anthropic/claude-opus-5-5", "Claude Opus 5.5"),
+            ("anthropic/claude-sonnet-5", "Claude Sonnet 5"),
+            ("openai/gpt-6", "GPT-6"),
+            ("openai/gpt-6-mini", "GPT-6 mini"),
+            ("google/gemini-3-pro", "Gemini 3 Pro"),
+            ("google/gemini-3-flash", "Gemini 3 Flash"),
+            ("openrouter/moonshotai/kimi-k3", "Kimi K3"),
+        ],
+    );
+    for choice in &mut model.choices {
+        choice.thinking = match choice.value.as_str() {
+            "anthropic/claude-haiku-4-5" => Some(levels(&[
+                ("off", "Off"),
+                ("low", "low"),
+                ("medium", "medium"),
+                ("high", "high"),
+            ])),
+            "openai/gpt-6-mini" => Some(levels(&[("off", "Off")])),
+            _ => None,
+        };
+    }
+    vec![
+        model,
+        option(
+            "thinking",
+            "Thinking",
+            "thought_level",
+            "high",
+            &[
+                ("off", "Off"),
+                ("low", "low"),
+                ("medium", "medium"),
+                ("high", "high"),
+                ("xhigh", "xhigh"),
+            ],
+        ),
+        option(
+            "mode",
+            "Mode",
+            "mode",
+            "default",
+            &[("default", "Default"), ("plan", "Plan")],
+        ),
+        ConfigOption {
+            id: "context".into(),
+            name: "Include workspace context".into(),
+            category: None,
+            description: None,
+            kind: OptionKind::Boolean,
+            value: OptionValue::Boolean(true),
+            choices: Vec::new(),
+        },
+    ]
 }
 
 fn palette(s: &mut Desktop) {
@@ -503,6 +599,7 @@ fn option(
                 name: (*name).into(),
                 description: None,
                 group: None,
+                thinking: None,
             })
             .collect(),
     }

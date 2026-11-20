@@ -1,7 +1,8 @@
-use rune::{El, row};
+use rune::{El, Tx, row};
 use rune_kit::MenuItem;
 use viz_client::protocol::{ConfigOption, ConversationId, OptionKind, OptionValue};
 
+use super::model;
 use crate::{
     app::{Desktop, NewChat},
     backend::Command,
@@ -10,13 +11,21 @@ use crate::{
     ui,
 };
 
-const CATEGORIES: [&str; 3] = ["model", "thought_level", "mode"];
+/// What a runner's option is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Role {
+    Model,
+    Thinking,
+    Mode,
+    Other,
+}
 
-fn category(option: &ConfigOption) -> Option<usize> {
+pub(super) fn role(option: &ConfigOption) -> Role {
     match option.category.as_deref() {
-        Some("effort") => Some(1),
-        Some(category) => CATEGORIES.iter().position(|name| *name == category),
-        None => None,
+        Some("model") => Role::Model,
+        Some("thought_level" | "effort") => Role::Thinking,
+        Some("mode") => Role::Mode,
+        _ => Role::Other,
     }
 }
 
@@ -24,14 +33,19 @@ fn category(option: &ConfigOption) -> Option<usize> {
 const PICKER_CHROME: f32 = S32;
 pub(super) const GAP: f32 = S2;
 
-/// The width an inline select takes for `label`.
-pub(super) fn picker_width(label: &str, t: &Theme) -> f32 {
-    (rune::text::measure(label, &[], t.ui_medium, None).0 + PICKER_CHROME)
-        .min(ui::PICKER_TRIGGER_MAX)
+/// The width an inline select takes for `label`, at most `max`.
+pub(super) fn trigger_width(label: &str, max: f32, t: &Theme) -> f32 {
+    (rune::text::measure(label, &[], t.ui_medium, None).0 + PICKER_CHROME).min(max)
 }
 
-/// The draft or session's selects: model, effort and mode in that priority.
-/// Options that don't fit fold into More with the uncategorized options.
+/// The width an inline select takes for `label`.
+pub(super) fn picker_width(label: &str, t: &Theme) -> f32 {
+    trigger_width(label, ui::PICKER_TRIGGER_MAX, t)
+}
+
+/// The draft or session's selects: the model picker (model and thinking),
+/// then the mode. Options that don't fit fold into More with the
+/// uncategorized options.
 pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) -> El {
     let bar = row()
         .key("settings")
@@ -74,19 +88,23 @@ fn session_options(
     target: Options<'_>,
     options: &[ConfigOption],
 ) -> El {
-    let mut primary: Vec<&ConfigOption> = options
-        .iter()
-        .filter(|option| category(option).is_some())
-        .collect();
-    primary.sort_by_key(|option| category(option));
-    let extra = options.iter().filter(|option| category(option).is_none());
-    let more = picker_width("More", t) + GAP;
     let mut used = 0.0;
+    if let Some(picker) = model::Picker::new(target, options) {
+        let (picker, width) = model::picker(s, &picker, t, layer);
+        bar = bar.child(picker);
+        used += width + GAP;
+    }
+    let modes: Vec<_> = options
+        .iter()
+        .filter(|option| role(option) == Role::Mode)
+        .collect();
+    let extra = options.iter().filter(|option| role(option) == Role::Other);
+    let more = picker_width("More", t) + GAP;
     let mut shown = 0;
-    for (index, option) in primary.iter().enumerate() {
+    for (index, option) in modes.iter().enumerate() {
         let width = picker_width(value_name(option, target), t) + GAP;
         // Room for More whenever something is left for it.
-        let reserve = if index + 1 < primary.len() || extra.clone().next().is_some() {
+        let reserve = if index + 1 < modes.len() || extra.clone().next().is_some() {
             more
         } else {
             0.0
@@ -97,7 +115,7 @@ fn session_options(
         used += width;
         shown += 1;
     }
-    let (inline, folded) = primary.split_at(shown);
+    let (inline, folded) = modes.split_at(shown);
     for option in inline {
         let key = format!("option-{}", option.id);
         let menu = picker(s, &key, &option.name, Some(value_name(option, target)), t);
@@ -106,7 +124,7 @@ fn session_options(
         } else {
             menu
         };
-        bar = bar.child(menu.build(&t.k, layer));
+        bar = bar.child(menu.build(&t.overlay, layer));
     }
     let mut overflow = folded.iter().copied().chain(extra).peekable();
     if overflow.peek().is_some() {
@@ -124,7 +142,7 @@ fn session_options(
                 menu = add_choices(menu.group_label(&label), target, option);
             }
         }
-        bar = bar.child(menu.build(&t.k, layer));
+        bar = bar.child(menu.build(&t.overlay, layer));
     }
     bar
 }
@@ -158,17 +176,55 @@ pub(super) fn picker(
     )
 }
 
+/// Whose options the composer shows: the fresh composer's draft (sent with
+/// its first message) or a session's (applied at once).
 #[derive(Clone, Copy)]
-enum Options<'a> {
+pub(super) enum Options<'a> {
     Draft(&'a NewChat),
     Conversation(ConversationId),
 }
 
+/// [`Options`] without the borrow, for a choice's handler.
+#[derive(Clone, Copy)]
+pub(super) enum Owner {
+    Draft(u64),
+    Conversation(ConversationId),
+}
+
 impl<'a> Options<'a> {
-    fn value(self, option: &'a ConfigOption) -> &'a OptionValue {
+    /// The option's value: the draft's choice, else the runner's.
+    pub(super) fn value(self, option: &'a ConfigOption) -> &'a OptionValue {
         match self {
             Self::Draft(chat) => chat.options.get(&option.id).unwrap_or(&option.value),
             Self::Conversation(_) => &option.value,
+        }
+    }
+
+    pub(super) const fn owner(self) -> Owner {
+        match self {
+            Self::Draft(chat) => Owner::Draft(chat.id),
+            Self::Conversation(id) => Owner::Conversation(id),
+        }
+    }
+}
+
+/// Sets option `id` to `value`: on the session at once, or in the draft.
+pub(super) fn apply(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: String, value: OptionValue) {
+    match owner {
+        Owner::Conversation(conversation) => {
+            s.send(
+                Command::Configure {
+                    conversation,
+                    option: id,
+                    value,
+                },
+                tx,
+            );
+        }
+        Owner::Draft(draft) => {
+            if let Some(chat) = s.new_chat.as_mut().filter(|chat| chat.id == draft) {
+                chat.options.insert(id, value);
+            }
         }
     }
 }
@@ -228,33 +284,14 @@ fn add_choices(
 fn choice(target: Options<'_>, option: &ConfigOption, label: &str, value: OptionValue) -> MenuItem {
     let id = option.id.clone();
     let checked = *target.value(option) == value;
-    let draft = match target {
-        Options::Draft(chat) => Some(chat.id),
-        Options::Conversation(_) => None,
-    };
-    let conversation = match target {
-        Options::Draft(_) => None,
-        Options::Conversation(id) => Some(id),
-    };
+    let owner = target.owner();
     MenuItem::new(label)
         .checked(checked)
         .on_select_tx(move |s: &mut Desktop, tx| {
             s.open_picker = None;
             tx.focus("draft", false);
-            if checked {
-                return;
-            }
-            if let Some(conversation) = conversation {
-                s.send(
-                    Command::Configure {
-                        conversation,
-                        option: id.clone(),
-                        value: value.clone(),
-                    },
-                    tx,
-                );
-            } else if let Some(chat) = s.new_chat.as_mut().filter(|chat| Some(chat.id) == draft) {
-                chat.options.insert(id.clone(), value.clone());
+            if !checked {
+                apply(s, tx, owner, id.clone(), value.clone());
             }
         })
 }

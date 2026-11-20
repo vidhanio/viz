@@ -11,16 +11,16 @@ use rune::{TextEdit, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, Branches, ConversationId, ConversationKind, ConversationState, ConversationStatus,
-    ConversationSummary, CreateConversation, DefaultWorkspace, Harness, ManagedWorktree,
-    OptionValue, Project, Submit, Workspace,
+    Attachment, Branches, ConfigOption, ConversationId, ConversationKind, ConversationState,
+    ConversationStatus, ConversationSummary, CreateConversation, DefaultWorkspace, Harness,
+    ManagedWorktree, OptionValue, Project, Submit, Workspace,
 };
 
 use crate::{
     attachments::{self, Loaded, Source, Target as AttachmentTarget},
     backend::{ChatChange, Command},
     changes::{self, Changes},
-    composer::Completion,
+    composer::{Completion, ModelMenu},
     palette::Palette,
     sidebar::Navigation,
     thread::Thread,
@@ -146,6 +146,7 @@ pub struct Desktop {
     attachment_reads: HashSet<AttachmentTarget>,
     drafts: HashMap<ConversationId, Draft>,
     pub completion: Completion,
+    pub model_menu: ModelMenu,
     pub open_picker: Option<String>,
     pub navigation: Navigation,
     /// The sidebar's width and whether it's open.
@@ -191,6 +192,7 @@ impl Desktop {
             attachment_reads: HashSet::new(),
             drafts: HashMap::new(),
             completion: Completion::default(),
+            model_menu: ModelMenu::default(),
             open_picker: None,
             navigation: Navigation::default(),
             sidebar: PaneState::new(256.0).range(220.0, 384.0),
@@ -209,6 +211,12 @@ impl Desktop {
     /// `main` replaces it.
     pub fn detached() -> Self {
         Self::new(mpsc::unbounded_channel().0)
+    }
+
+    /// The orchestrator is in the main pane. It owns no agents and no
+    /// checkout, so it has no Agents card and no changes panel.
+    pub fn orchestrator_open(&self) -> bool {
+        self.selected.is_some() && self.selected == self.root
     }
 
     /// Connected to a backend.
@@ -489,6 +497,19 @@ impl Desktop {
             chat.loading_choices = false;
             chat.branches = branches;
             chat.worktrees = worktrees;
+        }
+    }
+
+    /// Takes a runner's options with another model selected
+    /// (`harnesses.options`): its catalog, now with that model's thinking
+    /// levels.
+    pub fn set_harness_options(&mut self, harness: &str, options: Vec<ConfigOption>) {
+        if let Some(runner) = self
+            .harnesses
+            .iter_mut()
+            .find(|runner| runner.name == harness)
+        {
+            runner.options = options;
         }
     }
 

@@ -459,6 +459,12 @@ pub fn open_delete_chat(s: &mut Desktop, id: ConversationId, tx: &mut Tx) {
     actions::delete_chat(s, id, tx);
 }
 
+/// A chat's context menu with its Move to project submenu open, in a preview
+/// scene.
+pub fn preview_context_menu(s: &mut Desktop, id: ConversationId, x: f32, y: f32) {
+    s.navigation.menu = Some(actions::Context::preview(&format!("chat-{id}"), x, y));
+}
+
 /// Shows the delete confirmation for `id` in a preview scene.
 pub fn preview_delete(s: &mut Desktop, id: ConversationId) {
     s.navigation.edit = Some(actions::Edit::DeleteChat(id));

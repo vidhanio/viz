@@ -58,14 +58,6 @@ pub fn rule(t: &Theme) -> El {
     el().w_full().h(HAIRLINE).fill(t.hairline).a11y_hidden()
 }
 
-/// A short vertical hairline between inline metadata.
-pub fn divider(t: &Theme) -> El {
-    el().w(HAIRLINE)
-        .h(ICON_SMALL)
-        .fill(t.hairline)
-        .a11y_hidden()
-}
-
 /// A section title: small, medium, muted.
 pub fn section(label: &str, t: &Theme) -> El {
     text(label).font(t.small_medium).color(t.muted)
@@ -122,6 +114,14 @@ pub fn reading(child: El) -> El {
         .px(READING_INSET)
         .items_center()
         .child(child.w_full().max_w(READING_WIDTH))
+}
+
+/// rune-kit's shell marks its title bands (the toolbar, the sidebar's header
+/// row) `.window_drag()`; viz's window isn't moved from its content. Pin this
+/// over a band, beneath its controls (they keep their presses), and a press
+/// between them does nothing.
+pub fn drag_guard(key: &str) -> El {
+    el().key(key).no_window_drag().a11y_hidden()
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -354,6 +354,28 @@ pub fn section_row(key: &str, label: &str, action: Option<El>, t: &Theme) -> El 
         .child(trailing(None, action, true))
 }
 
+/// An inline select's trigger: its name, or `current` once chosen, and a
+/// chevron, at most `max_w` wide. The caller handles its press.
+pub fn select_trigger(
+    id: &str,
+    name: &str,
+    current: Option<&str>,
+    open: bool,
+    max_w: f32,
+    t: &Theme,
+) -> El {
+    Select::new(id, &[] as &[&str])
+        .appearance(SelectAppearance::Inline)
+        .label(name)
+        .placeholder(name)
+        .current(current)
+        .open(open)
+        .trigger(&t.k)
+        .h(Size::Default.height())
+        .max_w(max_w)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+}
+
 /// The combobox trigger is separate from its menu: server ids can differ even
 /// when the labels match.
 pub fn picker<S: 'static>(
@@ -365,18 +387,7 @@ pub fn picker<S: 'static>(
     close: impl Fn(&mut S) + 'static,
     t: &Theme,
 ) -> Menu {
-    let trigger = Select::new(id, &[] as &[&str])
-        .appearance(SelectAppearance::Inline)
-        .label(name)
-        .placeholder(name)
-        .current(current)
-        .open(open)
-        .on_toggle(toggle);
-    let trigger = trigger
-        .trigger(&t.k)
-        .h(Size::Default.height())
-        .max_w(PICKER_TRIGGER_MAX)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent);
+    let trigger = select_trigger(id, name, current, open, PICKER_TRIGGER_MAX, t).on_press(toggle);
     Menu::new(format!("{id}-picker"))
         .standard()
         .placement(Placement::TopStart)
@@ -389,6 +400,8 @@ pub fn picker<S: 'static>(
 /// The widest an inline select's trigger gets; rune-kit truncates its label
 /// there.
 pub const PICKER_TRIGGER_MAX: f32 = 156.0;
+/// The model picker's trigger: a model's short name and its thinking level.
+pub const MODEL_TRIGGER_MAX: f32 = 240.0;
 /// A menu's narrowest width.
 pub const MENU_WIDTH: f32 = 196.0;
 const COMPLETION_HEIGHT: f32 = 240.0;
@@ -527,7 +540,7 @@ fn modal<S: 'static>(
     t: &Theme,
     layer: &mut Vec<El>,
 ) {
-    let k = &t.k;
+    let k = &t.overlay;
     let panel = k.shadow_layers(&k.elevation.overlay).fold(
         panel
             .key(format!("{key}-dialog"))
@@ -571,7 +584,7 @@ pub fn toast<S: 'static>(
     close: impl Fn(&mut S) + 'static,
     t: &Theme,
 ) -> El {
-    let k = &t.k;
+    let k = &t.overlay;
     let mut content = col()
         .grow(1.0)
         .shrink()

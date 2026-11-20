@@ -13,8 +13,8 @@ use viz_client::{
     Client, Connection, Endpoint, Error, delta,
     protocol::{
         ClientInfo, ClientKind, ConfigureConversation, ConversationId, CreateConversation,
-        CreateProject, DefaultWorkspace, EntryId, GitBranches, Notification, OptionValue,
-        RemoveProject, RemoveQueuedInput, Revision, SearchFiles, SubmissionId, Submit,
+        CreateProject, DefaultWorkspace, EntryId, GitBranches, HarnessOptions, Notification,
+        OptionValue, RemoveProject, RemoveQueuedInput, Revision, SearchFiles, SubmissionId, Submit,
         UpdateConversation, UpdateProject, ViewRevision, Workspace,
     },
 };
@@ -42,6 +42,12 @@ pub enum Command {
         draft: u64,
         params: CreateConversation,
         submit: Submit,
+    },
+    /// A runner's options with `model` selected, for a draft that picked a
+    /// model whose thinking levels the catalog doesn't know yet.
+    HarnessOptions {
+        harness: String,
+        model: String,
     },
     LoadDraft {
         id: u64,
@@ -374,6 +380,10 @@ impl Session<'_> {
                 self.load_draft(id, project);
                 Ok(())
             }
+            Command::HarnessOptions { harness, model } => {
+                self.harness_options(harness, model);
+                Ok(())
+            }
             Command::Update(conversation, change) => self.update_chat(conversation, &change).await,
             Command::Delete(conversation) => {
                 let kept = self.client.delete_conversation(conversation).await?;
@@ -653,6 +663,23 @@ impl Session<'_> {
                 if s.selected == Some(conversation) {
                     s.completion.file_result(request, result);
                 }
+            });
+        });
+    }
+
+    fn harness_options(&self, harness: String, model: String) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let result = client
+                .harness_options(&HarnessOptions {
+                    harness: harness.clone(),
+                    model,
+                })
+                .await;
+            ui.update(move |s, tx| match result {
+                Ok(result) => s.set_harness_options(&harness, result.options),
+                Err(error) => s.toast(tx, "Couldn't load model options", Some(error.to_string())),
             });
         });
     }

@@ -318,7 +318,7 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
             .build(&t.k)
             .key("add-project-empty")
     };
-    if s.selected.is_some() && s.selected == s.root {
+    if s.orchestrator_open() {
         let intro = ui::empty(
             Some(icon(&ui::STAR, ICON_LARGE).color(t.accent)),
             "Orchestrator",
