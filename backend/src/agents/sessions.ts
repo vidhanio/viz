@@ -87,8 +87,6 @@ export class AgentSessions {
   #mcp!: McpServer<ToolScope>;
   #harness!: Harness;
 
-  constructor(private readonly providerName: (id: string) => string | undefined) {}
-
   start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[]): void {
     this.#harness = harness;
     this.#mcp = new McpServer(
@@ -244,8 +242,7 @@ export class AgentSessions {
       { command: [config.command, ...(config.args ?? [])], cwd, env, signal: context.abortSignal! },
       {
         onUpdate: (_id, update) => {
-          if (update.sessionUpdate === "config_option_update")
-            reported = normalize(update.configOptions, this.providerName);
+          if (update.sessionUpdate === "config_option_update") reported = normalize(update.configOptions);
         },
         onClose: () => {},
         log: (line) => console.error(`ACP ${name}: ${line}`),
@@ -257,14 +254,14 @@ export class AgentSessions {
       // Stable ACP cannot fetch settings for an inactive model. Ask a disposable, prompt-free session.
       const response = await awaitWithContext(process.newSession(cwd, []), context);
       sessionId = response.sessionId;
-      const options = response.configOptions ? normalize(response.configOptions, this.providerName) : (reported ?? []);
+      const options = response.configOptions ? normalize(response.configOptions) : (reported ?? []);
       await this.#harness.commit((tx) => this.#saveHarnessOptions(tx, name, options), context);
       const setting = modelOption(options);
       if (model !== undefined && setting?.value !== model) {
         if (!setting || !validValue(setting, model)) throw new Error("Model not available");
         reported = undefined;
         const changed = await awaitWithContext(process.setOption(response.sessionId, setting.id, model), context);
-        const selected = changed.configOptions ? normalize(changed.configOptions, this.providerName) : reported;
+        const selected = changed.configOptions ? normalize(changed.configOptions) : reported;
         if (selected) await this.#harness.commit((tx) => this.#saveHarnessOptions(tx, name, selected), context);
       }
     } finally {
@@ -386,7 +383,7 @@ export class AgentSessions {
 
   #refresh(live: LiveSession, { configOptions }: LoadSessionResponse) {
     if (configOptions == null) return false;
-    live.options = normalize(configOptions, this.providerName);
+    live.options = normalize(configOptions);
     return true;
   }
 

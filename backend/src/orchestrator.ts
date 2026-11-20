@@ -58,7 +58,7 @@ export function orchestratorSettings(
           return {
             value: `${provider}/${id}`,
             name: name.startsWith(`${provider}/`) ? name.slice(provider.length + 1) : name,
-            group: models.getProvider(provider)?.name ?? provider,
+            group: provider,
             ref: { provider, model: id },
             levels: getSupportedThinkingLevels(entry),
           };

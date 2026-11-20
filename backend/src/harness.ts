@@ -131,7 +131,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   const binding: MemoryBinding = {};
   const Memorize = memoryExtension(memory, binding);
   const cwd = resolve(orchestrator.cwd ?? homedir());
-  const sessions = new AgentSessions((id) => models.getProvider(id)?.name);
+  const sessions = new AgentSessions();
   const chats = chatScheduler(runners, sessions, cwd);
   let toolkit: ToolkitHost | undefined;
   const Toolkit = orchestratorToolkit(() => {

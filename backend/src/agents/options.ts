@@ -46,25 +46,19 @@ export function validValue(option: ConfigOption, value: OptionValue): boolean {
     : option.choices.some((choice) => choice.value === value);
 }
 
-export function normalize(
-  options: SessionConfigOption[],
-  providerName: (id: string) => string | undefined,
-): ConfigOption[] {
+export function normalize(options: SessionConfigOption[]): ConfigOption[] {
   const normalized = options.map((option): ConfigOption => {
     const category = option.category ?? (["model", "thought_level", "mode"].includes(option.id) ? option.id : null);
     const display = (item: Parameters<typeof selectChoice>[0], group?: string) => {
       const result = selectChoice(item);
       if (category === "model") {
+        // The runner's group, else the provider before a `/` in the value; a model with neither stays ungrouped.
         const separator = item.value.indexOf("/");
-        const provider = separator < 0 ? undefined : item.value.slice(0, separator);
-        const label = group ?? (provider ? (providerName(provider) ?? provider) : "Other");
-        for (const prefix of [provider, label]) {
-          if (prefix && result.name.toLowerCase().startsWith(`${prefix.toLowerCase()}/`)) {
-            result.name = result.name.slice(prefix.length + 1);
-            break;
-          }
+        const label = group ?? (separator < 0 ? undefined : item.value.slice(0, separator));
+        if (label && result.name.toLowerCase().startsWith(`${label.toLowerCase()}/`)) {
+          result.name = result.name.slice(label.length + 1);
         }
-        return { ...result, group: label };
+        return { ...result, ...(label !== undefined && { group: label }) };
       }
       if (category === "thought_level" && result.name.startsWith(`${option.name}: `)) {
         result.name = result.name.slice(option.name.length + 2);
