@@ -4,15 +4,14 @@ What viz is for, what it deliberately leaves out, and the rules every UI follows
 
 ## Product
 
-viz is one person's agent workspace: talk to the orchestrator, run coding agents on projects, see and ship what they changed. Every feature serves one of these jobs:
+viz is one person's agent workspace: talk to the orchestrator and run coding agents on projects. Every feature serves one of these jobs:
 
 1. **Ask.** Message the orchestrator from any client or connector; it remembers, delegates, and reports back.
-2. **Run agents on code.** Start a chat in a project (optionally in its own worktree), pick the agent's model, effort and mode, attach files, use its slash commands, stop it, queue the next message.
+2. **Run agents on code.** Start a chat in a project folder with a harness, pick the agent's model, effort and mode, attach files, use its slash commands, stop it, queue the next message.
 3. **Follow delegation.** See the subagents a chat started inside that chat, open them, talk to them.
-4. **Review and ship.** See what a turn, the worktree or the branch changed; revert a turn; commit, push, open a PR.
-5. **Find things.** Search every chat; jump anywhere from the palette.
+4. **Find things.** Search every chat; jump anywhere from the palette.
 
-Out of scope until a job above needs it: permission prompts, in-app settings forms (config is TOML), terminals, a browser, issue trackers, multi-model fan-out, usage dashboards, a theme editor.
+Out of scope until a job above needs it: git (diffs, checkpoints, worktrees, commit/push/PR; the agents do git themselves), permission prompts, in-app settings forms (config is TOML), terminals, a browser, issue trackers, multi-model fan-out, usage dashboards, a theme editor.
 
 ### Before adding something
 
@@ -23,7 +22,7 @@ Out of scope until a job above needs it: permission prompts, in-app settings for
 
 ## Interface
 
-- **Layout.** Sidebar (orchestrator, pinned, chats), the chat, and an optional right panel (changes). Overlays: palette, the Agents card, menus, dialogs, toasts. Nothing else.
+- **Layout.** Sidebar (orchestrator, pinned, chats) and the chat. Overlays: palette, the Agents card, menus, dialogs, toasts. Nothing else.
 - **Sidebar.** Two modes: _Recent_ (chats newest first, project under each title) and _Projects_ (collapsible projects, chats newest first). Subagents never appear in it; they live in their parent chat (timeline cards and the Agents card).
 - **Orchestrator.** Visually distinct and never managed like a chat: no pin, archive, rename, move or delete.
 - **Copy.** Short, plain, sentence case. No exclamation marks, filler or marketing. Labels name the thing; buttons name the action.

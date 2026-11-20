@@ -6,7 +6,6 @@
 mod app;
 mod attachments;
 mod backend;
-mod changes;
 mod composer;
 mod config;
 mod header;
@@ -69,17 +68,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     // the sidebar's header row, centered on the toolbar's line and over the
     // rows' trailing slots.
     let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
-    // The orchestrator has no checkout: its chat never shows the changes
-    // panel, which stays as it was for the next chat.
-    let split = if s.orchestrator_open() {
-        split
-    } else {
-        split.inspector(
-            &s.changes.pane,
-            |s: &mut Desktop| &mut s.changes.pane,
-            changes::view(s, t, &mut overlays),
-        )
-    };
     let split = split
         .toolbar(header::toolbar(s, t, &mut overlays))
         .titlebar_inset(cx.titlebar_inset())
@@ -107,7 +95,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         split
     };
     sidebar::overlays(s, t, &mut overlays);
-    changes::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
     overlays.extend(toasts(s, t));
     rune_kit::root(split, overlays)
@@ -163,10 +150,6 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.create_here(tx);
         return true;
     }
-    if ev.is_command('d') && !s.orchestrator_open() {
-        changes::toggle(s, tx);
-        return true;
-    }
     if ev.is_command('.') && s.busy() {
         s.abort(tx);
         return true;
@@ -220,7 +203,6 @@ fn main() {
     let scene_theme = preview
         .then(|| std::env::var("VIZ_SCENE_THEME").ok())
         .flatten();
-    let headless_dark = headless.then_some(tooling.theme.as_deref() != Some("light"));
     let (theme_error, endpoint) = match viz_config::load::<DesktopConfig>(&file) {
         Ok(config) => {
             let endpoint = Paths::from_env()
@@ -267,10 +249,6 @@ fn main() {
         if !preview {
             desktop.navigation.restore();
         }
-        // Offscreen snapshots can draw only once, before the frame callback.
-        if let Some(dark) = headless_dark {
-            desktop.changes.set_dark(dark);
-        }
         desktop
     })
     .on_focus(Desktop::set_focus);
@@ -278,18 +256,13 @@ fn main() {
         app.handle()
             .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
     }
-    // Rune has no resize or appearance hook; a drawn frame reports the
-    // viewport and appearance, and a change re-lays out what depends on it
-    // (the composer's selects) or recolors it (the diff's code).
+    // Rune has no resize hook; a drawn frame reports the viewport, and a
+    // change re-lays out what depends on it (the composer's selects).
     let ui = app.handle();
     let app = app.on_frame_drawn(move |rt| {
         let width = rt.window_viewport().0 / rt.zoom();
         if (rt.state.window_width - width).abs() >= 1.0 {
             ui.update(move |s, _| s.window_width = width);
-        }
-        let dark = rt.env.system_dark;
-        if rt.state.changes.dark() != Some(dark) {
-            ui.update(move |s, _| s.changes.set_dark(dark));
         }
     });
     if !preview {

@@ -321,7 +321,7 @@ struct ContentView: View {
     }
     Task {
       do {
-        let kept = try await backend.delete(conversation: conversation.id)
+        try await backend.delete(conversation: conversation.id)
         if let selected = selection?.conversationID, subtree.contains(selected) {
           selection = parent.map { .conversation($0.id) }
         }
@@ -329,9 +329,6 @@ struct ContentView: View {
           drafts[id] = nil
           sent[id] = nil
           errors[id] = nil
-        }
-        if !kept.isEmpty {
-          notice = ("Worktrees kept on disk", kept.joined(separator: "\n"))
         }
       } catch {
         notice = ("Delete failed", error.localizedDescription)

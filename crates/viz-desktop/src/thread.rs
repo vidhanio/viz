@@ -79,8 +79,6 @@ pub struct User {
     pub key: String,
     /// What I wrote.
     pub text: String,
-    /// Prompt entry used by the turn diff and revert RPCs.
-    pub turn: Option<EntryId>,
     /// Names of the stored attachments carried by this prompt.
     pub attachments: Vec<String>,
 }
@@ -277,7 +275,6 @@ impl Reader {
     }
 
     fn prompt(&mut self, id: &str, entry: &Value, messages: &[Value]) {
-        let turn = entry.get("id").and_then(Value::as_u64).map(EntryId);
         let attachments: Vec<_> = array(entry.pointer("/data/attachments"))
             .iter()
             .filter_map(|file| str_at(file, "name"))
@@ -290,7 +287,6 @@ impl Reader {
                 self.items.push(Item::User(User {
                     key: format!("e{id}-0"),
                     text: text.to_owned(),
-                    turn,
                     attachments,
                 }));
             }
@@ -302,7 +298,6 @@ impl Reader {
                 self.items.push(Item::User(User {
                     key: format!("e{id}-{index}"),
                     text,
-                    turn,
                     attachments: Vec::new(),
                 }));
             }

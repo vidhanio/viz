@@ -9,7 +9,7 @@ use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary
 use crate::{
     app::{Desktop, chat_title},
     backend::{ChatChange, Command},
-    changes, sidebar,
+    sidebar,
     theme::{DIALOG_INSET, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
     ui,
 };
@@ -151,24 +151,16 @@ enum Local {
     NewChat,
     AddProject,
     Sidebar,
-    Changes,
-    Commit,
-    Push,
-    PullRequest,
     Pin,
     Archive,
     Delete,
     Stop,
 }
 
-const COMMANDS: [Local; 11] = [
+const COMMANDS: [Local; 7] = [
     Local::NewChat,
     Local::AddProject,
     Local::Sidebar,
-    Local::Changes,
-    Local::Commit,
-    Local::Push,
-    Local::PullRequest,
     Local::Pin,
     Local::Archive,
     Local::Delete,
@@ -182,10 +174,6 @@ impl Local {
             Self::NewChat => "New chat",
             Self::AddProject => "Add project",
             Self::Sidebar => "Toggle sidebar",
-            Self::Changes => "Toggle changes",
-            Self::Commit => "Commit changes",
-            Self::Push => "Push branch",
-            Self::PullRequest => "Create pull request",
             Self::Pin if chat.is_some_and(|chat| chat.pinned) => "Unpin chat",
             Self::Pin => "Pin chat",
             Self::Archive if chat.is_some_and(|chat| chat.archived) => "Unarchive chat",
@@ -198,12 +186,9 @@ impl Local {
     const fn glyph(self) -> &'static Icon {
         match self {
             Self::NewChat => &ui::COMPOSE,
-            Self::Commit | Self::PullRequest => &ui::GIT_BRANCH,
             Self::AddProject => &ui::FOLDER,
             Self::Archive => &ui::ARCHIVE,
             Self::Sidebar => &ui::SIDEBAR,
-            Self::Changes => &ui::INSPECTOR,
-            Self::Push => &ui::ARROW_UP,
             Self::Pin => &ui::PIN,
             Self::Delete => &ui::TRASH,
             Self::Stop => &ui::STOP,
@@ -213,7 +198,6 @@ impl Local {
     const fn shortcut(self) -> Option<&'static str> {
         match self {
             Self::NewChat => Some("N"),
-            Self::Changes => Some("D"),
             Self::Stop => Some("."),
             _ => None,
         }
@@ -230,19 +214,6 @@ impl Local {
         match self {
             Self::NewChat => s.new_chat.is_none(),
             Self::AddProject | Self::Sidebar => true,
-            Self::Changes => {
-                s.changes.pane.is_open()
-                    || s.selected.is_some()
-                        && s.conversation
-                            .as_ref()
-                            .is_some_and(|state| state.git.is_some())
-            }
-            Self::Commit | Self::Push | Self::PullRequest => {
-                s.selected.is_some()
-                    && s.conversation
-                        .as_ref()
-                        .is_some_and(|state| state.git.is_some())
-            }
             Self::Pin | Self::Archive | Self::Delete => {
                 s.new_chat.is_none()
                     && chat.is_some_and(|chat| chat.kind != ConversationKind::Orchestrator)
@@ -260,10 +231,6 @@ impl Local {
             Self::NewChat => s.create_here(tx),
             Self::AddProject => sidebar::open_add_project(s, tx),
             Self::Sidebar => s.sidebar.toggle(),
-            Self::Changes => changes::toggle(s, tx),
-            Self::Commit => changes::commit_dialog(s, tx),
-            Self::Push => changes::push(s, tx),
-            Self::PullRequest => changes::pr_dialog(s, tx),
             Self::Pin => {
                 if let Some((id, pinned, _)) = chat {
                     s.send(Command::Update(id, ChatChange::Pin(!pinned)), tx);
@@ -378,11 +345,7 @@ fn rows(s: &Desktop, recent: bool) -> impl Iterator<Item = ResultRow<'_>> {
     let filter = s.palette.filter.as_str();
     let commands = COMMANDS
         .into_iter()
-        .filter(move |command| {
-            command.available(s)
-                && (matches_filter(command.label(s), filter)
-                    || (*command == Local::PullRequest && filter == "pr"))
-        })
+        .filter(move |command| command.available(s) && matches_filter(command.label(s), filter))
         .map(ResultRow::Command);
     let connected = s.connected();
     let chats = if connected {

@@ -17,7 +17,7 @@
 # token = { file = "/run/secrets/viz-token" }
 # State storage: $STATE_DIRECTORY under systemd, otherwise $XDG_STATE_HOME/viz
 # (default ~/.local/state/viz). Holds viz.sqlite, memory.sqlite, the derived
-# search.sqlite index, attachments/, and chat worktrees/.
+# search.sqlite index, and attachments/.
 # state_dir = "/var/lib/viz"
 # Default ACP runner for new app chats and orchestrator delegation. A sole
 # runner is implicit; with several, name one here or choose one per request.
@@ -45,9 +45,7 @@ thinking = "medium"
 # The orchestrator's uniichat memory. Pick a cheap, fast model: turns wait for
 # earlier messages to be summarized, and failures are logged and retried every 60 s.
 [memory]
-# Required { provider, model }; also writes a commit subject if git.commit
-# is called without a message. Git features require git on PATH; opening a PR
-# also needs an authenticated gh.
+# Required { provider, model }.
 compactor = { provider = "anthropic", model = "claude-haiku-5-5" }
 # Same thinking levels as the orchestrator; defaults to the model's own.
 thinking = "high"

@@ -2,11 +2,10 @@ use rune::{El, Tx, row};
 use rune_kit::MenuItem;
 use viz_client::protocol::{ConfigOption, ConversationId, OptionKind, OptionValue};
 
-use super::model;
+use super::{draft, model};
 use crate::{
     app::{Desktop, NewChat},
     backend::Command,
-    composer::workspace,
     theme::{S2, S32, Size, Theme},
     ui,
 };
@@ -56,7 +55,7 @@ pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>, budget: f32) 
         return bar;
     }
     let (bar, budget, target, options) = if let Some(chat) = &s.new_chat {
-        let (bar, width) = workspace::toolbar(s, chat, bar, t, layer);
+        let (bar, width) = draft::toolbar(s, chat, bar, t, layer);
         let Some(harness) = chat.active_harness(&s.harnesses).filter(|_| !chat.sending) else {
             return bar;
         };

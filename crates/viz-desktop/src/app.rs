@@ -11,15 +11,14 @@ use rune::{TextEdit, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, Branches, ConfigOption, ConversationId, ConversationKind, ConversationState,
-    ConversationStatus, ConversationSummary, CreateConversation, DefaultWorkspace, Harness,
-    ManagedWorktree, OptionValue, Project, Submit, Workspace,
+    Attachment, ConfigOption, ConversationId, ConversationKind, ConversationState,
+    ConversationStatus, ConversationSummary, CreateConversation, Harness, OptionValue, Project,
+    Submit,
 };
 
 use crate::{
     attachments::{self, Loaded, Source, Target as AttachmentTarget},
     backend::{ChatChange, Command},
-    changes::{self, Changes},
     composer::{Completion, ModelMenu},
     palette::Palette,
     sidebar::Navigation,
@@ -65,9 +64,6 @@ pub struct Toast {
 pub struct NewChat {
     pub id: u64,
     pub project: Option<String>,
-    pub workspace: Workspace,
-    pub branches: Option<Branches>,
-    pub worktrees: Vec<ManagedWorktree>,
     pub harness: Option<String>,
     pub options: BTreeMap<String, OptionValue>,
     pub sending: bool,
@@ -79,12 +75,6 @@ impl NewChat {
         Self {
             id,
             project: project.map(|project| project.id.clone()),
-            workspace: match project.map(|project| project.default_workspace) {
-                Some(DefaultWorkspace::Worktree) => Workspace::Worktree { base: None },
-                _ => Workspace::Local,
-            },
-            branches: None,
-            worktrees: Vec::new(),
             harness: None,
             options: BTreeMap::new(),
             sending: false,
@@ -151,7 +141,6 @@ pub struct Desktop {
     pub navigation: Navigation,
     /// The sidebar's width and whether it's open.
     pub sidebar: PaneState,
-    pub changes: Changes,
     pub palette: Palette,
     /// Toasts, oldest first.
     pub toasts: Vec<Toast>,
@@ -196,7 +185,6 @@ impl Desktop {
             open_picker: None,
             navigation: Navigation::default(),
             sidebar: PaneState::new(256.0).range(220.0, 384.0),
-            changes: Changes::default(),
             palette: Palette::default(),
             toasts: Vec::new(),
             next_toast: 0,
@@ -213,8 +201,8 @@ impl Desktop {
         Self::new(mpsc::unbounded_channel().0)
     }
 
-    /// The orchestrator is in the main pane. It owns no agents and no
-    /// checkout, so it has no Agents card and no changes panel.
+    /// The orchestrator is in the main pane. It owns no agents, so it has no
+    /// Agents card.
     pub fn orchestrator_open(&self) -> bool {
         self.selected.is_some() && self.selected == self.root
     }
@@ -319,7 +307,6 @@ impl Desktop {
         self.expanded.clear();
         self.completion.reset();
         self.open_picker = None;
-        self.changes.reset();
     }
 
     /// Takes a new view of the selected conversation.
@@ -333,16 +320,11 @@ impl Desktop {
         if self.selected != Some(id) {
             return;
         }
-        let previous = self.conversation.as_ref();
-        let status_changed = previous.map(|prev| prev.status) != Some(state.status);
-        let refresh_git =
-            status_changed || previous.and_then(|prev| prev.git.as_ref()) != state.git.as_ref();
+        let status_changed =
+            self.conversation.as_ref().map(|prev| prev.status) != Some(state.status);
         self.conversation = Some(state);
         if status_changed {
             self.update_title(tx);
-        }
-        if refresh_git {
-            changes::refresh(self, tx);
         }
     }
 
@@ -385,17 +367,6 @@ impl Desktop {
             }
             self.thread = thread;
         }
-    }
-
-    pub fn branch(&self) -> Option<&str> {
-        if let Some(git) = self
-            .conversation
-            .as_ref()
-            .and_then(|state| state.git.as_ref())
-        {
-            return Some(git.branch.as_deref().unwrap_or("Detached"));
-        }
-        self.project().and_then(|project| project.branch.as_deref())
     }
 
     pub fn send(&mut self, command: Command, tx: &mut Tx) -> bool {
@@ -473,13 +444,7 @@ impl Desktop {
             return;
         }
         self.next_draft += 1;
-        chat.loading_choices = self.send(
-            Command::LoadDraft {
-                id: chat.id,
-                project: chat.project.clone(),
-            },
-            tx,
-        );
+        chat.loading_choices = self.send(Command::LoadDraft(chat.id), tx);
         self.save_draft();
         self.reset_thread();
         self.new_chat = Some(chat);
@@ -487,16 +452,10 @@ impl Desktop {
         tx.focus("draft", false);
     }
 
-    pub fn set_draft_workspace(
-        &mut self,
-        id: u64,
-        branches: Option<Branches>,
-        worktrees: Vec<ManagedWorktree>,
-    ) {
+    /// The draft's runner choices arrived (or failed to).
+    pub fn draft_loaded(&mut self, id: u64) {
         if let Some(chat) = self.new_chat.as_mut().filter(|chat| chat.id == id) {
             chat.loading_choices = false;
-            chat.branches = branches;
-            chat.worktrees = worktrees;
         }
     }
 
@@ -551,21 +510,6 @@ impl Desktop {
     pub fn project(&self) -> Option<&Project> {
         let id = self.project_id()?;
         self.projects.iter().find(|project| project.id == id)
-    }
-
-    /// A managed checkout used by the selected conversation.
-    pub fn worktree(&self) -> Option<(&str, Option<&str>)> {
-        let git = self
-            .conversation
-            .as_ref()
-            .and_then(|state| state.git.as_ref());
-        if let Some((git, path)) =
-            git.and_then(|git| git.worktree.as_deref().map(|path| (git, path)))
-        {
-            return Some((path, git.branch.as_deref()));
-        }
-        let summary = self.summary(self.selected?)?;
-        Some((summary.worktree.as_deref()?, summary.branch.as_deref()))
     }
 
     pub fn busy(&self) -> bool {
@@ -675,13 +619,11 @@ impl Desktop {
             ..Submit::default()
         };
         let command = if let Some(chat) = &mut self.new_chat {
-            let workspace = chat.project.as_ref().map(|_| chat.workspace.clone());
             chat.sending = true;
             Command::Create {
                 draft: chat.id,
                 params: CreateConversation {
                     project: chat.project.clone(),
-                    workspace,
                     harness: chat.harness.clone(),
                     options: chat.options.clone(),
                 },

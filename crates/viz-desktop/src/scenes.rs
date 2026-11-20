@@ -3,31 +3,26 @@
 
 use serde_json::json;
 use viz_client::protocol::{
-    Attachment, AttachmentCapabilities, Branches, ConfigOption, ConversationId, ConversationKind,
-    ConversationState, ConversationStatus, ConversationSummary, DefaultWorkspace, DependentChoice,
-    DependentOption, EntryId, GitFile, GitFileStatus, GitState, Harness, ManagedWorktree,
-    OptionChoice, OptionKind, OptionValue, Project, QueuedInput, SearchHit, SlashCommand,
-    SubmissionId,
+    Attachment, AttachmentCapabilities, ConfigOption, ConversationId, ConversationKind,
+    ConversationState, ConversationStatus, ConversationSummary, DependentChoice, DependentOption,
+    EntryId, Harness, OptionChoice, OptionKind, OptionValue, Project, QueuedInput, SearchHit,
+    SlashCommand, SubmissionId,
 };
 
 use crate::{
     app::{Desktop, NewChat, Status},
-    changes, composer, palette, sidebar,
+    composer, palette, sidebar,
     thread::Thread,
 };
 
 type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
-    ("workspace", workspace_review),
-    ("workspace-open", workspace_open),
-    ("workspace-locked", workspace_locked),
+    ("workspace", workspace),
     ("selectors", selectors),
     ("model-search", model_search),
     ("new-agent", new_agent),
     ("context-menu", context_menu),
     ("palette", palette),
-    ("diff", diff),
-    ("commit", commit),
     ("attachments", attachments),
     ("queue", queue),
     ("empty", empty),
@@ -49,19 +44,13 @@ fn workspace(s: &mut Desktop) {
     };
     s.root = Some(ConversationId(1));
     s.projects = [
-        ("workbench", "Workbench", "/work/workbench", "main"),
-        ("field-notes", "Field notes", "/work/field-notes", "docs"),
+        ("workbench", "Workbench", "/work/workbench"),
+        ("field-notes", "Field notes", "/work/field-notes"),
     ]
-    .map(|(id, name, path, branch)| Project {
+    .map(|(id, name, path)| Project {
         id: id.into(),
         name: name.into(),
         path: path.into(),
-        branch: Some(branch.into()),
-        default_workspace: if id == "workbench" {
-            DefaultWorkspace::Worktree
-        } else {
-            DefaultWorkspace::Local
-        },
         created_at: 0,
     })
     .into();
@@ -144,8 +133,6 @@ fn list() -> Vec<ConversationSummary> {
             updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
             unread: id == 9,
             pinned: id == 4,
-            worktree: (id == 10).then(|| "/work/workbench/.viz/worktrees/trim-export".into()),
-            branch: (id == 10).then(|| "viz/trim-export".into()),
         },
     )
     .into()
@@ -164,23 +151,6 @@ fn conversation() -> ConversationState {
             hint: Some("[path]".into()),
         }],
         queue: Vec::new(),
-        git: Some(GitState {
-            branch: Some("main".into()),
-            upstream: Some("origin/main".into()),
-            ahead: 2,
-            behind: 0,
-            worktree: None,
-            files: [
-                ("backend/src/routes.ts", GitFileStatus::Modified),
-                ("docs/glossary.md", GitFileStatus::Untracked),
-            ]
-            .map(|(path, status)| GitFile {
-                path: path.into(),
-                status,
-                staged: false,
-            })
-            .into(),
-        }),
         attachments: AttachmentCapabilities { images: true },
     }
 }
@@ -243,15 +213,6 @@ fn new_agent(s: &mut Desktop) {
             options: Vec::new(),
         },
     ];
-    s.set_draft_workspace(
-        0,
-        Some(Branches {
-            current: Some("main".into()),
-            default_base: Some("main".into()),
-            branches: vec!["main".into()],
-        }),
-        Vec::new(),
-    );
 }
 
 /// A chat's context menu with its Move to project submenu open.
@@ -370,76 +331,6 @@ fn palette(s: &mut Desktop) {
     palette::preview(s, "newline", hits);
 }
 
-/// The changes panel, after a push failed.
-fn diff(s: &mut Desktop) {
-    workspace(s);
-    changes::preview(s);
-    s.preview_toast(
-        "Push failed",
-        "remote: Permission to vidhanio/viz.git denied.",
-    );
-}
-
-fn commit(s: &mut Desktop) {
-    workspace(s);
-    changes::preview_commit(s);
-}
-
-fn workspace_open(s: &mut Desktop) {
-    workspace(s);
-    let id = 0;
-    let chat = NewChat::new(id, s.project());
-    let previous = s.conversations.iter().find_map(|chat| {
-        Some(ManagedWorktree {
-            path: chat.worktree.clone()?,
-            branch: chat.branch.clone(),
-            conversation: chat.id,
-            updated_at: chat.updated_at,
-        })
-    });
-    s.selected = None;
-    let options = s
-        .conversation
-        .take()
-        .map_or_else(Vec::new, |state| state.options);
-    s.thread = Thread::default();
-    s.new_chat = Some(chat);
-    s.harnesses = vec![Harness {
-        name: "omp".into(),
-        default: true,
-        options,
-    }];
-    s.set_draft_workspace(
-        id,
-        Some(Branches {
-            current: Some("main".into()),
-            default_base: Some("main".into()),
-            branches: ["main", "export-v2", "release"].map(str::to_owned).into(),
-        }),
-        previous.into_iter().collect(),
-    );
-    s.open_picker = Some("workspace".into());
-}
-
-fn workspace_locked(s: &mut Desktop) {
-    workspace(s);
-    let id = ConversationId(10);
-    let mut state = conversation();
-    if let (Some(summary), Some(git)) = (s.summary(id), &mut state.git) {
-        git.branch.clone_from(&summary.branch);
-        git.worktree.clone_from(&summary.worktree);
-        state.cwd.clone_from(&summary.worktree);
-    }
-    s.show(id);
-    s.conversation = Some(state);
-    s.thread = transcript(&[]);
-}
-
-fn workspace_review(s: &mut Desktop) {
-    workspace_locked(s);
-    changes::preview(s);
-}
-
 fn attachments(s: &mut Desktop) {
     workspace(s);
     s.thread = transcript(&["export-before.png", "notes.md"]);
@@ -471,7 +362,6 @@ fn orchestrator(s: &mut Desktop) {
     s.show(ConversationId(1));
     let mut state = conversation();
     state.project = None;
-    state.git = None;
     state.harness = None;
     state.options.clear();
     s.conversation = Some(state);
@@ -554,9 +444,9 @@ fn overflow(s: &mut Desktop) {
         "Couldn't open /home/vidhanio/Projects/viz/crates/viz-desktop/src/sidebar/actions.rs \
          for writing",
         "error: failed to write \
-         /home/vidhanio/Projects/viz/.viz/worktrees/export-markdown-notes-4f1c2a/crates/\
+         /home/vidhanio/Projects/viz/target/preview/export-markdown-notes-4f1c2a/crates/\
          viz-desktop/src/ui/mod.rs: Permission denied (os error 13)\nhint: check the \
-         worktree's owner\nhint: or remove it and start the chat again\nnote: the backend \
+         directory's owner\nhint: or remove it and start the chat again\nnote: the backend \
          kept the previous version on disk",
     );
     s.preview_toast("Offline", "Backend disconnected");

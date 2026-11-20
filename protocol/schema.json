@@ -129,14 +129,6 @@
                 },
                 "pinned": {
                   "type": "boolean"
-                },
-                "worktree": {
-                  "type": "string",
-                  "description": "Path of the viz-created git worktree the conversation runs in"
-                },
-                "branch": {
-                  "type": "string",
-                  "description": "Checked-out branch of a managed worktree; absent when detached"
                 }
               },
               "required": ["id", "title", "kind", "status", "archived", "updatedAt", "unread", "pinned"],
@@ -156,50 +148,6 @@
             "type": "string",
             "minLength": 1,
             "description": "Backend-assigned project id"
-          },
-          "workspace": {
-            "anyOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "const": "local"
-                  }
-                },
-                "required": ["kind"],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "const": "worktree"
-                  },
-                  "base": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "Default: origin HEAD, then the checked-out branch"
-                  }
-                },
-                "required": ["kind"],
-                "additionalProperties": false
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "const": "existing"
-                  },
-                  "path": {
-                    "type": "string",
-                    "minLength": 1,
-                    "description": "A viz-managed worktree of this project"
-                  }
-                },
-                "required": ["kind", "path"],
-                "additionalProperties": false
-              }
-            ]
           },
           "harness": {
             "type": "string",
@@ -345,16 +293,7 @@
       },
       "result": {
         "type": "object",
-        "properties": {
-          "kept": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Worktree paths left on disk rather than removed"
-          }
-        },
-        "required": ["kept"],
+        "properties": {},
         "additionalProperties": false
       }
     },
@@ -513,27 +452,12 @@
                   "type": "string",
                   "description": "Absolute directory; the cwd of the project's chats"
                 },
-                "branch": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "description": "Checked-out git branch, null outside a repository or when detached"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "defaultWorkspace": {
-                  "enum": ["local", "worktree"],
-                  "description": "Default workspace for new chats"
-                },
                 "createdAt": {
                   "type": "integer",
                   "description": "Unix milliseconds"
                 }
               },
-              "required": ["id", "name", "path", "branch", "defaultWorkspace", "createdAt"],
+              "required": ["id", "name", "path", "createdAt"],
               "additionalProperties": false
             }
           }
@@ -578,27 +502,12 @@
                 "type": "string",
                 "description": "Absolute directory; the cwd of the project's chats"
               },
-              "branch": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "description": "Checked-out git branch, null outside a repository or when detached"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "defaultWorkspace": {
-                "enum": ["local", "worktree"],
-                "description": "Default workspace for new chats"
-              },
               "createdAt": {
                 "type": "integer",
                 "description": "Unix milliseconds"
               }
             },
-            "required": ["id", "name", "path", "branch", "defaultWorkspace", "createdAt"],
+            "required": ["id", "name", "path", "createdAt"],
             "additionalProperties": false
           }
         },
@@ -618,10 +527,6 @@
           "name": {
             "type": "string",
             "minLength": 1
-          },
-          "defaultWorkspace": {
-            "enum": ["local", "worktree"],
-            "description": "Default workspace for new chats"
           }
         },
         "required": ["project"],
@@ -645,27 +550,12 @@
                 "type": "string",
                 "description": "Absolute directory; the cwd of the project's chats"
               },
-              "branch": {
-                "anyOf": [
-                  {
-                    "type": "string",
-                    "description": "Checked-out git branch, null outside a repository or when detached"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "defaultWorkspace": {
-                "enum": ["local", "worktree"],
-                "description": "Default workspace for new chats"
-              },
               "createdAt": {
                 "type": "integer",
                 "description": "Unix milliseconds"
               }
             },
-            "required": ["id", "name", "path", "branch", "defaultWorkspace", "createdAt"],
+            "required": ["id", "name", "path", "createdAt"],
             "additionalProperties": false
           }
         },
@@ -689,59 +579,6 @@
       "result": {
         "type": "object",
         "properties": {},
-        "additionalProperties": false
-      }
-    },
-    "worktrees.list": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Backend-assigned project id"
-          }
-        },
-        "required": ["project"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "worktrees": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "path": {
-                  "type": "string"
-                },
-                "branch": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "conversation": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "pi-durable ConversationId"
-                },
-                "updatedAt": {
-                  "type": "integer",
-                  "description": "Unix milliseconds of the latest live conversation using this worktree"
-                }
-              },
-              "required": ["path", "branch", "conversation", "updatedAt"],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": ["worktrees"],
         "additionalProperties": false
       }
     },
@@ -1170,276 +1007,6 @@
         "properties": {},
         "additionalProperties": false
       }
-    },
-    "git.diff": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "scope": {
-            "enum": ["worktree", "turn", "branch"],
-            "description": "worktree: uncommitted changes; turn: since the start of `turn`; branch: against the base branch"
-          },
-          "turn": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "For scope turn: the prompt entry id; default the latest turn"
-          },
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": ["conversation", "scope"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "files": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "path": {
-                  "type": "string"
-                },
-                "oldPath": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "status": {
-                  "enum": ["modified", "added", "deleted", "renamed"]
-                },
-                "additions": {
-                  "type": "integer"
-                },
-                "deletions": {
-                  "type": "integer"
-                },
-                "patch": {
-                  "type": "string",
-                  "description": "Unified diff of this file, capped at 200 KB"
-                }
-              },
-              "required": ["path", "oldPath", "status", "additions", "deletions", "patch"],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": ["files"],
-        "additionalProperties": false
-      }
-    },
-    "git.branches": {
-      "params": {
-        "anyOf": [
-          {
-            "type": "object",
-            "properties": {
-              "conversation": {
-                "type": "integer",
-                "minimum": 1,
-                "description": "pi-durable ConversationId"
-              }
-            },
-            "required": ["conversation"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "project": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Backend-assigned project id"
-              }
-            },
-            "required": ["project"],
-            "additionalProperties": false
-          }
-        ]
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "current": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "branches": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "defaultBase": {
-            "anyOf": [
-              {
-                "type": "string",
-                "description": "Short name of the default worktree base ref, or null if none"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": ["current", "branches", "defaultBase"],
-        "additionalProperties": false
-      }
-    },
-    "git.checkout": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "branch": {
-            "type": "string",
-            "minLength": 1
-          },
-          "create": {
-            "type": "boolean"
-          }
-        },
-        "required": ["conversation", "branch"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    "git.commit": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "message": {
-            "type": "string",
-            "description": "Empty or absent: written by the [memory].compactor model from the diff"
-          },
-          "all": {
-            "type": "boolean",
-            "description": "Stage every change first; default true"
-          }
-        },
-        "required": ["conversation"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "commit": {
-            "type": "string"
-          },
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": ["commit", "message"],
-        "additionalProperties": false
-      }
-    },
-    "git.push": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          }
-        },
-        "required": ["conversation"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    "git.pr": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "title": {
-            "type": "string"
-          },
-          "body": {
-            "type": "string"
-          },
-          "draft": {
-            "type": "boolean"
-          }
-        },
-        "required": ["conversation"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "url": {
-            "type": "string"
-          }
-        },
-        "required": ["url"],
-        "additionalProperties": false
-      }
-    },
-    "git.revert": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "turn": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Restore the working tree to the start of this turn (prompt entry id)"
-          }
-        },
-        "required": ["conversation", "turn"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
     }
   },
   "notifications": {
@@ -1663,80 +1230,6 @@
               },
               "description": "Inputs waiting for the next turn"
             },
-            "git": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "branch": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "description": "Null when detached"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "upstream": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "ahead": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "behind": {
-                      "type": "integer",
-                      "minimum": 0
-                    },
-                    "worktree": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "description": "Path of the viz-created worktree this conversation runs in"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "files": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "path": {
-                            "type": "string",
-                            "description": "Relative to the repository root"
-                          },
-                          "status": {
-                            "enum": ["modified", "added", "deleted", "renamed", "untracked", "conflicted"]
-                          },
-                          "staged": {
-                            "type": "boolean"
-                          }
-                        },
-                        "required": ["path", "status", "staged"],
-                        "additionalProperties": false
-                      }
-                    }
-                  },
-                  "required": ["branch", "upstream", "ahead", "behind", "worktree", "files"],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
             "attachments": {
               "type": "object",
               "properties": {
@@ -1750,7 +1243,7 @@
               "description": "What attachments the runner accepts; files always go as paths"
             }
           },
-          "required": ["status", "harness", "project", "cwd", "options", "commands", "queue", "git", "attachments"],
+          "required": ["status", "harness", "project", "cwd", "options", "commands", "queue", "attachments"],
           "additionalProperties": false
         }
       },

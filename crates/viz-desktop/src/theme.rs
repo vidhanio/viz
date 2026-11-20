@@ -26,7 +26,7 @@ use std::sync::OnceLock;
 use rune::{Color, Shadow, TextStyle};
 use rune_kit::{
     Kit, MarkdownStyle, Palette, PaletteFocus, PaletteSeed, StateColors,
-    syntax::{self, Highlighter, Paint, Syntax, SyntaxTheme},
+    syntax::{Syntax, SyntaxTheme},
 };
 use serde::Deserialize;
 
@@ -60,8 +60,7 @@ pub const RADIUS_INNER: f32 = S4;
 /// Cards, the composer, popovers.
 pub const RADIUS_CARD: f32 = S8;
 
-/// The shell's title band: the toolbar, the sidebar's header row, the
-/// inspector's tab row.
+/// The shell's title band: the toolbar and the sidebar's header row.
 pub const TOOLBAR_HEIGHT: f32 = rune_kit::shell::TOOLBAR_HEIGHT;
 /// rune-kit's padding at the toolbar band's ends.
 pub const TOOLBAR_PAD: f32 = S12;
@@ -89,16 +88,12 @@ pub const READING_WIDTH: f32 = 760.0;
 pub const READING_INSET: f32 = S20;
 /// Padding inside cards: messages, tool output, plans, the composer.
 pub const CARD_INSET: f32 = S12;
-/// The changes inspector's side inset.
-pub const PANEL_INSET: f32 = S12;
 /// Padding inside dialogs (rune-kit's header uses the same).
 pub const DIALOG_INSET: f32 = S16;
 pub const DIALOG_WIDTH: f32 = 400.0;
 /// Floating cards anchored to a control: the Agents card.
 pub const CARD_WIDTH: f32 = 320.0;
 pub const PALETTE_WIDTH: f32 = 560.0;
-/// Wide enough to show a previous-worktree label and a typical branch together.
-pub const WORKSPACE_MENU_WIDTH: f32 = 280.0;
 /// The model picker: wide enough for a provider's long model names beside
 /// the thinking levels.
 pub const MODEL_MENU_WIDTH: f32 = 320.0;
@@ -157,8 +152,6 @@ pub struct Theme {
     /// `k` for overlays (menus, popovers, the completion list): borderless,
     /// on their own fill; `overlay.c.layer_01` fills dialogs and toasts.
     pub overlay: Kit,
-    /// The main pane's background.
-    pub bg: Color,
     /// Cards on the main pane (composer, expanded tool output, code).
     pub surface: Color,
     /// One-pixel rules and outlines.
@@ -183,7 +176,7 @@ pub struct Theme {
     pub success: Color,
     /// Connecting.
     pub warning: Color,
-    /// Code colors: Markdown fences and the changes panel's diff.
+    /// Code colors: Markdown fences.
     pub syntax: SyntaxTheme,
     /// Interface text, 13 on 20.
     pub ui: TextStyle,
@@ -637,7 +630,6 @@ impl Theme {
         Self {
             shell,
             overlay: overlay_kit,
-            bg,
             surface,
             hairline,
             hover,
@@ -662,19 +654,6 @@ impl Theme {
             mono_small: TextStyle::new(11.5, 400.0).mono().lh(16.0),
             k,
         }
-    }
-
-    /// The built-in highlighter in this theme's code colors, for rune-kit
-    /// views that take a highlighter rather than a syntax theme (the diff).
-    pub fn highlighter(&self) -> Highlighter {
-        let theme = self.syntax;
-        Highlighter::new(move |lang, code| {
-            syntax::builtin(lang, code)
-                .into_iter()
-                .map(|(range, paint)| (range, Paint::Color(theme.paint(paint))))
-                .collect()
-        })
-        .key(theme)
     }
 
     /// Assistant prose: the message type, code blocks on `surface`.

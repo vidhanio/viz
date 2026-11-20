@@ -19,14 +19,11 @@ use viz_client::protocol::{
 use crate::{
     app::{Desktop, Status, chat_title},
     theme::{
-        self, HAIRLINE, ICON, ICON_SMALL, ORCHESTRATOR_ROW, ROW_INSET, S8, S32, SIDEBAR_PAD, Size,
-        TOOLBAR_HEIGHT, Theme,
+        self, HAIRLINE, ICON, ORCHESTRATOR_ROW, ROW_INSET, S8, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT,
+        Theme,
     },
     ui::{self, TreeLine},
 };
-
-/// The widest a project's branch name gets before it truncates.
-const BRANCH_MAX: f32 = S32 * 2.0;
 
 /// How the sidebar lists top-level chats.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -270,7 +267,7 @@ impl<'a> Outline<'a> {
     }
 
     /// A top-level chat's row. With `detail`, a quiet second line names its
-    /// project and branch.
+    /// project.
     fn chat(
         &self,
         chat: &ConversationSummary,
@@ -294,41 +291,21 @@ impl<'a> Outline<'a> {
         });
         let menu = actions::chat_menu(s, chat, &key, t, layer);
         let place = detail.then(|| {
-            let project = chat
-                .project
+            chat.project
                 .as_deref()
                 .and_then(|id| s.projects.iter().find(|p| p.id == id))
-                .map(|project| project.name.as_str());
-            match (project, chat.branch.as_deref()) {
-                (Some(project), Some(branch)) => format!("{project} · {branch}"),
-                (Some(project), None) => project.to_owned(),
-                (None, Some(branch)) => branch.to_owned(),
-                (None, None) => "No project".to_owned(),
-            }
+                .map_or("No project", |project| project.name.as_str())
         });
-        // A worktree chat's mark, unless its detail line already names the
-        // branch.
-        let marker = chat
-            .worktree
-            .as_ref()
-            .filter(|_| !detail || chat.branch.is_none())
-            .map(|path| {
-                icon(&ui::GIT_BRANCH, ICON_SMALL)
-                    .key("worktree")
-                    .color(t.faint)
-                    .help(path)
-                    .a11y_hidden()
-            });
         let mut node = TreeLine {
             key: &key,
             label: chat_title(chat),
-            detail: place.as_deref(),
+            detail: place,
             depth,
             strong: chat.unread && !chat.archived,
             dim: chat.archived,
             selected,
         }
-        .build(None, marker, ui::trailing(rest, Some(menu), menu_open), t)
+        .build(None, ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
         if chat.unread {
             node = node.description("Unread");
@@ -363,16 +340,6 @@ impl<'a> Outline<'a> {
             .size(ICON, ICON)
             .child(layer_of(&ui::FOLDER, 1.0, 0.0))
             .child(layer_of(disclosure, 0.0, 1.0));
-        let branch = project.branch.as_ref().map(|branch| {
-            text(branch)
-                .key("branch")
-                .font(t.small)
-                .color(t.faint)
-                .max_w(BRANCH_MAX)
-                .min_w(0.0)
-                .truncate()
-                .help(branch)
-        });
         let menu = actions::project_menu(s, project, &key, t, layer);
         let mut node = TreeLine {
             key: &key,
@@ -383,12 +350,7 @@ impl<'a> Outline<'a> {
             dim: false,
             selected: false,
         }
-        .build(
-            Some(leading),
-            branch,
-            ui::trailing(None, Some(menu), menu_open),
-            t,
-        )
+        .build(Some(leading), ui::trailing(None, Some(menu), menu_open), t)
         .expanded(open)
         .help(&project.path)
         .on_press(move |s: &mut Desktop| s.navigation.toggle_project(&id));

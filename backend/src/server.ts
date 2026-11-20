@@ -176,10 +176,10 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       return {};
     },
     "conversation.delete": async (_ws, { conversation: id }) => {
-      const { ids, kept } = await viz.deleteConversation((await conversation(id)).id, context);
+      const ids = await viz.deleteConversation((await conversation(id)).id, context);
       // Their views would never change again; apps learn of the deletion from `conversations.changed`.
       for (const ws of clients) for (const deleted of ids) await stopWatch(ws, deleted);
-      return { kept };
+      return {};
     },
     "projects.list": async () => ({ projects: await viz.projects.list(context) }),
     "project.create": async (_ws, { path, name }) => ({ project: await viz.projects.create(path, name, context) }),
@@ -190,37 +190,11 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
       await viz.removeProject(project, context);
       return {};
     },
-    "worktrees.list": async (_ws, { project }) => viz.listWorktrees(project, context),
     "harnesses.list": async () => viz.listHarnesses(context),
     "harnesses.options": async (_ws, { harness, model }) => viz.harnessOptions(harness, model, context),
     "files.search": async (_ws, { conversation: id, query, limit }) => ({
       files: await viz.searchFiles((await conversation(id)).id, query, limit, context),
     }),
-    "git.diff": async (_ws, { conversation: id, ...params }) =>
-      viz.repositories.diff((await conversation(id)).id, params, context),
-    "git.branches": async (_ws, target) => {
-      const selected =
-        "conversation" in target ? { conversation: (await conversation(target.conversation)).id } : target;
-      const branches = await viz.repositories.branches(selected, context);
-      if (branches === null) throw new RpcError(ErrorCode.NotARepository, "Not a Git repository");
-      return branches;
-    },
-    "git.checkout": async (_ws, { conversation: id, branch, create }) => {
-      await viz.repositories.checkout((await conversation(id)).id, branch, create, context);
-      return {};
-    },
-    "git.commit": async (_ws, { conversation: id, message, all }) =>
-      viz.repositories.commit((await conversation(id)).id, message, all, context),
-    "git.push": async (_ws, { conversation: id }) => {
-      await viz.repositories.push((await conversation(id)).id, context);
-      return {};
-    },
-    "git.pr": async (_ws, { conversation: id, ...params }) =>
-      viz.repositories.pr((await conversation(id)).id, params, context),
-    "git.revert": async (_ws, { conversation: id, turn }) => {
-      await viz.repositories.revert((await conversation(id)).id, turn, context);
-      return {};
-    },
     "conversation.submit": async (_ws, { conversation: id, text, requestId, origin, attachments }) => {
       const target = await conversation(id);
       const saved = attachments?.length ? await viz.saveAttachments(attachments) : undefined;
@@ -379,18 +353,11 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
     }
   });
 
-  const pollGit = setInterval(() => {
-    const ids = new Set<ConversationId>();
-    for (const ws of clients) for (const id of ws.data.watches.keys()) ids.add(id);
-    for (const id of ids) viz.changes.refresh(id);
-  }, 5_000);
-
   return {
     socket: options.socket,
     ...(tcp && { url: tcp.url.origin }),
     stop: async () => {
       stopChanges();
-      clearInterval(pollGit);
       await Promise.all([local.stop(true), tcp?.stop(true)]);
       await rm(options.socket, { force: true });
     },

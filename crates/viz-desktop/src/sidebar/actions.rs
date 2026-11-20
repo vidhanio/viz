@@ -1,8 +1,6 @@
 use rune::{El, FileDialogOptions, PointerPress, Tx};
 use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuEntry, MenuItem, Placement};
-use viz_client::protocol::{
-    ConversationId, ConversationKind, ConversationSummary, DefaultWorkspace, Project,
-};
+use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary, Project};
 
 use crate::{
     app::Desktop,
@@ -324,11 +322,6 @@ pub(super) fn project_menu(
     let (mut menu, context) = menu(s, key, t);
     if context.is_some() {
         let new = project.id.clone();
-        let worktree = project.id.clone();
-        let (default_label, next_default) = match project.default_workspace {
-            DefaultWorkspace::Local => ("Default workspace: Local", DefaultWorkspace::Worktree),
-            DefaultWorkspace::Worktree => ("Default workspace: Worktree", DefaultWorkspace::Local),
-        };
         let rename = project.id.clone();
         let remove = project.id.clone();
         let name = project.name.clone();
@@ -340,18 +333,6 @@ pub(super) fn project_menu(
                         s.navigation.menu = None;
                         s.create_in_project(&new, tx);
                     }),
-            )
-            .item(
-                MenuItem::new(default_label).on_select_tx(move |s: &mut Desktop, tx| {
-                    s.navigation.menu = None;
-                    s.send(
-                        Command::Project(ProjectChange::DefaultWorkspace {
-                            id: worktree.clone(),
-                            value: next_default,
-                        }),
-                        tx,
-                    );
-                }),
             )
             .item(
                 MenuItem::new("Rename").on_select_tx(move |s: &mut Desktop, tx| {

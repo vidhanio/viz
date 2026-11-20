@@ -25,12 +25,10 @@ use tokio_tungstenite::{
 use crate::{
     Endpoint, Error, Result,
     protocol::{
-        AbortConversation, Branches, ClientInfo, CommitResult, ConfigureConversation,
-        ConversationId, ConversationSummary, CreateConversation, CreateProject, DeleteConversation,
-        DiffFile, EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff, GitPr, GitPush,
-        GitRevert, Harness, HarnessOptions, HarnessOptionsResult, Hello, HelloParams,
-        ListConversations, ListEntries, ListHarnesses, ListProjects, ListWorktrees,
-        ManagedWorktree, Method, Notification, PROTOCOL_VERSION, PrResult, Project, RemoveProject,
+        AbortConversation, ClientInfo, ConfigureConversation, ConversationId, ConversationSummary,
+        CreateConversation, CreateProject, DeleteConversation, EntryPage, Harness, HarnessOptions,
+        HarnessOptionsResult, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses,
+        ListProjects, Method, Notification, PROTOCOL_VERSION, Project, RemoveProject,
         RemoveQueuedInput, SearchConversations, SearchFiles, SearchHit, SubmissionId, Submit,
         Unwatch, UpdateConversation, UpdateProject, Watch,
     },
@@ -181,17 +179,15 @@ impl Client {
             .map(drop)
     }
 
-    /// Deletes a conversation and its subagents, returning the worktree
-    /// paths left on disk because they have uncommitted changes.
+    /// Deletes a conversation and its subagents.
     ///
     /// # Errors
     ///
     /// See [`Client::submit`].
-    pub async fn delete_conversation(&self, conversation: ConversationId) -> Result<Vec<String>> {
-        Ok(self
-            .request(&DeleteConversation { conversation })
-            .await?
-            .kept)
+    pub async fn delete_conversation(&self, conversation: ConversationId) -> Result<()> {
+        self.request(&DeleteConversation { conversation })
+            .await
+            .map(drop)
     }
 
     /// Lists available project directories.
@@ -212,7 +208,7 @@ impl Client {
         Ok(self.request(params).await?.project)
     }
 
-    /// Updates a project's name or default workspace.
+    /// Updates a project's name.
     ///
     /// # Errors
     ///
@@ -228,14 +224,6 @@ impl Client {
     /// See [`Client::submit`].
     pub async fn remove_project(&self, params: &RemoveProject<'_>) -> Result<()> {
         self.request(params).await.map(drop)
-    }
-
-    /// Lists managed worktrees available to reuse in a project.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn list_worktrees(&self, project: &str) -> Result<Vec<ManagedWorktree>> {
-        Ok(self.request(&ListWorktrees { project }).await?.worktrees)
     }
 
     /// Lists configured ACP runners.
@@ -290,62 +278,6 @@ impl Client {
     /// # Errors
     /// See [`Client::submit`].
     pub async fn remove_queued_input(&self, params: &RemoveQueuedInput) -> Result<()> {
-        self.request(params).await.map(drop)
-    }
-
-    /// Gets unified patches and their file metadata.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn git_diff(&self, params: &GitDiff<'_>) -> Result<Vec<DiffFile>> {
-        Ok(self.request(params).await?.files)
-    }
-
-    /// Lists branches for the conversation's repository.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn git_branches(&self, target: GitBranches<'_>) -> Result<Branches> {
-        self.request(&target).await
-    }
-
-    /// Switches branches or creates and checks out a new branch.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn git_checkout(&self, params: &GitCheckout<'_>) -> Result<()> {
-        self.request(params).await.map(drop)
-    }
-
-    /// Commits changes in the conversation's repository.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn git_commit(&self, params: &GitCommit<'_>) -> Result<CommitResult> {
-        self.request(params).await
-    }
-
-    /// Pushes the active branch.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn git_push(&self, conversation: ConversationId) -> Result<()> {
-        self.request(&GitPush { conversation }).await.map(drop)
-    }
-
-    /// Creates a pull request for the active branch.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn git_pr(&self, params: &GitPr<'_>) -> Result<PrResult> {
-        self.request(params).await
-    }
-
-    /// Restores the working tree as it was at the start of a turn.
-    ///
-    /// # Errors
-    /// See [`Client::submit`].
-    pub async fn git_revert(&self, params: &GitRevert) -> Result<()> {
         self.request(params).await.map(drop)
     }
 

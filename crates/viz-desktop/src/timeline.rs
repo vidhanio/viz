@@ -14,7 +14,7 @@ use viz_client::protocol::ConversationStatus;
 
 use crate::{
     app::{Desktop, Status},
-    attachments, changes, sidebar,
+    attachments, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, HAIRLINE, ICON, ICON_LARGE, ICON_SMALL, S2, S4, S8, S12, S16,
         S24, S32, S40, Size, Theme,
@@ -142,7 +142,7 @@ fn items(s: &Desktop, items: &[Item], streaming: bool, rows: &mut Rows, t: &Them
     while let Some(item) = items.get(index) {
         index += 1;
         match item {
-            Item::User(user) => rows.push(Kind::Mine, mine(s, user, t)),
+            Item::User(user) => rows.push(Kind::Mine, mine(user, t)),
             Item::Text { key, text } => rows.push(Kind::Prose, prose(key, text, streaming, t)),
             Item::Thinking {
                 key,
@@ -336,7 +336,7 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
         return ui::empty(
             None,
             "Add a project",
-            "Chats run in a project’s folder, on its branch.",
+            "Chats run in a project’s folder.",
             Some(add_project()),
             t,
         );
@@ -344,8 +344,7 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
     chat_hint(s, t)
 }
 
-/// An empty chat: where it runs (the header carries its branch), and the few
-/// keys that work from here.
+/// An empty chat: where it runs, and the few keys that work from here.
 fn chat_hint(s: &Desktop, t: &Theme) -> El {
     let title = s
         .project()
@@ -361,11 +360,11 @@ fn chat_hint(s: &Desktop, t: &Theme) -> El {
     } else {
         ""
     };
-    // A draft is already the new chat, and has no changes until it's sent.
+    // A draft is already the new chat.
     let keys: &[_] = if s.new_chat.is_some() {
         &[("K", "Commands")]
     } else {
-        &[("N", "New chat"), ("K", "Commands"), ("D", "Changes")]
+        &[("N", "New chat"), ("K", "Commands")]
     };
     ui::empty(None, title, status, None, t).child(shortcuts(keys, t))
 }
@@ -391,51 +390,12 @@ fn shortcuts(keys: &[(&str, &str)], t: &Theme) -> El {
 }
 
 /// A user message sits on a neutral surface.
-fn mine(s: &Desktop, user: &User, t: &Theme) -> El {
+fn mine(user: &User, t: &Theme) -> El {
     let mut message = Card::Message
         .build(t)
         .key(&user.key)
         .role("article")
-        .label("You")
-        .hover_group_focus();
-    if let Some(turn) = user.turn
-        && s.conversation
-            .as_ref()
-            .is_some_and(|state| state.git.is_some())
-    {
-        let action = |label: &str| ui::button(label, ButtonVariant::GhostMuted, Size::Small);
-        message = message.child(
-            row()
-                .key("prompt-actions")
-                .w_full()
-                .h(Size::Small.height())
-                .gap(S4)
-                .center_y()
-                .child(ui::section("You", t).grow(1.0))
-                .child(
-                    row()
-                        .key("actions")
-                        .gap(S2)
-                        .group_opacity(0.0, 1.0)
-                        .child(
-                            action("Changes")
-                                .disabled(!s.connected())
-                                .on_press_tx(move |s: &mut Desktop, tx| changes::turn(s, tx, turn))
-                                .build(&t.k)
-                                .key("turn-changes"),
-                        )
-                        .child(
-                            action("Revert to here")
-                                .disabled(!s.connected() || s.busy())
-                                .on_press_tx(move |s: &mut Desktop, tx| {
-                                    changes::confirm_revert(s, tx, turn);
-                                })
-                                .build(&t.k)
-                                .key("turn-revert"),
-                        ),
-                ),
-        );
-    }
+        .label("You");
     if !user.text.is_empty() {
         message = message.child(
             text(&user.text)

@@ -1,5 +1,5 @@
 //! The toolbar: the open conversation's title (a subagent's under its
-//! parent), its workspace context, and the Agents card.
+//! parent), its project and run state, and the Agents card.
 
 use rune::{El, col, icon, row, text};
 use rune_kit::{IconButtonVariant, Placement, Popover, shell::Toolbar};
@@ -7,7 +7,7 @@ use viz_client::protocol::{ConversationId, ConversationStatus, ConversationSumma
 
 use crate::{
     app::{Desktop, chat_title},
-    changes, sidebar,
+    sidebar,
     theme::{
         self, CARD_WIDTH, HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S4, S8, S12, S32, Size,
         TOOLBAR_PAD, Theme,
@@ -44,30 +44,13 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
         title
     };
     let mut toolbar = toolbar.leading(title);
-    // The orchestrator owns no agents and no checkout: no Agents card, no
-    // changes panel.
-    if s.orchestrator_open() {
-        return toolbar.trailing(metadata(s, t).mr(READING_INSET - TOOLBAR_PAD));
-    }
-    if let Some(agents) = agents(s, t, layer) {
+    // The orchestrator owns no agents: no Agents card.
+    if !s.orchestrator_open()
+        && let Some(agents) = agents(s, t, layer)
+    {
         toolbar = toolbar.trailing(agents);
     }
-    let open = s.changes.pane.is_open();
-    toolbar.trailing(metadata(s, t)).trailing(
-        ui::icon_button(
-            &ui::INSPECTOR,
-            if open { "Hide changes" } else { "Show changes" },
-            IconButtonVariant::GhostMuted,
-            Size::Default,
-        )
-        .shortcut(format!("{}+D", ui::COMMAND_KEY))
-        .on_press_tx(changes::toggle)
-        .build(&t.k)
-        .key("inspector-toggle")
-        .expanded(open)
-        // Optically: the glyph's edge sits at the reading inset.
-        .mr(READING_INSET - TOOLBAR_PAD - (Size::Default.height() - ICON) / 2.0),
-    )
+    toolbar.trailing(metadata(s, t).mr(READING_INSET - TOOLBAR_PAD))
 }
 
 /// Opens or closes the Agents card, when the open chat has subagents.
@@ -299,8 +282,8 @@ fn breadcrumb(s: &Desktop, parent: ConversationId, t: &Theme) -> El {
         )
 }
 
-/// Project, branch and run state, quiet and right-aligned. The orchestrator
-/// isn't in a checkout: only its run state.
+/// Project and run state, quiet and right-aligned. The orchestrator has no
+/// project: only its run state.
 fn metadata(s: &Desktop, t: &Theme) -> El {
     let mut metadata = row()
         .key("header-metadata")
@@ -311,32 +294,6 @@ fn metadata(s: &Desktop, t: &Theme) -> El {
     let orchestrator = s.orchestrator_open();
     if let Some(project) = s.project().filter(|_| !orchestrator) {
         metadata = metadata.child(quiet("header-project", &project.name, t).help(&project.path));
-    }
-    if s.new_chat.is_none()
-        && !orchestrator
-        && let Some(branch) = s.branch()
-    {
-        let mut item = row()
-            .key("header-branch")
-            .center_y()
-            .gap(S4)
-            .min_w(0.0)
-            .shrink()
-            .child(icon(&ui::GIT_BRANCH, ICON_SMALL).color(t.muted))
-            .child(quiet("branch", branch, t));
-        if s.connected()
-            && s.conversation
-                .as_ref()
-                .is_some_and(|state| state.git.is_some())
-        {
-            item = item
-                .role("button")
-                .label("Switch branch")
-                .focusable(true)
-                .focus_ring(HAIRLINE, HAIRLINE, t.accent)
-                .on_press_tx(changes::branch_dialog);
-        }
-        metadata = metadata.child(item);
     }
     if let Some(mark) = s
         .conversation

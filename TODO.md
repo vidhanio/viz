@@ -20,18 +20,17 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] **uniichat memory** for the orchestrator (`backend/src/memory/`): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
 - [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
 - [x] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): `list_conversations`, `read_conversation`, `search_conversations`, `spawn_chat` (background, reports back as a `[chat N]` input), `message_conversation` (queues), `cancel_conversation`.
-- [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers), recover a worktree left by a crash between creation and saving it.
+- [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers).
 - [x] **Detached ACP delegation**: the orchestrator delegates only through `spawn_chat`; chat results arrive as inputs.
 - [x] **Scoped MCP progress** for ACP delegations: loopback HTTP or stdio bridge, per-turn token, no access to unrelated conversations.
 - [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
 - [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP. Parent transcript tool records link to the affected child when its runner forwards the result.
 - [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`).
 - [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
-- [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, worktree, timestamps) for the sidebar; rename.
-- [x] **Conversation deletion**: tombstone a chat subtree, stop its turns, remove its search hits, and clean up unshared clean worktrees. Protect the orchestrator from thread management.
-- [x] **ADE workspace** (t3code parity, 2026-11-18): projects, per-chat model/effort/mode from the runner's ACP config options (config = default), slash commands, `@` file search, stop, queue view and removal, attachments, full-text search, history paging, git worktree chats, per-turn checkpoints with diff and revert, commit (generated message) / push / PR.
-- [x] **Chat workspaces**: per-project default, new worktrees named from the first message, reuse of previous worktrees, and opt-in worktree isolation for ACP subagents.
-- [ ] ADE follow-ups (from the t3code gap analysis): terminal panes (server PTYs; Bun lacks openpty), in-thread find, edit-from-here / fork a chat at a message, plan-mode approve → implement, usage and limits panel, settings UI and rebindable keys, harness probe (capabilities and models per runner before a chat exists), scratch directories for project-less chats, multi-model fan-out to parallel worktrees.
+- [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, timestamps) for the sidebar; rename.
+- [x] **Conversation deletion**: tombstone a chat subtree, stop its turns, and remove its search hits. Protect the orchestrator from thread management.
+- [x] **ADE workspace** (t3code parity, 2026-11-18): projects, per-chat model/effort/mode from the runner's ACP config options (config = default), slash commands, `@` file search, stop, queue view and removal, attachments, full-text search, history paging.
+- [ ] ADE follow-ups (from the t3code gap analysis): terminal panes (server PTYs; Bun lacks openpty), in-thread find, edit-from-here / fork a chat at a message, plan-mode approve → implement, usage and limits panel, settings UI and rebindable keys, harness probe (capabilities and models per runner before a chat exists), scratch directories for project-less chats.
 - [ ] Credentials: persist pi-ai `CredentialStore` in the state dir; OAuth login (Claude Pro/Max, ChatGPT, Copilot) driven from a UI.
 - [ ] Auth: per-client tokens, pairing codes (QR for iOS), scopes; `tailscale serve` helper (t3code's `--tailscale-serve`).
 - [ ] Expose viz as an ACP agent itself, so editors (Zed) can talk to the orchestrator.
@@ -54,8 +53,8 @@ Roadmap and open work. Check items off in the same change that lands them.
 
 - [x] Skeleton: sidebar + transcript + input, live view via delta ops
 - [x] Redesign on rune-kit + OpenCode theme (light/dark): split shell with collapsible sidebar (Orchestrator, Chats, Subagents, busy spinners, connection footer), thread header (model, thinking, usage), Markdown timeline with grouped collapsible tool rows, subagent rows that open the child, turn dividers, streaming answer, auto-growing composer, toasts
-- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; Ctrl/Cmd+D changes panel (diffs, branch, commit, push, PR, revert); worktree chats; desktop notifications and window-title status.
-- [x] Delete a chat from its row menu or the command palette, with confirmation and retained-worktree paths.
+- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; desktop notifications and window-title status.
+- [x] Delete a chat from its row menu or the command palette, with confirmation.
 - [x] Configurable dark and light base16 schemes, with Home Manager Stylix integration
 - [ ] Settings UI for desktop preferences in `desktop.toml`
 - [ ] Tray, global shortcut to summon

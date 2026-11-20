@@ -8,9 +8,6 @@ import { type ConversationId, type Cursor, defineDoc, type Harness, type Tx } fr
 
 import type { Params, Project } from "./protocol.ts";
 
-export type WorktreeBinding = { path: string; base: string };
-export type ChatWorkspace = { worktree: WorktreeBinding; branchToName?: string };
-
 export const MetaDoc = defineDoc<{
   project: string | null;
   parent: ConversationId | null;
@@ -22,8 +19,6 @@ export const MetaDoc = defineDoc<{
    * this tombstone is the deletion; its transcript stays in `viz.sqlite`.
    */
   deleted?: boolean;
-  worktree?: WorktreeBinding;
-  branchToName?: string;
   createdAt: number;
   updatedAt: number;
 }>({
@@ -36,8 +31,7 @@ export const MetaDoc = defineDoc<{
   checkpointWhen: () => true,
 });
 
-type StoredProject = Omit<Project, "branch">;
-export const ProjectsDoc = defineDoc<{ projects: StoredProject[] }>({
+export const ProjectsDoc = defineDoc<{ projects: Project[] }>({
   kind: "viz.projects",
   version: 1,
   scope: "conversation",
@@ -73,24 +67,6 @@ export async function projectIn(tx: Tx, root: ConversationId, id: string) {
   return found;
 }
 
-async function withBranch(project: StoredProject): Promise<Project> {
-  let branch: string | null = null;
-  try {
-    // Git resolves the .git/HEAD of both ordinary checkouts and linked worktrees.
-    await stat(join(project.path, ".git"));
-    const git = Bun.spawn(["git", "symbolic-ref", "--quiet", "HEAD"], {
-      cwd: project.path,
-      stdout: "pipe",
-      stderr: "ignore",
-    });
-    const [ref, status] = await Promise.all([git.stdout.text(), git.exited]);
-    if (status === 0 && ref.startsWith("refs/heads/")) branch = ref.trimEnd().slice("refs/heads/".length);
-  } catch {
-    // No readable branch.
-  }
-  return { ...project, branch };
-}
-
 export type ProjectStore = {
   list(context: Context): Promise<Project[]>;
   create(path: string, name: string | undefined, context: Context): Promise<Project>;
@@ -102,7 +78,7 @@ export function projects(harness: Harness, root: ConversationId): ProjectStore {
   return {
     async list(context: Context): Promise<Project[]> {
       const state = await harness.snapshot(ProjectsDoc, root, context);
-      return Promise.all((state?.projects ?? []).map(withBranch));
+      return state?.projects ?? [];
     },
     async create(path: string, name: string | undefined, context: Context) {
       const absolute = resolve(
@@ -111,11 +87,10 @@ export function projects(harness: Harness, root: ConversationId): ProjectStore {
       const canonical = await realpath(absolute).catch(() => null);
       if (canonical === null || !(await stat(canonical)).isDirectory())
         throw new Error("Project path is not a directory");
-      const project: StoredProject = {
+      const project: Project = {
         id: randomUUID(),
         path: canonical,
         name: name ?? (basename(canonical) || canonical),
-        defaultWorkspace: "local",
         createdAt: Date.now(),
       };
       await harness.commit(async (tx) => {
@@ -123,16 +98,14 @@ export function projects(harness: Harness, root: ConversationId): ProjectStore {
         if (projects.some((p) => p.path === canonical)) throw new Error("Project already exists");
         projects.push(project);
       }, context);
-      return withBranch(project);
+      return project;
     },
-    async update(id: string, { name, defaultWorkspace }, context: Context) {
-      const project = await harness.commit(async (tx) => {
+    async update(id: string, { name }, context: Context) {
+      return harness.commit(async (tx) => {
         const project = await projectIn(tx, root, id);
         if (name !== undefined) project.name = name;
-        if (defaultWorkspace !== undefined) project.defaultWorkspace = defaultWorkspace;
         return { ...project };
       }, context);
-      return withBranch(project);
     },
     async remove(id: string, move: (tx: Tx, id: ConversationId) => Promise<void>, context: Context) {
       await harness.commit(async (tx) => {

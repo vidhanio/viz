@@ -82,10 +82,8 @@ export const TURNS_PROMPT = `# Turns
 
 Do the user's tasks yourself, with your tools, following the user's
 instructions. Delegate self-contained work with spawn_chat. It starts a visible,
-independent ACP chat, optionally in a project, and returns immediately. For
-independent write work, select workspace: { kind: "worktree" } on a Git
-project and integrate the result yourself. The result arrives later as an
-input starting with "[chat ". Use list_conversations
+independent ACP chat, optionally in a project, and returns immediately. The
+result arrives later as an input starting with "[chat ". Use list_conversations
 for project and top-level chat ids, message_conversation for follow-ups, and
 cancel_conversation to stop delegated work. Nested subagents are managed by
 their parent chat.

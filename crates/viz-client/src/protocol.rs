@@ -4,18 +4,16 @@
 //! Each request's params type implements [`Method`], which names the method on
 //! the wire and its result type.
 
-mod workspace;
+mod history;
 
 use std::fmt;
 
+pub use history::{
+    Attachment, AttachmentCapabilities, EntryId, EntryPage, ListEntries, QueuedInput,
+    RemoveQueuedInput, SearchConversations, SearchHit, SearchHits,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-pub use workspace::{
-    Attachment, AttachmentCapabilities, Branches, CommitResult, DiffFile, DiffFileStatus,
-    DiffFiles, DiffScope, EntryId, EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff,
-    GitFile, GitFileStatus, GitPr, GitPush, GitRevert, GitState, ListEntries, PrResult,
-    QueuedInput, RemoveQueuedInput, SearchConversations, SearchHit, SearchHits, Workspace,
-};
 
 /// The protocol version this crate speaks.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -71,12 +69,11 @@ methods! {
     UpdateConversation<'_> => "conversation.update", Empty;
     ConfigureConversation<'_> => "conversation.configure", Empty;
     AbortConversation => "conversation.abort", Empty;
-    DeleteConversation => "conversation.delete", Deleted;
+    DeleteConversation => "conversation.delete", Empty;
     ListProjects => "projects.list", ProjectList;
     CreateProject<'_> => "project.create", ProjectResult;
     UpdateProject<'_> => "project.update", ProjectResult;
     RemoveProject<'_> => "project.remove", Empty;
-    ListWorktrees<'_> => "worktrees.list", WorktreeList;
     ListHarnesses => "harnesses.list", HarnessList;
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
@@ -88,13 +85,6 @@ methods! {
     SearchConversations<'_> => "conversations.search", SearchHits;
     ListEntries => "conversation.entries", EntryPage;
     RemoveQueuedInput => "queue.remove", Empty;
-    GitDiff<'_> => "git.diff", DiffFiles;
-    GitBranches<'_> => "git.branches", Branches;
-    GitCheckout<'_> => "git.checkout", Empty;
-    GitCommit<'_> => "git.commit", CommitResult;
-    GitPush => "git.push", Empty;
-    GitPr<'_> => "git.pr", PrResult;
-    GitRevert => "git.revert", Empty;
 }
 
 /// What kind of client is connecting; decides which notifications it receives.
@@ -209,10 +199,6 @@ pub struct ConversationSummary {
     pub unread: bool,
     /// Show the conversation in the pinned section.
     pub pinned: bool,
-    /// The managed worktree path, if the chat uses one.
-    pub worktree: Option<String>,
-    /// The worktree's checked-out branch, absent when detached.
-    pub branch: Option<String>,
 }
 
 /// `conversation.create` params.
@@ -221,9 +207,6 @@ pub struct CreateConversation {
     /// Project directory; absent uses the default working directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Workspace selection; absent uses the project's default.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workspace: Option<Workspace>,
     /// Configured runner; absent uses the backend default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
@@ -361,8 +344,6 @@ pub struct ConversationState {
     pub commands: Vec<SlashCommand>,
     /// Inputs waiting for their turn.
     pub queue: Vec<QueuedInput>,
-    /// Git state of the current working directory.
-    pub git: Option<GitState>,
     /// What kind of attachment the current runner accepts directly.
     pub attachments: AttachmentCapabilities,
 }
@@ -377,22 +358,8 @@ pub struct Project {
     pub name: String,
     /// Absolute directory path.
     pub path: String,
-    /// Checked-out Git branch, if attached on a repository.
-    pub branch: Option<String>,
-    /// Workspace mode for new chats.
-    pub default_workspace: DefaultWorkspace,
     /// Creation time in Unix milliseconds.
     pub created_at: i64,
-}
-
-/// A project's default workspace for new chats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum DefaultWorkspace {
-    /// Use the project's existing checkout.
-    Local,
-    /// Make a separate checkout for each chat.
-    Worktree,
 }
 
 /// A configured ACP runner.
@@ -457,13 +424,6 @@ pub struct DeleteConversation {
     pub conversation: ConversationId,
 }
 
-/// Result of `conversation.delete`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct Deleted {
-    /// Worktree paths left on disk because they have uncommitted changes.
-    pub kept: Vec<String>,
-}
-
 /// List projects.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct ListProjects {}
@@ -485,7 +445,7 @@ pub struct CreateProject<'a> {
     pub name: Option<&'a str>,
 }
 
-/// Update a project's display name or default workspace.
+/// Update a project's display name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct UpdateProject<'a> {
     /// Project id.
@@ -493,9 +453,6 @@ pub struct UpdateProject<'a> {
     /// New display name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<&'a str>,
-    /// New default workspace.
-    #[serde(rename = "defaultWorkspace", skip_serializing_if = "Option::is_none")]
-    pub default_workspace: Option<DefaultWorkspace>,
 }
 
 /// The project returned after creation or an update.
@@ -510,34 +467,6 @@ pub struct ProjectResult {
 pub struct RemoveProject<'a> {
     /// Project id.
     pub project: &'a str,
-}
-
-/// List managed worktrees available to reuse in a project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ListWorktrees<'a> {
-    /// Project id.
-    pub project: &'a str,
-}
-
-/// Managed worktrees, newest conversation first.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct WorktreeList {
-    /// One entry per worktree.
-    pub worktrees: Vec<ManagedWorktree>,
-}
-
-/// A managed worktree and the latest conversation that uses it.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ManagedWorktree {
-    /// Full path to the checkout.
-    pub path: String,
-    /// Its current branch, absent when detached.
-    pub branch: Option<String>,
-    /// The latest live conversation using the checkout.
-    pub conversation: ConversationId,
-    /// Time of that conversation's last activity in Unix milliseconds.
-    pub updated_at: i64,
 }
 
 /// List configured ACP runners.

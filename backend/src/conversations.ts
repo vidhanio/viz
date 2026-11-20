@@ -12,8 +12,6 @@ import {
 import { ChatDoc } from "./agents/chat.ts";
 import { TurnEntry } from "./agents/model.ts";
 import { AcpStateDoc, HarnessOptionsDoc, withModelProfiles } from "./agents/options.ts";
-import { currentBranch } from "./git/commands.ts";
-import type { Git } from "./git/index.ts";
 import { conversationRecords, MetaDoc } from "./projects.ts";
 import type { ConfigOption, ConversationState, ConversationSummary } from "./protocol.ts";
 import { ORCHESTRATOR_TITLE, TitleDoc } from "./titles.ts";
@@ -22,7 +20,6 @@ export async function moveConversation(tx: Tx, id: ConversationId, project: stri
   const meta = await tx.doc(MetaDoc, id);
   if (meta.project === project) return false;
   meta.project = project;
-  if (meta.worktree) return false;
   const chat = await tx.doc(ChatDoc, id);
   if (chat.runner && chat.runner.cwd !== cwd) {
     if (chat.hasWorker || chat.dispatched || chat.queue.length) {
@@ -65,7 +62,6 @@ export class Conversations {
     private readonly cwd: string,
     private readonly rootOptions: (context: Context) => Promise<ConfigOption[]>,
     private readonly rootImages: (context: Context) => Promise<boolean>,
-    private readonly git: Git,
   ) {}
 
   async list(context: Context, scope: "all" | "top-level" = "all"): Promise<ConversationSummary[]> {
@@ -81,8 +77,7 @@ export class Conversations {
     }, context);
     // Bound concurrent storage reads regardless of the number of conversations.
     const summaries: ConversationSummary[] = [];
-    const branches = new Map<string, string | null>();
-    for (const record of records) summaries.push(await this.summary(record, context, branches));
+    for (const record of records) summaries.push(await this.summary(record, context));
     return summaries;
   }
 
@@ -111,22 +106,12 @@ export class Conversations {
     return { status, meta, parent, harness: chat.runner.name, cwd: chat.runner.cwd } as const;
   }
 
-  async summary(
-    record: ConversationRecord,
-    context: Context,
-    branches?: Map<string, string | null>,
-  ): Promise<ConversationSummary> {
+  async summary(record: ConversationRecord, context: Context): Promise<ConversationSummary> {
     const info = await this.#info(record, context);
     const title =
       record.id === this.root
         ? ORCHESTRATOR_TITLE
         : ((await this.harness.snapshot(TitleDoc, record.id, context))?.title ?? "");
-    const worktree = info.meta?.worktree?.path;
-    let branch = worktree && branches?.get(worktree);
-    if (worktree && branch === undefined) {
-      branch = await currentBranch(worktree).catch(() => null);
-      branches?.set(worktree, branch);
-    }
     return {
       id: record.id,
       title,
@@ -139,8 +124,6 @@ export class Conversations {
       archived: (record.id !== this.root && info.meta?.archived) || false,
       pinned: (record.id !== this.root && info.meta?.pinned) || false,
       unread: info.meta?.unread ?? false,
-      ...(worktree && { worktree }),
-      ...(branch && { branch }),
       updatedAt: info.meta?.updatedAt ?? 0,
     };
   }
@@ -154,7 +137,6 @@ export class Conversations {
       harness: info.harness,
       project: info.meta?.project ?? null,
       cwd: info.cwd,
-      git: await this.git.state(info.cwd, info.meta?.worktree?.path ?? null),
     };
     if (id === this.root) {
       const [options, images, inbox] = await Promise.all([

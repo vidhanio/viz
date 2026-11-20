@@ -43,24 +43,11 @@ const ConversationId = int({ minimum: 1, description: "pi-durable ConversationId
 const SubmissionId = int({ minimum: 1, description: "pi-durable SubmissionId" });
 const ProjectId = str({ minLength: 1, description: "Backend-assigned project id" });
 
-const DefaultWorkspace = oneOf(["local", "worktree"], { description: "Default workspace for new chats" });
-export const Workspace = union([
-  obj({ kind: lit("local") }),
-  obj({
-    kind: lit("worktree"),
-    base: opt(str({ minLength: 1, description: "Default: origin HEAD, then the checked-out branch" })),
-  }),
-  obj({ kind: lit("existing"), path: str({ minLength: 1, description: "A viz-managed worktree of this project" }) }),
-]);
-export type Workspace = Static<typeof Workspace>;
-
 /** A directory that chats run in. */
 export const Project = obj({
   id: ProjectId,
   name: str(),
   path: str({ description: "Absolute directory; the cwd of the project's chats" }),
-  branch: nullable(str({ description: "Checked-out git branch, null outside a repository or when detached" })),
-  defaultWorkspace: DefaultWorkspace,
   createdAt: int({ description: "Unix milliseconds" }),
 });
 export type Project = Static<typeof Project>;
@@ -82,8 +69,6 @@ export const ConversationSummary = obj({
   updatedAt: int({ description: "Unix milliseconds of the last input or turn end; 0 when unknown" }),
   unread: bool({ description: "A turn ended while no app watched the conversation; watching clears it" }),
   pinned: bool(),
-  worktree: opt(str({ description: "Path of the viz-created git worktree the conversation runs in" })),
-  branch: opt(str({ description: "Checked-out branch of a managed worktree; absent when detached" })),
 });
 export type ConversationSummary = Static<typeof ConversationSummary>;
 
@@ -120,23 +105,6 @@ export const ConfigOption = obj({
 });
 export type ConfigOption = Static<typeof ConfigOption>;
 
-/** The conversation's working tree, when its cwd is in a git repository. */
-export const GitState = obj({
-  branch: nullable(str({ description: "Null when detached" })),
-  upstream: nullable(str()),
-  ahead: int({ minimum: 0 }),
-  behind: int({ minimum: 0 }),
-  worktree: nullable(str({ description: "Path of the viz-created worktree this conversation runs in" })),
-  files: arr(
-    obj({
-      path: str({ description: "Relative to the repository root" }),
-      status: oneOf(["modified", "added", "deleted", "renamed", "untracked", "conflicted"]),
-      staged: bool(),
-    }),
-  ),
-});
-export type GitState = Static<typeof GitState>;
-
 /** A file sent with an input. Images go to runners that take them; everything is also saved for the agent to read. */
 export const Attachment = obj({
   name: str({ minLength: 1 }),
@@ -144,8 +112,6 @@ export const Attachment = obj({
   data: str({ description: "Base64, at most 20 MiB decoded" }),
 });
 export type Attachment = Static<typeof Attachment>;
-
-const ConversationTarget = obj({ conversation: ConversationId });
 
 /** viz's own per-conversation state, beside pi-durable's view. Sent whole on every change. */
 export const ConversationState = obj({
@@ -158,7 +124,6 @@ export const ConversationState = obj({
     obj({ name: str({ description: "Without the leading /" }), description: str(), hint: nullable(str()) }),
   ),
   queue: arr(obj({ submission: SubmissionId, text: str() }), { description: "Inputs waiting for the next turn" }),
-  git: nullable(GitState),
   attachments: obj(
     { images: bool({ description: "The runner takes image prompts" }) },
     { description: "What attachments the runner accepts; files always go as paths" },
@@ -183,7 +148,6 @@ export const Methods = {
   "conversation.create": {
     params: obj({
       project: opt(ProjectId),
-      workspace: opt(Workspace),
       harness: opt(str({ description: "Configured ACP runner; default [backend].default_harness" })),
       options: opt(
         map(OptionValue, {
@@ -214,11 +178,7 @@ export const Methods = {
   },
   "conversation.delete": {
     params: obj({ conversation: ConversationId }),
-    result: obj({
-      kept: arr(str(), {
-        description: "Worktree paths left on disk rather than removed",
-      }),
-    }),
+    result: Empty,
   },
   "conversation.submit": {
     params: obj({
@@ -250,25 +210,12 @@ export const Methods = {
     result: obj({ project: Project }),
   },
   "project.update": {
-    params: obj({ project: ProjectId, name: opt(str({ minLength: 1 })), defaultWorkspace: opt(DefaultWorkspace) }),
+    params: obj({ project: ProjectId, name: opt(str({ minLength: 1 })) }),
     result: obj({ project: Project }),
   },
   "project.remove": {
     params: obj({ project: ProjectId }),
     result: Empty,
-  },
-  "worktrees.list": {
-    params: obj({ project: ProjectId }),
-    result: obj({
-      worktrees: arr(
-        obj({
-          path: str(),
-          branch: nullable(str()),
-          conversation: ConversationId,
-          updatedAt: int({ description: "Unix milliseconds of the latest live conversation using this worktree" }),
-        }),
-      ),
-    }),
   },
   "harnesses.list": {
     params: Empty,
@@ -315,63 +262,6 @@ export const Methods = {
     params: obj({ conversation: ConversationId, submission: SubmissionId }),
     result: Empty,
   },
-  "git.diff": {
-    params: obj({
-      conversation: ConversationId,
-      scope: oneOf(["worktree", "turn", "branch"], {
-        description: "worktree: uncommitted changes; turn: since the start of `turn`; branch: against the base branch",
-      }),
-      turn: opt(int({ minimum: 1, description: "For scope turn: the prompt entry id; default the latest turn" })),
-      path: opt(str()),
-    }),
-    result: obj({
-      files: arr(
-        obj({
-          path: str(),
-          oldPath: nullable(str()),
-          status: oneOf(["modified", "added", "deleted", "renamed"]),
-          additions: int(),
-          deletions: int(),
-          patch: str({ description: "Unified diff of this file, capped at 200 KB" }),
-        }),
-      ),
-    }),
-  },
-  "git.branches": {
-    params: union([ConversationTarget, obj({ project: ProjectId })]),
-    result: obj({
-      current: nullable(str()),
-      branches: arr(str()),
-      defaultBase: nullable(str({ description: "Short name of the default worktree base ref, or null if none" })),
-    }),
-  },
-  "git.checkout": {
-    params: obj({ conversation: ConversationId, branch: str({ minLength: 1 }), create: opt(bool()) }),
-    result: Empty,
-  },
-  "git.commit": {
-    params: obj({
-      conversation: ConversationId,
-      message: opt(str({ description: "Empty or absent: written by the [memory].compactor model from the diff" })),
-      all: opt(bool({ description: "Stage every change first; default true" })),
-    }),
-    result: obj({ commit: str(), message: str() }),
-  },
-  "git.push": {
-    params: ConversationTarget,
-    result: Empty,
-  },
-  "git.pr": {
-    params: obj({ conversation: ConversationId, title: opt(str()), body: opt(str()), draft: opt(bool()) }),
-    result: obj({ url: str() }),
-  },
-  "git.revert": {
-    params: obj({
-      conversation: ConversationId,
-      turn: int({ minimum: 1, description: "Restore the working tree to the start of this turn (prompt entry id)" }),
-    }),
-    result: Empty,
-  },
 } as const;
 export type MethodName = keyof typeof Methods;
 export type Params<M extends MethodName> = Static<(typeof Methods)[M]["params"]>;
@@ -409,5 +299,4 @@ export const ErrorCode = {
   Internal: -32603,
   NotHello: -32000,
   NotFound: -32001,
-  NotARepository: -32002,
 } as const;

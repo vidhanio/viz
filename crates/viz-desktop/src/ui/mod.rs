@@ -2,7 +2,7 @@
 //! variant and owns its insets; views compose them and add no padding of
 //! their own beyond the layout tokens in `theme`.
 
-use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
+use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, row, text};
 use rune_kit::{
     Button, ButtonVariant, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
     Placement, PopupList, Select, SelectAppearance, TextInput,
@@ -72,33 +72,6 @@ pub fn quiet(label: &str, t: &Theme) -> El {
         .shrink()
         .truncate()
         .help_when_truncated(label)
-}
-
-/// A quiet read-only value for an inline control that can no longer change.
-pub fn locked_label(key: &str, label: &str, detail: &str, t: &Theme) -> El {
-    row()
-        .key(key)
-        .h(Size::Default.height())
-        .px(S4)
-        .center_y()
-        .gap(S4)
-        .max_w(PICKER_TRIGGER_MAX)
-        .help(detail)
-        .child(icon(&LOCK, ICON_SMALL).color(t.muted).a11y_hidden())
-        .child(
-            text(label)
-                .font(t.small)
-                .color(t.muted)
-                .min_w(0.0)
-                .truncate()
-                .shrink(),
-        )
-}
-
-/// The inline width reserved for a read-only value.
-pub fn locked_label_width(label: &str, t: &Theme) -> f32 {
-    (S4.mul_add(3.0, rune::text::measure(label, &[], t.small, None).0) + ICON_SMALL)
-        .min(PICKER_TRIGGER_MAX)
 }
 
 /// A glyph centered in an icon-wide box one line tall, so it sits on the
@@ -250,13 +223,7 @@ pub struct TreeLine<'a> {
 }
 
 impl TreeLine<'_> {
-    pub fn build(
-        self,
-        leading: Option<El>,
-        markers: impl IntoIterator<Item = El>,
-        slot: El,
-        t: &Theme,
-    ) -> El {
+    pub fn build(self, leading: Option<El>, slot: El, t: &Theme) -> El {
         let color = if self.dim {
             t.faint
         } else if self.selected || self.strong {
@@ -309,7 +276,6 @@ impl TreeLine<'_> {
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .children(leading.map(|mark| lead(mark, TREE_ROW)))
             .child(labels)
-            .children(markers)
             .child(slot);
         if let Some(detail) = self.detail {
             line = line.description(detail);
@@ -655,15 +621,6 @@ pub fn dialog_actions(buttons: impl IntoIterator<Item = El>) -> El {
     row().w_full().justify_end().gap(S8).children(buttons)
 }
 
-/// A labelled field in a dialog.
-pub fn field(label: &str, input: El, t: &Theme) -> El {
-    col()
-        .w_full()
-        .gap(S4)
-        .child(text(label).font(t.small_medium).color(t.muted))
-        .child(input)
-}
-
 /// A one-field (or no-field) confirmation dialog.
 pub struct DialogForm<'a> {
     pub title: &'a str,
@@ -741,9 +698,7 @@ lucide! {
     MORE = Ellipsis;
     FOLDER = Folder;
     CHAT = MessageSquare;
-    GIT_BRANCH = GitBranch;
     STOP = Square;
-    INSPECTOR = PanelRight;
     SIDEBAR = PanelLeft;
     PIN = Pin;
     ARCHIVE = Archive;

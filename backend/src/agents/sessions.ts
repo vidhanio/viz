@@ -14,13 +14,7 @@ import {
   withAbortSignal,
   withCancel,
 } from "@earendil-works/chord/context";
-import {
-  type ConversationId,
-  type EntryId,
-  type Harness,
-  ROOT_CONVERSATION_ID,
-  type Tx,
-} from "@earendil-works/pi-durable";
+import { type ConversationId, type Harness, ROOT_CONVERSATION_ID, type Tx } from "@earendil-works/pi-durable";
 
 import { type StoredAttachment, withAttachmentPaths } from "../attachments.ts";
 import { type Harness as HarnessConfig, resolveSecret } from "../config.ts";
@@ -52,12 +46,9 @@ type SessionOptions = { id: ConversationId; name: string; config: HarnessConfig;
 type TurnOptions = SessionOptions & {
   text: string;
   attachments?: StoredAttachment[];
-  promptEntry: EntryId;
   commit: (write: (tx: Tx) => Promise<void>) => Promise<void>;
   context: Context;
 };
-
-type Checkpoint = (id: ConversationId, prompt: EntryId, cwd: string, context: Context) => Promise<void>;
 
 type Update = SessionUpdate | { sessionUpdate: "viz_progress"; text: string };
 type TextRun = { kind: "text" | "thought"; text: string };
@@ -95,12 +86,10 @@ export class AgentSessions {
   readonly #piRunners = new Set<string>();
   #mcp!: McpServer<ToolScope>;
   #harness!: Harness;
-  #checkpoint!: Checkpoint;
 
   constructor(private readonly providerName: (id: string) => string | undefined) {}
 
-  start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[], checkpoint: Checkpoint): void {
-    this.#checkpoint = checkpoint;
+  start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[]): void {
     this.#harness = harness;
     this.#mcp = new McpServer(
       { name: "viz", version, instructions: "Manage your subagents and record progress." },
@@ -547,8 +536,6 @@ export class AgentSessions {
         }
         prompt.push({ type: "resource_link", uri, name, mimeType: mime });
       }
-      await this.#checkpoint(id, options.promptEntry, options.cwd, turn);
-      turn.abortSignal?.throwIfAborted();
       live.active = {
         context: withAbortSignal(live.lifetime.signal, toolTurn.context),
         receipts,

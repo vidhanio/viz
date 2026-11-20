@@ -1,9 +1,9 @@
 //! Per-conversation composer, settings, completions, and queued input.
 
 mod completion;
+mod draft;
 mod model;
 mod settings;
-mod workspace;
 
 pub use completion::{Completion, poll};
 pub use model::{ModelMenu, preview as preview_model_menu};
@@ -68,11 +68,9 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .on_input_paste(attachments::paste)
         .on_key(completion::on_key)
         .on_submit(Desktop::submit);
-    let locked = workspace::locked(s);
-    let metadata = locked.map(|(label, path)| ui::locked_label("workspace-locked", label, path, t));
     let attach =
         (s.new_chat.is_some() || s.conversation.is_some()).then(|| attachments::button(s, t));
-    let budget = settings_budget(s, attach.is_some(), locked.map(|(label, _)| label), t);
+    let budget = settings_budget(s, attach.is_some());
     let card = Card::Surface
         .frame(t)
         .key("composer-card")
@@ -101,7 +99,6 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                         .shrink()
                         .min_w(0.0),
                 )
-                .children(metadata)
                 .child(send_button(s, t)),
         );
     if s.can_attach() {
@@ -114,22 +111,21 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// Points the settings selects may take in one toolbar row: the main pane
 /// between the open panes, less the composer's margins and the toolbar's other
 /// items.
-fn settings_budget(s: &Desktop, attach: bool, locked: Option<&str>, t: &Theme) -> f32 {
+fn settings_budget(s: &Desktop, attach: bool) -> f32 {
     let button = Size::Default.height();
-    let main = s.window_width - s.sidebar.shown_width() - s.changes.pane.shown_width();
+    let main = s.window_width - s.sidebar.shown_width();
     // Both sides: the reading inset, then the card's border and toolbar inset.
     let card = 2.0f32.mul_add(
         -(HAIRLINE + TOOLBAR_INSET),
         2.0f32.mul_add(-READING_INSET, main).min(READING_WIDTH),
     );
-    let workspace = locked.map_or(0.0, |label| ui::locked_label_width(label, t));
     let send = TOOLBAR_GAP.mul_add(2.0, button);
     let fixed = if attach {
         send + button + TOOLBAR_GAP
     } else {
         send
     };
-    card - fixed - workspace
+    card - fixed
 }
 
 fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> El {
