@@ -8,12 +8,20 @@ import { conversationRecords, MetaDoc } from "../projects.ts";
 import { titleFrom } from "../titles.ts";
 import { settledAnswer, transcript } from "../transcripts.ts";
 import type { ChatInput, ChatOptions } from "./chat.ts";
+import {
+  spawnOptionsDescription,
+  spawnOptionsFields,
+  type SpawnOptionsQuery,
+  spawnSelectionFields,
+  type SpawnSelection,
+} from "./options.ts";
 import type { ToolScope } from "./sessions.ts";
 
 type Subagents = {
   harness: Harness;
   conversations: Conversations;
   spawn: (options: ChatOptions & { parent: ConversationId }, context: Context) => Promise<Conversation>;
+  listSpawnOptions: (query: SpawnOptionsQuery, context: Context, parent: ConversationId) => Promise<string>;
   submit: (id: ConversationId, input: ChatInput, context: Context) => Promise<Submission>;
   abort: (id: ConversationId, context: Context) => Promise<void>;
 };
@@ -21,7 +29,14 @@ type Subagents = {
 const conversation = int({ minimum: 1 });
 const text = str({ minLength: 1 });
 
-export function agentTools({ harness, conversations, spawn, submit, abort }: Subagents): McpTool<ToolScope>[] {
+export function agentTools({
+  harness,
+  conversations,
+  spawn,
+  listSpawnOptions,
+  submit,
+  abort,
+}: Subagents): McpTool<ToolScope>[] {
   async function requireChild(caller: ConversationId, target: ConversationId, context: Context) {
     const allowed = await harness.commit(async (tx) => {
       let id: ConversationId | null = target;
@@ -52,14 +67,32 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
   }
 
   return [
-    tool<ToolScope, { task: string; harness?: string; wait?: boolean }>({
+    tool<ToolScope, SpawnOptionsQuery>({
+      name: "list_spawn_options",
+      description: spawnOptionsDescription,
+      input: obj(spawnOptionsFields),
+      call: async (query, scope) => ({ text: await listSpawnOptions(query, scope.context(), scope.id) }),
+    }),
+    tool<ToolScope, SpawnSelection & { task: string; harness?: string; wait?: boolean }>({
       name: "spawn_subagent",
-      description: "Start a subagent in your working directory. It sees your uncommitted edits, and edits can collide.",
-      input: obj({ task: text, harness: opt(str()), wait: opt(bool()) }),
-      call: async ({ task, harness, wait = true }, scope) => {
+      description:
+        "Start a subagent in your working directory. It sees your uncommitted edits, and edits can collide. Use list_spawn_options to discover targets.",
+      input: obj({
+        task: text,
+        harness: opt(str({ description: "ACP harness; omit to use the parent's harness" })),
+        ...spawnSelectionFields,
+        wait: opt(bool()),
+      }),
+      call: async ({ task, harness, model, thinking, wait = true }, scope) => {
         const context = scope.context();
         const child = await spawn(
-          { parent: scope.id, title: titleFrom(task), ...(harness !== undefined && { harness }) },
+          {
+            parent: scope.id,
+            title: titleFrom(task),
+            ...(harness !== undefined && { harness }),
+            ...(model !== undefined && { model }),
+            ...(thinking !== undefined && { thinking }),
+          },
           context,
         );
         return { text: await send(child.id, task, wait, context), child: child.id };

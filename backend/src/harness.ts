@@ -25,6 +25,7 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 import { ChatDoc, type ChatInput, chatScheduler, withdrawChatInputs } from "./agents/chat.ts";
+import { modelOption, type SpawnOptionsQuery, thinkingOption } from "./agents/options.ts";
 import { Runners } from "./agents/runners.ts";
 import { AgentSessions } from "./agents/sessions.ts";
 import { agentTools } from "./agents/tools.ts";
@@ -227,6 +228,42 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     }
     return ids;
   };
+  const listSpawnOptions = async (
+    { harness: name, model, search }: SpawnOptionsQuery,
+    context: Context,
+    parent?: ConversationId,
+  ) => {
+    const parentRunner = parent === undefined ? undefined : (await harness.snapshot(ChatDoc, parent, context))?.runner;
+    const available = runners.list();
+    const defaultHarness = parentRunner?.name ?? available.find((runner) => runner.default)?.name ?? null;
+    if (name === undefined && model === undefined && search === undefined) {
+      return JSON.stringify({ defaultHarness, harnesses: available.map(({ name }) => name) });
+    }
+    const runner = runners.require(name ?? parentRunner?.name);
+    const options = await sessions.catalog(runner.name, runner.config, parentRunner?.cwd ?? cwd, context, model);
+    const models = modelOption(options);
+    const thinking = thinkingOption(options);
+    const selected = {
+      harness: runner.name,
+      model: models?.value ?? null,
+      thinking: thinking
+        ? { value: thinking.value, choices: thinking.choices.map(({ value, name }) => ({ value, name })) }
+        : null,
+    };
+    if (model !== undefined) return JSON.stringify(selected);
+    // Keep the tool result small even on runners with hundreds of models.
+    const query = search?.trim().toLowerCase();
+    const matching =
+      models?.choices.filter(
+        ({ value, name, group }) => !query || `${value} ${name} ${group ?? ""}`.toLowerCase().includes(query),
+      ) ?? [];
+    const limit = 24;
+    return JSON.stringify({
+      ...selected,
+      models: matching.slice(0, limit).map(({ value, name, group }) => ({ value, name, group })),
+      omittedModels: Math.max(0, matching.length - limit),
+    });
+  };
   sessions.start(
     options.version,
     harness,
@@ -234,6 +271,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       harness,
       conversations,
       spawn: (options, context) => chats.create(harness, options, context),
+      listSpawnOptions,
       submit: (id, input, context) => chats.submit(harness, id, input, context),
       abort: abortConversation,
     }),
@@ -294,6 +332,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     search,
     runners,
     chats,
+    listSpawnOptions,
     report: async (text, requestId, context) => void (await submit(root, { text, content: text, requestId }, context)),
     // A deleted conversation is not found; `abortConversation` itself also serves the deletion.
     abort: async (id, context) => {

@@ -20,7 +20,7 @@ import { MetaDoc, projectIn, touch } from "../projects.ts";
 import type { Origin } from "../protocol.ts";
 import { TitleDoc, titleFrom } from "../titles.ts";
 import { PromptEntry, TurnEntry } from "./model.ts";
-import { AcpStateDoc, type Desired } from "./options.ts";
+import { AcpStateDoc, type Desired, type SpawnSelection } from "./options.ts";
 import type { Runners } from "./runners.ts";
 import { type AgentSessions, clearLiveTurn, type TurnOutcome } from "./sessions.ts";
 
@@ -32,7 +32,7 @@ export type ChatInput = {
   readonly attachments?: StoredAttachment[];
 };
 
-export type ChatOptions = {
+export type ChatOptions = SpawnSelection & {
   readonly harness?: string;
   readonly project?: string;
   readonly parent?: ConversationId;
@@ -211,9 +211,16 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
       directory = selected.path;
     }
     const { name, config } = runners.require(options.harness ?? inherited);
-    const desired = { ...options.options };
+    const { model, thinking } = options;
     (await tx.doc(ChatDoc, id)).runner = { name, cwd: directory };
-    (await tx.doc(AcpStateDoc, id)).desired = desired;
+    const state = await tx.doc(AcpStateDoc, id);
+    state.desired = { ...options.options };
+    if (model !== undefined || thinking !== undefined) {
+      state.spawnSelection = {
+        ...(model !== undefined && { model }),
+        ...(thinking !== undefined && { thinking }),
+      };
+    }
     const meta = await tx.doc(MetaDoc, id);
     meta.project = project;
     meta.parent = options.parent ?? null;

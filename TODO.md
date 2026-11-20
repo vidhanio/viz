@@ -25,6 +25,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] **Scoped MCP for ACP agents**: loopback HTTP or stdio bridge, per-session token, no access to unrelated conversations.
 - [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
 - [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP. Parent transcript tool records link to the affected child when its runner forwards the result.
+- [x] **Delegation targets**: `list_spawn_options` discovers harnesses, searchable models and model-specific thinking levels. `spawn_chat` and `spawn_subagent` apply optional model/thinking overrides before the first prompt.
 - [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`).
 - [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
 - [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, timestamps) for the sidebar; rename.

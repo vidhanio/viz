@@ -1,5 +1,6 @@
 import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { defineDoc } from "@earendil-works/pi-durable";
+import { opt, str } from "@earendil-works/pi-schema";
 
 import type { Harness as HarnessConfig } from "../config.ts";
 import type { ConfigOption, ConversationState, ModelThinking } from "../protocol.ts";
@@ -7,6 +8,24 @@ import type { ConfigOption, ConversationState, ModelThinking } from "../protocol
 export type OptionValue = ConfigOption["value"];
 export type Desired = Record<string, OptionValue>;
 export type Commands = ConversationState["commands"];
+
+export type SpawnSelection = { model?: string; thinking?: string };
+
+export const spawnSelectionFields = {
+  model: opt(str({ minLength: 1, description: "Exact ACP model value from list_spawn_options" })),
+  thinking: opt(str({ minLength: 1, description: "Exact thinking value for that model from list_spawn_options" })),
+};
+
+export type SpawnOptionsQuery = { harness?: string; model?: string; search?: string };
+export const spawnOptionsFields = {
+  harness: opt(str({ minLength: 1, description: "ACP harness name; omit to use the default when filtering" })),
+  model: opt(
+    str({ minLength: 1, description: "Exact model value; show its thinking levels instead of listing models" }),
+  ),
+  search: opt(str({ minLength: 1, description: "Filter models by name, value, or provider" })),
+};
+export const spawnOptionsDescription =
+  "List configured ACP harnesses and the default. Pass a harness to list models, search to filter them, or a model to see its thinking levels.";
 
 type ModelProfile = { model: string; thinking: ModelThinking | null };
 export type HarnessCatalog = { name: string; options: ConfigOption[]; profiles: ModelProfile[] };
@@ -19,6 +38,8 @@ export const AcpStateDoc = defineDoc<{
   options: ConfigOption[];
   commands: Commands;
   desired: Desired;
+  /** Explicit spawn selections must be applied before the first prompt, even after a restart. */
+  spawnSelection?: SpawnSelection;
   images?: boolean;
   /** The runner's last ACP `usage_update`: tokens in context and the context window size. */
   usage?: { used: number; size: number };

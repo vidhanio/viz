@@ -23,6 +23,12 @@ import {
 import { bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 
 import type { ChatScheduler } from "./agents/chat.ts";
+import {
+  spawnOptionsDescription,
+  spawnOptionsFields,
+  type SpawnOptionsQuery,
+  spawnSelectionFields,
+} from "./agents/options.ts";
 import type { Runners } from "./agents/runners.ts";
 import type { Conversations } from "./conversations.ts";
 import { conversationRecords, MetaDoc, type ProjectStore } from "./projects.ts";
@@ -38,6 +44,7 @@ export type ToolkitHost = {
   readonly search: SearchIndex;
   readonly runners: Runners;
   readonly chats: ChatScheduler;
+  listSpawnOptions(query: SpawnOptionsQuery, context: Context): Promise<string>;
   /** Submits `text` to the orchestrator once per `requestId`. */
   report(text: string, requestId: string, context: Context): Promise<void>;
   abort(id: ConversationId, context: Context): Promise<void>;
@@ -199,15 +206,24 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
         },
       }),
       defineTool({
+        name: "list_spawn_options",
+        description: spawnOptionsDescription,
+        parameters: obj(spawnOptionsFields),
+        replay: "safe",
+        execute: async (query, _api, context) => text(await host().listSpawnOptions(query, context)),
+      }),
+      defineTool({
         name: "spawn_chat",
-        description: "Start an ACP chat on a task in the background. It reports back here when done.",
+        description:
+          "Start an ACP chat on a task in the background. It reports back here when done. Use list_spawn_options to discover targets.",
         parameters: obj({
           task: str({ minLength: 1, description: "Task and context" }),
           project: opt(str({ description: "Project id or name; omit for none" })),
           harness: opt(str({ description: "ACP harness; omit for the default" })),
+          ...spawnSelectionFields,
         }),
         replay: "safe",
-        execute: async ({ task, project, harness }, api, context) => {
+        execute: async ({ task, project, harness, model, thinking }, api, context) => {
           const { projects, runners, chats } = host();
           const selected =
             project === undefined
@@ -219,6 +235,8 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
             const record = await tx.createConversation({ ownership: { kind: "ownerless" } });
             await chats.setup(tx, record.id, {
               ...(harness !== undefined && { harness }),
+              ...(model !== undefined && { model }),
+              ...(thinking !== undefined && { thinking }),
               ...(selected && { project: selected.id }),
             });
             const submission = await chats.enqueue(tx, record, { text: task, content: task });

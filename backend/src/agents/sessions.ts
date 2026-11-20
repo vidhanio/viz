@@ -375,17 +375,33 @@ export class AgentSessions {
       return { ...doc.desired };
     }, context);
     // Model changes can change or reset the runner's available effort choices.
-    const model = modelOption(options);
+    let modelId = modelOption(options)?.id;
     let preferred = desired;
+    const selection = saved?.spawnSelection;
     live.applyingOptions = true;
     try {
-      if (model && Object.hasOwn(desired, model.id)) await this.#setOption(live, model.id, desired[model.id]!);
-      if (sessionId === null) preferred = { ...defaults(config, live.options), ...desired };
-      for (const [id, value] of Object.entries(preferred)) if (id !== model?.id) await this.#setOption(live, id, value);
+      if (selection?.model !== undefined) {
+        modelId = await this.#setSpawnOption(live, modelOption, "Model", selection.model);
+        preferred = { ...desired, [modelId]: selection.model };
+      } else if (modelId !== undefined && Object.hasOwn(desired, modelId)) {
+        await this.#setOption(live, modelId, desired[modelId]!);
+      }
+      if (sessionId === null) preferred = { ...defaults(config, live.options), ...preferred };
+      const thinkingId = selection?.thinking === undefined ? undefined : thinkingOption(live.options)?.id;
+      for (const [id, value] of Object.entries(preferred)) {
+        if (id !== modelId && id !== thinkingId) await this.#setOption(live, id, value);
+      }
+      if (selection?.thinking !== undefined) {
+        const id = await this.#setSpawnOption(live, thinkingOption, "Thinking level", selection.thinking);
+        preferred = { ...preferred, [id]: selection.thinking };
+      }
+      if (selection?.model !== undefined && modelOption(live.options)?.value !== selection.model) {
+        throw new Error(`${live.name} did not retain model ${JSON.stringify(selection.model)}.`);
+      }
     } finally {
       live.applyingOptions = false;
     }
-    await this.#saveOptions(live, preferred);
+    await this.#saveOptions(live, preferred, selection !== undefined);
   }
 
   #refresh(live: LiveSession, { configOptions }: LoadSessionResponse) {
@@ -426,11 +442,12 @@ export class AgentSessions {
     }
   }
 
-  async #saveOptions(live: LiveSession, desired?: Desired): Promise<void> {
+  async #saveOptions(live: LiveSession, desired?: Desired, appliedSpawnSelection = false): Promise<void> {
     const context = withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT);
     const { options } = live;
     await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, live.id);
+      if (appliedSpawnSelection) delete doc.spawnSelection;
       if (JSON.stringify(doc.options) !== JSON.stringify(options)) doc.options = options;
       await this.#saveHarnessOptions(tx, live.name, options, live.openValues);
       // Retain only settings the runner still offers; persist its actual value if it clamped the request.
@@ -510,6 +527,24 @@ export class AgentSessions {
     if (!option || option.value === value || !validValue(option, value)) return;
     const response = await live.process.setOption(live.sessionId, id, value);
     this.#refresh(live, response);
+  }
+
+  async #setSpawnOption(
+    live: LiveSession,
+    find: (options: ConfigOption[]) => ConfigOption | undefined,
+    label: string,
+    value: string,
+  ): Promise<string> {
+    const option = find(live.options);
+    if (!option || !validValue(option, value)) {
+      throw new Error(`${label} ${JSON.stringify(value)} is not available. See list_spawn_options.`);
+    }
+    await this.#setOption(live, option.id, value);
+    const applied = find(live.options);
+    if (applied?.value !== value) {
+      throw new Error(`${live.name} did not apply ${label.toLowerCase()} ${JSON.stringify(value)}.`);
+    }
+    return applied.id;
   }
 
   async turn(options: TurnOptions): Promise<TurnOutcome> {
