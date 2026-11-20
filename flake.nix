@@ -2,9 +2,13 @@
   description = "viz: an all-in-one personal agent and meta-harness";
 
   nixConfig = {
-    extra-substituters = [ "https://nix-community.cachix.org" ];
+    extra-substituters = [
+      "https://nix-community.cachix.org"
+      "https://cache.numtide.com"
+    ];
     extra-trusted-public-keys = [
       "nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs="
+      "niks3.numtide.com-1:DTx8wZduET09hRmMtKdQDxNNthLQETkc/yaX7M4qK0g="
     ];
   };
 
@@ -32,6 +36,9 @@
       url = "github:Mic92/bun2nix/lockfile-v2-v3";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # ACP runners for local development (pi-acp); not a dependency of any package. Keeps its own nixpkgs so the
+    # numtide cache hits.
+    llm-agents.url = "github:numtide/llm-agents.nix";
   };
 
   outputs =
@@ -217,6 +224,8 @@
               # backend
               pkgs.bun
               pkgs.bun2nix
+              # an ACP runner for local chats (`[harnesses.pi]` in viz.local.toml); wraps its own `pi`
+              inputs'.llm-agents.packages.pi-acp
               # ios
               swiftPkgs.swift
               swiftPkgs.swiftpm
