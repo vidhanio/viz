@@ -49,17 +49,17 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
 
 fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let placeholder = if !s.connected() {
-        "Offline"
+        "offline"
     } else if s.busy() {
-        "Queue a message"
+        "queue a message"
     } else if s.orchestrator_open() {
-        "Message the orchestrator"
+        "message the orchestrator"
     } else {
-        "Ask anything"
+        "ask anything"
     };
     let field = text_input(&s.draft, t.body)
         .key("draft")
-        .label("Message")
+        .label("message")
         .w_full()
         .color(t.text)
         .caret(t.accent, t.k.selection())
@@ -133,7 +133,7 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
         .frame(t)
         .key("queue")
         .role("group")
-        .label("Queued inputs")
+        .label("queued inputs")
         .max_h(QUEUE_HEIGHT)
         .pl(CARD_INSET)
         .pr(TOOLBAR_INSET)
@@ -145,7 +145,7 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
             row()
                 .h(Size::Small.height())
                 .center_y()
-                .child(ui::section("Queued", t)),
+                .child(ui::section("queued", t)),
         )
         .children(inputs.iter().map(|input| {
             let submission = input.submission;
@@ -153,7 +153,7 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
                 .text
                 .lines()
                 .find(|line| !line.trim().is_empty())
-                .unwrap_or("Attachment");
+                .unwrap_or("attachment");
             row()
                 .key(format!("queue-{submission}"))
                 .w_full()
@@ -172,7 +172,7 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
                 .child(
                     ui::icon_button(
                         &ui::CLOSE,
-                        "Remove queued input",
+                        "remove queued input",
                         IconButtonVariant::GhostMuted,
                         Size::Small,
                     )
@@ -196,7 +196,7 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
 /// (Enter queues then).
 fn send_button(s: &Desktop, t: &Theme) -> El {
     if s.busy() {
-        ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Submit, Size::Default)
+        ui::icon_button(&ui::STOP, "stop", IconButtonVariant::Submit, Size::Default)
             .shortcut(format!("{}+.", ui::COMMAND_KEY))
             .disabled(!s.connected())
             .on_press_tx(Desktop::abort)
@@ -205,7 +205,7 @@ fn send_button(s: &Desktop, t: &Theme) -> El {
     } else {
         ui::icon_button(
             &ui::ARROW_UP,
-            "Send",
+            "send",
             IconButtonVariant::Submit,
             Size::Default,
         )

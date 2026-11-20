@@ -1,10 +1,8 @@
 //! The model picker: one menu for the runner's model and its thinking level.
-//! Its trigger names both (`Claude Opus 5.5 · High`); the menu filters the
-//! models by a search field, groups them by provider under short names, and
-//! ends in the selected model's thinking levels. Type to filter, arrows to
-//! move, Enter to choose.
-
-use std::{borrow::Cow, collections::HashMap};
+//! Everything shows as slugs, as the runner's ids: its trigger names both
+//! (`claude-opus-5-5 · high`); the menu filters the models by a search field,
+//! groups them by provider, and ends in the selected model's thinking levels.
+//! Type to filter, arrows to move, Enter to choose.
 
 use rune::{El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, icon, row, text};
 use rune_kit::{Placement, TextInput, popover, scrim};
@@ -147,24 +145,16 @@ impl<'a> Picker<'a> {
 
     /// The trigger's label: the model's short name and the thinking level.
     fn label(&self) -> String {
-        let model = self.model_value().map(|value| {
-            self.model
-                .and_then(|model| model.choices.iter().find(|choice| choice.value == value))
-                .map_or_else(|| short(value), |choice| split(choice).1)
-        });
-        let level = self.levels.and_then(|levels| {
-            let value = levels.value(self.target)?;
-            let name = levels
-                .choices()
-                .into_iter()
-                .find_map(|(choice, name)| (choice == value).then_some(name))?;
-            Some(level_name(levels.name(), name, value))
-        });
+        let model = self.model_value().map(|value| ui::slug(short(value)));
+        let level = self
+            .levels
+            .and_then(|levels| levels.value(self.target))
+            .map(str::to_lowercase);
         match (model, level, self.levels) {
             (Some(model), Some(level), _) => format!("{model} · {level}"),
-            (Some(model), None, _) => model.to_owned(),
-            (None, Some(level), Some(levels)) => format!("{} · {level}", levels.name()),
-            _ => "Model".to_owned(),
+            (Some(model), None, _) => model,
+            (None, Some(level), Some(levels)) => format!("{} · {level}", ui::slug(levels.name())),
+            _ => "model".to_owned(),
         }
     }
 }
@@ -179,7 +169,7 @@ pub(super) fn picker(
     let label = picker.label();
     let open = settings::is_open(s, KEY);
     let current = picker.model_value().map(row_key);
-    let trigger = ui::select_trigger(KEY, "Model", Some(&label), open, ui::MODEL_TRIGGER_MAX, t)
+    let trigger = ui::select_trigger(KEY, "model", Some(&label), open, ui::MODEL_TRIGGER_MAX, t)
         .on_press_tx(move |s: &mut Desktop, tx| {
             if settings::is_open(s, KEY) {
                 close(s);
@@ -218,55 +208,32 @@ fn close(s: &mut Desktop) {
 /// One model in the list.
 struct Entry<'a> {
     value: &'a str,
-    label: &'a str,
-    /// Tells apart models whose names match (an alias and a dated release).
-    detail: Option<&'a str>,
+    /// Its id without the provider, as a slug.
+    label: String,
 }
 
 /// The models matching the search, grouped by provider in the runner's
 /// order.
-fn groups<'a>(model: &'a ConfigOption, query: &str) -> Vec<(Option<Cow<'a, str>>, Vec<Entry<'a>>)> {
+fn groups<'a>(model: &'a ConfigOption, query: &str) -> Vec<(Option<String>, Vec<Entry<'a>>)> {
     let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
-    let mut groups: Vec<(Option<&str>, Vec<&OptionChoice>)> = Vec::new();
+    let mut groups: Vec<(Option<String>, Vec<Entry<'a>>)> = Vec::new();
     for choice in &model.choices {
-        let group = split(choice).0;
+        let group = group(choice);
+        let haystack =
+            format!("{} {}", group.as_deref().unwrap_or_default(), choice.value).to_lowercase();
+        if !words.iter().all(|word| haystack.contains(word.as_str())) {
+            continue;
+        }
+        let entry = Entry {
+            value: &choice.value,
+            label: ui::slug(short(&choice.value)),
+        };
         match groups.iter_mut().find(|(name, _)| *name == group) {
-            Some((_, members)) => members.push(choice),
-            None => groups.push((group, vec![choice])),
+            Some((_, entries)) => entries.push(entry),
+            None => groups.push((group, vec![entry])),
         }
     }
     groups
-        .into_iter()
-        .filter_map(|(group, members)| {
-            let mut names: HashMap<&str, usize> = HashMap::new();
-            for choice in &members {
-                *names.entry(split(choice).1).or_default() += 1;
-            }
-            let heading = group.map(|group| provider(group, members[0]));
-            let entries: Vec<_> = members
-                .into_iter()
-                .filter(|choice| {
-                    let haystack = format!(
-                        "{} {} {}",
-                        heading.as_deref().unwrap_or_default(),
-                        split(choice).1,
-                        choice.value
-                    )
-                    .to_lowercase();
-                    words.iter().all(|word| haystack.contains(word.as_str()))
-                })
-                .map(|choice| {
-                    let label = split(choice).1;
-                    Entry {
-                        value: &choice.value,
-                        label,
-                        detail: (names[label] > 1).then(|| short(&choice.value)),
-                    }
-                })
-                .collect();
-            (!entries.is_empty()).then_some((heading, entries))
-        })
-        .collect()
 }
 
 fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
@@ -274,7 +241,7 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
     let mut body = col()
         .key("model-menu")
         .role("dialog")
-        .label("Model")
+        .label("model")
         .w(MODEL_MENU_WIDTH)
         .min_h(0.0)
         .radius(Size::Default.radius())
@@ -284,7 +251,9 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
     if let Some(model) = picker.model {
         let (field, list) = models(s, picker, model, t);
         body = body
-            .child(row().w_full().px(S4).pt(S4).child(field))
+            // Typing lands at once in the field; the list and the menu around it
+            // spring to their new size (`on_change` below animates the commit).
+            .child(row().w_full().px(S4).pt(S4).instant_changes().child(field))
             .child(ui::rule(t))
             .child(list);
     }
@@ -326,7 +295,7 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
     let mut list = col()
         .key(LIST)
         .role("listbox")
-        .label("Models")
+        .label("models")
         .w_full()
         .max_h(MODEL_LIST_HEIGHT)
         .shrink()
@@ -358,7 +327,7 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
     }
     if values.is_empty() {
         list = list.child(
-            text("No models")
+            text("no models")
                 .role("status")
                 .font(t.small)
                 .color(t.faint)
@@ -369,8 +338,8 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
     let owner = picker.target.owner();
     let id = model.id.clone();
     let field = TextInput::new(&s.model_menu.query)
-        .label("Search models")
-        .placeholder("Search models")
+        .label("search models")
+        .placeholder("search models")
         .plain()
         .leading_icon(&ui::SEARCH)
         .width(None)
@@ -380,6 +349,9 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
         .on_change(|s: &mut Desktop, tx| {
             s.model_menu.active = None;
             tx.scroll_to_instant(LIST, 0.0, 0.0);
+            // Typing commits instantly by default; the filtered list should
+            // grow and shrink smoothly, its dropped rows fading out.
+            tx.animated();
         })
         .on_key(move |s, ev, tx| on_key(s, ev, tx, &values, active.as_deref(), owner, &id))
         .build(&t.overlay)
@@ -400,7 +372,7 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
     let mut item = row()
         .key(row_key(entry.value))
         .role("option")
-        .label(entry.label)
+        .label(&entry.label)
         .checked(current)
         .focus_selected(active)
         .focusable(false)
@@ -414,7 +386,7 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         .hover(t.hover)
         .on_press_tx(move |s: &mut Desktop, tx| choose_model(s, tx, owner, &id, &value))
         .child(
-            text(entry.label)
+            text(&entry.label)
                 .font(t.ui)
                 .color(t.text)
                 .min_w(0.0)
@@ -422,15 +394,6 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
                 .truncate()
                 .a11y_hidden(),
         )
-        .children(entry.detail.map(|detail| {
-            text(detail)
-                .font(t.small)
-                .color(t.faint)
-                .min_w(0.0)
-                .shrink()
-                .truncate()
-                .a11y_hidden()
-        }))
         .child(rune::spacer())
         .child(
             icon(&ui::CHECK, ICON_SMALL)
@@ -438,9 +401,6 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
                 .opacity(if current { 1.0 } else { 0.0 })
                 .a11y_hidden(),
         );
-    if let Some(detail) = entry.detail {
-        item = item.description(detail);
-    }
     if active {
         item = item.fill(t.selected);
     }
@@ -451,15 +411,15 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
 fn thinking(picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> El {
     let selected = levels.value(picker.target);
     let owner = picker.target.owner();
-    let chips = levels.choices().into_iter().map(|(value, name)| {
+    let chips = levels.choices().into_iter().map(|(value, _)| {
         let on = selected == Some(value);
-        let label = level_name(levels.name(), name, value);
+        let label = value.to_lowercase();
         let id = levels.id().to_owned();
         let choice = OptionValue::Select(value.to_owned());
         row()
             .key(format!("level-{value}"))
             .role("radio")
-            .label(label.as_ref())
+            .label(&label)
             .checked(on)
             .h(Size::Small.height())
             .px(S8)
@@ -481,12 +441,13 @@ fn thinking(picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> El {
                 }
             })
             .child(
-                text(label.into_owned())
+                text(label)
                     .font(if on { t.ui_medium } else { t.ui })
                     .color(if on { t.text } else { t.muted })
                     .a11y_hidden(),
             )
     });
+    let name = levels.name().to_lowercase();
     col()
         .key("model-thinking")
         .w_full()
@@ -494,12 +455,12 @@ fn thinking(picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> El {
         .pt(S6)
         .pb(S8)
         .gap(S4)
-        .child(ui::section(levels.name(), t))
+        .child(ui::section(&name, t))
         .child(
             row()
                 .key("levels")
                 .role("radiogroup")
-                .label(levels.name())
+                .label(name)
                 .w_full()
                 .gap(S4)
                 .flex_wrap()
@@ -646,78 +607,17 @@ fn thinking_ids(harness: &Harness) -> Vec<String> {
         .collect()
 }
 
-/// A model choice's provider and short name: its group, else the provider
-/// before a `/` in its name (`anthropic/Claude Fable 5`) or value
-/// (`anthropic/claude-fable-5`).
-fn split(choice: &OptionChoice) -> (Option<&str>, &str) {
-    if let Some(group) = choice.group.as_deref() {
-        return (Some(group), &choice.name);
-    }
-    if let Some((provider, name)) = choice.name.split_once('/') {
-        return (Some(provider), name);
-    }
-    (
-        choice.value.split_once('/').map(|(provider, _)| provider),
-        &choice.name,
-    )
+/// A model's provider as a slug: the runner's group (`OpenCode Go` is
+/// `opencode-go`), else the provider before a `/` in its id.
+fn group(choice: &OptionChoice) -> Option<String> {
+    choice
+        .group
+        .as_deref()
+        .or_else(|| choice.value.split_once('/').map(|(provider, _)| provider))
+        .map(ui::slug)
 }
 
 /// A model id without its provider.
 fn short(value: &str) -> &str {
     value.split_once('/').map_or(value, |(_, model)| model)
-}
-
-/// A provider's heading: the runner's group label as given, a known
-/// provider id's name, else the id in title case.
-fn provider<'a>(group: &'a str, sample: &OptionChoice) -> Cow<'a, str> {
-    if sample.group.is_some() {
-        return Cow::Borrowed(group);
-    }
-    let known = match group {
-        "openai" => "OpenAI",
-        "openai-codex" => "OpenAI Codex",
-        "openrouter" => "OpenRouter",
-        "xai" => "xAI",
-        "deepseek" => "DeepSeek",
-        "github-copilot" => "GitHub Copilot",
-        "google-vertex" => "Google Vertex",
-        "google-gemini-cli" => "Gemini CLI",
-        "amazon-bedrock" => "Amazon Bedrock",
-        "azure-openai-responses" => "Azure OpenAI",
-        "huggingface" => "Hugging Face",
-        "zai" => "Z.ai",
-        _ => {
-            return Cow::Owned(
-                group
-                    .split(['-', '_'])
-                    .map(capitalize)
-                    .collect::<Vec<_>>()
-                    .join(" "),
-            );
-        }
-    };
-    Cow::Borrowed(known)
-}
-
-fn capitalize(word: &str) -> String {
-    let mut chars = word.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().chain(chars).collect()
-    })
-}
-
-/// A thinking level's display name: without a repeated `Thinking:` prefix,
-/// and a bare level id (`xhigh`) as words.
-fn level_name<'a>(option: &str, name: &'a str, value: &str) -> Cow<'a, str> {
-    let name = name
-        .split_once(':')
-        .filter(|(prefix, _)| prefix.trim().eq_ignore_ascii_case(option))
-        .map_or(name, |(_, rest)| rest.trim());
-    if !name.eq_ignore_ascii_case(value) {
-        return Cow::Borrowed(name);
-    }
-    Cow::Owned(match value.to_ascii_lowercase().as_str() {
-        "xhigh" => "Extra high".to_owned(),
-        _ => capitalize(name),
-    })
 }

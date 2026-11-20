@@ -1,5 +1,5 @@
 //! The toolbar: the open conversation's title (a subagent's under its
-//! parent), its project and run state, and the Agents card.
+//! parent), its run state, and the Agents card.
 
 use rune::{El, col, icon, row, text};
 use rune_kit::{IconButtonVariant, Placement, Popover, shell::Toolbar};
@@ -15,8 +15,8 @@ use crate::{
     ui,
 };
 
-/// The widest a piece of header metadata gets before it truncates.
-const META_MAX: f32 = 136.0;
+/// The widest the parent's title gets in a subagent's breadcrumb.
+const BREADCRUMB_MAX: f32 = 272.0;
 /// The Agents card's `open_picker` value.
 const AGENTS: &str = "agents";
 /// The Agents card's "Previous agents" fold, in `Desktop::expanded`.
@@ -78,7 +78,7 @@ fn agents(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let open = s.open_picker.as_deref() == Some(AGENTS);
     let toggle = ui::icon_button(
         &ui::BOT,
-        "Agents",
+        "agents",
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
@@ -101,7 +101,7 @@ fn agents(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
                 .px(S12)
                 .gap(S4)
                 .center_y()
-                .child(ui::section("Agents", t))
+                .child(ui::section("agents", t))
                 .children((!running.is_empty()).then(|| {
                     text(format!("· {} running", running.len()))
                         .font(t.small)
@@ -117,7 +117,7 @@ fn agents(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
                 row()
                     .key(PREVIOUS)
                     .role("button")
-                    .label("Previous agents")
+                    .label("previous agents")
                     .expanded(shown)
                     .h(S32)
                     .mx(S4)
@@ -141,7 +141,7 @@ fn agents(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
                         .color(t.faint),
                         S32,
                     ))
-                    .child(ui::section("Previous agents", t).grow(1.0))
+                    .child(ui::section("previous agents", t).grow(1.0))
                     .child(
                         text(previous.len().to_string())
                             .font(t.mono_small)
@@ -157,7 +157,7 @@ fn agents(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     }
     let toggle = Popover::new("agents")
         .trigger(toggle)
-        .label("Agents")
+        .label("agents")
         .padding(0.0)
         .placement(Placement::BottomEnd)
         .gutter(S8)
@@ -223,7 +223,7 @@ fn title_text(label: &str, t: &Theme) -> El {
 fn title(s: &Desktop, t: &Theme) -> El {
     let Some(id) = s.selected else {
         let label = if s.new_chat.is_some() {
-            "New chat"
+            "new chat"
         } else {
             "viz"
         };
@@ -238,7 +238,7 @@ fn title(s: &Desktop, t: &Theme) -> El {
     if s.root == Some(id) {
         return group
             .child(icon(&ui::STAR, ICON).color(t.accent).a11y_hidden())
-            .child(title_text("Orchestrator", t));
+            .child(title_text("orchestrator", t));
     }
     let Some(parent) = s
         .summary(id)
@@ -261,9 +261,9 @@ fn breadcrumb(s: &Desktop, parent: ConversationId, t: &Theme) -> El {
     row()
         .key("header-parent")
         .role("link")
-        .label(format!("Back to {label}"))
+        .label(format!("back to {label}"))
         .min_w(0.0)
-        .max_w(META_MAX * 2.0)
+        .max_w(BREADCRUMB_MAX)
         .shrink()
         .hover_group()
         .focusable(true)
@@ -282,39 +282,10 @@ fn breadcrumb(s: &Desktop, parent: ConversationId, t: &Theme) -> El {
         )
 }
 
-/// Project, harness and run state, quiet and right-aligned. The orchestrator
-/// has no project or harness: only its run state.
+/// The run state, right-aligned; the sidebar already names the project and
+/// harness.
 fn metadata(s: &Desktop, t: &Theme) -> El {
-    let mut metadata = row()
-        .key("header-metadata")
-        .center_y()
-        .gap(S8)
-        .min_w(0.0)
-        .shrink();
-    let orchestrator = s.orchestrator_open();
-    if let Some(project) = s.project().filter(|_| !orchestrator) {
-        metadata = metadata.child(quiet("header-project", &project.name, t).help(&project.path));
-    }
-    if let Some(harness) = s
-        .conversation
-        .as_ref()
-        .and_then(|state| state.harness.as_deref())
-    {
-        metadata = metadata.child(
-            row()
-                .key("header-harness")
-                .gap(S4)
-                .center_y()
-                .min_w(0.0)
-                .shrink()
-                .child(
-                    icon(ui::harness_icon(harness), ICON_SMALL)
-                        .color(t.muted)
-                        .a11y_hidden(),
-                )
-                .child(quiet("header-harness-name", harness, t)),
-        );
-    }
+    let mut metadata = row().key("header-metadata").center_y();
     if let Some(mark) = s
         .conversation
         .as_ref()
@@ -323,8 +294,4 @@ fn metadata(s: &Desktop, t: &Theme) -> El {
         metadata = metadata.child(mark.key("header-status"));
     }
     metadata
-}
-
-fn quiet(key: &str, label: &str, t: &Theme) -> El {
-    ui::quiet(label, t).key(key).max_w(META_MAX)
 }

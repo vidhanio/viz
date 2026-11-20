@@ -247,7 +247,7 @@ impl Reader {
             }),
             "pi.compaction" => self.items.push(Item::Divider {
                 key: format!("e{id}"),
-                label: Some("Earlier context summarized"),
+                label: Some("earlier context summarized"),
             }),
             "pi.user" | "viz.input" | "viz.agent.prompt" => {
                 self.prompt(&id, entry, messages);
@@ -332,7 +332,7 @@ impl Reader {
                 let Some(data) = entry.get("data") else {
                     return;
                 };
-                let title = str_at(data, "title").unwrap_or("Tool");
+                let title = str_at(data, "title").unwrap_or("tool");
                 let status = match str_at(data, "status") {
                     Some("pending") => ToolStatus::Pending,
                     Some("in_progress") => ToolStatus::Running,
@@ -392,8 +392,8 @@ impl Reader {
                         str_at(data, "stopReason").filter(|reason| *reason != "end_turn")
                     {
                         let text = match reason {
-                            "cancelled" => "Stopped".to_owned(),
-                            _ => format!("Turn ended: {}", reason.replace('_', " ")),
+                            "cancelled" => "stopped".to_owned(),
+                            _ => format!("turn ended: {}", reason.replace('_', " ")),
                         };
                         self.items.push(Item::Progress { key, text });
                     }
@@ -513,9 +513,9 @@ fn assistant(key: &str, message: &Value, items: &mut Vec<Item>, status: ToolStat
     let notice = match str_at(message, "stopReason") {
         Some("error") => Some(
             str_at(message, "errorMessage")
-                .map_or_else(|| "The model returned an error".to_owned(), str::to_owned),
+                .map_or_else(|| "the model returned an error".to_owned(), str::to_owned),
         ),
-        Some("aborted") => Some("Answer aborted".to_owned()),
+        Some("aborted") => Some("answer aborted".to_owned()),
         _ => None,
     };
     if let Some(text) = notice {
@@ -613,7 +613,7 @@ impl Live {
                 .unwrap_or("unknown")
                 .replace('_', " ");
             let detail = str_at(failure, "detail").map_or_default(|detail| format!(": {detail}"));
-            format!("Run ended without an answer ({reason}){detail}")
+            format!("run ended without an answer ({reason}){detail}")
         });
         Self {
             busy,

@@ -1,7 +1,7 @@
-use rune::{El, icon, row};
+use rune::El;
 use rune_kit::MenuItem;
 
-use super::settings::{GAP, is_open, picker, picker_width};
+use super::settings::{GAP, is_open, marked_picker, picker, picker_width};
 use crate::{
     app::{Desktop, NewChat},
     theme::{ICON, S4, S8, Size, Theme},
@@ -23,12 +23,12 @@ pub(super) fn toolbar(
         return (
             bar.gap(S8)
                 .child(ui::lead(ui::spinner(t), Size::Default.height()))
-                .child(ui::section("Opening session", t)),
+                .child(ui::section("opening session", t)),
             0.0,
         );
     }
     if s.harnesses.is_empty() {
-        return (bar.child(ui::section("No harness configured", t)), 0.0);
+        return (bar.child(ui::section("no harness configured", t)), 0.0);
     }
     if s.harnesses.len() > 1 {
         let (harness, size) = harness(s, chat, t, layer);
@@ -38,11 +38,16 @@ pub(super) fn toolbar(
 }
 
 fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, f32) {
-    let label = "Choose harness";
+    let label = "choose harness";
     let name = chat
         .active_harness(&s.harnesses)
         .map(|runner| runner.name.as_str());
-    let mut menu = picker(s, HARNESS, label, name, t);
+    // The chosen runner's mark leads the value inside its trigger, as in its
+    // menu.
+    let mut menu = name.map_or_else(
+        || picker(s, HARNESS, label, None, t),
+        |name| marked_picker(s, HARNESS, label, name, ui::harness_icon(name), t),
+    );
     if is_open(s, HARNESS) {
         menu = ui::menu_items(
             menu,
@@ -56,7 +61,7 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
                     .icon(ui::harness_icon(&name))
                     .checked(selected);
                 if harness.default {
-                    item = item.badge("Default");
+                    item = item.badge("default");
                 }
                 item.on_select_tx(move |s: &mut Desktop, tx| {
                     s.open_picker = None;
@@ -69,22 +74,7 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
             }),
         );
     }
-    // The chosen runner's mark leads its trigger, as in its menu.
-    let mark = name.map(|name| {
-        icon(ui::harness_icon(name), ICON)
-            .color(t.muted)
-            .a11y_hidden()
-    });
     let width =
-        picker_width(name.unwrap_or(label), t) + if mark.is_some() { ICON + S4 } else { 0.0 };
-    (
-        row()
-            .gap(S4)
-            .center_y()
-            .min_w(0.0)
-            .shrink()
-            .children(mark)
-            .child(menu.build(&t.overlay, layer).min_w(0.0).shrink()),
-        width,
-    )
+        picker_width(name.unwrap_or(label), t) + if name.is_some() { ICON + S4 } else { 0.0 };
+    (menu.build(&t.overlay, layer).min_w(0.0).shrink(), width)
 }

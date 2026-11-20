@@ -226,8 +226,8 @@ impl Desktop {
                 _ if before == chat.status || watched => continue,
                 // A subagent's end reaches its parent, which notifies in turn.
                 _ if chat.kind == ConversationKind::Subagent => continue,
-                Idle if ran => "Finished",
-                Failed if ran => "Failed",
+                Idle if ran => "finished",
+                Failed if ran => "failed",
                 _ => continue,
             };
             self.send(
@@ -331,10 +331,10 @@ impl Desktop {
     pub fn update_title(&self, tx: &mut Tx) {
         tx.set_title(
             match (&self.status, self.conversation.as_ref().map(|s| s.status)) {
-                (Status::Error(_), _) => "viz — Offline",
-                (Status::Connecting, _) => "viz — Connecting",
-                (_, Some(ConversationStatus::Working)) => "viz — Working",
-                (_, Some(ConversationStatus::Failed)) => "viz — Failed",
+                (Status::Error(_), _) => "viz — offline",
+                (Status::Connecting, _) => "viz — connecting",
+                (_, Some(ConversationStatus::Working)) => "viz — working",
+                (_, Some(ConversationStatus::Failed)) => "viz — failed",
                 _ => "viz",
             },
         );
@@ -373,7 +373,7 @@ impl Desktop {
         if self.commands.send(command).is_ok() {
             return true;
         }
-        self.toast(tx, "Offline", None);
+        self.toast(tx, "offline", None);
         false
     }
 
@@ -425,7 +425,8 @@ impl Desktop {
         }
     }
 
-    /// Prepares a chat in the current project.
+    /// Prepares a chat in the open chat's project (none from the
+    /// orchestrator or a loose chat); the draft's project picker changes it.
     pub fn create_here(&mut self, tx: &mut Tx) {
         let chat = NewChat::new(self.next_draft, self.project());
         self.prepare_chat(chat, tx);
@@ -436,6 +437,24 @@ impl Desktop {
         if let Some(project) = self.projects.iter().find(|project| project.id == id) {
             let chat = NewChat::new(self.next_draft, Some(project));
             self.prepare_chat(chat, tx);
+        }
+    }
+
+    /// The backend added `project`. Listed at once (the list refresh may come
+    /// later), and an open draft takes it: a folder added while drafting is
+    /// the one the chat is meant for, whether it came from the draft's own
+    /// add button, the sidebar or the palette.
+    pub fn project_added(&mut self, project: Project) {
+        if let Some(chat) = &mut self.new_chat
+            && !chat.sending
+        {
+            chat.project = Some(project.id.clone());
+        }
+        if !self.projects.iter().any(|known| known.id == project.id) {
+            let at = self
+                .projects
+                .partition_point(|known| (&known.name, &known.id) < (&project.name, &project.id));
+            self.projects.insert(at, project);
         }
     }
 
@@ -595,7 +614,7 @@ impl Desktop {
             }
         }
         if !errors.is_empty() {
-            self.toast(tx, "Couldn't attach files", Some(errors.join("\n")));
+            self.toast(tx, "couldn't attach files", Some(errors.join("\n")));
         }
     }
 
@@ -650,7 +669,7 @@ impl Desktop {
                     Command::Submit(submit) => self.attachments = submit.attachments,
                     _ => unreachable!("only inputs are sent by the composer"),
                 }
-                self.toast(tx, "Offline", None);
+                self.toast(tx, "offline", None);
             }
         }
     }
@@ -681,9 +700,9 @@ impl Desktop {
         self.summary(conversation).map_or_else(
             || {
                 if self.root == Some(conversation) {
-                    "Orchestrator"
+                    "orchestrator"
                 } else {
-                    "New chat"
+                    "new chat"
                 }
             },
             chat_title,
@@ -755,8 +774,8 @@ pub fn chat_title(chat: &ConversationSummary) -> &str {
         return &chat.title;
     }
     match chat.kind {
-        ConversationKind::Orchestrator => "Orchestrator",
-        ConversationKind::Chat => "New chat",
-        ConversationKind::Subagent => "Subagent",
+        ConversationKind::Orchestrator => "orchestrator",
+        ConversationKind::Chat => "new chat",
+        ConversationKind::Subagent => "subagent",
     }
 }

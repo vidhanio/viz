@@ -19,8 +19,8 @@ use viz_client::protocol::{
 use crate::{
     app::{Desktop, Status, chat_title},
     theme::{
-        self, HAIRLINE, ICON, ORCHESTRATOR_ROW, ROW_INSET, S8, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT,
-        Theme,
+        self, HAIRLINE, ICON, ORCHESTRATOR_ROW, PROJECT_BOX_INSET, ROW_INSET, S8, SIDEBAR_PAD,
+        Size, TOOLBAR_HEIGHT, Theme,
     },
     ui::{self, TreeLine},
 };
@@ -285,8 +285,8 @@ impl<'a> Outline<'a> {
             chat.unread.then(|| {
                 ui::dot(t.accent)
                     .role("status")
-                    .label("Unread")
-                    .help("Unread")
+                    .label("unread")
+                    .help("unread")
             })
         });
         let menu = actions::chat_menu(s, chat, &key, t, layer);
@@ -294,7 +294,7 @@ impl<'a> Outline<'a> {
             chat.project
                 .as_deref()
                 .and_then(|id| s.projects.iter().find(|p| p.id == id))
-                .map_or("No project", |project| project.name.as_str())
+                .map_or("no project", |project| project.name.as_str())
         });
         // The runner's mark, in the title's ink.
         let mark = chat.harness.as_deref().map(|harness| {
@@ -322,7 +322,7 @@ impl<'a> Outline<'a> {
         .build(mark, ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
         if chat.unread {
-            node = node.description("Unread");
+            node = node.description("unread");
         }
         if s.connected() {
             node = node.on_secondary_press(move |s: &mut Desktop, at, _| {
@@ -373,12 +373,24 @@ impl<'a> Outline<'a> {
                 s.navigation.menu = Some(actions::Context::at(&key, at));
             });
         }
+        // The project and its chats share one hairline box, which is the
+        // nesting: chats keep the project row's columns (their marks under its
+        // folder) instead of stepping in, and only their tree level says
+        // they're inside. The inset plus a row's radius makes the box's radius,
+        // so a highlighted row's corners run parallel to it.
         let mut branch = col()
             .key(format!("project-branch-{}", project.id))
             .w_full()
+            .padding(PROJECT_BOX_INSET)
+            .radius(Size::Default.radius() + PROJECT_BOX_INSET + HAIRLINE)
+            .border(HAIRLINE, t.hairline)
             .child(node);
         if let Some(chats) = self.projects.get(project.id.as_str()).filter(|_| open) {
-            branch = branch.children(chats.iter().map(|chat| self.chat(chat, 1, false, t, layer)));
+            branch = branch.children(
+                chats
+                    .iter()
+                    .map(|chat| self.chat(chat, 0, false, t, layer).level(2)),
+            );
         }
         branch
     }
@@ -407,17 +419,18 @@ fn open_match(s: &mut Desktop, tx: &mut Tx) {
 pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let tree = conversation_tree(s, t, layer);
     let mut bar = Sidebar::new()
-        .label("Workspace")
+        .label("workspace")
         .inset(0.0)
         .header_gap(S8)
         .header_padding(0.0, 0.0);
     if let Some(orchestrator) = orchestrator(s, t) {
         bar = bar.header(orchestrator);
     }
-    bar.header(filter(s, t))
-        .child(tree)
-        .footer(footer(s, t))
-        .build(&t.k)
+    bar = bar.header(filter(s, t)).child(tree);
+    if let Some(footer) = footer(s, t) {
+        bar = bar.footer(footer);
+    }
+    bar.build(&t.k)
 }
 
 /// Mounts sidebar dialogs independently of whether the sidebar is visible.
@@ -451,12 +464,32 @@ pub const fn preview_projects(s: &mut Desktop) {
     s.navigation.mode = Mode::Projects;
 }
 
+/// The sidebar header's buttons while it's open: add project, then new chat,
+/// before the sidebar toggle rune-kit places.
+pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
+    let add = ui::icon_button(
+        &ui::FOLDER_PLUS,
+        "add project",
+        IconButtonVariant::GhostMuted,
+        Size::Default,
+    )
+    .disabled(!s.connected())
+    .on_press_tx(open_add_project)
+    .build(&t.k)
+    .key("add-project");
+    row()
+        .key("sidebar-header-buttons")
+        .gap(theme::S4)
+        .child(add)
+        .child(new_chat_button(s, t))
+}
+
 /// New chat, as an icon button: in the sidebar's header row while the sidebar
 /// is open, after the sidebar toggle in the toolbar while it's closed.
 pub fn new_chat_button(s: &Desktop, t: &Theme) -> El {
     ui::icon_button(
         &ui::COMPOSE,
-        "New chat",
+        "new chat",
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
@@ -467,13 +500,12 @@ pub fn new_chat_button(s: &Desktop, t: &Theme) -> El {
     .key("new-chat")
 }
 
-/// Where the sidebar header's new-chat button sits, from the window's top
-/// left: one gap before the sidebar toggle, which rune-kit pins to the
-/// header's trailing end.
-pub fn new_chat_origin(s: &Desktop) -> (f32, f32) {
+/// Where [`header_buttons`] sit, from the window's top left: one gap before
+/// the sidebar toggle, which rune-kit pins to the header's trailing end.
+pub fn header_origin(s: &Desktop) -> (f32, f32) {
     let side = Size::Default.height();
     (
-        s.sidebar.width() - SIDEBAR_PAD - side - theme::S4 - side,
+        s.sidebar.width() - SIDEBAR_PAD - 3.0f32.mul_add(side, 2.0 * theme::S4),
         (TOOLBAR_HEIGHT - side) / 2.0,
     )
 }
@@ -484,11 +516,11 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
     let id = root.id;
     let selected = s.selected == Some(id);
     let (detail, color) = match root.status {
-        ConversationStatus::Working => ("Working".to_owned(), t.muted),
-        ConversationStatus::Failed => ("Last run failed".to_owned(), t.danger),
+        ConversationStatus::Working => ("working".to_owned(), t.muted),
+        ConversationStatus::Failed => ("last run failed".to_owned(), t.danger),
         ConversationStatus::Idle => (
             theme::ago(root.updated_at)
-                .map_or_else(|| "Idle".to_owned(), |ago| format!("Idle · {ago}")),
+                .map_or_else(|| "idle".to_owned(), |ago| format!("idle · {ago}")),
             t.faint,
         ),
     };
@@ -497,7 +529,7 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
         row()
             .key("orchestrator")
             .role("link")
-            .label("Orchestrator")
+            .label("orchestrator")
             .description(detail.clone())
             .w_full()
             .h(ORCHESTRATOR_ROW)
@@ -524,7 +556,7 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
                     .shrink()
                     .min_w(0.0)
                     .child(
-                        text("Orchestrator")
+                        text("orchestrator")
                             .font(t.ui_medium)
                             .color(t.text)
                             .a11y_hidden(),
@@ -546,8 +578,8 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
 fn filter(s: &Desktop, t: &Theme) -> El {
     ui::text_field(
         &s.navigation.filter,
-        "Filter chats",
-        "Filter chats",
+        "filter chats",
+        "filter chats",
         Size::Default,
     )
     .leading_icon(&ui::SEARCH)
@@ -563,11 +595,11 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let mut tree = col()
         .key("conversation-tree")
         .role("tree")
-        .label("Conversations")
+        .label("conversations")
         .w_full();
     if !outline.pinned.is_empty() {
         tree = tree
-            .child(ui::section_row("pinned-heading", "Pinned", None, t))
+            .child(ui::section_row("pinned-heading", "pinned", None, t))
             .children(
                 outline
                     .pinned
@@ -575,17 +607,22 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                     .map(|chat| outline.chat(chat, 0, recent, t, layer)),
             );
     }
-    let add = ui::icon_button(
-        &ui::PLUS,
-        "Add project",
+    let archived = s.navigation.archived;
+    let show_archived = ui::icon_button(
+        &ui::ARCHIVE,
+        if archived {
+            "hide archived"
+        } else {
+            "show archived"
+        },
         IconButtonVariant::GhostMuted,
         Size::Small,
     )
-    .disabled(!s.connected())
-    .on_press_tx(open_add_project)
+    .expanded(archived)
+    .on_press(|s: &mut Desktop| s.navigation.archived = !s.navigation.archived)
     .build(&t.k)
-    .key("add-project");
-    tree = tree.child(mode_switch(s.navigation.mode, add, t));
+    .key("archived");
+    tree = tree.child(mode_switch(s.navigation.mode, show_archived, t));
     if recent {
         return tree.children(
             outline
@@ -594,15 +631,17 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .map(|chat| outline.chat(chat, 0, true, t, layer)),
         );
     }
-    tree = tree.children(
-        s.projects
-            .iter()
-            .filter(|p| outline.visible_project(p))
-            .map(|p| outline.project(p, t, layer)),
+    tree = tree.child(
+        col().key("project-boxes").w_full().gap(theme::S4).children(
+            s.projects
+                .iter()
+                .filter(|p| outline.visible_project(p))
+                .map(|p| outline.project(p, t, layer)),
+        ),
     );
     if !outline.loose.is_empty() {
         tree = tree
-            .child(ui::section_row("chats-heading", "No project", None, t))
+            .child(ui::section_row("chats-heading", "no project", None, t))
             .children(
                 outline
                     .loose
@@ -613,9 +652,9 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     tree
 }
 
-/// The section row that picks how chats are listed, with Add project in its
-/// trailing slot.
-fn mode_switch(current: Mode, add: El, t: &Theme) -> El {
+/// The section row that picks how chats are listed, with the archived toggle
+/// in its trailing slot.
+fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
     let tab = |mode: Mode, label: &'static str| {
         let active = mode == current;
         ui::section(label, t)
@@ -633,31 +672,29 @@ fn mode_switch(current: Mode, add: El, t: &Theme) -> El {
     row()
         .key("sidebar-mode")
         .role("radiogroup")
-        .label("List chats by")
+        .label("list chats by")
         .w_full()
         .h(theme::TREE_ROW)
         .mt(theme::S12)
         .pl(ROW_INSET)
         .gap(theme::S12)
         .center_y()
-        .child(tab(Mode::Recent, "Recent"))
-        .child(tab(Mode::Projects, "Projects"))
+        .child(tab(Mode::Recent, "recent"))
+        .child(tab(Mode::Projects, "projects"))
         .child(el().grow(1.0).a11y_hidden())
-        .child(ui::trailing(None, Some(add), true))
+        .child(ui::trailing(None, Some(archived), true))
 }
 
-/// The connection (a dot and one word, the detail in its tooltip), a retry
-/// while offline, and the archived toggle.
-fn footer(s: &Desktop, t: &Theme) -> El {
+/// The connection while it's down (a dot and one word, the detail in its
+/// tooltip) and a retry while offline. A healthy connection says nothing, so
+/// there's no footer (and no rule above it) then.
+fn footer(s: &Desktop, t: &Theme) -> Option<El> {
     let (color, label) = match &s.status {
-        Status::Connecting => (t.warning, "Connecting"),
-        Status::Connected { .. } => (t.success, "Connected"),
-        Status::Error(_) => (t.danger, "Offline"),
+        Status::Connecting => (t.warning, "connecting…"),
+        Status::Connected { .. } => return None,
+        Status::Error(_) => (t.danger, "disconnected"),
     };
     let detail = match (&s.status, &s.endpoint) {
-        (Status::Connected { version }, Some(endpoint)) => {
-            format!("viz-backend {version} at {endpoint}")
-        }
         (Status::Error(message), _) => message.clone(),
         (_, Some(endpoint)) => endpoint.clone(),
         _ => String::new(),
@@ -692,24 +729,11 @@ fn footer(s: &Desktop, t: &Theme) -> El {
         );
     if matches!(s.status, Status::Error(_)) {
         footer = footer.child(
-            quiet("Retry")
+            quiet("retry")
                 .on_press_tx(Desktop::reconnect)
                 .build(&t.k)
                 .key("retry"),
         );
     }
-    let archived = s.navigation.archived;
-    col().w_full().gap(S8).child(ui::rule(t)).child(
-        footer.child(
-            quiet(if archived {
-                "Hide archived"
-            } else {
-                "Show archived"
-            })
-            .on_press(|s: &mut Desktop| s.navigation.archived = !s.navigation.archived)
-            .build(&t.k)
-            .key("archived")
-            .expanded(archived),
-        ),
-    )
+    Some(col().w_full().gap(S8).child(ui::rule(t)).child(footer))
 }

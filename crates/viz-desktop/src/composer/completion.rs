@@ -171,7 +171,7 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
                 .as_ref()
                 .is_some_and(|state| !state.commands.is_empty()) =>
         {
-            popup.label("Commands").empty_message("No commands").items(
+            popup.label("commands").empty_message("no commands").items(
                 commands(s, &token.query).map(|command| {
                     let mut item = PopupItem::new(&command.name, format!("/{}", command.name))
                         .description(&command.description);
@@ -190,11 +190,11 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         }
         Kind::Slash => return,
         Kind::File => popup
-            .label("Files")
+            .label("files")
             .empty_message(match &s.completion.files {
-                None => "Searching files",
-                Some(Err(_)) => "File search failed",
-                Some(Ok(_)) => "No files",
+                None => "searching files",
+                Some(Err(_)) => "file search failed",
+                Some(Ok(_)) => "no files",
             })
             .items(files(s).iter().map(|path| {
                 PopupItem::new(path, path).leading(icon(&ui::SEARCH, ICON_SMALL).color(t.muted))

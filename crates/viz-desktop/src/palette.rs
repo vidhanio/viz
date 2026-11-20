@@ -138,7 +138,7 @@ pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
             let query = s.palette.input.text.trim().to_owned();
             s.palette.search = Search::Pending;
             if !s.send(Command::SearchConversations { request, query }, tx) {
-                s.palette.search = Search::Complete(Err("The backend is offline.".into()));
+                s.palette.search = Search::Complete(Err("the backend is offline.".into()));
             }
         }
         _ => return false,
@@ -171,15 +171,15 @@ impl Local {
     fn label(self, s: &Desktop) -> &'static str {
         let chat = s.selected.and_then(|id| s.summary(id));
         match self {
-            Self::NewChat => "New chat",
-            Self::AddProject => "Add project",
-            Self::Sidebar => "Toggle sidebar",
-            Self::Pin if chat.is_some_and(|chat| chat.pinned) => "Unpin chat",
-            Self::Pin => "Pin chat",
-            Self::Archive if chat.is_some_and(|chat| chat.archived) => "Unarchive chat",
-            Self::Archive => "Archive chat",
-            Self::Delete => "Delete chat",
-            Self::Stop => "Stop response",
+            Self::NewChat => "new chat",
+            Self::AddProject => "add project",
+            Self::Sidebar => "toggle sidebar",
+            Self::Pin if chat.is_some_and(|chat| chat.pinned) => "unpin chat",
+            Self::Pin => "pin chat",
+            Self::Archive if chat.is_some_and(|chat| chat.archived) => "unarchive chat",
+            Self::Archive => "archive chat",
+            Self::Delete => "delete chat",
+            Self::Stop => "stop response",
         }
     }
 
@@ -316,10 +316,10 @@ impl ResultRow<'_> {
 
     const fn group(self, recent: bool) -> &'static str {
         match self {
-            Self::Command(_) => "Commands",
-            Self::Chat(_) if recent => "Recent chats",
-            Self::Chat(_) => "Chats",
-            Self::Message(_) => "Messages",
+            Self::Command(_) => "commands",
+            Self::Chat(_) if recent => "recent chats",
+            Self::Chat(_) => "chats",
+            Self::Message(_) => "messages",
         }
     }
 }
@@ -469,14 +469,14 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
 
 fn search_note(s: &Desktop, any_choices: bool, t: &Theme) -> Option<El> {
     let (label, detail) = if !s.connected() {
-        ("Connect to search chats and messages", None)
+        ("connect to search chats and messages", None)
     } else if s.palette.filter.is_empty() {
         return None;
     } else {
         match &s.palette.search {
-            Search::Idle | Search::Debouncing(_) | Search::Pending => ("Searching messages…", None),
-            Search::Complete(Ok(hits)) if hits.is_empty() && !any_choices => ("No results", None),
-            Search::Complete(Err(error)) => ("Message search failed", Some(error)),
+            Search::Idle | Search::Debouncing(_) | Search::Pending => ("searching messages…", None),
+            Search::Complete(Ok(hits)) if hits.is_empty() && !any_choices => ("no results", None),
+            Search::Complete(Err(error)) => ("message search failed", Some(error)),
             Search::Complete(Ok(_)) => return None,
         }
     };
@@ -502,9 +502,9 @@ fn footer(t: &Theme) -> El {
         .center_y()
         .children(
             [
-                (&["↑", "↓"][..], "Navigate"),
-                (&["↵"][..], "Open"),
-                (&["Esc"][..], "Close"),
+                (&["↑", "↓"][..], "navigate"),
+                (&["↵"][..], "open"),
+                (&["Esc"][..], "close"),
             ]
             .map(|(keys, name)| {
                 row()
@@ -531,7 +531,7 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     let mut list = col()
         .key(LIST)
         .role("listbox")
-        .label("Palette results")
+        .label("palette results")
         .w_full()
         .h(LIST_HEIGHT)
         .padding(S8)
@@ -561,8 +561,8 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         list = list.child(note.key("search-status"));
     }
     let field = TextInput::new(&s.palette.input)
-        .label("Search commands, chats, and messages")
-        .placeholder("Type a command or search chats…")
+        .label("search commands, chats, and messages")
+        .placeholder("type a command or search chats…")
         .plain()
         .leading_icon(&ui::SEARCH)
         .width(None)
@@ -577,7 +577,7 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     // footer names Escape.
     ui::sheet(
         "palette",
-        "Command palette",
+        "command palette",
         PALETTE_WIDTH,
         close,
         [

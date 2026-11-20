@@ -48,7 +48,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .h_full()
         .min_h(0.0)
         .child(ui::rule(t).key("header-rule"))
-        .child(timeline::timeline(s, t));
+        .child(timeline::timeline(s, t, &mut overlays));
     let main = main.children(composer::composer(s, t, &mut overlays));
     // The sidebar's header row is a title band above its content: guard it
     // from below, under the sidebar toggle and new-chat button that float
@@ -89,8 +89,8 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(&t.shell);
     let split = if s.sidebar.is_open() {
-        let (x, y) = sidebar::new_chat_origin(s);
-        split.child(sidebar::new_chat_button(s, t).absolute(x, y))
+        let (x, y) = sidebar::header_origin(s);
+        split.child(sidebar::header_buttons(s, t).absolute(x, y))
     } else {
         split
     };
@@ -254,7 +254,7 @@ fn main() {
     .on_focus(Desktop::set_focus);
     if let Some(detail) = theme_error {
         app.handle()
-            .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
+            .update(move |s, tx| s.toast(tx, "invalid desktop configuration", Some(detail)));
     }
     // Rune has no resize hook; a drawn frame reports the viewport, and a
     // change re-lays out what depends on it (the composer's selects).

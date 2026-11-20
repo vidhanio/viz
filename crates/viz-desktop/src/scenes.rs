@@ -13,6 +13,7 @@ use crate::{
     app::{Desktop, NewChat, Status},
     composer, palette, sidebar,
     thread::Thread,
+    timeline,
 };
 
 type Scene = (&'static str, fn(&mut Desktop));
@@ -34,6 +35,7 @@ pub const SCENES: &[Scene] = &[
     ("delete", delete),
     ("overflow", overflow),
     ("projects", projects),
+    ("draft-project", draft_project),
 ];
 
 const CHAT: ConversationId = ConversationId(11);
@@ -428,6 +430,12 @@ fn projects(s: &mut Desktop) {
     sidebar::preview_projects(s);
 }
 
+/// A fresh chat with its project picker open.
+fn draft_project(s: &mut Desktop) {
+    new_agent(s);
+    s.open_picker = Some(timeline::DRAFT_PROJECT.into());
+}
+
 /// The delete confirmation for the open chat.
 fn delete(s: &mut Desktop) {
     workspace(s);
@@ -445,7 +453,7 @@ fn overflow(s: &mut Desktop) {
     }
     sidebar::preview_delete(s, CHAT);
     s.preview_toast(
-        "Couldn't open /home/vidhanio/Projects/viz/crates/viz-desktop/src/sidebar/actions.rs \
+        "couldn't open /home/vidhanio/Projects/viz/crates/viz-desktop/src/sidebar/actions.rs \
          for writing",
         "error: failed to write \
          /home/vidhanio/Projects/viz/target/preview/export-markdown-notes-4f1c2a/crates/\
@@ -453,7 +461,7 @@ fn overflow(s: &mut Desktop) {
          directory's owner\nhint: or remove it and start the chat again\nnote: the backend \
          kept the previous version on disk",
     );
-    s.preview_toast("Offline", "Backend disconnected");
+    s.preview_toast("offline", "backend disconnected");
 }
 
 fn queue(s: &mut Desktop) {

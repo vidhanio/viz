@@ -98,10 +98,10 @@ fn session_options(
         .filter(|option| role(option) == Role::Mode)
         .collect();
     let extra = options.iter().filter(|option| role(option) == Role::Other);
-    let more = picker_width("More", t) + GAP;
+    let more = picker_width("more", t) + GAP;
     let mut shown = 0;
     for (index, option) in modes.iter().enumerate() {
-        let width = picker_width(value_name(option, target), t) + GAP;
+        let width = picker_width(&value_name(option, target), t) + GAP;
         // Room for More whenever something is left for it.
         let reserve = if index + 1 < modes.len() || extra.clone().next().is_some() {
             more
@@ -117,7 +117,13 @@ fn session_options(
     let (inline, folded) = modes.split_at(shown);
     for option in inline {
         let key = format!("option-{}", option.id);
-        let menu = picker(s, &key, &option.name, Some(value_name(option, target)), t);
+        let menu = picker(
+            s,
+            &key,
+            &option.name.to_lowercase(),
+            Some(&value_name(option, target)),
+            t,
+        );
         let menu = if is_open(s, &key) {
             add_choices(menu, target, option)
         } else {
@@ -127,16 +133,17 @@ fn session_options(
     }
     let mut overflow = folded.iter().copied().chain(extra).peekable();
     if overflow.peek().is_some() {
-        let mut menu = picker(s, "more-options", "More", None, t);
+        let mut menu = picker(s, "more-options", "more", None, t);
         if is_open(s, "more-options") {
             for (index, option) in overflow.enumerate() {
                 if index != 0 {
                     menu = menu.separator();
                 }
+                let name = option.name.to_lowercase();
                 let label = if folded.iter().any(|folded| folded.id == option.id) {
-                    format!("{} · {}", option.name, value_name(option, target))
+                    format!("{name} · {}", value_name(option, target))
                 } else {
-                    option.name.clone()
+                    name
                 };
                 menu = add_choices(menu.group_label(&label), target, option);
             }
@@ -157,22 +164,37 @@ pub(super) fn picker(
     value: Option<&str>,
     t: &Theme,
 ) -> rune_kit::Menu {
+    ui::picker(key, name, value, is_open(s, key), toggle(key), close, t)
+}
+
+/// A picker whose trigger shows `mark` before `value` (a harness's icon).
+pub(super) fn marked_picker(
+    s: &Desktop,
+    key: &str,
+    name: &str,
+    value: &str,
+    mark: &'static rune::Icon,
+    t: &Theme,
+) -> rune_kit::Menu {
+    let open = is_open(s, key);
+    let trigger = ui::marked_trigger(key, name, value, mark, open, t).on_press(toggle(key));
+    ui::picker_menu(key, trigger, open, close)
+}
+
+/// Opens picker `key`, or closes it when open.
+fn toggle(key: &str) -> impl Fn(&mut Desktop) + 'static {
     let target = key.to_owned();
-    ui::picker(
-        key,
-        name,
-        value,
-        is_open(s, key),
-        move |s: &mut Desktop| {
-            s.open_picker = if is_open(s, &target) {
-                None
-            } else {
-                Some(target.clone())
-            };
-        },
-        |s| s.open_picker = None,
-        t,
-    )
+    move |s: &mut Desktop| {
+        s.open_picker = if is_open(s, &target) {
+            None
+        } else {
+            Some(target.clone())
+        };
+    }
+}
+
+fn close(s: &mut Desktop) {
+    s.open_picker = None;
 }
 
 /// Whose options the composer shows: the fresh composer's draft (sent with
@@ -228,15 +250,17 @@ pub(super) fn apply(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: String, valu
     }
 }
 
-fn value_name<'a>(option: &'a ConfigOption, target: Options<'a>) -> &'a str {
+/// The option's current value as shown: its choice's name, lowercase.
+fn value_name(option: &ConfigOption, target: Options<'_>) -> String {
     match target.value(option) {
-        OptionValue::Boolean(true) => "On",
-        OptionValue::Boolean(false) => "Off",
+        OptionValue::Boolean(true) => "on".to_owned(),
+        OptionValue::Boolean(false) => "off".to_owned(),
         OptionValue::Select(value) => option
             .choices
             .iter()
             .find(|choice| choice.value == *value)
-            .map_or(value, |choice| &choice.name),
+            .map_or(value, |choice| &choice.name)
+            .to_lowercase(),
     }
 }
 
@@ -250,32 +274,40 @@ fn add_choices(
             menu.item(choice(
                 target,
                 option,
-                if value { "On" } else { "Off" },
+                if value { "on" } else { "off" },
                 OptionValue::Boolean(value),
             ))
         });
+    }
+    // Described choices get room to show their descriptions whole.
+    if option
+        .choices
+        .iter()
+        .any(|choice| choice.description.is_some())
+    {
+        menu = menu.min_width(ui::DESCRIBED_MENU_WIDTH);
     }
     let mut group = None;
     for entry in &option.choices {
         if group != entry.group.as_deref() {
             group = entry.group.as_deref();
             if let Some(group) = group {
-                menu = menu.group_label(group);
+                menu = menu.group_label(group.to_lowercase());
             }
         }
         let mut item = choice(
             target,
             option,
-            &entry.name,
+            &entry.name.to_lowercase(),
             OptionValue::Select(entry.value.clone()),
         );
         if let Some(detail) = entry.description.as_deref() {
-            item = item.description(detail);
+            item = item.description(detail.to_lowercase());
         }
         menu = menu.item(item);
     }
     if option.choices.is_empty() {
-        menu = menu.item(MenuItem::new("No choices").disabled(true));
+        menu = menu.item(MenuItem::new("no choices").disabled(true));
     }
     menu
 }

@@ -2,7 +2,7 @@
 //! variant and owns its insets; views compose them and add no padding of
 //! their own beyond the layout tokens in `theme`.
 
-use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, row, text};
+use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
     Placement, PopupList, Select, SelectAppearance, TextInput,
@@ -11,7 +11,7 @@ use viz_client::protocol::ConversationStatus;
 
 use crate::theme::{
     CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON,
-    ICON_SMALL, RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S8, S12, Size,
+    ICON_SMALL, RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, Size,
     TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
 };
 
@@ -61,17 +61,6 @@ pub fn rule(t: &Theme) -> El {
 /// A section title: small, medium, muted.
 pub fn section(label: &str, t: &Theme) -> El {
     text(label).font(t.small_medium).color(t.muted)
-}
-
-/// Secondary one-line text that truncates.
-pub fn quiet(label: &str, t: &Theme) -> El {
-    text(label)
-        .font(t.small)
-        .color(t.muted)
-        .min_w(0.0)
-        .shrink()
-        .truncate()
-        .help_when_truncated(label)
 }
 
 /// A glyph centered in an icon-wide box one line tall, so it sits on the
@@ -164,9 +153,9 @@ pub fn spinner(t: &Theme) -> El {
 /// success dot when done, a danger dot when it failed.
 pub fn agent_state(status: ConversationStatus, t: &Theme) -> (El, &'static str) {
     match status {
-        ConversationStatus::Working => (spinner(t), "Running"),
-        ConversationStatus::Failed => (dot(t.danger), "Failed"),
-        ConversationStatus::Idle => (dot(t.success), "Done"),
+        ConversationStatus::Working => (spinner(t), "running"),
+        ConversationStatus::Failed => (dot(t.danger), "failed"),
+        ConversationStatus::Idle => (dot(t.success), "done"),
     }
 }
 
@@ -175,8 +164,8 @@ pub fn agent_state(status: ConversationStatus, t: &Theme) -> (El, &'static str) 
 pub fn status(status: ConversationStatus, t: &Theme) -> Option<El> {
     let (mark, label) = match status {
         ConversationStatus::Idle => return None,
-        ConversationStatus::Working => (spinner(t), "Working"),
-        ConversationStatus::Failed => (dot(t.danger), "Failed"),
+        ConversationStatus::Working => (spinner(t), "working"),
+        ConversationStatus::Failed => (dot(t.danger), "failed"),
     };
     Some(
         el().size(ICON, ICON)
@@ -342,6 +331,51 @@ pub fn select_trigger(
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
 }
 
+/// An inline select's trigger led by `mark` inside it (a harness's icon),
+/// drawn as rune-kit's inline `Select` draws its own: the value, then a
+/// chevron, at most [`PICKER_TRIGGER_MAX`] wide. The caller handles its press.
+pub fn marked_trigger(
+    id: &str,
+    name: &str,
+    current: &str,
+    mark: &'static Icon,
+    open: bool,
+    t: &Theme,
+) -> El {
+    let chevron = if open { &CHEVRON_UP } else { &CHEVRON_OPEN };
+    let trigger = row()
+        .key(format!("{id}-trigger"))
+        .role("combobox")
+        .label(name)
+        .a11y_value(current)
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .h(Size::Default.height())
+        .max_w(PICKER_TRIGGER_MAX)
+        .pl(S6)
+        .pr(S4)
+        .gap(S4)
+        .center_y()
+        .radius(Size::Default.radius())
+        .child(icon(mark, ICON).color(t.muted).a11y_hidden())
+        .child(
+            text(current)
+                .font(t.ui_medium)
+                .color(t.text)
+                .min_w(0.0)
+                .shrink()
+                .truncate()
+                .a11y_hidden(),
+        )
+        .child(icon(chevron, ICON).color(t.muted).a11y_hidden());
+    if open {
+        trigger.fill(t.hover)
+    } else {
+        trigger.hover(t.hover)
+    }
+}
+
 /// The combobox trigger is separate from its menu: server ids can differ even
 /// when the labels match.
 pub fn picker<S: 'static>(
@@ -354,6 +388,16 @@ pub fn picker<S: 'static>(
     t: &Theme,
 ) -> Menu {
     let trigger = select_trigger(id, name, current, open, PICKER_TRIGGER_MAX, t).on_press(toggle);
+    picker_menu(id, trigger, open, close)
+}
+
+/// A picker's menu around its `trigger` (which carries the toggle).
+pub fn picker_menu<S: 'static>(
+    id: &str,
+    trigger: El,
+    open: bool,
+    close: impl Fn(&mut S) + 'static,
+) -> Menu {
     Menu::new(format!("{id}-picker"))
         .standard()
         .placement(Placement::TopStart)
@@ -370,6 +414,9 @@ pub const PICKER_TRIGGER_MAX: f32 = 156.0;
 pub const MODEL_TRIGGER_MAX: f32 = 240.0;
 /// A menu's narrowest width.
 pub const MENU_WIDTH: f32 = 196.0;
+/// A menu whose choices carry descriptions: wide enough that a runner's
+/// one-line descriptions (Codex's modes) show whole.
+pub const DESCRIBED_MENU_WIDTH: f32 = 360.0;
 const COMPLETION_HEIGHT: f32 = 240.0;
 pub const COMPLETION_WIDTH: f32 = 360.0;
 
@@ -452,7 +499,7 @@ impl<'a> Dialog<'a> {
         }
         // The button's box is a control tall around a title-line glyph: pull
         // it up and out so the glyph sits on the title's line and the inset.
-        let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::Ghost, Size::Small)
+        let dismiss = icon_button(&CLOSE, "close", IconButtonVariant::Ghost, Size::Small)
             .on_press(close.clone())
             .build(&t.k)
             .key("close")
@@ -575,7 +622,7 @@ pub fn toast<S: 'static>(
                 .w_full(),
         );
     }
-    let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::GhostMuted, Size::Small)
+    let dismiss = icon_button(&CLOSE, "close", IconButtonVariant::GhostMuted, Size::Small)
         .on_press(close)
         .build(k)
         .key("close")
@@ -652,7 +699,7 @@ impl DialogForm<'_> {
             .field
             .is_some_and(|(value, _)| value.text.trim().is_empty());
         let actions = dialog_actions([
-            button("Cancel", ButtonVariant::Ghost, Size::Default)
+            button("cancel", ButtonVariant::Ghost, Size::Default)
                 .on_press(close.clone())
                 .build(&t.k),
             button(self.action, self.variant, Size::Default)
@@ -697,6 +744,8 @@ lucide! {
     CHEVRON_UP = ChevronUp;
     MORE = Ellipsis;
     FOLDER = Folder;
+    /// Add project.
+    FOLDER_PLUS = FolderPlus;
     CHAT = MessageSquare;
     STOP = Square;
     SIDEBAR = PanelLeft;
@@ -786,4 +835,13 @@ pub fn kit_glyphs(glyph: &mut rune_kit::Glyphs) {
 /// (the shell's sidebar toggle), as Lucide.
 pub fn swap_kit_icon(icon: &Icon) -> Option<&'static Icon> {
     (icon.name == rune_kit::shell::SIDEBAR.name).then_some(&SIDEBAR)
+}
+
+/// `name` as a slug, the way the app shows runner ids and choices:
+/// lowercase, its words joined by `-` (`Extra high` is `extra-high`).
+pub fn slug(name: &str) -> String {
+    name.split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_lowercase()
 }

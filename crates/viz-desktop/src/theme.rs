@@ -96,6 +96,8 @@ pub const TREE_STEP: f32 = ICON + S8;
 pub const TRAILING: f32 = Size::Default.height();
 /// The orchestrator's two-line row.
 pub const ORCHESTRATOR_ROW: f32 = S40 + S4;
+/// The gap inside a Projects-mode project's box, around its rows.
+pub const PROJECT_BOX_INSET: f32 = S2;
 
 /// The transcript and composer column.
 pub const READING_WIDTH: f32 = 760.0;

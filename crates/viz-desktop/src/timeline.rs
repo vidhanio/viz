@@ -7,17 +7,17 @@
 
 use rune::{El, LoopSpec, ScrollSpec, Span, Tx, col, el, icon, rich, row, text};
 use rune_kit::{
-    ButtonVariant, Markdown,
+    ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement,
     diff::{FileDiff, LineKind},
 };
 use viz_client::protocol::ConversationStatus;
 
 use crate::{
-    app::{Desktop, Status},
+    app::{Desktop, NewChat, Status},
     attachments, sidebar,
     theme::{
-        self, CARD_INSET, EMPTY_TOP, HAIRLINE, ICON, ICON_LARGE, ICON_SMALL, S2, S4, S8, S12, S16,
-        S24, S32, S40, Size, Theme,
+        self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_LARGE, ICON_SMALL, S2, S4,
+        S8, S12, S16, S24, S32, S40, Size, Theme,
     },
     thread::{Item, PlanStep, Tool, ToolStatus, User},
     ui::{self, Card},
@@ -33,6 +33,8 @@ const ACTIVITY_TEXT: f32 = CARD_INSET + ICON + S8;
 const SHORTCUT_LABEL: f32 = S32 + S32 + S8;
 /// The longest a subagent's preview line gets.
 const PREVIEW_CHARS: usize = 280;
+/// The widest a user bubble gets, as a share of the reading column.
+const BUBBLE_FRAC: f32 = 0.8;
 
 /// What a row is, for the space above it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,7 +71,7 @@ impl Rows {
 }
 
 /// The scrolling timeline, or what to show in its place.
-pub fn timeline(s: &Desktop, t: &Theme) -> El {
+pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let thread = &s.thread;
     let empty = thread.items.is_empty()
         && thread.before.is_none()
@@ -77,7 +79,7 @@ pub fn timeline(s: &Desktop, t: &Theme) -> El {
         && !thread.live.busy
         && thread.live.failure.is_none();
     let body = if empty {
-        empty_state(s, t).pt(EMPTY_TOP)
+        empty_state(s, t, layer).pt(EMPTY_TOP)
     } else {
         let mut rows = Rows {
             rows: Vec::new(),
@@ -109,9 +111,9 @@ pub fn timeline(s: &Desktop, t: &Theme) -> El {
 /// Older history, between two rules.
 fn load_earlier(s: &Desktop, t: &Theme) -> El {
     let label = if s.history_loading {
-        "Loading earlier"
+        "loading earlier"
     } else {
-        "Load earlier"
+        "load earlier"
     };
     row()
         .key("load-earlier")
@@ -244,18 +246,18 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
                 .count()
         });
         let status = match (&live.retry, live.compacting) {
-            (Some(error), _) => Some((format!("Retrying: {error}"), t.warning)),
-            (None, true) => Some(("Compacting context".to_owned(), t.muted)),
+            (Some(error), _) => Some((format!("retrying: {error}"), t.warning)),
+            (None, true) => Some(("compacting context".to_owned(), t.muted)),
             (None, false) if pending_agents > 0 && !writing => Some((
                 if pending_agents == 1 {
-                    "Waiting on a subagent".to_owned()
+                    "waiting on a subagent".to_owned()
                 } else {
-                    format!("Waiting on {pending_agents} subagents")
+                    format!("waiting on {pending_agents} subagents")
                 },
                 t.muted,
             )),
             (None, false) if live.partial.is_empty() && !running => {
-                Some(("Working".to_owned(), t.muted))
+                Some(("working".to_owned(), t.muted))
             }
             (None, false) => None,
         };
@@ -286,15 +288,15 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
 }
 
 /// What to show when the timeline has no messages.
-fn empty_state(s: &Desktop, t: &Theme) -> El {
+fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     match s.status {
         Status::Error(_) => {
             return ui::empty(
                 None,
-                "Offline",
-                "Start viz-backend to reconnect.",
+                "offline",
+                "start viz-backend to reconnect.",
                 Some(
-                    ui::button("Retry", ButtonVariant::Outline, Size::Default)
+                    ui::button("retry", ButtonVariant::Outline, Size::Default)
                         .on_press_tx(Desktop::reconnect)
                         .build(&t.k)
                         .key("retry"),
@@ -302,17 +304,17 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
                 t,
             );
         }
-        Status::Connecting => return ui::empty(None, "Connecting", "", None, t),
+        Status::Connecting => return ui::empty(None, "connecting", "", None, t),
         Status::Connected { .. } => {}
     }
     if s.selected.is_none() && s.new_chat.is_none() {
-        return ui::empty(None, "No chat selected", "", None, t);
+        return ui::empty(None, "no chat selected", "", None, t);
     }
     // First run: nothing to chat in yet, so the one action is adding a
     // project; the orchestrator's intro carries it when that's what's open.
     let onboarding = s.projects.is_empty() && s.new_chat.is_none();
     let add_project = || {
-        ui::button("Add project", ButtonVariant::Submit, Size::Large)
+        ui::button("add project", ButtonVariant::Submit, Size::Large)
             .icon(&ui::PLUS)
             .on_press_tx(sidebar::open_add_project)
             .build(&t.k)
@@ -321,52 +323,137 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
     if s.orchestrator_open() {
         let intro = ui::empty(
             Some(icon(&ui::STAR, ICON_LARGE).color(t.accent)),
-            "Orchestrator",
-            "Remembers across chats and starts agents for you.",
+            "orchestrator",
+            "remembers across chats and starts agents for you.",
             onboarding.then(add_project),
             t,
         );
         return if onboarding {
             intro
         } else {
-            intro.child(shortcuts(&[("K", "Commands"), ("N", "New chat")], t))
+            intro.child(shortcuts(&[("K", "commands"), ("N", "new chat")], t))
         };
     }
     if onboarding {
         return ui::empty(
             None,
-            "Add a project",
-            "Chats run in a project’s folder.",
+            "add a project",
+            "chats run in a project’s folder.",
             Some(add_project()),
             t,
         );
     }
-    chat_hint(s, t)
+    chat_hint(s, t, layer)
 }
 
-/// An empty chat: where it runs, and the few keys that work from here.
-fn chat_hint(s: &Desktop, t: &Theme) -> El {
-    let title = s
+/// An empty chat: where it runs, and the few keys that work from here. A
+/// draft's place is still a choice, so it shows the project picker instead.
+fn chat_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+    let Some(chat) = &s.new_chat else {
+        let title = s
+            .project()
+            .map_or("new chat", |project| project.name.as_str());
+        return ui::empty(None, title, "", None, t)
+            .child(shortcuts(&[("N", "new chat"), ("K", "commands")], t));
+    };
+    let choose_harness = !chat.sending
+        && chat.harness.is_none()
+        && s.harnesses.len() > 1
+        && s.harnesses.iter().all(|harness| !harness.default);
+    // `ui::empty`'s column, with the picker row where its title goes.
+    col()
+        .key("empty")
+        .w_full()
+        .max_w(EMPTY_WIDTH)
+        .gap(S8)
+        .items_center()
+        .child(draft_project(s, chat, t, layer))
+        .children(choose_harness.then(|| {
+            text("choose a harness below")
+                .font(t.ui)
+                .color(t.muted)
+                .wrap()
+                .align(rune::Align::Center)
+        }))
+        // A draft is already the new chat.
+        .child(shortcuts(&[("K", "commands")], t))
+}
+
+/// The `open_picker` value of a draft's project picker.
+pub const DRAFT_PROJECT: &str = "draft-project";
+
+/// Where a draft will run: a picker of every project and none, and an add
+/// button whose new project the draft takes once the backend has it
+/// (`Desktop::project_added`). Fixed once the first message is on its way.
+fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> El {
+    let open = s.open_picker.as_deref() == Some(DRAFT_PROJECT) && !chat.sending;
+    let current = s
         .project()
-        .map_or("New chat", |project| project.name.as_str());
-    let choose_harness = s.new_chat.as_ref().is_some_and(|chat| {
-        !chat.sending
-            && chat.harness.is_none()
-            && s.harnesses.len() > 1
-            && s.harnesses.iter().all(|harness| !harness.default)
+        .map_or("no project", |project| project.name.as_str());
+    let trigger = ui::select_trigger(
+        DRAFT_PROJECT,
+        "project",
+        Some(current),
+        open,
+        ui::MODEL_TRIGGER_MAX,
+        t,
+    )
+    .on_press(|s: &mut Desktop| {
+        s.open_picker = if s.open_picker.as_deref() == Some(DRAFT_PROJECT)
+            || s.new_chat.as_ref().is_none_or(|chat| chat.sending)
+        {
+            None
+        } else {
+            Some(DRAFT_PROJECT.to_owned())
+        };
     });
-    let status = if choose_harness {
-        "Choose a harness below"
-    } else {
-        ""
-    };
-    // A draft is already the new chat.
-    let keys: &[_] = if s.new_chat.is_some() {
-        &[("K", "Commands")]
-    } else {
-        &[("N", "New chat"), ("K", "Commands")]
-    };
-    ui::empty(None, title, status, None, t).child(shortcuts(keys, t))
+    let mut menu = Menu::new(format!("{DRAFT_PROJECT}-picker"))
+        .standard()
+        .placement(Placement::Bottom)
+        .min_width(ui::MENU_WIDTH)
+        .open(open)
+        .on_close(|s: &mut Desktop| s.open_picker = None)
+        .trigger(trigger);
+    if open {
+        let choice = |label: &str, glyph: &'static rune::Icon, id: Option<&str>| {
+            let picked = chat.project.as_deref() == id;
+            let id = id.map(str::to_owned);
+            MenuItem::new(label)
+                .icon(glyph)
+                .checked(picked)
+                .on_select_tx(move |s: &mut Desktop, tx| {
+                    s.open_picker = None;
+                    tx.focus("draft", false);
+                    if let Some(chat) = &mut s.new_chat {
+                        chat.project.clone_from(&id);
+                    }
+                })
+        };
+        menu = menu.item(choice("no project", &ui::CHAT, None)).separator();
+        menu = ui::menu_items(
+            menu,
+            s.projects
+                .iter()
+                .map(|project| choice(&project.name, &ui::FOLDER, Some(&project.id))),
+        );
+    }
+    let add = ui::icon_button(
+        &ui::FOLDER_PLUS,
+        "add project",
+        IconButtonVariant::GhostMuted,
+        Size::Default,
+    )
+    .disabled(chat.sending)
+    .on_press_tx(sidebar::open_add_project)
+    .build(&t.k)
+    .key("draft-add-project");
+    row()
+        .key("draft-place")
+        .gap(S4)
+        .center_y()
+        .min_w(0.0)
+        .child(menu.build(&t.overlay, layer).min_w(0.0).shrink())
+        .child(add)
 }
 
 fn shortcuts(keys: &[(&str, &str)], t: &Theme) -> El {
@@ -389,13 +476,14 @@ fn shortcuts(keys: &[(&str, &str)], t: &Theme) -> El {
         }))
 }
 
-/// A user message sits on a neutral surface.
+/// A user message: a bubble on a neutral surface at the right of the column.
+/// It hugs short text and wraps long text at [`BUBBLE_FRAC`] of the column.
 fn mine(user: &User, t: &Theme) -> El {
     let mut message = Card::Message
         .build(t)
         .key(&user.key)
         .role("article")
-        .label("You");
+        .label("you");
     if !user.text.is_empty() {
         message = message.child(
             text(&user.text)
@@ -403,7 +491,6 @@ fn mine(user: &User, t: &Theme) -> El {
                 .font(t.body)
                 .color(t.text)
                 .wrap()
-                .w_full()
                 .selectable(true)
                 .selection_color(t.k.selection()),
         );
@@ -412,15 +499,24 @@ fn mine(user: &User, t: &Theme) -> El {
         message = message.child(
             row()
                 .key("message-attachments")
-                .w_full()
+                .self_end()
                 .gap(S4)
                 .flex_wrap()
+                .justify_end()
                 .children(user.attachments.iter().enumerate().map(|(index, name)| {
                     attachments::chip(name, t).key(format!("attachment-{index}"))
                 })),
         );
     }
-    message
+    // The spacer holds the column's other share (it never shrinks); the
+    // bubble's wrapper shrinks into the rest, so the card's own `w_full`
+    // fills only its content's width.
+    row()
+        .key(format!("{}-row", user.key))
+        .w_full()
+        .justify_end()
+        .child(el().w_frac(1.0 - BUBBLE_FRAC))
+        .child(col().min_w(0.0).shrink().child(message))
 }
 
 /// Assistant prose.
@@ -448,12 +544,12 @@ fn thinking(
 ) -> El {
     let open = s.expanded.contains(key);
     let title = match duration_ms {
-        _ if streaming => "Thinking…".to_owned(),
-        Some(ms) => format!("Thought for {}s", (ms + 500) / 1000),
-        None => "Thought".to_owned(),
+        _ if streaming => "thinking…".to_owned(),
+        Some(ms) => format!("thought for {}s", (ms + 500) / 1000),
+        None => "thought".to_owned(),
     };
     let body = if thought.trim().is_empty() {
-        "Reasoning hidden"
+        "reasoning hidden"
     } else {
         thought
     };
@@ -528,13 +624,13 @@ fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
 fn output(tool: &Tool, t: &Theme) -> El {
     let mut inner = col().key("inner").w_full().gap(S12).padding(CARD_INSET);
     if !tool.arguments.is_empty() && tool.arguments != "{}" {
-        inner = inner.child(code_section("Input", &tool.arguments, t));
+        inner = inner.child(code_section("input", &tool.arguments, t));
     }
     if !tool.output.is_empty() {
-        inner = inner.child(code_section("Output", &tool.output, t));
+        inner = inner.child(code_section("output", &tool.output, t));
     }
     if !tool.locations.is_empty() {
-        inner = inner.child(code_section("Paths", &tool.locations.join("\n"), t));
+        inner = inner.child(code_section("paths", &tool.locations.join("\n"), t));
     }
     if !tool.diffs.is_empty() {
         inner = inner.child(rune::memo(
@@ -548,7 +644,7 @@ fn output(tool: &Tool, t: &Theme) -> El {
         && tool.locations.is_empty()
         && tool.diffs.is_empty()
     {
-        inner = inner.child(ui::section("No details", t));
+        inner = inner.child(ui::section("no details", t));
     }
     Card::Surface
         .frame(t)
@@ -576,7 +672,7 @@ fn code_section(label: &'static str, body: &str, t: &Theme) -> El {
 fn diff_sections(tool: &Tool, t: &Theme) -> El {
     col()
         .role("group")
-        .label("Changes")
+        .label("changes")
         .w_full()
         .gap(S8)
         .children(tool.diffs.iter().enumerate().map(|(index, diff)| {
@@ -594,9 +690,9 @@ fn diff_sections(tool: &Tool, t: &Theme) -> El {
             if file.hunks.is_empty() {
                 section = section.child(ui::section(
                     if file.binary {
-                        "Binary change"
+                        "binary change"
                     } else {
-                        "No text changes"
+                        "no text changes"
                     },
                     t,
                 ));
@@ -645,18 +741,18 @@ fn plan(key: &str, steps: &[PlanStep], t: &Theme) -> El {
         .build(t)
         .key(key)
         .role("list")
-        .label("Plan")
+        .label("plan")
         .gap(S4)
-        .child(ui::section("Plan", t))
+        .child(ui::section("plan", t))
         .children(steps.iter().enumerate().map(|(index, step)| {
             let (mark, label) = match step.status {
-                ToolStatus::Done => (icon(&ui::CHECK, ICON).color(t.success), "Done"),
-                ToolStatus::Running => (ui::spinner(t), "In progress"),
+                ToolStatus::Done => (icon(&ui::CHECK, ICON).color(t.success), "done"),
+                ToolStatus::Running => (ui::spinner(t), "in progress"),
                 _ => (
                     el().size(ICON_SMALL - S2, ICON_SMALL - S2)
                         .radius(theme::S2 + HAIRLINE)
                         .border(HAIRLINE, t.faint),
-                    "Pending",
+                    "pending",
                 ),
             };
             row()
@@ -803,7 +899,7 @@ fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let mut link = row()
         .key(tool.key.clone())
         .role("link")
-        .label(format!("Subagent: {title}"))
+        .label(format!("subagent: {title}"))
         .description(agent.word())
         .w_full()
         .px(CARD_INSET)
@@ -875,10 +971,10 @@ fn subagent_group(s: &Desktop, tools: &[&Tool], t: &Theme) -> El {
 /// that opens the subagent it names.
 fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
     let verb = match call {
-        Call::Spawn | Call::Message => "Messaged",
-        Call::Read => "Read",
-        Call::List => "Listed subagents",
-        Call::Cancel => "Stopped",
+        Call::Spawn | Call::Message => "messaged",
+        Call::Read => "read",
+        Call::List => "listed subagents",
+        Call::Cancel => "stopped",
     };
     let name = (call != Call::List).then(|| subagent_title(s, tool).to_owned());
     let failed = tool.status == ToolStatus::Failed;
@@ -911,7 +1007,7 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
         Some(child) => line
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .help("Open the subagent")
+            .help("open the subagent")
             .hover(t.hover)
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| s.select(child, tx)),
         None => line,
@@ -928,7 +1024,7 @@ fn divider(key: &str, label: Option<&str>, t: &Theme) -> El {
     row()
         .key(key.to_owned())
         .role("separator")
-        .label(label.unwrap_or("New turn").to_owned())
+        .label(label.unwrap_or("new turn").to_owned())
         .w_full()
         .py(S24)
         .center()
