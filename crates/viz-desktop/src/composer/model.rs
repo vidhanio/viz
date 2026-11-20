@@ -433,9 +433,8 @@ fn thinking(picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> El {
             .hover(if on { t.selected } else { t.hover })
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            // The menu stays open: a model and its level are often picked together.
             .on_press_tx(move |s: &mut Desktop, tx| {
-                close(s);
-                tx.focus("draft", false);
                 if !on {
                     settings::apply(s, tx, owner, id.clone(), choice.clone());
                 }
@@ -506,12 +505,12 @@ fn on_key(
     true
 }
 
-/// Selects model `value`. A session applies it and reports the new model's
-/// levels itself. A draft keeps its thinking level only where the new model
-/// offers it, and asks the runner for a model's levels it hasn't reported.
+/// Selects model `value`, leaving the menu open on its thinking levels. A
+/// session applies it and reports the new model's levels itself. A draft keeps
+/// its thinking level only where the new model offers it, and asks the runner
+/// for a model's levels it hasn't reported.
 fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &str) {
-    close(s);
-    tx.focus("draft", false);
+    s.model_menu.active = Some(value.to_owned());
     let chosen = OptionValue::Select(value.to_owned());
     let draft = match owner {
         Owner::Conversation(_) => {

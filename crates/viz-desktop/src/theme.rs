@@ -33,7 +33,7 @@ use serde::Deserialize;
 use self::scheme::{DEFAULT_DARK, DEFAULT_LIGHT, Scheme};
 
 /// `AppSpec::families`: the platform's UI fonts, nothing bundled. Sans is the
-/// family the system resolves `system-ui`, else `sans-serif`, to (fontconfig on
+/// family the system resolves `sans-serif`, else `system-ui`, to (fontconfig on
 /// Linux, CoreText, DirectWrite), which Rune then loads by name; mono is Rune's
 /// `ui-monospace`: fontconfig's `monospace`, SF Mono, or Cascadia Mono.
 pub fn families() -> (&'static str, &'static str) {
@@ -43,7 +43,10 @@ pub fn families() -> (&'static str, &'static str) {
         shared: false,
         system_fonts: true,
     });
-    let sans = [GenericFamily::SystemUi, GenericFamily::SansSerif]
+    // `sans-serif` first: fontique's fontconfig `system-ui` list doesn't follow
+    // the user's preference (it led with Noto Sans CJK KR where `fc-match
+    // system-ui` and `sans-serif` both give the configured Allo).
+    let sans = [GenericFamily::SansSerif, GenericFamily::SystemUi]
         .into_iter()
         .find_map(|generic| system.generic_families(generic).next())
         .and_then(|id| system.family_name(id))
@@ -171,6 +174,9 @@ pub struct Theme {
     pub overlay: Kit,
     /// Cards on the main pane (composer, expanded tool output, code).
     pub surface: Color,
+    /// A group's fill on the sidebar (a project and its chats): one step
+    /// above `surface`, as overlays sit, so it reads without an outline.
+    pub group: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
     /// Hover wash on rows.
@@ -648,6 +654,7 @@ impl Theme {
             shell,
             overlay: overlay_kit,
             surface,
+            group: overlay,
             hairline,
             hover,
             mine: raised,

@@ -209,6 +209,9 @@ pub struct TreeLine<'a> {
     /// Archived: faint.
     pub dim: bool,
     pub selected: bool,
+    /// The label's ink at rest: `muted` for most rows, `text` for a project's
+    /// header, quieter for the chats inside it.
+    pub ink: Color,
 }
 
 impl TreeLine<'_> {
@@ -218,7 +221,7 @@ impl TreeLine<'_> {
         } else if self.selected || self.strong {
             t.text
         } else {
-            t.muted
+            self.ink
         };
         let title = text(self.label)
             .font(if self.strong { t.ui_medium } else { t.ui })

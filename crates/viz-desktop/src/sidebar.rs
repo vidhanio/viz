@@ -9,7 +9,7 @@ use std::{
     path::PathBuf,
 };
 
-use rune::{El, TextEdit, Tx, col, el, icon, row, text};
+use rune::{Color, El, TextEdit, Tx, col, el, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, shell::Sidebar};
 use serde_json::{Value, json};
 use viz_client::protocol::{
@@ -266,12 +266,12 @@ impl<'a> Outline<'a> {
             || self.matches(&project.path)
     }
 
-    /// A top-level chat's row. With `detail`, a quiet second line names its
-    /// project.
+    /// A top-level chat's row, its title at rest in `ink`. With `detail`, a
+    /// quiet second line names its project.
     fn chat(
         &self,
         chat: &ConversationSummary,
-        depth: u16,
+        ink: Color,
         detail: bool,
         t: &Theme,
         layer: &mut Vec<El>,
@@ -303,7 +303,7 @@ impl<'a> Outline<'a> {
             } else if selected {
                 t.text
             } else {
-                t.muted
+                ink
             };
             icon(ui::harness_icon(harness), ICON)
                 .color(ink)
@@ -314,10 +314,11 @@ impl<'a> Outline<'a> {
             key: &key,
             label: chat_title(chat),
             detail: place,
-            depth,
+            depth: 0,
             strong: chat.unread && !chat.archived,
             dim: chat.archived,
             selected,
+            ink,
         }
         .build(mark, ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
@@ -343,7 +344,7 @@ impl<'a> Outline<'a> {
             el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                 .center()
                 .group_opacity(rest, hovered)
-                .child(icon(glyph, ICON).color(t.muted))
+                .child(icon(glyph, ICON).color(t.text))
         };
         let disclosure = if open {
             &ui::CHEVRON_OPEN
@@ -363,6 +364,7 @@ impl<'a> Outline<'a> {
             strong: false,
             dim: false,
             selected: false,
+            ink: t.text,
         }
         .build(Some(leading), ui::trailing(None, Some(menu), menu_open), t)
         .expanded(open)
@@ -373,24 +375,25 @@ impl<'a> Outline<'a> {
                 s.navigation.menu = Some(actions::Context::at(&key, at));
             });
         }
-        // The project and its chats share one hairline box, which is the
-        // nesting: chats keep the project row's columns (their marks under its
-        // folder) instead of stepping in, and only their tree level says
-        // they're inside. The inset plus a row's radius makes the box's radius,
-        // so a highlighted row's corners run parallel to it.
+        // The project and its chats share one filled box a step above the
+        // sidebar, which is the nesting: chats keep the project row's columns
+        // (their marks under its folder) instead of stepping in, and only
+        // their tree level says they're inside. The header reads in full ink,
+        // its chats a step quieter than loose ones. The inset plus a row's
+        // radius makes the box's radius, so a highlighted row's corners run
+        // parallel to it.
         let mut branch = col()
             .key(format!("project-branch-{}", project.id))
             .w_full()
             .padding(PROJECT_BOX_INSET)
-            .radius(Size::Default.radius() + PROJECT_BOX_INSET + HAIRLINE)
-            .border(HAIRLINE, t.hairline)
+            .radius(Size::Default.radius() + PROJECT_BOX_INSET)
+            .fill(t.group)
             .child(node);
         if let Some(chats) = self.projects.get(project.id.as_str()).filter(|_| open) {
-            branch = branch.children(
-                chats
-                    .iter()
-                    .map(|chat| self.chat(chat, 0, false, t, layer).level(2)),
-            );
+            branch = branch.children(chats.iter().map(|chat| {
+                self.chat(chat, t.muted.mix(t.faint, 0.5), false, t, layer)
+                    .level(2)
+            }));
         }
         branch
     }
@@ -604,7 +607,7 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 outline
                     .pinned
                     .iter()
-                    .map(|chat| outline.chat(chat, 0, recent, t, layer)),
+                    .map(|chat| outline.chat(chat, t.muted, recent, t, layer)),
             );
     }
     let archived = s.navigation.archived;
@@ -628,7 +631,7 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             outline
                 .recent
                 .iter()
-                .map(|chat| outline.chat(chat, 0, true, t, layer)),
+                .map(|chat| outline.chat(chat, t.muted, true, t, layer)),
         );
     }
     tree = tree.child(
@@ -646,7 +649,7 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 outline
                     .loose
                     .iter()
-                    .map(|chat| outline.chat(chat, 0, false, t, layer)),
+                    .map(|chat| outline.chat(chat, t.muted, false, t, layer)),
             );
     }
     tree
