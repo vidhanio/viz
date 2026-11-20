@@ -1,5 +1,5 @@
 /** Durable session identity and display-only ACP transcript entries. */
-import type { StopReason, ToolCallStatus, ToolKind } from "@agentclientprotocol/sdk";
+import type { ToolCallStatus, ToolKind } from "@agentclientprotocol/sdk";
 import { defineDoc, defineEntry } from "@earendil-works/pi-durable";
 
 import type { StoredAttachment } from "../attachments.ts";
@@ -19,26 +19,7 @@ export type ToolRecord = {
   locations?: string[];
 };
 
-export type Outcome =
-  { kind: "running" } | { kind: "done"; answer: string; stopReason: StopReason } | { kind: "failed"; error: string };
-
-type AgentState = {
-  harness: string;
-  outcome: Outcome | null;
-};
-
-/** Legacy task-owned chats retain their runner and outcome here. */
-export const AgentDoc = defineDoc<AgentState>({
-  kind: "viz.agent",
-  version: 1,
-  scope: "conversation",
-  history: "latest",
-  fork: "initial",
-  initial: () => ({ harness: "", outcome: null }),
-  checkpointWhen: () => true,
-});
-
-export const SessionDoc = defineDoc<{ sessionId: string | null; legacyMode?: boolean; openValues?: Desired }>({
+export const SessionDoc = defineDoc<{ sessionId: string | null; openValues?: Desired }>({
   kind: "viz.acp.session",
   version: 1,
   scope: "conversation",

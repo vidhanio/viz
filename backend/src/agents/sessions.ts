@@ -5,6 +5,7 @@ import type {
   LoadSessionResponse,
   McpServer as McpDeclaration,
   SessionUpdate,
+  StopReason,
 } from "@agentclientprotocol/sdk";
 import {
   awaitWithContext,
@@ -27,20 +28,19 @@ import { bridgeEnv } from "../mcp/bridge.ts";
 import { McpServer, type McpTool } from "../mcp/server.ts";
 import type { ConfigOption } from "../protocol.ts";
 import { AcpProcess } from "./acp.ts";
-import { type Outcome, PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
+import { PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
 import {
   AcpStateDoc,
   defaults,
   type Desired,
   HarnessOptionsDoc,
-  legacyMode,
   normalize,
   type OptionValue,
   validValue,
 } from "./options.ts";
 import { ToolContent, ToolReceipts } from "./tool-record.ts";
 
-export type TurnOutcome = Exclude<Outcome, { kind: "running" }>;
+export type TurnOutcome = { kind: "done"; answer: string; stopReason: StopReason } | { kind: "failed"; error: string };
 
 type SessionOptions = { id: ConversationId; name: string; config: HarnessConfig; cwd: string };
 type TurnOptions = SessionOptions & {
@@ -75,7 +75,6 @@ type LiveSession = {
   sessionId: string | null;
   options: ConfigOption[];
   openValues?: Desired;
-  legacyMode?: ConfigOption;
   configuring: Promise<void>;
   cancelled: boolean;
   active?: ActiveTurn & { update: (update: SessionUpdate) => void; receipts: ToolReceipts };
@@ -219,11 +218,7 @@ export class AgentSessions {
       {
         onUpdate: (source, update) => {
           if (opening) {
-            if (
-              update.sessionUpdate === "config_option_update" ||
-              update.sessionUpdate === "current_mode_update" ||
-              update.sessionUpdate === "available_commands_update"
-            )
+            if (update.sessionUpdate === "config_option_update" || update.sessionUpdate === "available_commands_update")
               early.push([source, update]);
           } else if (source === live.sessionId && !signal.aborted) {
             void this.#onUpdate(live, update).catch((error: unknown) => this.#release(live, error));
@@ -258,26 +253,17 @@ export class AgentSessions {
       live.sessionId = sessionId;
       live.options = saved?.options ?? [];
       if (session?.openValues) live.openValues = session.openValues;
-      if (session?.legacyMode) {
-        const mode = live.options.find((option) => option.id === "mode");
-        if (mode) {
-          live.legacyMode = mode;
-          live.options = live.options.filter((item) => item !== mode);
-        }
-      }
       reported = this.#refresh(live, response);
     }
     for (const [source, update] of early) {
       if (source === live.sessionId && (await this.#onUpdate(live, update, false))) reported = true;
     }
     opening = false;
-    const options = this.#options(live);
+    const { options } = live;
     if (reported) live.openValues ??= Object.fromEntries(options.map(({ id, value }) => [id, value]));
     const desired = await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, id);
       doc.images = process.supportsImages;
-      // `access` was viz's own option, since removed; never send it to the agent.
-      delete doc.desired.access;
       doc.desired = {
         ...(sessionId === null && defaults(config, options)),
         ...doc.desired,
@@ -299,16 +285,10 @@ export class AgentSessions {
     await this.#saveOptions(live, configured);
   }
 
-  #refresh(live: LiveSession, { configOptions, modes }: LoadSessionResponse) {
-    if (modes) live.legacyMode = legacyMode(modes);
-    if (configOptions) live.options = normalize(configOptions);
-    return configOptions != null || modes != null;
-  }
-
-  #options(live: LiveSession): ConfigOption[] {
-    return live.legacyMode && !live.options.some((item) => item.id === "mode" || item.category === "mode")
-      ? [...live.options, live.legacyMode]
-      : live.options;
+  #refresh(live: LiveSession, { configOptions }: LoadSessionResponse) {
+    if (configOptions == null) return false;
+    live.options = normalize(configOptions);
+    return true;
   }
 
   async #saveHarnessOptions(tx: Tx, live: LiveSession, options: ConfigOption[]) {
@@ -330,11 +310,10 @@ export class AgentSessions {
 
   async #saveOptions(live: LiveSession, reported: boolean): Promise<void> {
     const context = withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT);
-    const options = this.#options(live);
+    const { options } = live;
     await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, live.id);
       if (JSON.stringify(doc.options) !== JSON.stringify(options)) doc.options = options;
-      (await tx.doc(SessionDoc, live.id)).legacyMode = options !== live.options;
       if (reported) await this.#saveHarnessOptions(tx, live, options);
     }, context);
   }
@@ -346,11 +325,6 @@ export class AgentSessions {
         if (save) await this.#saveOptions(live, reported);
         return reported;
       }
-      case "current_mode_update":
-        if (!live.legacyMode) return false;
-        live.legacyMode = { ...live.legacyMode, value: update.currentModeId };
-        if (save) await this.#saveOptions(live, true);
-        return true;
       case "available_commands_update":
         await this.#harness.commit(
           async (tx) => {
@@ -374,13 +348,8 @@ export class AgentSessions {
   async #setOption(live: LiveSession, id: string, value: OptionValue) {
     if (!live.process || live.sessionId === null) throw new Error("ACP session is closed");
     live.lifetime.signal.throwIfAborted();
-    const option = this.#options(live).find((item) => item.id === id);
+    const option = live.options.find((item) => item.id === id);
     if (!option || option.value === value || !validValue(option, value)) return false;
-    if (option === live.legacyMode && typeof value === "string") {
-      await live.process.setMode(live.sessionId, value);
-      if (live.legacyMode) live.legacyMode = { ...live.legacyMode, value };
-      return true;
-    }
     const response = await live.process.setOption(live.sessionId, id, value);
     return this.#refresh(live, response);
   }

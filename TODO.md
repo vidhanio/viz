@@ -21,11 +21,11 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
 - [x] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): `list_conversations`, `read_conversation`, `search_conversations`, `spawn_chat` (background, reports back as a `[chat N]` input), `message_conversation` (queues), `cancel_conversation`.
 - [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers), recover a worktree left by a crash between creation and saving it.
-- [x] **Detached ACP delegation**: the orchestrator delegates only through `spawn_chat`; chat results arrive as inputs, and legacy task-owned chats remain usable.
+- [x] **Detached ACP delegation**: the orchestrator delegates only through `spawn_chat`; chat results arrive as inputs.
 - [x] **Scoped MCP progress** for ACP delegations: loopback HTTP or stdio bridge, per-turn token, no access to unrelated conversations.
 - [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
 - [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP. Parent transcript tool records link to the affected child when its runner forwards the result.
-- [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`). Per-chat access and approvals existed briefly and were removed as unneeded.
+- [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`).
 - [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
 - [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, worktree, timestamps) for the sidebar; rename.
 - [x] **Conversation deletion**: tombstone a chat subtree, stop its turns, remove its search hits, and clean up unshared clean worktrees. Protect the orchestrator from thread management.
@@ -42,7 +42,6 @@ Roadmap and open work. Check items off in the same change that lands them.
 
 - [ ] Generate Rust (`typify`) and Swift (`quicktype` or hand-rolled from schema) types from `protocol/schema.json` instead of mirroring by hand.
 - [ ] Methods: compact, fork. (Done: abort, configure, archive, delete, paging via `conversation.entries`.)
-- [ ] Protocol version negotiation beyond the `hello` equality check.
 
 ## Connectors
 
@@ -55,7 +54,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 
 - [x] Skeleton: sidebar + transcript + input, live view via delta ops
 - [x] Redesign on rune-kit + OpenCode theme (light/dark): split shell with collapsible sidebar (Orchestrator, Chats, Subagents, busy spinners, connection footer), thread header (model, thinking, usage), Markdown timeline with grouped collapsible tool rows, subagent rows that open the child, turn dividers, streaming answer, auto-growing composer, toasts
-- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; Ctrl/Cmd+D changes panel (diffs, branch, commit, push, PR, revert); worktree chats; desktop notifications and window-title status. (Its access select and approval card were later removed with ACP approvals.)
+- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; Ctrl/Cmd+D changes panel (diffs, branch, commit, push, PR, revert); worktree chats; desktop notifications and window-title status.
 - [x] Delete a chat from its row menu or the command palette, with confirmation and retained-worktree paths.
 - [x] Configurable dark and light base16 schemes, with Home Manager Stylix integration
 - [ ] Settings UI for desktop preferences in `desktop.toml`

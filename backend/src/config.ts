@@ -68,42 +68,39 @@ const Harness = obj({
 export type Harness = Static<typeof Harness>;
 
 /** Configuration read only by the backend. */
-export const BackendConfig = obj(
-  {
-    backend: opt(
-      obj({
-        socket: opt(str({ description: "Unix socket path; default $XDG_RUNTIME_DIR/viz/backend.sock" })),
-        listen: opt(str({ description: "TCP host:port for remote clients (tailnet/LAN); requires token" })),
-        token: opt(Secret),
-        state_dir: opt(str({ description: "Where the databases live; default $XDG_STATE_HOME/viz" })),
-        default_harness: opt(
-          str({ description: "Default ACP runner for chats and delegations; implicit if only one is configured" }),
-        ),
-      }),
-    ),
-    orchestrator: obj({
-      model: ModelRef,
-      thinking: opt(Thinking),
-      instructions: opt(str({ description: "Extra instructions appended to the orchestrator's system prompt" })),
-      cwd: opt(str({ description: "Working directory for the orchestrator's tools; default $HOME" })),
+export const BackendConfig = obj({
+  backend: opt(
+    obj({
+      socket: opt(str({ description: "Unix socket path; default $XDG_RUNTIME_DIR/viz/backend.sock" })),
+      listen: opt(str({ description: "TCP host:port for remote clients (tailnet/LAN); requires token" })),
+      token: opt(Secret),
+      state_dir: opt(str({ description: "Where the databases live; default $XDG_STATE_HOME/viz" })),
+      default_harness: opt(
+        str({ description: "Default ACP runner for chats and delegations; implicit if only one is configured" }),
+      ),
     }),
-    memory: obj({
-      compactor: ModelRef,
-      thinking: opt(Thinking),
+  ),
+  orchestrator: obj({
+    model: ModelRef,
+    thinking: opt(Thinking),
+    instructions: opt(str({ description: "Extra instructions appended to the orchestrator's system prompt" })),
+    cwd: opt(str({ description: "Working directory for the orchestrator's tools; default $HOME" })),
+  }),
+  memory: obj({
+    compactor: ModelRef,
+    thinking: opt(Thinking),
+  }),
+  providers: opt(
+    map(obj({ api_key: Secret }), {
+      description: "Credentials by pi-ai provider id, e.g. [providers.anthropic]; else the provider's env var",
     }),
-    providers: opt(
-      map(obj({ api_key: Secret }), {
-        description: "Credentials by pi-ai provider id, e.g. [providers.anthropic]; else the provider's env var",
-      }),
-    ),
-    harnesses: opt(
-      map(Harness, {
-        description: "Named ACP programs for chats and subagents",
-      }),
-    ),
-  },
-  { open: true },
-);
+  ),
+  harnesses: opt(
+    map(Harness, {
+      description: "Named ACP programs for chats and subagents",
+    }),
+  ),
+});
 export type BackendConfig = Static<typeof BackendConfig>;
 
 const checkBackendConfig = compile(BackendConfig);

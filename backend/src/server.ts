@@ -321,7 +321,7 @@ export async function serve(viz: VizHarness, options: ServeOptions): Promise<Viz
   const authorized = (request: Request) => {
     if (!expected) return false;
     const header = request.headers.get("authorization");
-    const given = header?.startsWith("Bearer ") ? header.slice(7) : new URL(request.url).searchParams.get("token");
+    const given = header?.startsWith("Bearer ") ? header.slice(7) : undefined;
     if (!given) return false;
     const buffer = Buffer.from(given);
     return buffer.length === expected.length && timingSafeEqual(buffer, expected);

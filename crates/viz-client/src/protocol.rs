@@ -175,7 +175,7 @@ pub enum ConversationKind {
     Orchestrator,
     /// A chat started from an app.
     Chat,
-    /// A subagent, owned by a tool call of `parent`.
+    /// An ACP chat started by another ACP chat.
     Subagent,
 }
 
@@ -190,8 +190,7 @@ pub struct ConversationSummary {
     pub title: String,
     /// What it is.
     pub kind: ConversationKind,
-    /// For a subagent: the conversation whose tool call owns it.
-    #[serde(default)]
+    /// For a subagent: the conversation that started it.
     pub parent: Option<ConversationId>,
     /// The project directory this conversation belongs to, if any.
     pub project: Option<String>,
@@ -327,8 +326,6 @@ pub struct ConversationState {
     pub project: Option<String>,
     /// Working directory, if known.
     pub cwd: Option<String>,
-    /// Whether input is refused.
-    pub read_only: bool,
     /// Configuration reported by the runner or orchestrator.
     pub options: Vec<ConfigOption>,
     /// Available slash commands.

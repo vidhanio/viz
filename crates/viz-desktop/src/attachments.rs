@@ -48,6 +48,7 @@ pub struct Loaded {
 impl Source {
     pub fn load(self) -> Loaded {
         let paths = match self {
+            // Rune's native file dialog is single-select.
             Self::Picker => rfd::FileDialog::new()
                 .set_title("Attach files")
                 .pick_files()

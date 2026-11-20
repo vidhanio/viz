@@ -24,7 +24,7 @@ import { bool, int, obj, opt, str } from "@earendil-works/pi-schema";
 
 import type { ChatScheduler } from "./agents/chat.ts";
 import type { Runners } from "./agents/runners.ts";
-import { parentOf, type Conversations } from "./conversations.ts";
+import type { Conversations } from "./conversations.ts";
 import { type ChatWorkspace, conversationRecords, MetaDoc, type ProjectStore } from "./projects.ts";
 import { Workspace } from "./protocol.ts";
 import type { SearchIndex } from "./search.ts";
@@ -69,7 +69,7 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
     const record = await tx.conversation(id);
     if (!record) return;
     const meta = await tx.doc(MetaDoc, id);
-    if (!meta.deleted && parentOf(record, meta) === null) return record;
+    if (!meta.deleted && meta.parent === null) return record;
   };
 
   const topLevel = async (tx: Tx, id: ConversationId) => {
@@ -198,7 +198,7 @@ export function orchestratorToolkit(host: () => ToolkitHost): Extension {
               if (record.id === root) continue;
               const meta = await tx.doc(MetaDoc, record.id);
               if (meta.deleted) continue;
-              const parent = parentOf(record, meta);
+              const { parent } = meta;
               const chat = parent === null ? record.id : groups.get(parent);
               if (chat !== undefined) groups.set(record.id, chat);
             }

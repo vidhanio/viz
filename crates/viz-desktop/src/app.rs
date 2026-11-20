@@ -577,9 +577,7 @@ impl Desktop {
         if let Some(chat) = &self.new_chat {
             return (!chat.sending).then_some(AttachmentTarget::Draft(chat.id));
         }
-        self.conversation
-            .as_ref()
-            .filter(|state| !state.read_only)?;
+        self.conversation.as_ref()?;
         self.selected.map(AttachmentTarget::Conversation)
     }
 

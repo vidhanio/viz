@@ -22,7 +22,7 @@ futures-util = { version = "0.3", default-features = false }
 lucide-static-svg = "1.76"
 mime_guess = "2"
 notify-rust = { version = "4", default-features = false }
-rfd = "0.18"
+rfd = { version = "0.18", default-features = false }
 rustls = { version = "0.23", default-features = false }
 serde = "1"
 # Base16 scheme files (tinted-theming YAML) for the desktop's themes.

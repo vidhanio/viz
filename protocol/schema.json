@@ -1324,10 +1324,6 @@
                 }
               ]
             },
-            "readOnly": {
-              "type": "boolean",
-              "description": "Inputs are refused: a subagent while its delegating call still runs"
-            },
             "options": {
               "type": "array",
               "items": {
@@ -1528,18 +1524,7 @@
               "description": "What attachments the runner accepts; files always go as paths"
             }
           },
-          "required": [
-            "status",
-            "harness",
-            "project",
-            "cwd",
-            "readOnly",
-            "options",
-            "commands",
-            "queue",
-            "git",
-            "attachments"
-          ],
+          "required": ["status", "harness", "project", "cwd", "options", "commands", "queue", "git", "attachments"],
           "additionalProperties": false
         }
       },

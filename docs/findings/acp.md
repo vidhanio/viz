@@ -1,11 +1,11 @@
 # ACP (Agent Client Protocol)
 
-Supersedes the SDK section of `docs/findings/acp.md`: the installed 2.7.0 SDK removed `ClientSideConnection`/`ClientSideConnection` interfaces (see `MIGRATION_STABLE_UNSTABLE.md` in the package). Everything below was read from the installed SDK, the ACP site, adapter repos, or the registry; UNVERIFIED items are marked.
+Based on the installed 2.7.0 SDK, the ACP site, adapter repos, and the registry. Unverified items are marked.
 
 ## 0. Bottom line
 
 - ACP = JSON-RPC 2.0, newline-delimited over stdio. No batches. Agent process stdout must contain only ACP messages (stderr is for logs). `protocolVersion: 1` is stable; `2` is draft and already spoken by `claude-agent-acp` when a client asks for it.
-- The installed TS SDK is **2.7.0** and uses the new **app API**: `client()` / `agent()` builders + `connect()` / `connectWith()`. Legacy `ClientSideConnection` is gone. `ndJsonStream`, `methods`, `RequestError`, `PROTOCOL_VERSION`, typed handlers remain.
+- The installed TS SDK is **2.7.0**. Its **app API** provides `client()` / `agent()` builders with `connect()` / `connectWith()`, plus `ndJsonStream`, `methods`, `RequestError`, `PROTOCOL_VERSION`, and typed handlers.
 - Stable v1 session surface: `session/new`, `session/load`, `session/list`, `session/delete`, `session/resume`, `session/close`, `session/set_mode`, `session/set_config_option`, `session/prompt`, `session/cancel`. `session/fork`, `session/archive|unarchive`, `session/status`, `session/options`, `session/set_title`, providers, `auth/status`, subagents, usage-on-prompt, plan operations, prompt suggestions are **unstable** in 2.7.0 (available from `@agentclientprotocol/sdk/unstable`, whose types are generated from `schema/v1/schema.unstable.json`).
 - For a meta-harness, the only standard way to give _any_ ACP agent tools is **MCP servers declared in `session/new`** (stdio is mandatory for all agents; HTTP/SSE optional). MCP-over-ACP (`type: "acp"`, `mcp/message`) is the clean no-extra-process option when the agent advertises `mcpCapabilities.acp` (Claude, Codex do; OpenCode explicitly does not).
 - ACP session IDs are agent/process-scoped. viz must namespace them (`adapter/sessionId`) and keep its own conversation mapping; `session/list` only lists sessions that agent instance knows about.

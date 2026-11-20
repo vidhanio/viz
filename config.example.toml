@@ -72,10 +72,3 @@ thinking = "high"
 # [harnesses.omp]
 # command = "omp"
 # args = ["acp"]
-
-# Upgrading from shared config? Move client [backend] settings and connector
-# credentials into their own files (see their examples). Remove the old tables,
-# [subagents].model (now ACP runners), and any harness `permissions` keys.
-# Check drop-ins and writable Home Manager config too: removing a declaration
-# does not remove the old value from a mutable file. Legacy native app chats
-# keep their visible transcripts, but their next input starts a fresh ACP session.

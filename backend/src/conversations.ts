@@ -10,21 +10,13 @@ import {
 } from "@earendil-works/pi-durable";
 
 import { ChatDoc } from "./agents/chat.ts";
-import { AgentDoc, TurnEntry } from "./agents/model.ts";
+import { TurnEntry } from "./agents/model.ts";
 import { AcpStateDoc } from "./agents/options.ts";
-import type { AgentSessions } from "./agents/sessions.ts";
 import { currentBranch } from "./git/commands.ts";
 import type { Git } from "./git/index.ts";
-import { conversationRecords, MetaDoc, ProjectsDoc } from "./projects.ts";
+import { conversationRecords, MetaDoc } from "./projects.ts";
 import type { ConfigOption, ConversationState, ConversationSummary } from "./protocol.ts";
 import { ORCHESTRATOR_TITLE, TitleDoc } from "./titles.ts";
-
-export function parentOf(
-  record: ConversationRecord,
-  meta: { parent: number | null } | undefined,
-): ConversationId | null {
-  return record.owner?.conversationId ?? (meta?.parent as ConversationId | undefined) ?? null;
-}
 
 export async function moveConversation(tx: Tx, id: ConversationId, project: string | null, cwd: string) {
   const meta = await tx.doc(MetaDoc, id);
@@ -43,11 +35,11 @@ export async function moveConversation(tx: Tx, id: ConversationId, project: stri
 }
 
 export async function* descendants(tx: Tx, conversation: ConversationId) {
-  // Parent IDs always precede their children, so one scan handles both ownership kinds.
+  // Parent IDs always precede their children.
   const scope = new Set([conversation]);
   for await (const record of conversationRecords(tx)) {
     if (record.id <= conversation) continue;
-    const parent = parentOf(record, record.owner ? undefined : await tx.doc(MetaDoc, record.id));
+    const { parent } = await tx.doc(MetaDoc, record.id);
     if (parent !== null && scope.has(parent)) {
       scope.add(record.id);
       yield { record, parent };
@@ -55,11 +47,7 @@ export async function* descendants(tx: Tx, conversation: ConversationId) {
   }
 }
 
-async function failed(
-  harness: Harness,
-  conversationId: ConversationId,
-  context: Context,
-): Promise<boolean | undefined> {
+async function failed(harness: Harness, conversationId: ConversationId, context: Context): Promise<boolean> {
   let cursor: Cursor | undefined;
   do {
     const page = await harness.commit((tx) => tx.scanEntries({ conversationId }, 32, cursor), context);
@@ -67,7 +55,7 @@ async function failed(
     if (turn) return turn.data.error != null;
     cursor = page.next;
   } while (cursor !== undefined);
-  return undefined;
+  return false;
 }
 
 export class Conversations {
@@ -75,7 +63,6 @@ export class Conversations {
     private readonly harness: Harness,
     private readonly root: ConversationId,
     private readonly cwd: string,
-    private readonly sessions: AgentSessions,
     private readonly rootOptions: (context: Context) => Promise<ConfigOption[]>,
     private readonly rootImages: (context: Context) => Promise<boolean>,
     private readonly git: Git,
@@ -87,7 +74,7 @@ export class Conversations {
       for await (const record of conversationRecords(tx)) {
         const meta = await tx.doc(MetaDoc, record.id);
         if (meta.deleted) continue;
-        if (scope === "top-level" && (record.id === this.root || parentOf(record, meta) !== null)) continue;
+        if (scope === "top-level" && (record.id === this.root || meta.parent !== null)) continue;
         records.push(record);
       }
       return records;
@@ -100,10 +87,10 @@ export class Conversations {
   }
 
   async #info(record: ConversationRecord, context: Context) {
-    const { harness, root, sessions, cwd } = this;
+    const { harness, root, cwd } = this;
     const { id } = record;
     const meta = await harness.snapshot(MetaDoc, id, context);
-    const parent = parentOf(record, meta);
+    const parent = meta?.parent ?? null;
     if (id === root) {
       const live = await harness.snapshot(LiveDoc, root, context);
       const status = live?.run
@@ -111,21 +98,17 @@ export class Conversations {
         : live?.runFailure && !["aborted", "reset"].includes(live.runFailure.reason)
           ? "failed"
           : "idle";
-      return { status, meta, parent, harness: null, cwd, readOnly: false } as const;
+      return { status, meta, parent, harness: null, cwd } as const;
     }
-    const [chat, agent] = await Promise.all([
-      harness.snapshot(ChatDoc, id, context),
-      record.owner ? harness.snapshot(AgentDoc, id, context) : undefined,
-    ]);
-    const name = chat?.runner?.name ?? (agent?.harness || null);
+    const chat = await harness.snapshot(ChatDoc, id, context);
+    if (!chat?.runner) throw new Error("ACP chat has no runner");
     const status =
-      chat?.hasWorker || chat?.dispatched || chat?.queue.length
+      chat.hasWorker || chat.dispatched || chat.queue.length
         ? "working"
-        : chat?.setupFailed ||
-            ((chat || agent) && ((await failed(harness, id, context)) ?? agent?.outcome?.kind === "failed"))
+        : chat.setupFailed || (await failed(harness, id, context))
           ? "failed"
           : "idle";
-    return { status, meta, parent, harness: name, cwd: chat?.runner?.cwd, readOnly: false } as const;
+    return { status, meta, parent, harness: chat.runner.name, cwd: chat.runner.cwd } as const;
   }
 
   async summary(
@@ -166,14 +149,12 @@ export class Conversations {
     const record = await this.harness.commit((tx) => tx.conversation(id), context);
     if (!record) throw new Error("Conversation not found");
     const info = await this.#info(record, context);
-    const cwd = info.cwd ?? info.meta?.worktree?.path ?? (await this.#projectCwd(info.meta?.project, context));
     const base = {
       status: info.status,
       harness: info.harness,
       project: info.meta?.project ?? null,
-      cwd,
-      git: await this.git.state(cwd, info.meta?.worktree?.path ?? null),
-      readOnly: info.readOnly,
+      cwd: info.cwd,
+      git: await this.git.state(info.cwd, info.meta?.worktree?.path ?? null),
     };
     if (id === this.root) {
       const [options, images, inbox] = await Promise.all([
@@ -210,14 +191,7 @@ export class Conversations {
   async cwdFor(id: ConversationId, context: Context): Promise<string> {
     if (id === this.root) return this.cwd;
     const chat = await this.harness.snapshot(ChatDoc, id, context);
-    if (chat?.runner) return chat.runner.cwd;
-    const meta = await this.harness.snapshot(MetaDoc, id, context);
-    return meta?.worktree?.path ?? this.#projectCwd(meta?.project, context);
-  }
-
-  async #projectCwd(project: string | null | undefined, context: Context): Promise<string> {
-    if (!project) return this.cwd;
-    const projects = await this.harness.snapshot(ProjectsDoc, this.root, context);
-    return projects?.projects.find(({ id }) => id === project)?.path ?? this.cwd;
+    if (!chat?.runner) throw new Error("ACP chat has no runner");
+    return chat.runner.cwd;
   }
 }

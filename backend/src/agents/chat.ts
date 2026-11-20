@@ -3,7 +3,6 @@ import {
   type Conversation,
   type ConversationId,
   type ConversationRecord,
-  configure,
   defineDoc,
   defineExtension,
   defineTask,
@@ -21,7 +20,7 @@ import type { Harness as HarnessConfig } from "../config.ts";
 import { type ChatWorkspace, MetaDoc, projectIn, touch, type WorktreeBinding } from "../projects.ts";
 import type { Origin } from "../protocol.ts";
 import { TitleDoc, titleFrom } from "../titles.ts";
-import { AgentDoc, PromptEntry, TurnEntry } from "./model.ts";
+import { PromptEntry, TurnEntry } from "./model.ts";
 import { AcpStateDoc, type Desired } from "./options.ts";
 import type { Runners } from "./runners.ts";
 import type { AgentSessions, TurnOutcome } from "./sessions.ts";
@@ -260,22 +259,9 @@ export function chatScheduler(
       const existing = await tx.submissionByRequest(id, requestId);
       if (existing) return existing.id;
     }
-    const delegated = conversation.owner ? await tx.doc(AgentDoc, id) : undefined;
     const chat = await tx.doc(ChatDoc, id);
-    if (chat.runner === null) {
-      // Older delegated ACP chats have a runner in viz.agent only. Native chats keep their visible history.
-      const { name } = runners.require(delegated?.harness || undefined);
-      const { project } = await tx.doc(MetaDoc, id);
-      const directory = project === null ? cwd : (await projectIn(tx, ROOT_CONVERSATION_ID, project)).path;
-      chat.runner = { name, cwd: directory };
-      await configure(tx, id, {
-        model: null,
-        thinkingLevel: null,
-        extensions: null,
-        tools: null,
-        instructions: null,
-      });
-    } else runners.require(chat.runner.name);
+    if (chat.runner === null) throw new Error("ACP chat has no runner");
+    runners.require(chat.runner.name);
     const title = await tx.doc(TitleDoc, id);
     await touch(tx, id);
     if (title.title === "") title.title = titleFrom(prompt.text);

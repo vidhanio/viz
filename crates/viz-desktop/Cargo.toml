@@ -13,8 +13,8 @@ clap = { workspace = true, features = ["derive"] }
 lucide-static-svg.workspace = true
 mime_guess.workspace = true
 notify-rust = { workspace = true, features = ["z-with-tokio"] }
-rfd.workspace = true
-rune.workspace = true
+rfd = { workspace = true, features = ["xdg-portal", "wayland"] }
+rune = { workspace = true, features = ["native-file-dialog"] }
 rune-kit = { workspace = true, features = ["markdown"] }
 rune-theme-opencode.workspace = true
 serde = { workspace = true, features = ["derive"] }

@@ -2,17 +2,17 @@
 //! variant and owns its insets; views compose them and add no padding of
 //! their own beyond the layout tokens in `theme`.
 
-use rune::{Color, El, Icon, TextEdit, Tx, col, el, icon, row, text};
+use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
 use rune_kit::{
-    Button, ButtonVariant, Dialog, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
+    Button, ButtonVariant, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
     Placement, PopupList, Select, SelectAppearance, TextInput,
 };
 use viz_client::protocol::ConversationStatus;
 
 use crate::theme::{
-    CARD_INSET, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL,
-    RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S4, S8, S12, Size, TRAILING, TREE_ROW,
-    TREE_ROW_TALL, TREE_STEP, Theme,
+    CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON,
+    ICON_SMALL, RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S8, S12, Size,
+    TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -137,16 +137,7 @@ pub enum Card {
 impl Card {
     /// The surface alone, for compound cards whose children own their insets.
     pub fn frame(self, t: &Theme) -> El {
-        self.paint(col(), t)
-    }
-
-    /// [`Card::frame`] laid out as a row.
-    pub fn row(self, t: &Theme) -> El {
-        self.paint(row(), t)
-    }
-
-    fn paint(self, frame: El, t: &Theme) -> El {
-        let frame = frame.w_full().radius(RADIUS_CARD);
+        let frame = col().w_full().radius(RADIUS_CARD);
         match self {
             Self::Surface => frame.fill(t.surface).border(HAIRLINE, t.hairline),
             Self::Outline => frame.border(HAIRLINE, t.hairline),
@@ -416,19 +407,97 @@ pub fn popup_list<S: 'static>(key: &str, anchor: &str) -> PopupList<S> {
         .open(true)
 }
 
-/// A dialog's frame: title, optional description, and a body inset like
-/// rune-kit's header.
-pub fn dialog(key: &str, title: &str, detail: Option<&str>) -> Dialog {
-    let dialog = Dialog::new(key, title).width(DIALOG_WIDTH).open(true).fit();
-    match detail {
-        Some(detail) => dialog.description(detail),
-        None => dialog,
+/// The most lines a dialog's or toast's title wraps to before "…".
+const TITLE_LINES: usize = 2;
+/// The most lines a toast's detail (an error, a list of paths) shows.
+const TOAST_DETAIL_LINES: usize = 4;
+
+/// A dialog: a title of up to [`TITLE_LINES`], what it's about (`subject`,
+/// one quiet line cut in the middle so a long path or chat title keeps both
+/// ends) and a description, beside the close button's own column; then the
+/// body, which insets itself like [`dialog_body`].
+pub struct Dialog<'a> {
+    key: &'a str,
+    title: &'a str,
+    subject: Option<&'a str>,
+    detail: Option<&'a str>,
+}
+
+pub const fn dialog<'a>(key: &'a str, title: &'a str, detail: Option<&'a str>) -> Dialog<'a> {
+    Dialog {
+        key,
+        title,
+        subject: None,
+        detail,
+    }
+}
+
+impl<'a> Dialog<'a> {
+    pub const fn subject(mut self, subject: &'a str) -> Self {
+        self.subject = Some(subject);
+        self
+    }
+
+    pub fn build<S: 'static>(
+        self,
+        close: impl Fn(&mut S) + Clone + 'static,
+        body: El,
+        t: &Theme,
+        layer: &mut Vec<El>,
+    ) {
+        let mut head = col().grow(1.0).shrink().min_w(0.0).gap(S4).child(
+            text(self.title)
+                .font(t.title)
+                .color(t.text)
+                .wrap_anywhere()
+                .max_lines(TITLE_LINES)
+                .w_full(),
+        );
+        if let Some(subject) = self.subject {
+            head = head.child(
+                text(subject)
+                    .font(t.ui)
+                    .color(t.muted)
+                    .truncate_middle()
+                    .w_full(),
+            );
+        }
+        if let Some(detail) = self.detail {
+            head = head.child(
+                text(detail)
+                    .font(t.ui)
+                    .color(t.muted)
+                    .wrap_anywhere()
+                    .w_full(),
+            );
+        }
+        // The button's box is a control tall around a title-line glyph: pull
+        // it up and out so the glyph sits on the title's line and the inset.
+        let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::Ghost, Size::Small)
+            .on_press(close.clone())
+            .build(&t.k)
+            .key("close")
+            .mt(-S2)
+            .mr(-S4);
+        let header = row()
+            .key("header")
+            .w_full()
+            .padding(DIALOG_INSET)
+            .gap(S8)
+            .items_start()
+            .child(head)
+            .child(dismiss);
+        let panel = col()
+            .label(self.title)
+            .description(self.detail.unwrap_or_default())
+            .child(header)
+            .child(col().key("body").w_full().child(body));
+        modal(self.key, panel, DIALOG_WIDTH, close, t, layer);
     }
 }
 
 /// A dialog without a title row, for an overlay whose first control says
-/// what it is (the palette's search field): rune-kit's `Dialog` scrim, panel,
-/// outline and dismissal (Escape, a click outside).
+/// what it is (the palette's search field).
 pub fn sheet<S: 'static>(
     key: &str,
     label: &str,
@@ -438,17 +507,35 @@ pub fn sheet<S: 'static>(
     t: &Theme,
     layer: &mut Vec<El>,
 ) {
+    modal(
+        key,
+        col().label(label).children(body),
+        width,
+        close,
+        t,
+        layer,
+    );
+}
+
+/// rune-kit's `Dialog` scrim, panel, outline and dismissal (Escape, a click
+/// outside) around `panel`.
+fn modal<S: 'static>(
+    key: &str,
+    panel: El,
+    width: f32,
+    close: impl Fn(&mut S) + 'static,
+    t: &Theme,
+    layer: &mut Vec<El>,
+) {
     let k = &t.k;
     let panel = k.shadow_layers(&k.elevation.overlay).fold(
-        col()
+        panel
             .key(format!("{key}-dialog"))
             .role("dialog")
-            .label(label)
             .w_full()
             .max_w(width)
             .radius(Size::Default.radius())
             .fill(k.c.layer_01)
-            .children(body)
             .token_motion(k.motion.overlay)
             .modal(true, close),
         El::box_shadow,
@@ -471,6 +558,72 @@ pub fn sheet<S: 'static>(
             .center()
             .child(panel),
     );
+}
+
+/// A toast: `mark`, a title of up to [`TITLE_LINES`] and a detail of up to
+/// [`TOAST_DETAIL_LINES`], beside the close button's own column. Long words
+/// (paths, URLs) break anywhere rather than overflow.
+pub fn toast<S: 'static>(
+    key: String,
+    title: &str,
+    detail: Option<&str>,
+    mark: El,
+    close: impl Fn(&mut S) + 'static,
+    t: &Theme,
+) -> El {
+    let k = &t.k;
+    let mut content = col()
+        .grow(1.0)
+        .shrink()
+        .min_w(0.0)
+        .gap(S4)
+        .a11y_hidden()
+        .child(
+            text(title)
+                .font(t.ui_medium)
+                .color(t.text)
+                .wrap_anywhere()
+                .max_lines(TITLE_LINES)
+                .w_full(),
+        );
+    if let Some(detail) = detail {
+        content = content.child(
+            text(detail)
+                .font(t.ui)
+                .color(t.muted)
+                .wrap_anywhere()
+                .max_lines(TOAST_DETAIL_LINES)
+                .w_full(),
+        );
+    }
+    let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::GhostMuted, Size::Small)
+        .on_press(close)
+        .build(k)
+        .key("close")
+        .mt(-S2)
+        .mr(-S4);
+    let panel = col()
+        .key(key)
+        .role("status")
+        .label(title)
+        .description(detail.unwrap_or_default())
+        .w(CARD_WIDTH)
+        .padding(CARD_INSET)
+        .radius(RADIUS_CARD)
+        .fill(k.c.layer_01)
+        .child(
+            row()
+                .w_full()
+                .gap(S12)
+                .items_start()
+                .child(mark.a11y_hidden())
+                .child(content)
+                .child(dismiss),
+        );
+    k.shadow_layers(&k.elevation.floating)
+        .fold(panel, El::box_shadow)
+        .transition(Transition::move_edge(Edge::Bottom))
+        .token_motion(k.motion.overlay)
 }
 
 /// A dialog's body: its fields, then its actions, at the dialog inset.
@@ -501,6 +654,8 @@ pub fn field(label: &str, input: El, t: &Theme) -> El {
 /// A one-field (or no-field) confirmation dialog.
 pub struct DialogForm<'a> {
     pub title: &'a str,
+    /// What the action is about, as [`Dialog::subject`].
+    pub subject: Option<&'a str>,
     pub detail: Option<&'a str>,
     pub field: Option<(&'a TextEdit, &'a str)>,
     pub action: &'a str,
@@ -535,10 +690,12 @@ impl DialogForm<'_> {
                 .on_press_tx(submit)
                 .build(&t.k),
         ]);
-        dialog("edit", self.title, self.detail)
-            .on_close(close)
-            .child(dialog_body(input, actions))
-            .build(&t.k, layer);
+        let dialog = dialog("edit", self.title, self.detail);
+        match self.subject {
+            Some(subject) => dialog.subject(subject),
+            None => dialog,
+        }
+        .build(close, dialog_body(input, actions), t, layer);
     }
 }
 

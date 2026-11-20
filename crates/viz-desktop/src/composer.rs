@@ -5,7 +5,7 @@ mod settings;
 mod workspace;
 
 pub use completion::{Completion, poll};
-use rune::{El, ScrollSpec, col, icon, row, text, text_input};
+use rune::{El, ScrollSpec, col, row, text, text_input};
 use rune_kit::IconButtonVariant;
 use viz_client::protocol::{ConversationId, QueuedInput};
 
@@ -13,10 +13,7 @@ use crate::{
     app::Desktop,
     attachments,
     backend::Command,
-    theme::{
-        CARD_INSET, HAIRLINE, ICON, ICON_SMALL, READING_INSET, READING_WIDTH, S4, S8, S48, Size,
-        Theme,
-    },
+    theme::{CARD_INSET, HAIRLINE, ICON, READING_INSET, READING_WIDTH, S4, S8, S48, Size, Theme},
     ui::{self, Card},
 };
 
@@ -39,33 +36,8 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     {
         column = column.child(queue(s, id, &state.queue, t));
     }
-    let editor = if s.conversation.as_ref().is_some_and(|state| state.read_only) {
-        let mut notice = Card::Surface
-            .row(t)
-            .key("read-only")
-            .center_y()
-            .gap(S8)
-            .pl(CARD_INSET)
-            .pr(TOOLBAR_INSET)
-            .py(TOOLBAR_INSET)
-            .child(ui::lead(
-                icon(&ui::LOCK, ICON_SMALL).color(t.muted),
-                Size::Default.height(),
-            ))
-            .child(
-                text("Subagent is running")
-                    .font(t.ui)
-                    .color(t.muted)
-                    .grow(1.0),
-            );
-        if s.busy() {
-            notice = notice.child(send_button(s, t));
-        }
-        notice
-    } else {
-        completion::popup(s, t, layer);
-        editor(s, t, layer)
-    };
+    completion::popup(s, t, layer);
+    let editor = editor(s, t, layer);
     Some(
         ui::reading(column.child(editor))
             .key("composer")

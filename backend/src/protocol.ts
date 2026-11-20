@@ -139,7 +139,6 @@ export const ConversationState = obj({
   harness: nullable(str()),
   project: nullable(ProjectId),
   cwd: nullable(str()),
-  readOnly: bool({ description: "Inputs are refused: a subagent while its delegating call still runs" }),
   options: arr(ConfigOption, { description: "Empty until the runner's session reports them" }),
   commands: arr(
     obj({ name: str({ description: "Without the leading /" }), description: str(), hint: nullable(str()) }),

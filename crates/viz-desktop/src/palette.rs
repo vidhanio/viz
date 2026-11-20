@@ -241,7 +241,7 @@ impl Local {
                 s.selected.is_some()
                     && s.conversation
                         .as_ref()
-                        .is_some_and(|state| !state.read_only && state.git.is_some())
+                        .is_some_and(|state| state.git.is_some())
             }
             Self::Pin | Self::Archive | Self::Delete => {
                 s.new_chat.is_none()

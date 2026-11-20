@@ -307,10 +307,12 @@ pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         Modal::Revert(turn) => ("Revert turn", "", revert_form(*turn, disabled, t)),
         Modal::Created(url) => ("Pull request created", "", pr_link(url, t)),
     };
-    ui::dialog("git-action", title, (!detail.is_empty()).then_some(detail))
-        .on_close(close)
-        .child(col().w_full().px(DIALOG_INSET).pb(DIALOG_INSET).child(body))
-        .build(&t.k, layer);
+    ui::dialog("git-action", title, (!detail.is_empty()).then_some(detail)).build(
+        close,
+        col().w_full().px(DIALOG_INSET).pb(DIALOG_INSET).child(body),
+        t,
+        layer,
+    );
 }
 
 /// A spinner and what it's waiting for, one control tall.
@@ -329,7 +331,7 @@ fn branch_picker(s: &Desktop, disabled: bool, t: &Theme) -> El {
         BranchLoad::Idle | BranchLoad::Pending => busy("Loading branches", t),
         BranchLoad::Failed(error) => col()
             .gap(S8)
-            .child(text(error).font(t.ui).color(t.danger).wrap())
+            .child(text(error).font(t.ui).color(t.danger).wrap_anywhere())
             .child(
                 ui::button("Retry", ButtonVariant::Ghost, Size::Default)
                     .disabled(disabled)
@@ -558,7 +560,7 @@ fn commit_summary(result: &CommitResult, t: &Theme) -> El {
                     text(&result.message)
                         .font(t.ui)
                         .color(t.text)
-                        .wrap()
+                        .wrap_anywhere()
                         .grow(1.0)
                         .shrink()
                         .selectable(true),

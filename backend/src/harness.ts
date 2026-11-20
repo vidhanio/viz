@@ -9,10 +9,8 @@ import { InMemoryCredentialStore, type UserMessage } from "@earendil-works/pi-ai
 import type { MutableModels } from "@earendil-works/pi-ai/models";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import {
-  AssistantEntry,
   type Conversation,
   type ConversationId,
-  configure,
   type ConversationView,
   createRegistry,
   Harness,
@@ -21,15 +19,12 @@ import {
   LiveDoc,
   type Submission,
   type SubmissionId,
-  ToolTask,
-  type ToolTaskInput,
 } from "@earendil-works/pi-durable";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
 import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite/node";
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 import { ChatDoc, type ChatInput, chatScheduler, withdrawChatInputs } from "./agents/chat.ts";
-import { AgentDoc, TurnEntry } from "./agents/model.ts";
 import { HarnessOptionsDoc } from "./agents/options.ts";
 import { Runners } from "./agents/runners.ts";
 import { AgentSessions } from "./agents/sessions.ts";
@@ -204,18 +199,6 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       registry,
       env: (target) =>
         target.conversationId === ROOT_CONVERSATION_ID ? new NodeExecutionEnv({ cwd: target.cwd ?? cwd }) : undefined,
-      conversationCreated: async (tx, { id }) => {
-        if (id !== ROOT_CONVERSATION_ID) {
-          // pi-durable task-owned children otherwise inherit the root's native agent.
-          await configure(tx, id, {
-            model: null,
-            extensions: null,
-            instructions: null,
-            tools: null,
-            thinkingLevel: null,
-          });
-        }
-      },
     },
     context,
   );
@@ -236,8 +219,6 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     const doc = await tx.doc(TitleDoc, root.id);
     if (doc.title !== ORCHESTRATOR_TITLE) doc.title = ORCHESTRATOR_TITLE;
   }, context);
-
-  await stopRetiredTasks(harness, root.id, context);
 
   const sync = new Sync(memory, root, context);
   binding.sync = sync;
@@ -265,7 +246,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     if (!subject) throw new Error("Model did not return a Conventional Commits subject");
     return subject;
   });
-  const conversations = new Conversations(harness, root.id, cwd, sessions, settings.options, rootImages, git);
+  const conversations = new Conversations(harness, root.id, cwd, settings.options, rootImages, git);
   const projectStore = projects(harness, root.id);
   const files = new FileSearch();
   const changes = await observeChanges(harness, root.id, context);
@@ -483,6 +464,12 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       await abortConversation(id, context);
     },
   };
+  // A crash between tombstoning a chat and stopping it must not replay its tasks.
+  const { tasks } = await harness.inspect(context);
+  for (const { record } of tasks) {
+    if (record.conversationId !== root.id && (await isDeleted(harness, record.conversationId, context)))
+      await harness.abortTask(record.id, context);
+  }
   harness.resume();
 
   return {
@@ -585,45 +572,4 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
       memory.close();
     },
   };
-}
-
-/** Retire old native runs and blocking delegations before the scheduler can replay them. */
-async function stopRetiredTasks(harness: Harness, root: ConversationId, context: Context): Promise<void> {
-  const { tasks } = await harness.inspect(context);
-  for (const { record } of tasks) {
-    if (record.conversationId !== root) {
-      if (record.kind.startsWith("pi.") || (await isDeleted(harness, record.conversationId, context)))
-        await harness.abortTask(record.id, context);
-    } else if (record.kind === ToolTask.definition.name) {
-      // The built-in abort handler uses the persisted call and does not need the retired extension.
-      const input = record.input as ToolTaskInput;
-      const legacy =
-        input.kind === "nested"
-          ? input.call.name === "subagent"
-          : await harness.commit(async (tx) => {
-              const entry = await tx.entry(AssistantEntry, input.assistant);
-              const message = entry?.model?.[0];
-              return (
-                message?.role === "assistant" &&
-                message.content.some(
-                  (call) => call.type === "toolCall" && call.id === input.callId && call.name === "subagent",
-                )
-              );
-            }, context);
-      if (legacy) await harness.abortTask(record.id, context);
-    }
-  }
-
-  await harness.commit(async (tx) => {
-    const interrupted: ConversationId[] = [];
-    for await (const { id, owner } of conversationRecords(tx)) {
-      if (owner && (await tx.doc(AgentDoc, id)).outcome?.kind === "running") interrupted.push(id);
-    }
-    for (const id of interrupted) {
-      const error = "Interrupted ACP delegation; prompt not resent";
-      (await tx.doc(AgentDoc, id)).outcome = { kind: "failed", error };
-      await touch(tx, id);
-      await tx.appendEntry(TurnEntry, id, { data: { stopReason: "error", error } });
-    }
-  }, context);
 }

@@ -121,7 +121,6 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         return;
     };
     let field = Some((&s.navigation.value, "Name"));
-    let delete_title;
     let form = match edit {
         Edit::RenameProject(_) | Edit::RenameChat(_) => DialogForm {
             title: if matches!(edit, Edit::RenameProject(_)) {
@@ -129,32 +128,32 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
             } else {
                 "Rename chat"
             },
+            subject: None,
             detail: None,
             field,
             action: "Save",
             variant: ButtonVariant::Submit,
         },
         Edit::RemoveProject(id) => DialogForm {
-            title: "Remove project",
-            detail: s
+            title: "Remove project?",
+            subject: s
                 .projects
                 .iter()
                 .find(|p| p.id == *id)
                 .map(|p| p.path.as_str()),
+            detail: None,
             field: None,
             action: "Remove project",
             variant: ButtonVariant::Danger,
         },
-        Edit::DeleteChat(id) => {
-            delete_title = format!("Delete “{}”?", s.title(*id));
-            DialogForm {
-                title: &delete_title,
-                detail: Some("Its subagents are deleted too. This can't be undone."),
-                field: None,
-                action: "Delete",
-                variant: ButtonVariant::Danger,
-            }
-        }
+        Edit::DeleteChat(id) => DialogForm {
+            title: "Delete chat?",
+            subject: Some(s.title(*id)),
+            detail: Some("Its subagents are deleted too. This can't be undone."),
+            field: None,
+            action: "Delete",
+            variant: ButtonVariant::Danger,
+        },
     };
     form.build(
         |s: &mut Desktop| &mut s.navigation.value,

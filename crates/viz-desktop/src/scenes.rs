@@ -33,6 +33,7 @@ pub const SCENES: &[Scene] = &[
     ("agents", agents),
     ("subagent", subagent),
     ("delete", delete),
+    ("overflow", overflow),
     ("projects", projects),
 ];
 
@@ -152,7 +153,6 @@ fn conversation() -> ConversationState {
         harness: Some("omp".into()),
         project: Some("workbench".into()),
         cwd: Some("/work/workbench".into()),
-        read_only: false,
         options: vec![
             option(
                 "model",
@@ -442,6 +442,28 @@ fn projects(s: &mut Desktop) {
 fn delete(s: &mut Desktop) {
     workspace(s);
     sidebar::preview_delete(s, CHAT);
+}
+
+/// Long strings in the delete dialog and the toasts: titles wrap or cut
+/// before the close buttons, details stop at their line caps.
+fn overflow(s: &mut Desktop) {
+    workspace(s);
+    if let Some(chat) = s.conversations.iter_mut().find(|chat| chat.id == CHAT) {
+        chat.title = "Which Rust edition does /home/vidhanio/Projects/viz/Cargo.toml use, and \
+                      does every crate in the workspace inherit it?"
+            .into();
+    }
+    sidebar::preview_delete(s, CHAT);
+    s.preview_toast(
+        "Couldn't open /home/vidhanio/Projects/viz/crates/viz-desktop/src/sidebar/actions.rs \
+         for writing",
+        "error: failed to write \
+         /home/vidhanio/Projects/viz/.viz/worktrees/export-markdown-notes-4f1c2a/crates/\
+         viz-desktop/src/ui/mod.rs: Permission denied (os error 13)\nhint: check the \
+         worktree's owner\nhint: or remove it and start the chat again\nnote: the backend \
+         kept the previous version on disk",
+    );
+    s.preview_toast("Offline", "Backend disconnected");
 }
 
 fn queue(s: &mut Desktop) {

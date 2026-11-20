@@ -13,7 +13,7 @@ export type ChatWorkspace = { worktree: WorktreeBinding; branchToName?: string }
 
 export const MetaDoc = defineDoc<{
   project: string | null;
-  parent: number | null;
+  parent: ConversationId | null;
   archived: boolean;
   pinned?: boolean;
   unread?: boolean;
@@ -36,7 +36,7 @@ export const MetaDoc = defineDoc<{
   checkpointWhen: () => true,
 });
 
-type StoredProject = Omit<Project, "branch" | "defaultWorkspace"> & { defaultWorkspace?: Project["defaultWorkspace"] };
+type StoredProject = Omit<Project, "branch">;
 export const ProjectsDoc = defineDoc<{ projects: StoredProject[] }>({
   kind: "viz.projects",
   version: 1,
@@ -88,7 +88,7 @@ async function withBranch(project: StoredProject): Promise<Project> {
   } catch {
     // No readable branch.
   }
-  return { ...project, branch, defaultWorkspace: project.defaultWorkspace ?? "local" };
+  return { ...project, branch };
 }
 
 export type ProjectStore = {
@@ -111,10 +111,11 @@ export function projects(harness: Harness, root: ConversationId): ProjectStore {
       const canonical = await realpath(absolute).catch(() => null);
       if (canonical === null || !(await stat(canonical)).isDirectory())
         throw new Error("Project path is not a directory");
-      const project = {
+      const project: StoredProject = {
         id: randomUUID(),
         path: canonical,
         name: name ?? (basename(canonical) || canonical),
+        defaultWorkspace: "local",
         createdAt: Date.now(),
       };
       await harness.commit(async (tx) => {

@@ -33,7 +33,7 @@ export async function runBridge(): Promise<never> {
     authProvider: { token: async () => token },
     redirectPolicy: "same-origin",
   });
-  // A 2025-era client negotiates its version once; later requests must carry it as a header.
+  // Forward the negotiated MCP version in the headers on later HTTP requests.
   const initializing = new Set<string | number>();
   upstream.onmessage = (message) => {
     if (isJSONRPCResultResponse(message) && initializing.delete(message.id)) {

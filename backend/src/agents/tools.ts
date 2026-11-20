@@ -2,7 +2,7 @@ import type { Context } from "@earendil-works/chord/context";
 import type { Conversation, ConversationId, Harness, Submission } from "@earendil-works/pi-durable";
 import { bool, int, obj, oneOf, opt, str } from "@earendil-works/pi-schema";
 
-import { parentOf, type Conversations } from "../conversations.ts";
+import type { Conversations } from "../conversations.ts";
 import type { CreatedWorktree } from "../git/index.ts";
 import { type McpTool, tool } from "../mcp/server.ts";
 import { conversationRecords, MetaDoc } from "../projects.ts";
@@ -35,10 +35,10 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
       while (id !== null && id > caller) {
         const record = await tx.conversation(id);
         if (!record) return false;
-        const meta = await tx.doc(MetaDoc, id);
+        const meta: { deleted?: boolean; parent: ConversationId | null } = await tx.doc(MetaDoc, id);
         // Deleting a conversation deletes its descendants, so a deleted ancestor implies a deleted target.
         if (meta.deleted) return false;
-        const parent = parentOf(record, record.owner ? undefined : meta);
+        const { parent } = meta;
         if (parent !== null && parent >= id) return false;
         id = parent;
       }
@@ -107,7 +107,7 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
           for await (const record of conversationRecords(tx)) {
             if (record.id <= scope.id) continue;
             const meta = await tx.doc(MetaDoc, record.id);
-            if (!meta.deleted && parentOf(record, record.owner ? undefined : meta) === scope.id) children.push(record);
+            if (!meta.deleted && meta.parent === scope.id) children.push(record);
           }
           return children;
         }, context);

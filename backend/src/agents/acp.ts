@@ -180,10 +180,6 @@ export class AcpProcess {
     });
   }
 
-  async setMode(sessionId: string, modeId: string): Promise<void> {
-    await this.#connection.agent.request(acp.methods.agent.session.setMode, { sessionId, modeId });
-  }
-
   /** Runs one prompt turn; resolves with its stop reason when the agent ends it. */
   async prompt(sessionId: string, prompt: acp.ContentBlock[]): Promise<acp.StopReason> {
     const response = await this.#connection.agent.request(acp.methods.agent.session.prompt, {

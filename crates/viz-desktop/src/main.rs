@@ -23,7 +23,7 @@ use std::{path::PathBuf, time::Duration};
 use clap::Parser;
 use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Tx, col};
 use rune_kit::{
-    Toast, ToastRegion,
+    ToastRegion,
     shell::{SidebarToggle, SplitView},
 };
 use tokio::sync::mpsc;
@@ -105,13 +105,14 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
     }
     let region = s.toasts.iter().fold(ToastRegion::new(), |region, toast| {
         let id = toast.id;
-        let mut built = Toast::new(format!("toast-{id}"), toast.title.clone())
-            .lead(ui::lead(ui::dot(t.danger), t.ui.line_height))
-            .on_close(move |s: &mut Desktop| s.dismiss(id));
-        if let Some(detail) = &toast.detail {
-            built = built.description(detail.clone());
-        }
-        region.toast(built.build(&t.k))
+        region.toast(ui::toast(
+            format!("toast-{id}"),
+            &toast.title,
+            toast.detail.as_deref(),
+            ui::lead(ui::dot(t.danger), t.ui.line_height),
+            move |s: &mut Desktop| s.dismiss(id),
+            t,
+        ))
     });
     Some(region.build(&t.k))
 }

@@ -84,13 +84,10 @@ impl Completion {
 }
 
 pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
-    let Some(conversation) = s.selected.filter(|_| {
-        s.connected()
-            && s.open_picker.is_none()
-            && s.conversation
-                .as_ref()
-                .is_some_and(|state| !state.read_only)
-    }) else {
+    let Some(conversation) = s
+        .selected
+        .filter(|_| s.connected() && s.open_picker.is_none() && s.conversation.is_some())
+    else {
         return clear(s);
     };
     let Some(token) = Token::at(&s.draft) else {

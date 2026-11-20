@@ -1,4 +1,4 @@
-import type { SessionConfigOption, SessionModeState } from "@agentclientprotocol/sdk";
+import type { SessionConfigOption } from "@agentclientprotocol/sdk";
 import { defineDoc } from "@earendil-works/pi-durable";
 
 import type { Harness as HarnessConfig } from "../config.ts";
@@ -60,19 +60,6 @@ export function normalize(options: SessionConfigOption[]): ConfigOption[] {
 
 function selectChoice({ value, name, description }: { value: string; name: string; description?: string | null }) {
   return { value, name, ...(description != null && { description }) };
-}
-
-export function legacyMode(modes: SessionModeState): ConfigOption {
-  return {
-    id: "mode",
-    category: "mode",
-    name: "Mode",
-    type: "select",
-    value: modes.currentModeId,
-    choices: modes.availableModes.map(({ id, name, description }) =>
-      selectChoice({ value: id, name, ...(description != null && { description }) }),
-    ),
-  };
 }
 
 export function defaults(config: HarnessConfig, options: ConfigOption[]): Desired {

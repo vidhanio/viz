@@ -735,12 +735,13 @@ enum Call {
 fn subagent_call(tool: &Tool) -> Option<Call> {
     let name = tool.viz.as_deref().unwrap_or(tool.name.as_str());
     match name {
-        "subagent" | "spawn_subagent" => Some(Call::Spawn),
+        "spawn_subagent" => Some(Call::Spawn),
+        "spawn_chat" if tool.child.is_some() => Some(Call::Spawn),
         "message_subagent" => Some(Call::Message),
         "read_subagent" => Some(Call::Read),
         "list_subagents" => Some(Call::List),
         "cancel_subagent" => Some(Call::Cancel),
-        _ => tool.child.map(|_| Call::Spawn),
+        _ => None,
     }
 }
 
