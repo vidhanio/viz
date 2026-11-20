@@ -425,7 +425,10 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         ResultRow::Chat(chat) if chat.kind == ConversationKind::Subagent => {
             (&ui::BOT, chat_title(chat))
         }
-        ResultRow::Chat(chat) => (&ui::CHAT, chat_title(chat)),
+        ResultRow::Chat(chat) => (
+            chat.harness.as_deref().map_or(&ui::CHAT, ui::harness_icon),
+            chat_title(chat),
+        ),
         ResultRow::Message(hit) => (&ui::SEARCH, s.title(hit.conversation)),
     };
     let label = text(title).font(t.ui).color(t.text).truncate();

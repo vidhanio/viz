@@ -56,6 +56,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; desktop notifications and window-title status.
 - [x] Delete a chat from its row menu or the command palette, with confirmation.
 - [x] Configurable dark and light base16 schemes, with Home Manager Stylix integration
+- [x] Monochrome harness marks (Claude, Codex, omp, pi; a terminal otherwise) on sidebar chats, the palette, the header and the new-chat harness picker, matched by harness name
 - [ ] Settings UI for desktop preferences in `desktop.toml`
 - [ ] Tray, global shortcut to summon
 

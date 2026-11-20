@@ -713,6 +713,53 @@ lucide! {
     EYE = Eye;
     EYE_OFF = EyeOff;
     MINUS = Minus;
+    /// A harness without a known mark.
+    HARNESS = SquareTerminal;
+}
+
+/// Declares a harness's monochrome brand mark from `icons/`, drawn in its
+/// element's colour (`currentColor`) at `view` units square.
+macro_rules! mark {
+    ($($(#[$doc:meta])* $name:ident = $file:literal, $view:literal;)*) => {$(
+        $(#[$doc])*
+        pub static $name: Icon = Icon {
+            name: concat!("harness-", $file),
+            view: $view,
+            body: include_str!(concat!("../../icons/", $file, ".svg")),
+        };
+    )*};
+}
+
+mark! {
+    /// Anthropic's Claude starburst (`@lobehub/icons-static-svg`).
+    CLAUDE = "claude", 24.0;
+    /// The Codex mark (`@lobehub/icons-static-svg`).
+    CODEX = "codex", 24.0;
+    /// pi's block mark (`pi.dev/favicon.svg`), inset to Lucide's margin.
+    PI = "pi", 700.0;
+    /// oh-my-pi's pi with a plug (`can1357/oh-my-pi` `assets/icon.svg`).
+    OMP = "omp", 100.0;
+}
+
+/// A harness's mark, recognized from its configured name's first word
+/// (`claude`, `claude-acp`, `codex`, `omp`, `pi`, …); a terminal otherwise.
+pub fn harness_icon(name: &str) -> &'static Icon {
+    let word = name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .next()
+        .unwrap_or_default();
+    let is = |names: &[&str]| names.iter().any(|known| word.eq_ignore_ascii_case(known));
+    if is(&["claude", "anthropic"]) {
+        &CLAUDE
+    } else if is(&["codex", "openai"]) {
+        &CODEX
+    } else if is(&["omp"]) {
+        &OMP
+    } else if is(&["pi"]) {
+        &PI
+    } else {
+        &HARNESS
+    }
 }
 
 /// rune-kit's own glyphs, as Lucide.

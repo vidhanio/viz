@@ -1,10 +1,10 @@
-use rune::El;
+use rune::{El, icon, row};
 use rune_kit::MenuItem;
 
 use super::settings::{GAP, is_open, picker, picker_width};
 use crate::{
     app::{Desktop, NewChat},
-    theme::{S8, Size, Theme},
+    theme::{ICON, S4, S8, Size, Theme},
     ui,
 };
 
@@ -52,7 +52,9 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
                     .harness
                     .as_deref()
                     .map_or(harness.default, |picked| picked == name);
-                let mut item = MenuItem::new(&name).checked(selected);
+                let mut item = MenuItem::new(&name)
+                    .icon(ui::harness_icon(&name))
+                    .checked(selected);
                 if harness.default {
                     item = item.badge("Default");
                 }
@@ -67,8 +69,22 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
             }),
         );
     }
+    // The chosen runner's mark leads its trigger, as in its menu.
+    let mark = name.map(|name| {
+        icon(ui::harness_icon(name), ICON)
+            .color(t.muted)
+            .a11y_hidden()
+    });
+    let width =
+        picker_width(name.unwrap_or(label), t) + if mark.is_some() { ICON + S4 } else { 0.0 };
     (
-        menu.build(&t.overlay, layer).min_w(0.0).shrink(),
-        picker_width(name.unwrap_or(label), t),
+        row()
+            .gap(S4)
+            .center_y()
+            .min_w(0.0)
+            .shrink()
+            .children(mark)
+            .child(menu.build(&t.overlay, layer).min_w(0.0).shrink()),
+        width,
     )
 }

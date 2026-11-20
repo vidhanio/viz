@@ -296,6 +296,20 @@ impl<'a> Outline<'a> {
                 .and_then(|id| s.projects.iter().find(|p| p.id == id))
                 .map_or("No project", |project| project.name.as_str())
         });
+        // The runner's mark, in the title's ink.
+        let mark = chat.harness.as_deref().map(|harness| {
+            let ink = if chat.archived {
+                t.faint
+            } else if selected {
+                t.text
+            } else {
+                t.muted
+            };
+            icon(ui::harness_icon(harness), ICON)
+                .color(ink)
+                .help(harness)
+                .a11y_hidden()
+        });
         let mut node = TreeLine {
             key: &key,
             label: chat_title(chat),
@@ -305,7 +319,7 @@ impl<'a> Outline<'a> {
             dim: chat.archived,
             selected,
         }
-        .build(None, ui::trailing(rest, Some(menu), menu_open), t)
+        .build(mark, ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
         if chat.unread {
             node = node.description("Unread");

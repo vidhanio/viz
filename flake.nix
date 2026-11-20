@@ -93,12 +93,13 @@
             pkgs.fontconfig.bin
           ];
 
-          # Cargo sources plus the base16 schemes the desktop embeds with `include_str!`.
+          # Cargo sources plus the base16 schemes and harness icons the desktop embeds with `include_str!`.
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
               (craneLib.fileset.commonCargoSources ./.)
               ./crates/viz-desktop/themes
+              ./crates/viz-desktop/icons
             ];
           };
           commonArgs = {

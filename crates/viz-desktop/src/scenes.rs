@@ -125,7 +125,11 @@ fn list() -> Vec<ConversationSummary> {
             kind,
             parent: parent.map(ConversationId),
             project: project.map(str::to_owned),
-            harness: (kind != Orchestrator).then(|| "omp".into()),
+            // Every known mark among the chats.
+            harness: (kind != Orchestrator).then(|| {
+                let marks = ["claude", "codex", "goose", "omp", "pi", "claude"];
+                marks[usize::try_from(id).unwrap_or_default() % marks.len()].into()
+            }),
             status,
             archived: false,
             // Minutes ago, newest first by id, so "last activity" reads
@@ -141,7 +145,7 @@ fn list() -> Vec<ConversationSummary> {
 fn conversation() -> ConversationState {
     ConversationState {
         status: ConversationStatus::Idle,
-        harness: Some("omp".into()),
+        harness: Some("claude".into()),
         project: Some("workbench".into()),
         cwd: Some("/work/workbench".into()),
         options: options(),

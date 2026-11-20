@@ -282,8 +282,8 @@ fn breadcrumb(s: &Desktop, parent: ConversationId, t: &Theme) -> El {
         )
 }
 
-/// Project and run state, quiet and right-aligned. The orchestrator has no
-/// project: only its run state.
+/// Project, harness and run state, quiet and right-aligned. The orchestrator
+/// has no project or harness: only its run state.
 fn metadata(s: &Desktop, t: &Theme) -> El {
     let mut metadata = row()
         .key("header-metadata")
@@ -294,6 +294,26 @@ fn metadata(s: &Desktop, t: &Theme) -> El {
     let orchestrator = s.orchestrator_open();
     if let Some(project) = s.project().filter(|_| !orchestrator) {
         metadata = metadata.child(quiet("header-project", &project.name, t).help(&project.path));
+    }
+    if let Some(harness) = s
+        .conversation
+        .as_ref()
+        .and_then(|state| state.harness.as_deref())
+    {
+        metadata = metadata.child(
+            row()
+                .key("header-harness")
+                .gap(S4)
+                .center_y()
+                .min_w(0.0)
+                .shrink()
+                .child(
+                    icon(ui::harness_icon(harness), ICON_SMALL)
+                        .color(t.muted)
+                        .a11y_hidden(),
+                )
+                .child(quiet("header-harness-name", harness, t)),
+        );
     }
     if let Some(mark) = s
         .conversation
