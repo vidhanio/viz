@@ -94,7 +94,7 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
     let mut definitions = rpc_definitions();
     definitions.extend([
         definition::<Empty>("list_environments", "List the local and explicitly configured peer environments, with reachability."),
-        definition::<Target<SpawnOptions>>("list_spawn_options", "List configured ACP harnesses and their models. Pass a harness and model for model-specific thinking options, or search to filter models."),
+        definition::<Target<SpawnOptions>>("list_spawn_options", "List ACP harness IDs and display names. Pass a harness ID and model for model-specific thinking options, or search to filter models."),
         definition::<Delegate>("delegate_task", "Delegate a self-contained task from this thread. Pass a destination environment and project if needed, or reuse one of your existing child threads. The result arrives as a new input here."),
         definition::<Empty>("list_tasks", "List the durable tasks delegated by this thread."),
         definition::<TaskStatus>("task_status", "Read the status and result of one of this thread's tasks by task ID. Set wait to wait for completion."),
@@ -243,7 +243,7 @@ impl Tools {
             harnesses
                 .iter()
                 .find(|harness| harness.default)
-                .map(|harness| harness.name.as_str())
+                .map(|harness| harness.id.as_str())
         });
         if input.harness.is_none() && input.model.is_none() && input.search.is_none() {
             return output(
@@ -251,7 +251,10 @@ impl Tools {
                     default_harness,
                     harnesses: harnesses
                         .iter()
-                        .map(|harness| harness.name.as_str())
+                        .map(|harness| HarnessLabel {
+                            id: &harness.id,
+                            name: &harness.name,
+                        })
                         .collect(),
                 },
                 None,
@@ -264,7 +267,7 @@ impl Tools {
             .ok_or_else(|| RpcError::not_found("no default ACP harness; specify a harness"))?;
         let harness = harnesses
             .iter()
-            .find(|harness| harness.name == name)
+            .find(|harness| harness.id == name)
             .ok_or_else(|| RpcError::not_found(format!("no ACP harness {name}")))?;
         if let Some(model) = input.model {
             let options = self
@@ -289,6 +292,7 @@ impl Tools {
             return output(
                 &SpawnSelection {
                     harness: name,
+                    harness_name: &harness.name,
                     model: model.map(|option| &option.value),
                     thinking,
                 },
@@ -334,7 +338,8 @@ fn spawn_models(
         .collect();
     output(
         &SpawnModels {
-            harness: &harness.name,
+            harness: &harness.id,
+            harness_name: &harness.name,
             models,
             omitted_models: matching.count(),
         },
@@ -452,12 +457,20 @@ struct SpawnOptions {
 #[serde(rename_all = "camelCase")]
 struct SpawnCatalog<'a> {
     default_harness: Option<&'a str>,
-    harnesses: Vec<&'a str>,
+    harnesses: Vec<HarnessLabel<'a>>,
 }
 
 #[derive(Serialize)]
+struct HarnessLabel<'a> {
+    id: &'a str,
+    name: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct SpawnSelection<'a> {
     harness: &'a str,
+    harness_name: &'a str,
     model: Option<&'a viz_client::protocol::OptionValue>,
     thinking: Option<&'a viz_client::protocol::ConfigOption>,
 }
@@ -466,6 +479,7 @@ struct SpawnSelection<'a> {
 #[serde(rename_all = "camelCase")]
 struct SpawnModels<'a> {
     harness: &'a str,
+    harness_name: &'a str,
     models: Vec<ListedModel<'a>>,
     omitted_models: usize,
 }

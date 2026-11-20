@@ -85,7 +85,7 @@ impl NewThread {
         runners.iter().find(|runner| {
             self.harness
                 .as_deref()
-                .map_or(runner.default, |name| name == runner.name)
+                .map_or(runner.default, |id| id == runner.id)
         })
     }
 }
@@ -108,6 +108,7 @@ impl Default for Draft {
 #[derive(Debug)]
 pub struct ImportBrowser {
     pub harness: String,
+    pub harness_name: String,
     pub project: Option<String>,
     pub threads: Vec<HarnessThread>,
     pub next: Option<String>,
@@ -533,7 +534,7 @@ impl Desktop {
         if let Some(runner) = self
             .harnesses
             .iter_mut()
-            .find(|runner| runner.name == harness)
+            .find(|runner| runner.id == harness)
         {
             runner.options = options;
         }
@@ -664,13 +665,13 @@ impl Desktop {
                         self.harnesses
                             .iter()
                             .find(|harness| harness.default)
-                            .map(|harness| harness.name.as_str())
+                            .map(|harness| harness.id.as_str())
                     })
             },
             |draft| {
                 draft
                     .active_harness(&self.harnesses)
-                    .map(|harness| harness.name.as_str())
+                    .map(|harness| harness.id.as_str())
             },
         )?;
         Some((harness, self.project_path()))
@@ -682,6 +683,19 @@ impl Desktop {
         };
         self.imports = Some(ImportBrowser {
             harness: harness.to_owned(),
+            harness_name: self
+                .harnesses
+                .iter()
+                .find(|runner| runner.id == harness)
+                .map(|runner| runner.name.as_str())
+                .or_else(|| {
+                    self.selected
+                        .and_then(|thread| self.summary(thread))
+                        .filter(|thread| thread.harness == harness)
+                        .map(|thread| thread.harness_name.as_str())
+                })
+                .unwrap_or(harness)
+                .to_owned(),
             project: project.map(str::to_owned),
             threads: Vec::new(),
             next: None,

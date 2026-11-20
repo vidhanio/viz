@@ -124,6 +124,7 @@ in
             default_harness = "claude";
           };
           harnesses.claude = {
+            name = "Claude Code";
             command = "claude-agent-acp";
             env.ANTHROPIC_API_KEY.env = "ANTHROPIC_API_KEY";
           };

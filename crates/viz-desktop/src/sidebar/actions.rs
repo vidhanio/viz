@@ -409,6 +409,6 @@ pub(super) fn imports(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         "Import a thread",
         browser.project.as_deref(),
     )
-    .subject(&browser.harness)
+    .subject(&browser.harness_name)
     .build(|s: &mut Desktop| s.imports = None, list, t, layer);
 }

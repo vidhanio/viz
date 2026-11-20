@@ -772,7 +772,7 @@ private struct ImportSheet: View {
         Section {
           Picker("Harness", selection: $harness) {
             ForEach(harnesses) { harness in
-              Text(harness.name).tag(Optional(harness.name))
+              Text(harness.name).tag(Optional(harness.id))
             }
           }
           Picker("Project", selection: $project) {
@@ -830,7 +830,7 @@ private struct ImportSheet: View {
       .task {
         do {
           harnesses = try await backend.listHarnesses()
-          harness = harnesses.first(where: \.default)?.name ?? harnesses.first?.name
+          harness = harnesses.first(where: \.default)?.id ?? harnesses.first?.id
         } catch {
           failure = error.localizedDescription
         }

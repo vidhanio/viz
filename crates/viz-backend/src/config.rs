@@ -27,6 +27,7 @@ pub(crate) struct Config {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct HarnessConfig {
+    pub(crate) name: Option<String>,
     pub(crate) command: String,
     #[serde(default)]
     pub(crate) args: Vec<String>,
@@ -103,11 +104,18 @@ impl Config {
             file.environments.is_empty() || backend.token.is_some(),
             "linked environments require backend.token"
         );
-        for (name, harness) in &file.harnesses {
-            ensure!(valid_name(name), "invalid harness name {name:?}");
+        for (id, harness) in &file.harnesses {
+            ensure!(valid_name(id), "invalid harness ID {id:?}");
+            ensure!(
+                harness
+                    .name
+                    .as_ref()
+                    .is_none_or(|name| !name.trim().is_empty()),
+                "harness {id:?} has an empty display name"
+            );
             ensure!(
                 !harness.command.is_empty(),
-                "harness {name:?} has no executable"
+                "harness {id:?} has no executable"
             );
         }
         let default_harness = match backend.default_harness {

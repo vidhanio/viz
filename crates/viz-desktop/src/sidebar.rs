@@ -302,7 +302,7 @@ impl<'a> Outline<'a> {
             };
             icon(ui::harness_icon(harness), ICON)
                 .color(ink)
-                .help(harness)
+                .help(&thread.harness_name)
                 .a11y_hidden()
         };
         let mut node = TreeLine {

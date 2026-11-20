@@ -36,26 +36,33 @@ pub(super) fn toolbar(
 
 fn harness(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> El {
     let label = "Choose harness";
-    let name = thread
-        .active_harness(&s.harnesses)
-        .map(|runner| runner.name.as_str());
+    let runner = thread.active_harness(&s.harnesses);
     // The chosen runner's mark leads the value inside its trigger, as in its
     // menu.
-    let mut menu = name.map_or_else(
+    let mut menu = runner.map_or_else(
         || picker(s, HARNESS, label, None, t),
-        |name| marked_picker(s, HARNESS, label, name, ui::harness_icon(name), t),
+        |runner| {
+            marked_picker(
+                s,
+                HARNESS,
+                label,
+                &runner.name,
+                ui::harness_icon(&runner.id),
+                t,
+            )
+        },
     );
     if is_open(s, HARNESS) {
         menu = ui::menu_items(
             menu,
             s.harnesses.iter().map(|harness| {
-                let name = harness.name.clone();
+                let id = harness.id.clone();
                 let selected = thread
                     .harness
                     .as_deref()
-                    .map_or(harness.default, |picked| picked == name);
-                let mut item = MenuItem::new(&name)
-                    .icon(ui::harness_icon(&name))
+                    .map_or(harness.default, |picked| picked == id);
+                let mut item = MenuItem::new(&harness.name)
+                    .icon(ui::harness_icon(&id))
                     .checked(selected);
                 if harness.default {
                     item = item.badge("Default");
@@ -64,7 +71,7 @@ fn harness(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> E
                     s.open_picker = None;
                     tx.focus("draft", false);
                     if !selected && let Some(thread) = &mut s.new_thread {
-                        thread.harness = Some(name.clone());
+                        thread.harness = Some(id.clone());
                         thread.options.clear();
                     }
                 })

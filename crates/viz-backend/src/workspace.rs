@@ -432,6 +432,14 @@ impl Workspace {
             .ok_or_else(|| RpcError::invalid(format!("ACP harness {name} is not configured")))
     }
 
+    /// Resolve presentation from current config, not from the saved thread.
+    fn harness_name<'a>(&'a self, id: &'a str) -> &'a str {
+        self.harnesses
+            .get(id)
+            .and_then(|harness| harness.name.as_deref())
+            .unwrap_or(id)
+    }
+
     async fn cwd_for(
         &self,
         db: &mut dyn toasty::Executor,

@@ -166,7 +166,7 @@ pub fn agent_identity(thread: &ThreadSummary, t: &Theme) -> El {
         (Some(model), Some(thinking)) => Some(format!("{model} · {thinking}")),
         (Some(model), None) => Some(model.to_owned()),
         (None, Some(thinking)) => Some(thinking.into_owned()),
-        (None, None) => Some(thread.harness.clone()),
+        (None, None) => Some(thread.harness_name.clone()),
     };
     row()
         .grow(1.0)
@@ -177,6 +177,7 @@ pub fn agent_identity(thread: &ThreadSummary, t: &Theme) -> El {
         .child(
             icon(ui::harness_icon(&thread.harness), ICON)
                 .color(t.muted)
+                .help(thread.harness_name.clone())
                 .a11y_hidden(),
         )
         .child(
@@ -312,7 +313,7 @@ fn title(s: &Desktop, t: &Theme) -> El {
             |draft| {
                 let harness = draft
                     .active_harness(&s.harnesses)
-                    .map(|runner| runner.name.as_str());
+                    .map(|runner| (runner.id.as_str(), runner.name.as_str()));
                 group
                     .child(harness_mark(harness, t))
                     .child(title_text("New thread", t))
@@ -320,7 +321,10 @@ fn title(s: &Desktop, t: &Theme) -> El {
         );
     };
     let thread = s.summary(id);
-    let mark = harness_mark(thread.map(|thread| thread.harness.as_str()), t);
+    let mark = harness_mark(
+        thread.map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
+        t,
+    );
     let title = title_text(s.title(id), t);
     let Some((parent, environment)) = thread
         .and_then(|thread| {
@@ -341,10 +345,14 @@ fn title(s: &Desktop, t: &Theme) -> El {
         .child(title)
 }
 
-fn harness_mark(harness: Option<&str>, t: &Theme) -> El {
-    let mark = icon(harness.map_or(&ui::HARNESS, ui::harness_icon), ICON).color(t.muted);
+fn harness_mark(harness: Option<(&str, &str)>, t: &Theme) -> El {
+    let mark = icon(
+        harness.map_or(&ui::HARNESS, |(id, _)| ui::harness_icon(id)),
+        ICON,
+    )
+    .color(t.muted);
     match harness {
-        Some(name) => mark.help(name),
+        Some((_, name)) => mark.help(name),
         None => mark.a11y_hidden(),
     }
 }

@@ -123,11 +123,8 @@ fn list() -> Vec<ThreadSummary> {
         parent: parent.map(ThreadId),
         parent_environment: None,
         project: project.map(str::to_owned),
-        // Every known mark among the threads.
-        harness: {
-            let marks = ["claude", "codex", "goose", "omp", "pi", "claude"];
-            marks[usize::try_from(id).unwrap_or_default() % marks.len()].into()
-        },
+        harness: preview_harness(id).0.into(),
+        harness_name: preview_harness(id).1.into(),
         model: match id {
             20 => Some("GPT-5.5".into()),
             21 => Some("Claude Opus 4.7".into()),
@@ -143,6 +140,16 @@ fn list() -> Vec<ThreadSummary> {
         pinned: id == 4,
     })
     .into()
+}
+
+const fn preview_harness(id: u64) -> (&'static str, &'static str) {
+    match id {
+        21 | 11 => ("claude", "Claude Code"),
+        20 => ("codex", "Codex"),
+        9 => ("omp", "Oh My Pi"),
+        4 | 10 => ("pi", "Pi"),
+        _ => ("goose", "Goose"),
+    }
 }
 
 fn thread() -> ThreadState {
@@ -245,12 +252,14 @@ fn new_agent(s: &mut Desktop) {
     s.new_thread = Some(thread);
     s.harnesses = vec![
         Harness {
-            name: "omp".into(),
+            id: "omp".into(),
+            name: "Oh My Pi".into(),
             default: true,
             options: options(),
         },
         Harness {
-            name: "pi".into(),
+            id: "codex".into(),
+            name: "Codex".into(),
             default: false,
             options: Vec::new(),
         },

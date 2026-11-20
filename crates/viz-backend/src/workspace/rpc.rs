@@ -142,9 +142,13 @@ impl Workspace {
         match method {
             "threads.list" => {
                 let ListThreads { project, archived } = decode(params)?;
-                let threads =
-                    store::list_threads(&mut *self.db.lock().await, archived, project.as_deref())
-                        .await?;
+                let threads = store::list_threads(
+                    &mut *self.db.lock().await,
+                    archived,
+                    project.as_deref(),
+                    self,
+                )
+                .await?;
                 Ok(json!({"threads":threads}))
             }
             "thread.entries" => {
@@ -535,7 +539,7 @@ impl Workspace {
             .map(|name| self.harness_summary(name))
             .collect::<FuturesUnordered<_>>();
         let mut harnesses: Vec<_> = pending.collect().await;
-        harnesses.sort_unstable_by(|a, b| a.name.cmp(&b.name));
+        harnesses.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         harnesses
     }
 
@@ -548,7 +552,8 @@ impl Workspace {
                 Vec::new()
             });
         Harness {
-            name: name.to_owned(),
+            id: name.to_owned(),
+            name: self.harness_name(name).to_owned(),
             default: self.default_harness.as_deref() == Some(name),
             options,
         }

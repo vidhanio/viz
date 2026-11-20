@@ -656,9 +656,7 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
             );
             ((!kept).then(|| vec![levels.id().to_owned()]), None)
         }
-        _ if unseen(harness, id, value) => {
-            (Some(thinking_ids(harness)), Some(harness.name.clone()))
-        }
+        _ if unseen(harness, id, value) => (Some(thinking_ids(harness)), Some(harness.id.clone())),
         _ => (None, None),
     };
     for level in stale.into_iter().flatten() {

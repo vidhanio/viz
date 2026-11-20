@@ -52,6 +52,7 @@ enum VizProtocol {
     let id: Int
     let title: String
     let harness: String
+    let harnessName: String
     let parent: Int?
     let parentEnvironment: String?
     let project: String?
@@ -66,10 +67,9 @@ enum VizProtocol {
 
   struct HarnessCatalog: Decodable {
     struct Harness: Decodable, Identifiable {
+      let id: String
       let name: String
       let `default`: Bool
-
-      var id: String { name }
     }
 
     let harnesses: [Harness]

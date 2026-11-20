@@ -7,7 +7,10 @@ use std::{
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use toasty::Executor;
 
-use super::sql::{exec, row, rows};
+use super::{
+    Workspace,
+    sql::{exec, row, rows},
+};
 use crate::{
     acp::{Desired, Selection},
     wire::{
@@ -173,6 +176,7 @@ pub(super) async fn list_threads(
     db: &mut dyn Executor,
     archived: Option<bool>,
     project: Option<&str>,
+    workspace: &Workspace,
 ) -> Result<Vec<ThreadSummary>, RpcError> {
     let query = format!("SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
             t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking
@@ -181,13 +185,15 @@ pub(super) async fn list_threads(
     rows(db, &query, [archived.into(), project.into()])
         .await?
         .map(|mut row| {
+            let harness = row.str(5)?;
             Ok(ThreadSummary {
                 id: ThreadId(row.u64(0)?),
                 title: row.str(1)?,
                 parent: row.opt_u64(2)?.map(ThreadId),
                 parent_environment: row.opt_str(3)?,
                 project: row.opt_str(4)?,
-                harness: row.str(5)?,
+                harness_name: workspace.harness_name(&harness).to_owned(),
+                harness,
                 status: status(&row.str(6)?)?,
                 archived: row.flag(7)?,
                 updated_at: row.i64(8)?,

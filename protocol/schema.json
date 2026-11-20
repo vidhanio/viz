@@ -1813,7 +1813,11 @@
                 ]
               },
               "harness": {
-                "description": "The configured ACP runner.",
+                "description": "Configuration key of the ACP harness.",
+                "type": "string"
+              },
+              "harnessName": {
+                "description": "Display name of the ACP harness.",
                 "type": "string"
               },
               "status": {
@@ -1856,6 +1860,7 @@
               "id",
               "title",
               "harness",
+              "harnessName",
               "status",
               "archived",
               "updatedAt",
@@ -2289,8 +2294,12 @@
             "description": "A configured ACP runner.",
             "type": "object",
             "properties": {
+              "id": {
+                "description": "Configuration key used to select this harness.",
+                "type": "string"
+              },
               "name": {
-                "description": "Configured name.",
+                "description": "Display name shown to the user.",
                 "type": "string"
               },
               "default": {
@@ -2306,6 +2315,7 @@
               }
             },
             "required": [
+              "id",
               "name",
               "default",
               "options"

@@ -206,8 +206,10 @@ pub struct ThreadSummary {
     pub parent_environment: Option<String>,
     /// The project directory this thread belongs to, if any.
     pub project: Option<String>,
-    /// The configured ACP runner.
+    /// Configuration key of the ACP harness.
     pub harness: String,
+    /// Display name of the ACP harness.
+    pub harness_name: String,
     /// What this thread is doing.
     pub status: ThreadStatus,
     /// Whether the thread is archived.
@@ -508,7 +510,9 @@ pub struct Project {
 /// A configured ACP runner.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Harness {
-    /// Configured name.
+    /// Configuration key used to select this harness.
+    pub id: String,
+    /// Display name shown to the user.
     pub name: String,
     /// Whether this is the backend default.
     pub default: bool,

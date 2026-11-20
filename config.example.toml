@@ -32,6 +32,8 @@
 # Trusted ACP runners run under the backend account and own their model credentials.
 # viz does not add a sandbox or interactive permission policy.
 # [harnesses.claude]
+# Display name for selectors; the table key is still used in requests. Omit to show the key.
+# name = "Claude Code"
 # Required executable on PATH or an absolute path.
 # command = "claude-agent-acp"
 # Arguments, default []; extra environment (Secret values), default {}.
@@ -42,7 +44,9 @@
 # model = "claude-opus-5-5"
 # effort = "high"
 # [harnesses.codex]
+# name = "Codex"
 # command = "codex-acp"
 # [harnesses.omp]
+# name = "Oh My Pi"
 # command = "omp"
 # args = ["acp"]
