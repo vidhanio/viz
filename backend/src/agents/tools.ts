@@ -52,21 +52,12 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
   }
 
   return [
-    tool<ToolScope, { text: string }>({
-      name: "report_progress",
-      description: "Record a progress note.",
-      input: obj({ text: str({ minLength: 1, maxLength: 4096 }) }),
-      call: async ({ text }, scope) => {
-        await scope.active().report(text);
-        return { text: "Progress recorded" };
-      },
-    }),
     tool<ToolScope, { task: string; harness?: string; wait?: boolean }>({
       name: "spawn_subagent",
       description: "Start a subagent in your working directory. It sees your uncommitted edits, and edits can collide.",
       input: obj({ task: text, harness: opt(str()), wait: opt(bool()) }),
       call: async ({ task, harness, wait = true }, scope) => {
-        const { context } = scope.active();
+        const context = scope.context();
         const child = await spawn(
           { parent: scope.id, title: titleFrom(task), ...(harness !== undefined && { harness }) },
           context,
@@ -79,7 +70,7 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
       description: "List your direct subagents.",
       input: obj({}),
       call: async (_args, scope) => {
-        const { context } = scope.active();
+        const context = scope.context();
         const records = await harness.commit(async (tx) => {
           const children = [];
           for await (const record of conversationRecords(tx)) {
@@ -102,7 +93,7 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
       description: "Read a subagent's recent transcript.",
       input: obj({ conversation, limit: opt(int({ minimum: 1, maximum: 100 })) }),
       call: async ({ conversation, limit = 20 }, scope) => {
-        const { context } = scope.active();
+        const context = scope.context();
         const id = await requireChild(scope.id, conversation as ConversationId, context);
         return { text: await transcript(harness, id, limit, context), child: id };
       },
@@ -112,7 +103,7 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
       description: "Send a follow-up to a subagent.",
       input: obj({ conversation, text, wait: opt(bool()) }),
       call: async ({ conversation, text, wait = true }, scope) => {
-        const { context } = scope.active();
+        const context = scope.context();
         const child = await requireChild(scope.id, conversation as ConversationId, context);
         return { text: await send(child, text, wait, context), child };
       },
@@ -122,7 +113,7 @@ export function agentTools({ harness, conversations, spawn, submit, abort }: Sub
       description: "Stop a subagent's turn.",
       input: obj({ conversation }),
       call: async ({ conversation }, scope) => {
-        const { context } = scope.active();
+        const context = scope.context();
         const child = await requireChild(scope.id, conversation as ConversationId, context);
         await abort(child, context);
         return { text: "Subagent stopped", child };

@@ -60,8 +60,8 @@ pub enum Item {
     Tool(Box<Tool>),
     /// The latest checklist reported in this ACP turn.
     Plan { key: String, steps: Vec<PlanStep> },
-    /// A harness progress message.
-    Progress { key: String, text: String },
+    /// A non-default ACP stop reason shown in the activity timeline.
+    TurnStatus { key: String, text: String },
     /// A turn boundary (no label) or another marker that isn't a message.
     Divider {
         /// Stable element key.
@@ -98,7 +98,7 @@ impl Item {
             Self::Text { key, .. }
             | Self::Thinking { key, .. }
             | Self::Plan { key, .. }
-            | Self::Progress { key, .. }
+            | Self::TurnStatus { key, .. }
             | Self::Divider { key, .. }
             | Self::Notice { key, .. } => key,
         }
@@ -406,14 +406,6 @@ impl Reader {
                 }
             }
             "viz.agent.plan" => self.plan(id, array(entry.pointer("/data/entries"))),
-            "viz.agent.progress" => {
-                if let Some(text) = entry.pointer("/data/text").and_then(Value::as_str) {
-                    self.items.push(Item::Progress {
-                        key: format!("e{id}"),
-                        text: text.to_owned(),
-                    });
-                }
-            }
             "viz.agent.turn" => {
                 for item in &mut self.items[self.acp_start..] {
                     if let Item::Tool(tool) = item
@@ -443,7 +435,7 @@ impl Reader {
                             "refusal" => "The agent declined to continue".to_owned(),
                             _ => format!("Turn ended: {}", reason.replace('_', " ")),
                         };
-                        self.items.push(Item::Progress { key, text });
+                        self.items.push(Item::TurnStatus { key, text });
                     }
                 }
             }

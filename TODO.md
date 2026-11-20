@@ -22,7 +22,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): `list_conversations`, `read_conversation`, `search_conversations`, `spawn_chat` (background, reports back as a `[chat N]` input), `message_conversation` (queues), `cancel_conversation`.
 - [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers).
 - [x] **Detached ACP delegation**: the orchestrator delegates only through `spawn_chat`; chat results arrive as inputs.
-- [x] **Scoped MCP progress** for ACP delegations: loopback HTTP or stdio bridge, per-turn token, no access to unrelated conversations.
+- [x] **Scoped MCP for ACP agents**: loopback HTTP or stdio bridge, per-session token, no access to unrelated conversations.
 - [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
 - [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP. Parent transcript tool records link to the affected child when its runner forwards the result.
 - [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`).

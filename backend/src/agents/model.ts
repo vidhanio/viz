@@ -56,5 +56,4 @@ export const TextEntry = defineEntry<{ text: string; key?: string }>("viz.agent.
 export const ThoughtEntry = defineEntry<{ text: string; key?: string }>("viz.agent.thought");
 export const ToolEntry = defineEntry<ToolRecord>("viz.agent.tool");
 export const PlanEntry = defineEntry<{ entries: { content: string; status: string }[] }>("viz.agent.plan");
-export const ProgressEntry = defineEntry<{ text: string }>("viz.agent.progress");
 export const TurnEntry = defineEntry<{ stopReason: string; error: string | null; answer?: string }>("viz.agent.turn");

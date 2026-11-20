@@ -2,7 +2,7 @@
 
 Source: `github.com/pingdotgg/t3code`, branch `main`, read 2026-11-18 via GitHub raw/API (scout). Paths are repo-relative; prefix `https://github.com/pingdotgg/t3code/blob/main/`. Line anchors drift.
 
-viz has since landed most P0/P1 items (see TODO.md); the table records t3code's surface and where it lives.
+This records the feature gap on 2026-11-18, not viz's current behavior. See TODO.md for shipped work; viz has since replaced its progress-only MCP surface with scoped subagent tools.
 
 # Compressed summary — ranked P0/P1 gaps
 

@@ -183,7 +183,7 @@ fn items<'a>(
                 }
             }
             Item::Plan { key, steps } => rows.push(Kind::Prose, plan(key, steps, t)),
-            Item::Progress { key, text: words } => rows.push(
+            Item::TurnStatus { key, text: words } => rows.push(
                 Kind::Activity,
                 text(words)
                     .key(key)

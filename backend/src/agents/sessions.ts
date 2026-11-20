@@ -23,16 +23,7 @@ import { McpServer, type McpTool } from "../mcp/server.ts";
 import type { ConfigOption } from "../protocol.ts";
 import { titleFrom, TitleDoc } from "../titles.ts";
 import { AcpProcess, type AcpEvents } from "./acp.ts";
-import {
-  LiveTurnDoc,
-  type LiveText,
-  PlanEntry,
-  ProgressEntry,
-  SessionDoc,
-  TextEntry,
-  ThoughtEntry,
-  ToolEntry,
-} from "./model.ts";
+import { LiveTurnDoc, type LiveText, PlanEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
 import {
   AcpStateDoc,
   catalogOptions,
@@ -62,7 +53,6 @@ type TurnOptions = SessionOptions & {
   context: Context;
 };
 
-type Update = SessionUpdate | { sessionUpdate: "viz_progress"; text: string };
 /** The turn's uncommitted tail: `runs` numbers its text runs for their keys. */
 type Transcript = { turn: string; runs: number; text?: LiveText };
 
@@ -74,10 +64,9 @@ const EARLY_UPDATES: Partial<Record<SessionUpdate["sessionUpdate"], true>> = {
   usage_update: true,
 };
 
-type ActiveTurn = { context: Context; report: (text: string) => Promise<void> };
 export type ToolScope = {
   id: ConversationId;
-  active: () => ActiveTurn;
+  context: () => Context;
   receipt: () => ToolReceipts["issue"] | undefined;
 };
 
@@ -97,7 +86,7 @@ type LiveSession = {
   configuring: Promise<void>;
   applyingOptions: boolean;
   cancelled: boolean;
-  active?: ActiveTurn & { update: (update: SessionUpdate) => void; receipts: ToolReceipts };
+  active?: { context: Context; update: (update: SessionUpdate) => void; receipts: ToolReceipts };
 };
 
 /** One process per conversation. Callers serialize turns and persist their prompt and terminal state. */
@@ -110,10 +99,8 @@ export class AgentSessions {
 
   start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[]): void {
     this.#harness = harness;
-    this.#mcp = new McpServer(
-      { name: "viz", version, instructions: "Manage your subagents and record progress." },
-      tools,
-      (scope) => scope.receipt(),
+    this.#mcp = new McpServer({ name: "viz", version, instructions: "Manage your subagents." }, tools, (scope) =>
+      scope.receipt(),
     );
     this.#mcp.start();
   }
@@ -180,9 +167,9 @@ export class AgentSessions {
       token: this.#mcp.grant({
         id,
         receipt: () => live.active?.receipts.issue,
-        active: () => {
+        context: () => {
           if (!live.active || live.active.context.abortSignal?.aborted) throw new Error("No active ACP turn");
-          return live.active;
+          return live.active.context;
         },
       }),
     };
@@ -528,7 +515,7 @@ export class AgentSessions {
   async turn(options: TurnOptions): Promise<TurnOutcome> {
     const { id, text, commit, context } = options;
     const transcript: Transcript = { turn: options.turn, runs: 0 };
-    let pending: Update[] = [];
+    let pending: SessionUpdate[] = [];
     const answer: string[] = [];
     const tools = new Map<string, ToolContent>();
     const receipts = new ToolReceipts();
@@ -561,7 +548,7 @@ export class AgentSessions {
       });
       return saved;
     };
-    const push = (update: Update) => {
+    const push = (update: SessionUpdate) => {
       pending.push(update);
       timer ??= setTimeout(flush, 75);
     };
@@ -594,10 +581,6 @@ export class AgentSessions {
           if (update.sessionUpdate === "agent_message_chunk" && update.content.type === "text")
             answer.push(update.content.text);
           push(update);
-        },
-        report: async (text) => {
-          push({ sessionUpdate: "viz_progress", text });
-          await flush();
         },
       };
       // ACP prompts do not have idempotency keys. Never retry one after an error.
@@ -680,7 +663,7 @@ export async function clearLiveTurn(tx: Tx, id: ConversationId) {
 async function apply(
   tx: Tx,
   id: ConversationId,
-  updates: Update[],
+  updates: SessionUpdate[],
   tools: Map<string, ToolContent>,
   receipts: ToolReceipts,
   transcript: Transcript,
@@ -710,14 +693,11 @@ async function apply(
         } else tools.set(record.id, tool);
         break;
       }
-      case "plan":
-      case "viz_progress": {
+      case "plan": {
         await appendText(tx, id, transcript);
-        if (update.sessionUpdate === "plan") {
-          await tx.appendEntry(PlanEntry, id, {
-            data: { entries: update.entries.map(({ content, status }) => ({ content, status })) },
-          });
-        } else await tx.appendEntry(ProgressEntry, id, { data: { text: update.text } });
+        await tx.appendEntry(PlanEntry, id, {
+          data: { entries: update.entries.map(({ content, status }) => ({ content, status })) },
+        });
         break;
       }
     }
