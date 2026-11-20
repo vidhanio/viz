@@ -1,5 +1,5 @@
 //! The toolbar: the open conversation's title (a subagent's under its
-//! project and parent), its workspace context, and the Agents card.
+//! parent), its workspace context, and the Agents card.
 
 use rune::{El, col, icon, row, text};
 use rune_kit::{IconButtonVariant, Placement, Popover, shell::Toolbar};
@@ -40,20 +40,6 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
     let mut toolbar = toolbar.leading(title);
     if let Some(agents) = agents(s, t, layer) {
         toolbar = toolbar.trailing(agents);
-    }
-    if s.worktree().is_some() && s.project().is_some() {
-        toolbar = toolbar.trailing(
-            ui::icon_button(
-                &ui::COMPOSE,
-                "New chat in this worktree",
-                IconButtonVariant::GhostMuted,
-                Size::Default,
-            )
-            .disabled(!s.connected())
-            .on_press_tx(Desktop::create_in_worktree)
-            .build(&t.k)
-            .key("new-chat-in-worktree"),
-        );
     }
     let open = s.changes.pane.is_open();
     toolbar.trailing(metadata(s, t)).trailing(
@@ -186,16 +172,13 @@ fn agents(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     Some(toggle)
 }
 
-/// One subagent in the Agents card: its state, title and how long ago it
-/// last moved.
+/// One subagent in the Agents card: its state mark, title and how long ago
+/// it last moved (the mark already says whether it runs).
 fn agent_row(chat: &ConversationSummary, t: &Theme) -> El {
     let id = chat.id;
     let title = chat_title(chat);
     let (mark, state) = ui::agent_state(chat.status, t);
-    let when = match chat.status {
-        ConversationStatus::Working => state.to_owned(),
-        _ => theme::ago(chat.updated_at).unwrap_or_else(|| state.to_owned()),
-    };
+    let when = theme::ago(chat.updated_at).unwrap_or_else(|| state.to_owned());
     row()
         .key(format!("agent-{id}"))
         .role("link")
@@ -259,13 +242,7 @@ fn title(s: &Desktop, t: &Theme) -> El {
     if s.root == Some(id) {
         return group
             .child(icon(&ui::STAR, ICON).color(t.accent).a11y_hidden())
-            .child(title_text("Orchestrator", t))
-            .child(
-                text("Main agent · memory")
-                    .key("header-orchestrator")
-                    .font(t.small)
-                    .color(t.faint),
-            );
+            .child(title_text("Orchestrator", t));
     }
     let Some(parent) = s
         .summary(id)
@@ -274,27 +251,11 @@ fn title(s: &Desktop, t: &Theme) -> El {
     else {
         return title_text(s.title(id), t);
     };
-    let slash = || text("/").font(t.title).color(t.faint).a11y_hidden();
-    let project = s
-        .summary(parent)
-        .and_then(|chat| chat.project.as_deref())
-        .and_then(|project| s.projects.iter().find(|p| p.id == project));
-    let mut group = group.gap(S4);
-    if let Some(project) = project {
-        group = group
-            .child(
-                text(&project.name)
-                    .key("header-project-crumb")
-                    .font(t.title)
-                    .color(t.faint)
-                    .truncate()
-                    .max_w(META_MAX),
-            )
-            .child(slash());
-    }
+    let slash = text("/").font(t.title).color(t.faint).a11y_hidden();
     group
+        .gap(S4)
         .child(breadcrumb(s, parent, t))
-        .child(slash())
+        .child(slash)
         .child(title_text(s.title(id), t))
 }
 

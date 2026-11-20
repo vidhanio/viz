@@ -274,9 +274,14 @@ fn palette(s: &mut Desktop) {
     palette::preview(s, "newline", hits);
 }
 
+/// The changes panel, after a push failed.
 fn diff(s: &mut Desktop) {
     workspace(s);
     changes::preview(s);
+    s.preview_toast(
+        "Push failed",
+        "remote: Permission to vidhanio/viz.git denied.",
+    );
 }
 
 fn commit(s: &mut Desktop) {
@@ -287,7 +292,7 @@ fn commit(s: &mut Desktop) {
 fn workspace_open(s: &mut Desktop) {
     workspace(s);
     let id = 0;
-    let chat = NewChat::new(id, s.project(), None);
+    let chat = NewChat::new(id, s.project());
     let previous = s.conversations.iter().find_map(|chat| {
         Some(ManagedWorktree {
             path: chat.worktree.clone()?,

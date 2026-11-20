@@ -306,13 +306,19 @@ impl<'a> Outline<'a> {
                 (None, None) => "No project".to_owned(),
             }
         });
-        let marker = chat.worktree.as_ref().map(|path| {
-            icon(&ui::GIT_BRANCH, ICON_SMALL)
-                .key("worktree")
-                .color(t.faint)
-                .help(path)
-                .a11y_hidden()
-        });
+        // A worktree chat's mark, unless its detail line already names the
+        // branch.
+        let marker = chat
+            .worktree
+            .as_ref()
+            .filter(|_| !detail || chat.branch.is_none())
+            .map(|path| {
+                icon(&ui::GIT_BRANCH, ICON_SMALL)
+                    .key("worktree")
+                    .color(t.faint)
+                    .help(path)
+                    .a11y_hidden()
+            });
         let mut node = TreeLine {
             key: &key,
             label: chat_title(chat),

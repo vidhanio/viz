@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use rune::{El, Icon, Key, KeyEvent, ScrollSpec, Span, TextEdit, Tx, col, icon, rich, row, text};
-use rune_kit::{Dialog, Keybind, TextInput};
+use rune_kit::{Keybind, TextInput};
 use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary, SearchHit};
 
 use crate::{
@@ -607,15 +607,21 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .on_key(move |s, ev, tx| on_key(s, ev, tx, &choices))
         .build(&t.k)
         .key(FIELD);
-    Dialog::new("palette", "Command palette")
-        .open(true)
-        .fit()
-        .width(PALETTE_WIDTH)
-        .on_close(close)
-        .child(row().w_full().px(S8).child(field))
-        .child(ui::rule(t))
-        .child(list)
-        .child(ui::rule(t))
-        .child(footer(t))
-        .build(&t.k, layer);
+    // No title row or close button: the field says what this is, and the
+    // footer names Escape.
+    ui::sheet(
+        "palette",
+        "Command palette",
+        PALETTE_WIDTH,
+        close,
+        [
+            row().w_full().px(S8).child(field),
+            ui::rule(t),
+            list,
+            ui::rule(t),
+            footer(t),
+        ],
+        t,
+        layer,
+    );
 }

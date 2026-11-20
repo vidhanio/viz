@@ -14,10 +14,13 @@ const BASE: &str = "workspace-base";
 const HARNESS: &str = "harness";
 const LOCAL: &str = "Current checkout";
 const NEW: &str = "New worktree";
+const WORKTREE: &str = "Worktree";
 
+/// A sent chat's workspace, which can no longer change: the checkout or a
+/// worktree, its path in the tooltip. The branch is the header's.
 pub(super) fn locked(s: &Desktop) -> Option<(&str, &str)> {
-    if let Some((path, branch)) = s.worktree() {
-        return Some((branch.unwrap_or("Detached worktree"), path));
+    if let Some((path, _)) = s.worktree() {
+        return Some((WORKTREE, path));
     }
     let state = s.conversation.as_ref()?;
     state.git.as_ref()?;

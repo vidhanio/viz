@@ -310,10 +310,27 @@ fn legible(c: Color, surfaces: &[Color], dark: bool, min: f32) -> Color {
     at(high)
 }
 
-/// How far (0 to 1) from `from` toward `to` moves Oklab lightness by `step`:
-/// 1 when even `to` doesn't. Washes are this much of `base02`, so they read
-/// alike across schemes whose `base02` sits near or far from `base00`, and in
-/// both appearances.
+/// `top` at opacity `t` over opaque `base`, as the window composites it: in
+/// sRGB-encoded values (`App::srgb_blend`, Rune's default), not linear light.
+/// Linear mixing overstates a light wash on a dark surface and understates a
+/// dark one on a light surface, so washes computed with it came out faint in
+/// dark schemes and heavy in light ones.
+fn over(base: Color, top: Color, t: f32) -> Color {
+    use rune::color::{srgb_decode, srgb_encode};
+    let m =
+        |a: f32, b: f32| srgb_decode((srgb_encode(b) - srgb_encode(a)).mul_add(t, srgb_encode(a)));
+    Color {
+        r: m(base.r, top.r),
+        g: m(base.g, top.g),
+        b: m(base.b, top.b),
+        a: 1.0,
+    }
+}
+
+/// How far (0 to 1) from `from` toward `to`, composited by [`over`], moves
+/// Oklab lightness by `step`: 1 when even `to` doesn't. Washes are this much
+/// of `base02`, so they read alike across schemes whose `base02` sits near or
+/// far from `base00`, and in both appearances.
 fn reach(from: Color, to: Color, step: f32) -> f32 {
     let lightness = |c: Color| c.to_oklab()[0];
     let distance = |c: Color| (lightness(c) - lightness(from)).abs();
@@ -323,7 +340,7 @@ fn reach(from: Color, to: Color, step: f32) -> f32 {
     let (mut low, mut high) = (0.0, 1.0);
     for _ in 0..20 {
         let mid = f32::midpoint(low, high);
-        if distance(from.mix(to, mid)) >= step {
+        if distance(over(from, to, mid)) >= step {
             high = mid;
         } else {
             low = mid;
@@ -387,13 +404,13 @@ impl Theme {
         let hover = tint(0.026);
         let pressed = tint(0.040);
         let selected = tint(0.055);
-        let raised = bg.mix(wash, reach(bg, wash, 0.05));
+        let raised = over(bg, wash, reach(bg, wash, 0.05));
         let surfaces = [
             bg,
             surface,
             raised,
-            bg.mix(interactive, selected.a),
-            surface.mix(interactive, selected.a),
+            over(bg, interactive, selected.a),
+            over(surface, interactive, selected.a),
         ];
         let legible = |c: Color, min: f32| legible(c, &surfaces, dark, min);
         let by_luminance = |x: &Color, y: &Color| x.luminance().total_cmp(&y.luminance());

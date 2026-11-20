@@ -7,7 +7,7 @@ pub use dialog::{
 };
 use rune::{Color, El, ScrollSpec, Tx, col, el, icon, row, text};
 use rune_kit::{
-    ButtonVariant, IconButtonVariant, SegmentedControl,
+    ButtonVariant, SegmentedControl,
     diff::{self, DiffState, DiffView, FoldRow},
     shell::PaneState,
 };
@@ -275,18 +275,6 @@ pub fn view(s: &Desktop, t: &Theme, _layer: &mut Vec<El>) -> El {
     })
     .build(&t.k)
     .key("scope");
-    let close = ui::icon_button(
-        &ui::CLOSE,
-        "Close changes",
-        IconButtonVariant::GhostMuted,
-        Size::Default,
-    )
-    .on_press_tx(|s: &mut Desktop, tx| {
-        s.changes.pane.set_open(false);
-        tx.focus("draft", false);
-    })
-    .build(&t.k)
-    .key("close-changes");
     col()
         .key("changes")
         .w_full()
@@ -294,6 +282,7 @@ pub fn view(s: &Desktop, t: &Theme, _layer: &mut Vec<El>) -> El {
         .min_w(0.0)
         .min_h(0.0)
         .fill(t.bg)
+        // The header's changes toggle closes the panel; no second close here.
         .child(
             row()
                 .key("changes-tabs")
@@ -301,9 +290,7 @@ pub fn view(s: &Desktop, t: &Theme, _layer: &mut Vec<El>) -> El {
                 .h(TOOLBAR_HEIGHT)
                 .px(PANEL_INSET)
                 .center_y()
-                .child(tabs)
-                .child(el().grow(1.0))
-                .child(close),
+                .child(tabs),
         )
         .child(ui::rule(t))
         .children(git_bar(s, t).map(|bar| col().w_full().child(bar).child(ui::rule(t))))

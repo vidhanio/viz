@@ -12,7 +12,7 @@ viz is one person's agent workspace: talk to the orchestrator, run coding agents
 4. **Review and ship.** See what a turn, the worktree or the branch changed; revert a turn; commit, push, open a PR.
 5. **Find things.** Search every chat; jump anywhere from the palette.
 
-Out of scope until a job above needs it: permission prompts, in-app settings forms (config is TOML), terminals, a browser, issue trackers, multi-model fan-out, usage dashboards, themes beyond light and dark.
+Out of scope until a job above needs it: permission prompts, in-app settings forms (config is TOML), terminals, a browser, issue trackers, multi-model fan-out, usage dashboards, a theme editor.
 
 ### Before adding something
 
@@ -32,7 +32,7 @@ Out of scope until a job above needs it: permission prompts, in-app settings for
 
 Everything visual comes from `crates/viz-desktop/src/theme.rs` (tokens) and `crates/viz-desktop/src/ui/` (components). Views compose components; they never set raw sizes, colors or paddings.
 
-- **Tokens:** one semantic palette for both themes, a 4-pt spacing scale, control heights, radii, a type ramp, icon sizes. A new value is a new token, never a literal at a call site.
+- **Tokens:** one semantic palette derived from a base16 scheme per appearance (`desktop.toml` `[theme]`; any scheme must read well), a 4-pt spacing scale, control heights, radii, a type ramp, icon sizes. A new value is a new token, never a literal at a call site.
 - **Icons:** [Lucide](https://lucide.dev) only, at token sizes and one stroke width. Never draw custom icons.
 - **Flat:** surfaces separated by hairlines and fills, not shadows or glow. Overlays get a hairline border. One accent, used for the primary action, focus and selection.
 - **Alignment:** content shares vertical lines: one sidebar inset, one reading column, fixed leading and trailing columns in rows.

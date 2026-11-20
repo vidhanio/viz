@@ -75,16 +75,14 @@ pub struct NewChat {
 }
 
 impl NewChat {
-    pub fn new(id: u64, project: Option<&Project>, workspace: Option<Workspace>) -> Self {
+    pub fn new(id: u64, project: Option<&Project>) -> Self {
         Self {
             id,
             project: project.map(|project| project.id.clone()),
-            workspace: workspace.unwrap_or_else(|| {
-                match project.map(|project| project.default_workspace) {
-                    Some(DefaultWorkspace::Worktree) => Workspace::Worktree { base: None },
-                    _ => Workspace::Local,
-                }
-            }),
+            workspace: match project.map(|project| project.default_workspace) {
+                Some(DefaultWorkspace::Worktree) => Workspace::Worktree { base: None },
+                _ => Workspace::Local,
+            },
             branches: None,
             worktrees: Vec::new(),
             harness: None,
@@ -450,27 +448,16 @@ impl Desktop {
 
     /// Prepares a chat in the current project.
     pub fn create_here(&mut self, tx: &mut Tx) {
-        let chat = NewChat::new(self.next_draft, self.project(), None);
+        let chat = NewChat::new(self.next_draft, self.project());
         self.prepare_chat(chat, tx);
     }
 
     /// Open a draft for a project without creating its backend session.
     pub fn create_in_project(&mut self, id: &str, tx: &mut Tx) {
         if let Some(project) = self.projects.iter().find(|project| project.id == id) {
-            let chat = NewChat::new(self.next_draft, Some(project), None);
+            let chat = NewChat::new(self.next_draft, Some(project));
             self.prepare_chat(chat, tx);
         }
-    }
-
-    pub fn create_in_worktree(&mut self, tx: &mut Tx) {
-        let Some((project, (path, _))) = self.project().zip(self.worktree()) else {
-            return;
-        };
-        let workspace = Workspace::Existing {
-            path: path.to_owned(),
-        };
-        let chat = NewChat::new(self.next_draft, Some(project), Some(workspace));
-        self.prepare_chat(chat, tx);
     }
 
     fn prepare_chat(&mut self, mut chat: NewChat, tx: &mut Tx) {
@@ -756,6 +743,17 @@ impl Desktop {
             self.toasts.remove(0);
         }
         tx.wake_after(TOAST_LIFE);
+    }
+
+    /// A toast that stays, for a preview scene (it has no `Tx` clock).
+    pub fn preview_toast(&mut self, title: &str, detail: &str) {
+        self.toasts.push(Toast {
+            id: self.next_toast,
+            title: title.into(),
+            detail: Some(detail.into()),
+            due: f64::INFINITY,
+        });
+        self.next_toast += 1;
     }
 
     /// Closes a toast early.

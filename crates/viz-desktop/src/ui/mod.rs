@@ -426,6 +426,53 @@ pub fn dialog(key: &str, title: &str, detail: Option<&str>) -> Dialog {
     }
 }
 
+/// A dialog without a title row, for an overlay whose first control says
+/// what it is (the palette's search field): rune-kit's `Dialog` scrim, panel,
+/// outline and dismissal (Escape, a click outside).
+pub fn sheet<S: 'static>(
+    key: &str,
+    label: &str,
+    width: f32,
+    close: impl Fn(&mut S) + 'static,
+    body: impl IntoIterator<Item = El>,
+    t: &Theme,
+    layer: &mut Vec<El>,
+) {
+    let k = &t.k;
+    let panel = k.shadow_layers(&k.elevation.overlay).fold(
+        col()
+            .key(format!("{key}-dialog"))
+            .role("dialog")
+            .label(label)
+            .w_full()
+            .max_w(width)
+            .radius(Size::Default.radius())
+            .fill(k.c.layer_01)
+            .children(body)
+            .token_motion(k.motion.overlay)
+            .modal(true, close),
+        El::box_shadow,
+    );
+    layer.push(
+        el().key(format!("{key}-scrim"))
+            .absolute(0.0, 0.0)
+            .w_full()
+            .h_full()
+            .fill(k.c.scrim)
+            .token_motion(k.motion.overlay)
+            .a11y_hidden(),
+    );
+    layer.push(
+        el().key(format!("{key}-layer"))
+            .absolute(0.0, 0.0)
+            .w_full()
+            .h_full()
+            .padding(DIALOG_INSET)
+            .center()
+            .child(panel),
+    );
+}
+
 /// A dialog's body: its fields, then its actions, at the dialog inset.
 pub fn dialog_body(fields: impl IntoIterator<Item = El>, actions: El) -> El {
     col()
@@ -518,8 +565,6 @@ lucide! {
     ARROW_UP = ArrowUp;
     /// A subagent, and the Agents card.
     BOT = Bot;
-    /// Back to a subagent's parent.
-    CORNER_LEFT_UP = CornerLeftUp;
     CHEVRON = ChevronRight;
     CHEVRON_OPEN = ChevronDown;
     CHEVRON_UP = ChevronUp;

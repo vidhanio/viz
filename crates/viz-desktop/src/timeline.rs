@@ -83,9 +83,6 @@ pub fn timeline(s: &Desktop, t: &Theme) -> El {
             rows: Vec::new(),
             last: None,
         };
-        if let Some(divider) = parent_divider(s, t) {
-            rows.push(Kind::Notice, divider);
-        }
         if thread.before.is_some() {
             rows.push(Kind::Notice, load_earlier(s, t));
         }
@@ -129,44 +126,6 @@ fn load_earlier(s: &Desktop, t: &Theme) -> El {
                 .build(&t.k),
         )
         .child(ui::rule(t).grow(1.0).w(0.0))
-}
-
-/// A subagent's first row: whose it is, and the way back.
-fn parent_divider(s: &Desktop, t: &Theme) -> Option<El> {
-    let parent = s
-        .selected
-        .and_then(|id| s.summary(id))
-        .and_then(|chat| chat.parent)
-        .filter(|parent| s.summary(*parent).is_some())?;
-    let title = s.title(parent).to_owned();
-    Some(
-        row()
-            .key("parent-divider")
-            .role("separator")
-            .label(format!("Subagent of {title}"))
-            .w_full()
-            .gap(S8)
-            .center_y()
-            .child(ui::rule(t).grow(1.0).w(0.0))
-            .child(icon(&ui::BOT, ICON_SMALL).color(t.faint))
-            .child(text("Subagent of").font(t.small).color(t.faint))
-            .child(
-                text(title)
-                    .font(t.small_medium)
-                    .color(t.muted)
-                    .truncate()
-                    .min_w(0.0)
-                    .shrink(),
-            )
-            .child(
-                ui::button("Open parent", ButtonVariant::GhostMuted, Size::Small)
-                    .icon(&ui::CORNER_LEFT_UP)
-                    .on_press_tx(move |s: &mut Desktop, tx| s.select(parent, tx))
-                    .build(&t.k)
-                    .key("open-parent"),
-            )
-            .child(ui::rule(t).grow(1.0).w(0.0)),
-    )
 }
 
 /// `item`, when it spawned a subagent.
@@ -385,7 +344,8 @@ fn empty_state(s: &Desktop, t: &Theme) -> El {
     chat_hint(s, t)
 }
 
-/// An empty chat: where it runs, and the few keys worth knowing.
+/// An empty chat: where it runs (the header carries its branch), and the few
+/// keys that work from here.
 fn chat_hint(s: &Desktop, t: &Theme) -> El {
     let title = s
         .project()
@@ -401,23 +361,13 @@ fn chat_hint(s: &Desktop, t: &Theme) -> El {
     } else {
         ""
     };
-    let mut hint = ui::empty(None, title, status, None, t);
-    if s.new_chat.is_none()
-        && let Some(branch) = s.branch()
-    {
-        hint = hint.child(
-            row()
-                .key("empty-branch")
-                .gap(S4)
-                .center_y()
-                .child(icon(&ui::GIT_BRANCH, ICON_SMALL).color(t.muted))
-                .child(text(branch).font(t.ui).color(t.muted)),
-        );
-    }
-    hint.child(shortcuts(
-        &[("N", "New chat"), ("K", "Commands"), ("D", "Changes")],
-        t,
-    ))
+    // A draft is already the new chat, and has no changes until it's sent.
+    let keys: &[_] = if s.new_chat.is_some() {
+        &[("K", "Commands")]
+    } else {
+        &[("N", "New chat"), ("K", "Commands"), ("D", "Changes")]
+    };
+    ui::empty(None, title, status, None, t).child(shortcuts(keys, t))
 }
 
 fn shortcuts(keys: &[(&str, &str)], t: &Theme) -> El {
@@ -902,7 +852,7 @@ fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         .radius(Size::Default.radius())
         .child(ui::lead(agent.mark(t), t.ui.line_height))
         .child(labels)
-        .children(when.map(|when| text(when).font(t.mono_small).color(t.faint)));
+        .children(when.map(|when| text(when).font(t.small).color(t.faint)));
     if let Some(child) = tool.child {
         link = link
             .hover(t.hover)

@@ -246,7 +246,11 @@ fn main() {
     })
     .init(move || {
         let mut desktop = Desktop::new(commands);
-        desktop.navigation.restore();
+        // Scenes are deterministic: they neither read nor write the saved
+        // sidebar mode and collapsed projects.
+        if !preview {
+            desktop.navigation.restore();
+        }
         // Offscreen snapshots can draw only once, before the frame callback.
         if let Some(dark) = headless_dark {
             desktop.changes.set_dark(dark);

@@ -222,9 +222,11 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
         }))
 }
 
+/// The composer's one primary action: send, or stop while the agent works
+/// (Enter queues then).
 fn send_button(s: &Desktop, t: &Theme) -> El {
     if s.busy() {
-        ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Neutral, Size::Default)
+        ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Submit, Size::Default)
             .shortcut(format!("{}+.", ui::COMMAND_KEY))
             .disabled(!s.connected())
             .on_press_tx(Desktop::abort)
