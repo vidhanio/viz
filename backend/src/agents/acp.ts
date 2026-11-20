@@ -67,10 +67,12 @@ export class AcpProcess {
   readonly #capabilities: acp.AgentCapabilities;
   readonly #connection: acp.ClientConnection;
   #closing = false;
+  readonly agentName: string | undefined;
 
   private constructor(connection: acp.ClientConnection, init: acp.InitializeResponse) {
     this.#connection = connection;
     this.#capabilities = init.agentCapabilities ?? {};
+    this.agentName = init.agentInfo?.name;
   }
 
   /** Spawns the harness and initializes the connection. */
@@ -161,6 +163,13 @@ export class AcpProcess {
 
   newSession(cwd: string, mcpServers: acp.McpServer[]): Promise<acp.NewSessionResponse> {
     return this.#connection.agent.request(acp.methods.agent.session.new, { cwd, mcpServers });
+  }
+
+  async discardSession(sessionId: string): Promise<void> {
+    const capabilities = this.#capabilities.sessionCapabilities;
+    const methods = acp.methods.agent.session;
+    if (capabilities?.delete) await this.#connection.agent.request(methods.delete, { sessionId });
+    else if (capabilities?.close) await this.#connection.agent.request(methods.close, { sessionId });
   }
 
   /** Restores the same session; a successful load has finished sending its history before replying. */

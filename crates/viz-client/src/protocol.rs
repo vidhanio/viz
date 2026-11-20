@@ -78,6 +78,7 @@ methods! {
     RemoveProject<'_> => "project.remove", Empty;
     ListWorktrees<'_> => "worktrees.list", WorktreeList;
     ListHarnesses => "harnesses.list", HarnessList;
+    HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
     // `CreateConversation` owns its initial settings for callers that queue creation.
     CreateConversation => "conversation.create", Created;
@@ -281,6 +282,34 @@ pub struct OptionChoice {
     pub description: Option<String>,
     /// Optional group label.
     pub group: Option<String>,
+    /// Thinking levels reported for this model, if available.
+    pub thinking: Option<DependentOption>,
+}
+
+/// A select setting that depends on the chosen model.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DependentOption {
+    /// Identifier for `conversation.configure`.
+    pub id: String,
+    /// Display label.
+    pub name: String,
+    /// Optional explanation.
+    pub description: Option<String>,
+    /// Default or current value, depending on the surrounding catalog.
+    pub value: OptionValue,
+    /// Available choices.
+    pub choices: Vec<DependentChoice>,
+}
+
+/// A choice in a model-dependent setting.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct DependentChoice {
+    /// Value to send.
+    pub value: String,
+    /// Display label.
+    pub name: String,
+    /// Optional explanation.
+    pub description: Option<String>,
 }
 
 /// A setting offered by the backend or ACP session.
@@ -520,6 +549,22 @@ pub struct ListHarnesses {}
 pub struct HarnessList {
     /// Configured ACP runners.
     pub harnesses: Vec<Harness>,
+}
+
+/// Fetch the runner's options for a model before creating a conversation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct HarnessOptions {
+    /// Configured runner name.
+    pub harness: String,
+    /// Model option value.
+    pub model: String,
+}
+
+/// The runner's options with the requested model selected.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct HarnessOptionsResult {
+    /// Options available for the selected model.
+    pub options: Vec<ConfigOption>,
 }
 
 /// Search a conversation's working directory for files.

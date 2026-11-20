@@ -779,6 +779,16 @@
                       "description": {
                         "type": "string"
                       },
+                      "value": {
+                        "anyOf": [
+                          {
+                            "type": "string"
+                          },
+                          {
+                            "type": "boolean"
+                          }
+                        ]
+                      },
                       "category": {
                         "anyOf": [
                           {
@@ -792,16 +802,6 @@
                       },
                       "type": {
                         "enum": ["select", "boolean"]
-                      },
-                      "value": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "boolean"
-                          }
-                        ]
                       },
                       "choices": {
                         "type": "array",
@@ -819,7 +819,53 @@
                             },
                             "group": {
                               "type": "string",
-                              "description": "Group label"
+                              "description": "Group label, e.g. the model's provider"
+                            },
+                            "thinking": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "description": {
+                                  "type": "string"
+                                },
+                                "value": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "boolean"
+                                    }
+                                  ]
+                                },
+                                "choices": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "object",
+                                    "properties": {
+                                      "value": {
+                                        "type": "string"
+                                      },
+                                      "name": {
+                                        "type": "string"
+                                      },
+                                      "description": {
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["value", "name"],
+                                    "additionalProperties": false
+                                  }
+                                }
+                              },
+                              "required": ["id", "name", "value", "choices"],
+                              "additionalProperties": false,
+                              "description": "Thinking levels reported for this model"
                             }
                           },
                           "required": ["value", "name"],
@@ -827,7 +873,7 @@
                         }
                       }
                     },
-                    "required": ["id", "name", "category", "type", "value", "choices"],
+                    "required": ["id", "name", "value", "category", "type", "choices"],
                     "additionalProperties": false
                   }
                 }
@@ -838,6 +884,140 @@
           }
         },
         "required": ["harnesses"],
+        "additionalProperties": false
+      }
+    },
+    "harnesses.options": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          }
+        },
+        "required": ["harness", "model"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "options": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "boolean"
+                    }
+                  ]
+                },
+                "category": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "description": "model | thought_level | mode | other ACP categories"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": {
+                  "enum": ["select", "boolean"]
+                },
+                "choices": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "value": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "group": {
+                        "type": "string",
+                        "description": "Group label, e.g. the model's provider"
+                      },
+                      "thinking": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "description": {
+                            "type": "string"
+                          },
+                          "value": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "boolean"
+                              }
+                            ]
+                          },
+                          "choices": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "value": {
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "type": "string"
+                                },
+                                "description": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["value", "name"],
+                              "additionalProperties": false
+                            }
+                          }
+                        },
+                        "required": ["id", "name", "value", "choices"],
+                        "additionalProperties": false,
+                        "description": "Thinking levels reported for this model"
+                      }
+                    },
+                    "required": ["value", "name"],
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "required": ["id", "name", "value", "category", "type", "choices"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["options"],
         "additionalProperties": false
       }
     },
@@ -1338,6 +1518,16 @@
                   "description": {
                     "type": "string"
                   },
+                  "value": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "boolean"
+                      }
+                    ]
+                  },
                   "category": {
                     "anyOf": [
                       {
@@ -1351,16 +1541,6 @@
                   },
                   "type": {
                     "enum": ["select", "boolean"]
-                  },
-                  "value": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "boolean"
-                      }
-                    ]
                   },
                   "choices": {
                     "type": "array",
@@ -1378,7 +1558,53 @@
                         },
                         "group": {
                           "type": "string",
-                          "description": "Group label"
+                          "description": "Group label, e.g. the model's provider"
+                        },
+                        "thinking": {
+                          "type": "object",
+                          "properties": {
+                            "id": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "value": {
+                              "anyOf": [
+                                {
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "boolean"
+                                }
+                              ]
+                            },
+                            "choices": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "value": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "description": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["value", "name"],
+                                "additionalProperties": false
+                              }
+                            }
+                          },
+                          "required": ["id", "name", "value", "choices"],
+                          "additionalProperties": false,
+                          "description": "Thinking levels reported for this model"
                         }
                       },
                       "required": ["value", "name"],
@@ -1386,7 +1612,7 @@
                     }
                   }
                 },
-                "required": ["id", "name", "category", "type", "value", "choices"],
+                "required": ["id", "name", "value", "category", "type", "choices"],
                 "additionalProperties": false
               },
               "description": "Empty until the runner's session reports them"

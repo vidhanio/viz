@@ -28,10 +28,11 @@ use crate::{
         AbortConversation, Branches, ClientInfo, CommitResult, ConfigureConversation,
         ConversationId, ConversationSummary, CreateConversation, CreateProject, DeleteConversation,
         DiffFile, EntryPage, GitBranches, GitCheckout, GitCommit, GitDiff, GitPr, GitPush,
-        GitRevert, Harness, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses,
-        ListProjects, ListWorktrees, ManagedWorktree, Method, Notification, PROTOCOL_VERSION,
-        PrResult, Project, RemoveProject, RemoveQueuedInput, SearchConversations, SearchFiles,
-        SearchHit, SubmissionId, Submit, Unwatch, UpdateConversation, UpdateProject, Watch,
+        GitRevert, Harness, HarnessOptions, HarnessOptionsResult, Hello, HelloParams,
+        ListConversations, ListEntries, ListHarnesses, ListProjects, ListWorktrees,
+        ManagedWorktree, Method, Notification, PROTOCOL_VERSION, PrResult, Project, RemoveProject,
+        RemoveQueuedInput, SearchConversations, SearchFiles, SearchHit, SubmissionId, Submit,
+        Unwatch, UpdateConversation, UpdateProject, Watch,
     },
 };
 
@@ -244,6 +245,16 @@ impl Client {
     /// See [`Client::submit`].
     pub async fn list_harnesses(&self) -> Result<Vec<Harness>> {
         Ok(self.request(&ListHarnesses {}).await?.harnesses)
+    }
+
+    /// Fetches the available settings for a model without creating a
+    /// conversation.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::submit`].
+    pub async fn harness_options(&self, params: &HarnessOptions) -> Result<HarnessOptionsResult> {
+        self.request(params).await
     }
 
     /// Finds files in the conversation's working directory.

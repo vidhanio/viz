@@ -27,17 +27,23 @@ import { type Harness as HarnessConfig, resolveSecret } from "../config.ts";
 import { bridgeEnv } from "../mcp/bridge.ts";
 import { McpServer, type McpTool } from "../mcp/server.ts";
 import type { ConfigOption } from "../protocol.ts";
-import { AcpProcess } from "./acp.ts";
+import { AcpProcess, type AcpEvents } from "./acp.ts";
 import { PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
 import {
   AcpStateDoc,
+  catalogOptions,
   defaults,
   type Desired,
+  type HarnessCatalog,
   HarnessOptionsDoc,
+  modelOption,
+  modelProfile,
   normalize,
   type OptionValue,
+  thinkingOption,
   validValue,
 } from "./options.ts";
+import { piMcp } from "./pi-mcp.ts";
 import { ToolContent, ToolReceipts } from "./tool-record.ts";
 
 export type TurnOutcome = { kind: "done"; answer: string; stopReason: StopReason } | { kind: "failed"; error: string };
@@ -72,10 +78,12 @@ type LiveSession = {
   readonly token: string;
   readonly ready: Promise<void>;
   process?: AcpProcess;
+  disposeMcp?: () => void;
   sessionId: string | null;
   options: ConfigOption[];
   openValues?: Desired;
   configuring: Promise<void>;
+  applyingOptions: boolean;
   cancelled: boolean;
   active?: ActiveTurn & { update: (update: SessionUpdate) => void; receipts: ToolReceipts };
 };
@@ -83,9 +91,13 @@ type LiveSession = {
 /** One process per conversation. Callers serialize turns and persist their prompt and terminal state. */
 export class AgentSessions {
   readonly #sessions = new Map<ConversationId, LiveSession>();
+  readonly #probes = new Map<string, Promise<void>>();
+  readonly #piRunners = new Set<string>();
   #mcp!: McpServer<ToolScope>;
   #harness!: Harness;
   #checkpoint!: Checkpoint;
+
+  constructor(private readonly providerName: (id: string) => string | undefined) {}
 
   start(version: string, harness: Harness, tools: readonly McpTool<ToolScope>[], checkpoint: Checkpoint): void {
     this.#checkpoint = checkpoint;
@@ -132,6 +144,7 @@ export class AgentSessions {
     this.#mcp.revoke(live.token);
     live.lifetime.abort(error ?? new Error("ACP session closed"));
     live.process?.close();
+    live.disposeMcp?.();
   }
 
   #session(options: SessionOptions): LiveSession {
@@ -148,6 +161,7 @@ export class AgentSessions {
       sessionId: null,
       options: [],
       configuring: Promise.resolve(),
+      applyingOptions: false,
       cancelled: false,
       ready: Promise.resolve()
         .then(() => this.#open(live))
@@ -172,23 +186,108 @@ export class AgentSessions {
     await this.#session(options).ready;
   }
 
-  async configure(id: ConversationId, option: string, value: OptionValue, context: Context) {
-    await this.#harness.commit(async (tx) => {
-      const doc = await tx.doc(AcpStateDoc, id);
-      const setting = doc.options.find((item) => item.id === option);
-      if (!setting) throw new Error("Option not found");
-      if (!validValue(setting, value)) throw new Error("Invalid option value");
-      doc.desired = { ...doc.desired, [option]: value };
-      setting.value = value;
-    }, context);
-    const live = this.#sessions.get(id);
-    if (!live) return;
+  async configure(session: SessionOptions, id: string, value: OptionValue, context: Context) {
+    const live = this.#session(session);
     const job = live.configuring.then(async () => {
       await live.ready;
-      await this.#saveOptions(live, await this.#setOption(live, option, value));
+      const setting = live.options.find((option) => option.id === id);
+      if (!setting) throw new Error("Option not found");
+      if (!validValue(setting, value)) throw new Error("Invalid option value");
+      const saved = await this.#harness.snapshot(AcpStateDoc, live.id, context);
+      const desired = { ...saved?.desired, [id]: value };
+      live.applyingOptions = true;
+      try {
+        await this.#setOption(live, id, value);
+        if (setting.category === "model") {
+          const thinking = thinkingOption(live.options);
+          if (thinking) {
+            const preferred = Object.hasOwn(desired, thinking.id) ? desired[thinking.id] : live.config.effort;
+            if (preferred !== undefined) await this.#setOption(live, thinking.id, preferred);
+          }
+        }
+      } finally {
+        live.applyingOptions = false;
+        await this.#saveOptions(live, desired);
+      }
     });
     live.configuring = job.catch(() => {});
     await job;
+  }
+
+  async catalog(name: string, config: HarnessConfig, cwd: string, context: Context, model?: string) {
+    let catalog = await this.#catalog(name, context);
+    if (!catalog) {
+      await this.#probeCatalog(name, config, cwd, context);
+      catalog = await this.#catalog(name, context);
+    }
+    if (!catalog) return [];
+    const setting = modelOption(catalog.options);
+    const requested = model ?? config.model;
+    if (requested !== undefined && setting && validValue(setting, requested)) {
+      if (!catalog.profiles.some((profile) => profile.model === requested)) {
+        await this.#probeCatalog(name, config, cwd, context, requested);
+        catalog = (await this.#catalog(name, context)) ?? catalog;
+      }
+    } else if (model !== undefined) throw new Error("Model not available");
+    return catalogOptions(catalog, config, model);
+  }
+
+  async #probeCatalog(name: string, config: HarnessConfig, cwd: string, context: Context, model?: string) {
+    const key = JSON.stringify([name, model]);
+    let pending = this.#probes.get(key);
+    if (pending === undefined) {
+      pending = this.#probe(name, config, cwd, model, context).finally(() => this.#probes.delete(key));
+      this.#probes.set(key, pending);
+    }
+    await awaitWithContext(pending, context);
+  }
+
+  async #catalog(name: string, context: Context) {
+    const saved = await this.#harness.snapshot(HarnessOptionsDoc, ROOT_CONVERSATION_ID, context);
+    return saved?.harnesses.find((catalog) => catalog.name === name);
+  }
+
+  async #probe(name: string, config: HarnessConfig, cwd: string, model: string | undefined, parent: Context) {
+    const context = withAbortSignal(AbortSignal.timeout(15_000), parent);
+    const env = await runnerEnv(config, context);
+    let reported: ConfigOption[] | undefined;
+    const process = await AcpProcess.start(
+      { command: [config.command, ...(config.args ?? [])], cwd, env, signal: context.abortSignal! },
+      {
+        onUpdate: (_id, update) => {
+          if (update.sessionUpdate === "config_option_update")
+            reported = normalize(update.configOptions, this.providerName);
+        },
+        onClose: () => {},
+        log: (line) => console.error(`ACP ${name}: ${line}`),
+      },
+    );
+    if (process.agentName === "pi-acp" && !process.supportsHttpMcp) this.#piRunners.add(name);
+    let sessionId: string | undefined;
+    try {
+      // Stable ACP cannot fetch settings for an inactive model. Ask a disposable, prompt-free session.
+      const response = await awaitWithContext(process.newSession(cwd, []), context);
+      sessionId = response.sessionId;
+      const options = response.configOptions ? normalize(response.configOptions, this.providerName) : (reported ?? []);
+      await this.#harness.commit((tx) => this.#saveHarnessOptions(tx, name, options), context);
+      const setting = modelOption(options);
+      if (model !== undefined && setting?.value !== model) {
+        if (!setting || !validValue(setting, model)) throw new Error("Model not available");
+        reported = undefined;
+        const changed = await awaitWithContext(process.setOption(response.sessionId, setting.id, model), context);
+        const selected = changed.configOptions ? normalize(changed.configOptions, this.providerName) : reported;
+        if (selected) await this.#harness.commit((tx) => this.#saveHarnessOptions(tx, name, selected), context);
+      }
+    } finally {
+      if (sessionId !== undefined) {
+        await awaitWithContext(process.discardSession(sessionId), context).catch((error: unknown) => {
+          if (!context.abortSignal?.aborted) {
+            console.error(`ACP ${name} catalog cleanup:`, error instanceof Error ? error.message : error);
+          }
+        });
+      }
+      process.close();
+    }
   }
 
   async #open(live: LiveSession): Promise<void> {
@@ -205,40 +304,51 @@ export class AgentSessions {
       this.#harness.snapshot(AcpStateDoc, id, context),
     ]);
     const sessionId = session?.sessionId ?? null;
-    const env = Object.fromEntries(
-      await awaitWithContext(
-        Promise.all(Object.entries(config.env ?? {}).map(async ([key, value]) => [key, await resolveSecret(value)])),
-        context,
-      ),
-    );
+    const env = await runnerEnv(config, context);
     const early: [string, SessionUpdate][] = [];
     let opening = true;
-    const process = await AcpProcess.start(
-      { command: [config.command, ...(config.args ?? [])], cwd, env, signal },
-      {
-        onUpdate: (source, update) => {
-          if (opening) {
-            if (update.sessionUpdate === "config_option_update" || update.sessionUpdate === "available_commands_update")
-              early.push([source, update]);
-          } else if (source === live.sessionId && !signal.aborted) {
-            void this.#onUpdate(live, update).catch((error: unknown) => this.#release(live, error));
-          }
-        },
-        onClose: (error) => {
-          if (error) {
-            console.error(`ACP ${name}:`, error.message);
-            this.#release(live, error);
-          }
-        },
-        log: (line) => console.error(`ACP ${name}: ${line}`),
+    const events: AcpEvents = {
+      onUpdate: (source, update) => {
+        if (opening) {
+          if (update.sessionUpdate === "config_option_update" || update.sessionUpdate === "available_commands_update")
+            early.push([source, update]);
+        } else if (source === live.sessionId && !signal.aborted) {
+          void this.#onUpdate(live, update).catch((error: unknown) => this.#release(live, error));
+        }
       },
-    );
+      onClose: (error) => {
+        if (error) {
+          console.error(`ACP ${name}:`, error.message);
+          this.#release(live, error);
+        }
+      },
+      log: (line) => console.error(`ACP ${name}: ${line}`),
+    };
+    const command = [config.command, ...(config.args ?? [])];
+    const start = (env: Record<string, string>) => AcpProcess.start({ command, cwd, env, signal }, events);
+    const startPi = async () => {
+      const injection = await piMcp(this.#mcp.url, live.token, env);
+      if (signal.aborted) {
+        injection.dispose();
+        signal.throwIfAborted();
+      }
+      live.disposeMcp = injection.dispose;
+      return start(injection.env);
+    };
+    let usePiExtension = this.#piRunners.has(name);
+    let process = await (usePiExtension ? startPi() : start(env));
+    if (!usePiExtension && process.agentName === "pi-acp" && !process.supportsHttpMcp) {
+      process.close();
+      this.#piRunners.add(name);
+      usePiExtension = true;
+      process = await startPi();
+    }
     if (signal.aborted) {
       process.close();
       signal.throwIfAborted();
     }
     live.process = process;
-    const mcp = [declaration(process, this.#mcp.url, live.token)];
+    const mcp = usePiExtension ? [] : [declaration(process, this.#mcp.url, live.token)];
     // No transcript sink during restore: session/load replays history.
     let reported: boolean;
     if (sessionId === null) {
@@ -264,57 +374,82 @@ export class AgentSessions {
     const desired = await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, id);
       doc.images = process.supportsImages;
-      doc.desired = {
-        ...(sessionId === null && defaults(config, options)),
-        ...doc.desired,
-      };
+      if (sessionId === null) doc.desired = { ...defaults(config, options), ...doc.desired };
       if (reported) {
         if (live.openValues && !session?.openValues) (await tx.doc(SessionDoc, id)).openValues = live.openValues;
-        await this.#saveHarnessOptions(tx, live, options);
+        await this.#saveHarnessOptions(tx, live.name, options, live.openValues);
       }
       return { ...doc.desired };
     }, context);
     // Model changes can change or reset the runner's available effort choices.
-    const model = options.find((option) => option.category === "model")?.id ?? "model";
-    let configured = false;
-    const apply = async (id: string, value: OptionValue) => {
-      if (await awaitWithContext(this.#setOption(live, id, value), context)) configured = true;
-    };
-    if (Object.hasOwn(desired, model)) await apply(model, desired[model]!);
-    for (const [option, value] of Object.entries(desired)) if (option !== model) await apply(option, value);
-    await this.#saveOptions(live, configured);
+    const model = modelOption(options);
+    let preferred = desired;
+    live.applyingOptions = true;
+    try {
+      if (model && Object.hasOwn(desired, model.id)) await this.#setOption(live, model.id, desired[model.id]!);
+      if (sessionId === null) preferred = { ...defaults(config, live.options), ...desired };
+      for (const [id, value] of Object.entries(preferred)) if (id !== model?.id) await this.#setOption(live, id, value);
+    } finally {
+      live.applyingOptions = false;
+    }
+    await this.#saveOptions(live, preferred);
   }
 
   #refresh(live: LiveSession, { configOptions }: LoadSessionResponse) {
     if (configOptions == null) return false;
-    live.options = normalize(configOptions);
+    live.options = normalize(configOptions, this.providerName);
     return true;
   }
 
-  async #saveHarnessOptions(tx: Tx, live: LiveSession, options: ConfigOption[]) {
-    const configured = defaults(live.config, options);
-    const opened = live.openValues;
-    const catalog = options.map((option) => {
-      const value = Object.hasOwn(configured, option.id)
-        ? configured[option.id]
-        : opened && Object.hasOwn(opened, option.id)
-          ? opened[option.id]
-          : undefined;
-      return value !== undefined && option.value !== value && validValue(option, value) ? { ...option, value } : option;
-    });
+  async #saveHarnessOptions(tx: Tx, name: string, options: ConfigOption[], opened?: Desired) {
     const { harnesses } = await tx.doc(HarnessOptionsDoc, ROOT_CONVERSATION_ID);
-    const previous = harnesses.find(({ name }) => name === live.name);
-    if (previous === undefined) harnesses.push({ name: live.name, options: catalog });
-    else if (JSON.stringify(previous.options) !== JSON.stringify(catalog)) previous.options = catalog;
+    const previous = harnesses.find((catalog) => catalog.name === name);
+    const profile = modelProfile(options, previous?.profiles ?? []);
+    // The catalog has one template for model-independent options; the profile owns model-dependent effort.
+    const catalog = options
+      .filter((option) => !profile || option.category !== "thought_level")
+      .map((option) => {
+        const baseline = previous?.options.find(({ id }) => id === option.id)?.value;
+        const value =
+          baseline !== undefined && validValue(option, baseline)
+            ? baseline
+            : opened && Object.hasOwn(opened, option.id)
+              ? opened[option.id]
+              : undefined;
+        return value !== undefined && option.value !== value && validValue(option, value)
+          ? { ...option, value }
+          : option;
+      });
+    if (!previous) {
+      const entry: HarnessCatalog = { name, options: catalog, profiles: profile ? [profile] : [] };
+      harnesses.push(entry);
+      return;
+    }
+    if (JSON.stringify(previous.options) !== JSON.stringify(catalog)) previous.options = catalog;
+    if (profile) {
+      const index = previous.profiles.findIndex(({ model }) => model === profile.model);
+      if (index < 0) previous.profiles.push(profile);
+      else if (JSON.stringify(previous.profiles[index]) !== JSON.stringify(profile)) previous.profiles[index] = profile;
+    }
   }
 
-  async #saveOptions(live: LiveSession, reported: boolean): Promise<void> {
+  async #saveOptions(live: LiveSession, desired?: Desired): Promise<void> {
     const context = withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT);
     const { options } = live;
     await this.#harness.commit(async (tx) => {
       const doc = await tx.doc(AcpStateDoc, live.id);
       if (JSON.stringify(doc.options) !== JSON.stringify(options)) doc.options = options;
-      if (reported) await this.#saveHarnessOptions(tx, live, options);
+      await this.#saveHarnessOptions(tx, live.name, options, live.openValues);
+      // Retain only settings the runner still offers; persist its actual value if it clamped the request.
+      if (desired !== undefined || !live.applyingOptions) {
+        const requested = desired ?? doc.desired;
+        const reconciled = Object.fromEntries(
+          options
+            .filter((option) => Object.hasOwn(requested, option.id) && validValue(option, option.value))
+            .map(({ id, value }) => [id, value]),
+        );
+        if (JSON.stringify(doc.desired) !== JSON.stringify(reconciled)) doc.desired = reconciled;
+      }
     }, context);
   }
 
@@ -322,7 +457,7 @@ export class AgentSessions {
     switch (update.sessionUpdate) {
       case "config_option_update": {
         const reported = this.#refresh(live, update);
-        if (save) await this.#saveOptions(live, reported);
+        if (save && reported && !live.applyingOptions) await this.#saveOptions(live);
         return reported;
       }
       case "available_commands_update":
@@ -349,9 +484,9 @@ export class AgentSessions {
     if (!live.process || live.sessionId === null) throw new Error("ACP session is closed");
     live.lifetime.signal.throwIfAborted();
     const option = live.options.find((item) => item.id === id);
-    if (!option || option.value === value || !validValue(option, value)) return false;
+    if (!option || option.value === value || !validValue(option, value)) return;
     const response = await live.process.setOption(live.sessionId, id, value);
-    return this.#refresh(live, response);
+    this.#refresh(live, response);
   }
 
   async turn(options: TurnOptions): Promise<TurnOutcome> {
@@ -449,6 +584,13 @@ export class AgentSessions {
     }
     return outcome;
   }
+}
+
+async function runnerEnv(config: HarnessConfig, context: Context): Promise<Record<string, string>> {
+  const env = Object.entries(config.env ?? {});
+  return Object.fromEntries(
+    await awaitWithContext(Promise.all(env.map(async ([key, value]) => [key, await resolveSecret(value)])), context),
+  );
 }
 
 function failure(error: unknown): TurnOutcome {

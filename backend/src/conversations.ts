@@ -11,7 +11,7 @@ import {
 
 import { ChatDoc } from "./agents/chat.ts";
 import { TurnEntry } from "./agents/model.ts";
-import { AcpStateDoc } from "./agents/options.ts";
+import { AcpStateDoc, HarnessOptionsDoc, withModelProfiles } from "./agents/options.ts";
 import { currentBranch } from "./git/commands.ts";
 import type { Git } from "./git/index.ts";
 import { conversationRecords, MetaDoc } from "./projects.ts";
@@ -175,16 +175,18 @@ export class Conversations {
       });
       return { ...base, commands: [], options, queue, attachments: { images } };
     }
-    const [acp, chat] = await Promise.all([
+    const [acp, chat, catalog] = await Promise.all([
       this.harness.snapshot(AcpStateDoc, id, context),
       this.harness.snapshot(ChatDoc, id, context),
+      this.harness.snapshot(HarnessOptionsDoc, this.root, context),
     ]);
+    const profiles = catalog?.harnesses.find(({ name }) => name === info.harness)?.profiles ?? [];
     return {
       ...base,
       attachments: { images: acp?.images ?? false },
       queue: chat?.queue.map(({ submission, text }) => ({ submission, text })) ?? [],
       commands: acp?.commands ?? [],
-      options: acp?.options ?? [],
+      options: withModelProfiles(acp?.options ?? [], profiles),
     };
   }
 

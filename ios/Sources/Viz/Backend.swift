@@ -62,9 +62,18 @@ enum VizProtocol {
     let branch: String?
   }
 
-  enum OptionValue {
+  enum OptionValue: Decodable {
     case string(String)
     case bool(Bool)
+
+    init(from decoder: Decoder) throws {
+      let container = try decoder.singleValueContainer()
+      if let value = try? container.decode(Bool.self) {
+        self = .bool(value)
+      } else {
+        self = .string(try container.decode(String.self))
+      }
+    }
 
     var json: Any {
       switch self {
@@ -72,6 +81,56 @@ enum VizProtocol {
       case .bool(let value): value
       }
     }
+  }
+
+  struct ModelThinking: Decodable {
+    struct Choice: Decodable {
+      let value: String
+      let name: String
+      let description: String?
+    }
+
+    let id: String
+    let name: String
+    let description: String?
+    let value: OptionValue
+    let choices: [Choice]
+  }
+
+  struct ConfigOption: Decodable, Identifiable {
+    enum Kind: String, Decodable {
+      case select, boolean
+    }
+
+    struct Choice: Decodable {
+      let value: String
+      let name: String
+      let description: String?
+      let group: String?
+      let thinking: ModelThinking?
+    }
+
+    let id: String
+    let name: String
+    let description: String?
+    let category: String?
+    let type: Kind
+    let value: OptionValue
+    let choices: [Choice]
+  }
+
+  struct HarnessCatalog: Decodable {
+    struct Harness: Decodable {
+      let name: String
+      let `default`: Bool
+      let options: [ConfigOption]
+    }
+
+    let harnesses: [Harness]
+  }
+
+  struct HarnessOptions: Decodable {
+    let options: [ConfigOption]
   }
 
   enum Workspace {
@@ -215,6 +274,16 @@ final class Backend {
     if let workspace { params["workspace"] = workspace.json }
     let data = try await call("conversation.create", params: params)
     return try JSONDecoder().decode(VizProtocol.Created.self, from: data).conversation
+  }
+
+  func listHarnesses() async throws -> [VizProtocol.HarnessCatalog.Harness] {
+    let data = try await call("harnesses.list", params: [:])
+    return try JSONDecoder().decode(VizProtocol.HarnessCatalog.self, from: data).harnesses
+  }
+
+  func harnessOptions(harness: String, model: String) async throws -> [VizProtocol.ConfigOption] {
+    let data = try await call("harnesses.options", params: ["harness": harness, "model": model])
+    return try JSONDecoder().decode(VizProtocol.HarnessOptions.self, from: data).options
   }
 
   func updateProject(

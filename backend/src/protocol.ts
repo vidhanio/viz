@@ -89,19 +89,33 @@ export type ConversationSummary = Static<typeof ConversationSummary>;
 
 const OptionValue = union([str(), bool()]);
 
+const choiceFields = { value: str(), name: str(), description: opt(str()) };
+const configFields = {
+  id: str(),
+  name: str(),
+  description: opt(str()),
+  value: OptionValue,
+};
+export const ModelThinking = obj(
+  { ...configFields, choices: arr(obj(choiceFields)) },
+  { description: "Thinking levels reported for this model" },
+);
+export type ModelThinking = Static<typeof ModelThinking>;
+
 /**
  * A per-conversation setting shown in the composer. ACP chats take them from the runner's session config options
  * (`category` model, thought_level, mode, ...); the orchestrator has `model` and `thinking`.
  */
 export const ConfigOption = obj({
-  id: str(),
-  name: str(),
-  description: opt(str()),
+  ...configFields,
   category: nullable(str({ description: "model | thought_level | mode | other ACP categories" })),
   type: oneOf(["select", "boolean"]),
-  value: OptionValue,
   choices: arr(
-    obj({ value: str(), name: str(), description: opt(str()), group: opt(str({ description: "Group label" })) }),
+    obj({
+      ...choiceFields,
+      group: opt(str({ description: "Group label, e.g. the model's provider" })),
+      thinking: opt(ModelThinking),
+    }),
   ),
 });
 export type ConfigOption = Static<typeof ConfigOption>;
@@ -261,6 +275,10 @@ export const Methods = {
     result: obj({
       harnesses: arr(obj({ name: str(), default: bool(), options: arr(ConfigOption) })),
     }),
+  },
+  "harnesses.options": {
+    params: obj({ harness: str(), model: str() }),
+    result: obj({ options: arr(ConfigOption) }),
   },
   "files.search": {
     params: obj({

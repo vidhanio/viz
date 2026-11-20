@@ -25,7 +25,6 @@ import { openNodeSqliteStorage } from "@earendil-works/pi-durable/storage/sqlite
 import { CodingTools } from "@earendil-works/pi-durable/tools";
 
 import { ChatDoc, type ChatInput, chatScheduler, withdrawChatInputs } from "./agents/chat.ts";
-import { HarnessOptionsDoc } from "./agents/options.ts";
 import { Runners } from "./agents/runners.ts";
 import { AgentSessions } from "./agents/sessions.ts";
 import { agentTools } from "./agents/tools.ts";
@@ -39,7 +38,7 @@ import { type MemoryBinding, memoryExtension } from "./memory/extension.ts";
 import { type Compactor, Memory } from "./memory/memory.ts";
 import { MEMORY_PROMPT } from "./memory/prompt.ts";
 import { Sync } from "./memory/sync.ts";
-import { modelRef, Orchestrator, orchestratorSettings, SettingsDoc } from "./orchestrator.ts";
+import { modelRef, Orchestrator, orchestratorSettings, orchestratorThinking, SettingsDoc } from "./orchestrator.ts";
 import { orchestratorToolkit, type ToolkitHost } from "./orchestrator-tools.ts";
 import {
   type ChatWorkspace,
@@ -76,6 +75,7 @@ export type VizHarness = {
   createChat(options: Params<"conversation.create">, context: Context): Promise<Conversation>;
   listWorktrees(project: string, context: Context): Promise<Result<"worktrees.list">>;
   listHarnesses(context: Context): Promise<Result<"harnesses.list">>;
+  harnessOptions(harness: string, model: string, context: Context): Promise<Result<"harnesses.options">>;
   updateConversation(
     id: ConversationId,
     options: Omit<Params<"conversation.update">, "conversation">,
@@ -160,7 +160,7 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   const binding: MemoryBinding = {};
   const Memorize = memoryExtension(memory, binding);
   const cwd = resolve(orchestrator.cwd ?? homedir());
-  const sessions = new AgentSessions();
+  const sessions = new AgentSessions((id) => models.getProvider(id)?.name);
   const chats = chatScheduler(runners, sessions, cwd, async (id, directory, temporary, input, context) => {
     const filenames = input.attachments?.map(({ name }) => name).join("\n");
     const name = (
@@ -204,11 +204,12 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
   );
   const root = await harness.root(context, { init: touch });
   const overrides = await harness.snapshot(SettingsDoc, root.id, context);
+  const selectedModel = overrides?.model ?? orchestrator.model;
   // The selected options survive restart; config supplies defaults and host settings.
   await root.configure(
     {
-      model: modelRef(overrides?.model ?? orchestrator.model),
-      thinkingLevel: overrides?.thinking ?? orchestrator.thinking ?? null,
+      model: modelRef(selectedModel),
+      thinkingLevel: orchestratorThinking(models, selectedModel, overrides?.thinking ?? orchestrator.thinking),
       instructions: orchestrator.instructions ?? null,
       cwd,
       extensions: [CodingTools, Memorize, Orchestrator, Toolkit],
@@ -481,15 +482,23 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     search,
     repositories,
     listWorktrees,
-    listHarnesses: async (context) => {
-      const saved = await harness.snapshot(HarnessOptionsDoc, root.id, context);
-      return {
-        harnesses: runners.list().map((runner) => ({
+    listHarnesses: async (context) => ({
+      harnesses: await Promise.all(
+        runners.list().map(async (runner) => ({
           ...runner,
-          options: saved?.harnesses.find(({ name }) => name === runner.name)?.options ?? [],
+          options: await sessions
+            .catalog(runner.name, runners.require(runner.name).config, cwd, context)
+            .catch((error: unknown) => {
+              if (context.abortSignal?.aborted) context.abortSignal.throwIfAborted();
+              console.error(`ACP ${runner.name} catalog:`, error instanceof Error ? error.message : error);
+              return [];
+            }),
         })),
-      };
-    },
+      ),
+    }),
+    harnessOptions: async (name, model, context) => ({
+      options: await sessions.catalog(name, runners.require(name).config, cwd, context, model),
+    }),
     saveAttachments: (attachments) => saveAttachments(dir, attachments),
     removeQueued: (id, submission, context) =>
       harness.commit(async (tx) => {
@@ -539,7 +548,10 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
     },
     configureConversation: async (id, option, value, context) => {
       if (id === root.id) return settings.configure(option, value, context);
-      await sessions.configure(id, option, value, context);
+      const chat = await harness.snapshot(ChatDoc, id, context);
+      if (!chat?.runner) throw new Error("ACP chat has no runner");
+      const { name, cwd } = chat.runner;
+      await sessions.configure({ id, name, cwd, config: runners.require(name).config }, option, value, context);
     },
     removeProject: (id, context) =>
       editProject(async () => {
