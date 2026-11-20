@@ -225,8 +225,8 @@ fn main() {
     let (commands, receiver) = mpsc::unbounded_channel();
     let app = App::new(AppSpec {
         min_size: Some((720.0, 480.0)),
-        fonts: theme::FONTS,
-        families: theme::FAMILIES,
+        fonts: &[],
+        families: theme::families(),
         scenes: scenes::SCENES,
         on_key: Some(on_key),
         poll: Some(poll),

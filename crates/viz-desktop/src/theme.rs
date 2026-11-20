@@ -32,10 +32,25 @@ use serde::Deserialize;
 
 use self::scheme::{DEFAULT_DARK, DEFAULT_LIGHT, Scheme};
 
-/// Inter and IBM Plex Mono, for `AppSpec::fonts`.
-pub const FONTS: &[&[u8]] = rune_theme_opencode::FONTS;
-/// `AppSpec::families`: (sans, mono).
-pub const FAMILIES: (&str, &str) = rune_theme_opencode::FAMILIES;
+/// `AppSpec::families`: the platform's UI fonts, nothing bundled. Sans is the
+/// family the system resolves `system-ui`, else `sans-serif`, to (fontconfig on
+/// Linux, CoreText, DirectWrite), which Rune then loads by name; mono is Rune's
+/// `ui-monospace`: fontconfig's `monospace`, SF Mono, or Cascadia Mono.
+pub fn families() -> (&'static str, &'static str) {
+    use fontique::{Collection, CollectionOptions, GenericFamily};
+
+    let mut system = Collection::new(CollectionOptions {
+        shared: false,
+        system_fonts: true,
+    });
+    let sans = [GenericFamily::SystemUi, GenericFamily::SansSerif]
+        .into_iter()
+        .find_map(|generic| system.generic_families(generic).next())
+        .and_then(|id| system.family_name(id))
+        // Once per launch: `AppSpec` keeps the families for the app's lifetime.
+        .map_or("sans-serif", |name| name.to_owned().leak());
+    (sans, "ui-monospace")
+}
 
 pub const S2: f32 = 2.0;
 pub const S4: f32 = 4.0;
