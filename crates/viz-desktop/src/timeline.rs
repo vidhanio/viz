@@ -136,9 +136,9 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// Older history, between two rules.
 fn load_earlier(s: &Desktop, t: &Theme) -> El {
     let label = if s.history_loading {
-        "loading earlier"
+        "Loading earlier messages…"
     } else {
-        "load earlier"
+        "Load earlier messages"
     };
     row()
         .key("load-earlier")
@@ -412,10 +412,10 @@ fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         Status::Error(_) => {
             return ui::empty(
                 None,
-                "offline",
-                "start viz-backend to reconnect.",
+                "Offline",
+                "Start viz-backend to reconnect.",
                 Some(
-                    ui::button("retry", ButtonVariant::Outline, Size::Default)
+                    ui::button("Retry", ButtonVariant::Outline, Size::Default)
                         .on_press_tx(Desktop::reconnect)
                         .build(&t.k)
                         .key("retry"),
@@ -423,17 +423,17 @@ fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 t,
             );
         }
-        Status::Connecting => return ui::empty(None, "connecting", "", None, t),
+        Status::Connecting => return ui::empty(None, "Connecting…", "", None, t),
         Status::Connected { .. } => {}
     }
     if s.selected.is_none() && s.new_chat.is_none() {
-        return ui::empty(None, "no chat selected", "", None, t);
+        return ui::empty(None, "No chat selected", "", None, t);
     }
     // First run: nothing to chat in yet, so the one action is adding a
     // project; the orchestrator's intro carries it when that's what's open.
     let onboarding = s.projects.is_empty() && s.new_chat.is_none();
     let add_project = || {
-        ui::button("add project", ButtonVariant::Submit, Size::Large)
+        ui::button("Add project", ButtonVariant::Submit, Size::Large)
             .icon(&ui::PLUS)
             .on_press_tx(sidebar::open_add_project)
             .build(&t.k)
@@ -442,22 +442,22 @@ fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     if s.orchestrator_open() {
         let intro = ui::empty(
             Some(icon(&ui::STAR, ICON_LARGE).color(t.accent)),
-            "orchestrator",
-            "remembers across chats and starts agents for you.",
+            "Orchestrator",
+            "Remembers across chats and starts agents for you.",
             onboarding.then(add_project),
             t,
         );
         return if onboarding {
             intro
         } else {
-            intro.child(shortcuts(&[("K", "commands"), ("N", "new chat")], t))
+            intro.child(shortcuts(&[("K", "Commands"), ("N", "New chat")], t))
         };
     }
     if onboarding {
         return ui::empty(
             None,
-            "add a project",
-            "chats run in a project’s folder.",
+            "Add a project",
+            "Chats run in a project’s folder.",
             Some(add_project()),
             t,
         );
@@ -471,9 +471,9 @@ fn chat_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let Some(chat) = &s.new_chat else {
         let title = s
             .project()
-            .map_or("new chat", |project| project.name.as_str());
+            .map_or("New chat", |project| project.name.as_str());
         return ui::empty(None, title, "", None, t)
-            .child(shortcuts(&[("N", "new chat"), ("K", "commands")], t));
+            .child(shortcuts(&[("N", "New chat"), ("K", "Commands")], t));
     };
     let choose_harness = !chat.sending
         && chat.harness.is_none()
@@ -488,14 +488,14 @@ fn chat_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .items_center()
         .child(draft_project(s, chat, t, layer))
         .children(choose_harness.then(|| {
-            text("choose a harness below")
+            text("Choose a harness below.")
                 .font(t.ui)
                 .color(t.muted)
                 .wrap()
                 .align(rune::Align::Center)
         }))
         // A draft is already the new chat.
-        .child(shortcuts(&[("K", "commands")], t))
+        .child(shortcuts(&[("K", "Commands")], t))
 }
 
 /// The `open_picker` value of a draft's project picker.
@@ -508,10 +508,10 @@ fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) ->
     let open = s.open_picker.as_deref() == Some(DRAFT_PROJECT) && !chat.sending;
     let current = s
         .project()
-        .map_or("no project", |project| project.name.as_str());
+        .map_or("No project", |project| project.name.as_str());
     let trigger = ui::select_trigger(
         DRAFT_PROJECT,
-        "project",
+        "Project",
         Some(current),
         open,
         ui::MODEL_TRIGGER_MAX,
@@ -547,7 +547,7 @@ fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) ->
                     }
                 })
         };
-        menu = menu.item(choice("no project", &ui::CHAT, None)).separator();
+        menu = menu.item(choice("No project", &ui::CHAT, None)).separator();
         menu = ui::menu_items(
             menu,
             s.projects
@@ -557,7 +557,7 @@ fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) ->
     }
     let add = ui::icon_button(
         &ui::FOLDER_PLUS,
-        "add project",
+        "Add project",
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
@@ -601,7 +601,7 @@ fn mine(user: &User, t: &Theme) -> El {
         .build(t)
         .key(&user.key)
         .role("article")
-        .label("you");
+        .label("You");
     if !user.text.is_empty() {
         message = message.child(
             text(&user.text)
@@ -860,7 +860,7 @@ fn code_section(label: &'static str, body: &str, t: &Theme) -> El {
 fn diff_sections(tool: &Tool, t: &Theme) -> El {
     col()
         .role("group")
-        .label("changes")
+        .label("Changes")
         .w_full()
         .gap(S8)
         .children(tool.diffs.iter().enumerate().map(|(index, diff)| {
@@ -878,9 +878,9 @@ fn diff_sections(tool: &Tool, t: &Theme) -> El {
             if file.hunks.is_empty() {
                 section = section.child(ui::section(
                     if file.binary {
-                        "binary change"
+                        "Binary change"
                     } else {
-                        "no text changes"
+                        "No text changes"
                     },
                     t,
                 ));
@@ -929,18 +929,18 @@ fn plan(key: &str, steps: &[PlanStep], t: &Theme) -> El {
         .build(t)
         .key(key)
         .role("list")
-        .label("plan")
+        .label("Plan")
         .gap(S4)
-        .child(ui::section("plan", t))
+        .child(ui::section("Plan", t))
         .children(steps.iter().enumerate().map(|(index, step)| {
             let (mark, label) = match step.status {
-                ToolStatus::Done => (icon(&ui::CHECK, ICON).color(t.success), "done"),
-                ToolStatus::Running => (ui::spinner(t), "in progress"),
+                ToolStatus::Done => (icon(&ui::CHECK, ICON).color(t.success), "Done"),
+                ToolStatus::Running => (ui::spinner(t), "In progress"),
                 _ => (
                     el().size(ICON_SMALL - S2, ICON_SMALL - S2)
                         .radius(theme::S2 + HAIRLINE)
                         .border(HAIRLINE, t.faint),
-                    "pending",
+                    "Pending",
                 ),
             };
             row()
@@ -1024,10 +1024,10 @@ impl Agent {
 
     const fn word(self) -> &'static str {
         match self {
-            Self::Working => "working",
-            Self::Done => "done",
-            Self::Failed => "failed",
-            Self::Stopped => "stopped",
+            Self::Working => "Working",
+            Self::Done => "Done",
+            Self::Failed => "Failed",
+            Self::Stopped => "Stopped",
         }
     }
 
@@ -1140,10 +1140,11 @@ fn agent_stack<'a>(
 /// that opens the subagent it names.
 fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
     let verb = match call {
-        Call::Spawn | Call::Message => "messaged",
-        Call::Read => "read",
-        Call::List => "listed subagents",
-        Call::Cancel => "stopped",
+        Call::Spawn => "Started",
+        Call::Message => "Messaged",
+        Call::Read => "Read",
+        Call::List => "Listed subagents",
+        Call::Cancel => "Stopped",
     };
     let name = (call != Call::List).then(|| subagent_title(s, tool).to_owned());
     let failed = tool.status == ToolStatus::Failed;
@@ -1176,7 +1177,7 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
         Some(child) => line
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .help("open the subagent")
+            .help("Open the subagent")
             .hover(t.hover)
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| s.select(child, tx)),
         None => line,
@@ -1193,7 +1194,7 @@ fn divider(key: &str, label: Option<&str>, t: &Theme) -> El {
     row()
         .key(key.to_owned())
         .role("separator")
-        .label(label.unwrap_or("new turn").to_owned())
+        .label(label.unwrap_or("New turn").to_owned())
         .w_full()
         .py(S24)
         .center()

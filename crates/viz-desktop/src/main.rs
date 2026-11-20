@@ -276,7 +276,7 @@ fn main() {
     .on_focus(Desktop::set_focus);
     if let Some(detail) = theme_error {
         app.handle()
-            .update(move |s, tx| s.toast(tx, "invalid desktop configuration", Some(detail)));
+            .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
     }
     // Rune has no resize hook; a drawn frame reports the viewport, and a
     // change re-lays out what depends on it (the composer's selects).

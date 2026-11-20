@@ -23,12 +23,12 @@ pub(super) fn toolbar(
         return (
             bar.gap(S8)
                 .child(ui::lead(ui::spinner(t), Size::Default.height()))
-                .child(ui::section("opening session", t)),
+                .child(ui::section("Opening session…", t)),
             0.0,
         );
     }
     if s.harnesses.is_empty() {
-        return (bar.child(ui::section("no harness configured", t)), 0.0);
+        return (bar.child(ui::section("No harness configured", t)), 0.0);
     }
     if s.harnesses.len() > 1 {
         let (harness, size) = harness(s, chat, t, layer);
@@ -38,7 +38,7 @@ pub(super) fn toolbar(
 }
 
 fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, f32) {
-    let label = "choose harness";
+    let label = "Choose harness";
     let name = chat
         .active_harness(&s.harnesses)
         .map(|runner| runner.name.as_str());
@@ -61,7 +61,7 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
                     .icon(ui::harness_icon(&name))
                     .checked(selected);
                 if harness.default {
-                    item = item.badge("default");
+                    item = item.badge("Default");
                 }
                 item.on_select_tx(move |s: &mut Desktop, tx| {
                     s.open_picker = None;

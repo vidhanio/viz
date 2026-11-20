@@ -285,8 +285,8 @@ impl<'a> Outline<'a> {
             chat.unread.then(|| {
                 ui::dot(t.accent)
                     .role("status")
-                    .label("unread")
-                    .help("unread")
+                    .label("Unread")
+                    .help("Unread")
             })
         });
         let menu = actions::chat_menu(s, chat, &key, t, layer);
@@ -294,7 +294,7 @@ impl<'a> Outline<'a> {
             chat.project
                 .as_deref()
                 .and_then(|id| s.projects.iter().find(|p| p.id == id))
-                .map_or("no project", |project| project.name.as_str())
+                .map_or("No project", |project| project.name.as_str())
         });
         // The runner's mark, in the title's ink.
         let mark = chat.harness.as_deref().map(|harness| {
@@ -323,7 +323,7 @@ impl<'a> Outline<'a> {
         .build(mark, ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
         if chat.unread {
-            node = node.description("unread");
+            node = node.description("Unread");
         }
         if s.connected() {
             node = node.on_secondary_press(move |s: &mut Desktop, at, _| {
@@ -422,7 +422,7 @@ fn open_match(s: &mut Desktop, tx: &mut Tx) {
 pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let tree = conversation_tree(s, t, layer);
     let mut bar = Sidebar::new()
-        .label("workspace")
+        .label("Workspace")
         .inset(0.0)
         .header_gap(S8)
         .header_padding(0.0, 0.0);
@@ -472,7 +472,7 @@ pub const fn preview_projects(s: &mut Desktop) {
 pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
     let add = ui::icon_button(
         &ui::FOLDER_PLUS,
-        "add project",
+        "Add project",
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
@@ -492,7 +492,7 @@ pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
 pub fn new_chat_button(s: &Desktop, t: &Theme) -> El {
     ui::icon_button(
         &ui::COMPOSE,
-        "new chat",
+        "New chat",
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
@@ -519,11 +519,11 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
     let id = root.id;
     let selected = s.selected == Some(id);
     let (detail, color) = match root.status {
-        ConversationStatus::Working => ("working".to_owned(), t.muted),
-        ConversationStatus::Failed => ("last run failed".to_owned(), t.danger),
+        ConversationStatus::Working => ("Working".to_owned(), t.muted),
+        ConversationStatus::Failed => ("Last run failed".to_owned(), t.danger),
         ConversationStatus::Idle => (
             theme::ago(root.updated_at)
-                .map_or_else(|| "idle".to_owned(), |ago| format!("idle · {ago}")),
+                .map_or_else(|| "Idle".to_owned(), |ago| format!("Idle · {ago}")),
             t.faint,
         ),
     };
@@ -532,7 +532,7 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
         row()
             .key("orchestrator")
             .role("link")
-            .label("orchestrator")
+            .label("Orchestrator")
             .description(detail.clone())
             .w_full()
             .h(ORCHESTRATOR_ROW)
@@ -559,7 +559,7 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
                     .shrink()
                     .min_w(0.0)
                     .child(
-                        text("orchestrator")
+                        text("Orchestrator")
                             .font(t.ui_medium)
                             .color(t.text)
                             .a11y_hidden(),
@@ -581,8 +581,8 @@ fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
 fn filter(s: &Desktop, t: &Theme) -> El {
     ui::text_field(
         &s.navigation.filter,
-        "filter chats",
-        "filter chats",
+        "Filter chats",
+        "Filter chats",
         Size::Default,
     )
     .leading_icon(&ui::SEARCH)
@@ -598,11 +598,11 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let mut tree = col()
         .key("conversation-tree")
         .role("tree")
-        .label("conversations")
+        .label("Conversations")
         .w_full();
     if !outline.pinned.is_empty() {
         tree = tree
-            .child(ui::section_row("pinned-heading", "pinned", None, t))
+            .child(ui::section_row("pinned-heading", "Pinned", None, t))
             .children(
                 outline
                     .pinned
@@ -614,9 +614,9 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let show_archived = ui::icon_button(
         &ui::ARCHIVE,
         if archived {
-            "hide archived"
+            "Hide archived chats"
         } else {
-            "show archived"
+            "Show archived chats"
         },
         IconButtonVariant::GhostMuted,
         Size::Small,
@@ -644,7 +644,7 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     );
     if !outline.loose.is_empty() {
         tree = tree
-            .child(ui::section_row("chats-heading", "no project", None, t))
+            .child(ui::section_row("chats-heading", "No project", None, t))
             .children(
                 outline
                     .loose
@@ -675,15 +675,15 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
     row()
         .key("sidebar-mode")
         .role("radiogroup")
-        .label("list chats by")
+        .label("List chats by")
         .w_full()
         .h(theme::TREE_ROW)
         .mt(theme::S12)
         .pl(ROW_INSET)
         .gap(theme::S12)
         .center_y()
-        .child(tab(Mode::Recent, "recent"))
-        .child(tab(Mode::Projects, "projects"))
+        .child(tab(Mode::Recent, "Recent"))
+        .child(tab(Mode::Projects, "Projects"))
         .child(el().grow(1.0).a11y_hidden())
         .child(ui::trailing(None, Some(archived), true))
 }
@@ -693,9 +693,9 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
 /// there's no footer (and no rule above it) then.
 fn footer(s: &Desktop, t: &Theme) -> Option<El> {
     let (color, label) = match &s.status {
-        Status::Connecting => (t.warning, "connecting…"),
+        Status::Connecting => (t.warning, "Connecting…"),
         Status::Connected { .. } => return None,
-        Status::Error(_) => (t.danger, "disconnected"),
+        Status::Error(_) => (t.danger, "Disconnected"),
     };
     let detail = match (&s.status, &s.endpoint) {
         (Status::Error(message), _) => message.clone(),
@@ -732,7 +732,7 @@ fn footer(s: &Desktop, t: &Theme) -> Option<El> {
         );
     if matches!(s.status, Status::Error(_)) {
         footer = footer.child(
-            quiet("retry")
+            quiet("Retry")
                 .on_press_tx(Desktop::reconnect)
                 .build(&t.k)
                 .key("retry"),

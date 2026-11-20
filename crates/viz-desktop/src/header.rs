@@ -155,10 +155,11 @@ fn previous_toggle(count: usize, shown: bool, t: &Theme) -> El {
 /// and effort, never the defaults for that harness.
 pub fn agent_identity(chat: &ConversationSummary, t: &Theme) -> El {
     let label = chat_title(chat);
-    let detail = match (&chat.model, &chat.thinking) {
+    let thinking = chat.thinking.as_deref().map(ui::thinking_label);
+    let detail = match (chat.model.as_deref(), thinking) {
         (Some(model), Some(thinking)) => Some(format!("{model} · {thinking}")),
-        (Some(model), None) => Some(model.clone()),
-        (None, Some(thinking)) => Some(thinking.clone()),
+        (Some(model), None) => Some(model.to_owned()),
+        (None, Some(thinking)) => Some(thinking.into_owned()),
         (None, None) => chat.harness.clone(),
     };
     row()

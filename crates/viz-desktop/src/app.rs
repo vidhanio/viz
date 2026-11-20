@@ -228,8 +228,8 @@ impl Desktop {
                 _ if before == chat.status || watched => continue,
                 // A subagent's end reaches its parent, which notifies in turn.
                 _ if chat.kind == ConversationKind::Subagent => continue,
-                Idle if ran => "finished",
-                Failed if ran => "failed",
+                Idle if ran => "Finished",
+                Failed if ran => "Failed",
                 _ => continue,
             };
             self.send(
@@ -349,10 +349,10 @@ impl Desktop {
     pub fn update_title(&self, tx: &mut Tx) {
         tx.set_title(
             match (&self.status, self.conversation.as_ref().map(|s| s.status)) {
-                (Status::Error(_), _) => "viz — offline",
-                (Status::Connecting, _) => "viz — connecting",
-                (_, Some(ConversationStatus::Working)) => "viz — working",
-                (_, Some(ConversationStatus::Failed)) => "viz — failed",
+                (Status::Error(_), _) => "viz — Offline",
+                (Status::Connecting, _) => "viz — Connecting",
+                (_, Some(ConversationStatus::Working)) => "viz — Working",
+                (_, Some(ConversationStatus::Failed)) => "viz — Failed",
                 _ => "viz",
             },
         );
@@ -391,7 +391,7 @@ impl Desktop {
         if self.commands.send(command).is_ok() {
             return true;
         }
-        self.toast(tx, "offline", None);
+        self.toast(tx, "Offline", None);
         false
     }
 
@@ -632,7 +632,7 @@ impl Desktop {
             }
         }
         if !errors.is_empty() {
-            self.toast(tx, "couldn't attach files", Some(errors.join("\n")));
+            self.toast(tx, "Couldn't attach files", Some(errors.join("\n")));
         }
     }
 
@@ -687,7 +687,7 @@ impl Desktop {
                     Command::Submit(submit) => self.attachments = submit.attachments,
                     _ => unreachable!("only inputs are sent by the composer"),
                 }
-                self.toast(tx, "offline", None);
+                self.toast(tx, "Offline", None);
             }
         }
     }
@@ -718,9 +718,9 @@ impl Desktop {
         self.summary(conversation).map_or_else(
             || {
                 if self.root == Some(conversation) {
-                    "orchestrator"
+                    "Orchestrator"
                 } else {
-                    "new chat"
+                    "New chat"
                 }
             },
             chat_title,
@@ -792,8 +792,8 @@ pub fn chat_title(chat: &ConversationSummary) -> &str {
         return &chat.title;
     }
     match chat.kind {
-        ConversationKind::Orchestrator => "orchestrator",
-        ConversationKind::Chat => "new chat",
-        ConversationKind::Subagent => "subagent",
+        ConversationKind::Orchestrator => "Orchestrator",
+        ConversationKind::Chat => "New chat",
+        ConversationKind::Subagent => "Subagent",
     }
 }

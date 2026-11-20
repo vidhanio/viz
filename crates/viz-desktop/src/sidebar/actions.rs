@@ -70,7 +70,7 @@ pub(super) fn add_project(s: &mut Desktop, tx: &mut Tx) {
     }
     s.navigation.menu = None;
     let options = FileDialogOptions {
-        title: "add project".into(),
+        title: "Add project".into(),
         ..FileDialogOptions::default()
     };
     tx.open_folder(options, |s: &mut Desktop, result, tx| match result {
@@ -83,7 +83,7 @@ pub(super) fn add_project(s: &mut Desktop, tx: &mut Tx) {
         Ok(None) => {}
         Err(error) => s.toast(
             tx,
-            "couldn’t open the folder picker",
+            "Couldn’t open the folder picker",
             Some(error.to_string()),
         ),
     });
@@ -128,22 +128,22 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     let Some(edit) = &s.navigation.edit else {
         return;
     };
-    let field = Some((&s.navigation.value, "name"));
+    let field = Some((&s.navigation.value, "Name"));
     let form = match edit {
         Edit::RenameProject(_) | Edit::RenameChat(_) => DialogForm {
             title: if matches!(edit, Edit::RenameProject(_)) {
-                "rename project"
+                "Rename project"
             } else {
-                "rename chat"
+                "Rename chat"
             },
             subject: None,
             detail: None,
             field,
-            action: "save",
+            action: "Save",
             variant: ButtonVariant::Submit,
         },
         Edit::RemoveProject(id) => DialogForm {
-            title: "remove project?",
+            title: "Remove project?",
             subject: s
                 .projects
                 .iter()
@@ -151,15 +151,15 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
                 .map(|p| p.path.as_str()),
             detail: None,
             field: None,
-            action: "remove project",
+            action: "Remove project",
             variant: ButtonVariant::Danger,
         },
         Edit::DeleteChat(id) => DialogForm {
-            title: "delete chat?",
+            title: "Delete chat?",
             subject: Some(s.title(*id)),
-            detail: Some("its subagents are deleted too. this can't be undone."),
+            detail: Some("This also deletes its subagents. This can’t be undone."),
             field: None,
-            action: "delete",
+            action: "Delete",
             variant: ButtonVariant::Danger,
         },
     };
@@ -190,7 +190,7 @@ fn menu<'a>(s: &'a Desktop, key: &str, t: &Theme) -> (Menu, Option<&'a Context>)
     let target = key.to_owned();
     let trigger = ui::icon_button(
         &ui::MORE,
-        "actions",
+        "Actions",
         IconButtonVariant::GhostMuted,
         Size::Small,
     )
@@ -237,7 +237,7 @@ pub(super) fn chat_menu(
     let id = chat.id;
     let pinned = chat.pinned;
     menu = menu.item(
-        MenuItem::new(if pinned { "unpin" } else { "pin" }).on_select_tx(
+        MenuItem::new(if pinned { "Unpin" } else { "Pin" }).on_select_tx(
             move |s: &mut Desktop, tx| {
                 s.navigation.menu = None;
                 if s.connected() {
@@ -249,7 +249,7 @@ pub(super) fn chat_menu(
     let archived = chat.archived;
     menu = menu
         .item(
-            MenuItem::new("rename").on_select_tx(move |s: &mut Desktop, tx| {
+            MenuItem::new("Rename").on_select_tx(move |s: &mut Desktop, tx| {
                 let title = s
                     .summary(id)
                     .map_or_else(String::new, |chat| chat.title.clone());
@@ -257,7 +257,7 @@ pub(super) fn chat_menu(
             }),
         )
         .item(
-            MenuItem::new(if archived { "unarchive" } else { "archive" }).on_select_tx(
+            MenuItem::new(if archived { "Unarchive" } else { "Archive" }).on_select_tx(
                 move |s: &mut Desktop, tx| {
                     s.navigation.menu = None;
                     s.send(Command::Update(id, ChatChange::Archive(!archived)), tx);
@@ -275,7 +275,7 @@ pub(super) fn chat_menu(
             .map(MenuEntry::item)
             .collect();
         menu = menu.item(
-            MenuItem::new("move to project")
+            MenuItem::new("Move to project")
                 .submenu(destinations, context.moving)
                 .on_select(|s: &mut Desktop| {
                     if let Some(context) = &mut s.navigation.menu {
@@ -285,7 +285,7 @@ pub(super) fn chat_menu(
         );
     }
     menu = menu.separator().item(
-        MenuItem::new("delete")
+        MenuItem::new("Delete")
             .danger(true)
             .on_select_tx(move |s: &mut Desktop, tx| delete_chat(s, id, tx)),
     );
@@ -296,7 +296,7 @@ fn destination(chat: &ConversationSummary, project: Option<&Project>) -> MenuIte
     let id = chat.id;
     let current = chat.project.as_deref() == project.map(|project| project.id.as_str());
     let project_id = project.map(|project| project.id.clone());
-    MenuItem::new(project.map_or("no project", |project| project.name.as_str()))
+    MenuItem::new(project.map_or("No project", |project| project.name.as_str()))
         .checked(current)
         .disabled(current)
         .on_select_tx(move |s: &mut Desktop, tx| {
@@ -326,7 +326,7 @@ pub(super) fn project_menu(
         let name = project.name.clone();
         menu = menu
             .item(
-                MenuItem::new("new chat")
+                MenuItem::new("New chat")
                     .disabled(s.new_chat.is_some())
                     .on_select_tx(move |s: &mut Desktop, tx| {
                         s.navigation.menu = None;
@@ -334,12 +334,12 @@ pub(super) fn project_menu(
                     }),
             )
             .item(
-                MenuItem::new("rename").on_select_tx(move |s: &mut Desktop, tx| {
+                MenuItem::new("Rename").on_select_tx(move |s: &mut Desktop, tx| {
                     open_edit(s, Edit::RenameProject(rename.clone()), &name, tx);
                 }),
             )
             .separator()
-            .item(MenuItem::new("remove project").danger(true).on_select_tx(
+            .item(MenuItem::new("Remove project").danger(true).on_select_tx(
                 move |s: &mut Desktop, tx| {
                     open_edit(s, Edit::RemoveProject(remove.clone()), "", tx);
                 },

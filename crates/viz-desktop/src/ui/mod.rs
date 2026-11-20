@@ -2,6 +2,8 @@
 //! variant and owns its insets; views compose them and add no padding of
 //! their own beyond the layout tokens in `theme`.
 
+use std::borrow::Cow;
+
 use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
 use rune_kit::{
     Button, ButtonVariant, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
@@ -147,9 +149,9 @@ pub fn spinner(t: &Theme) -> El {
 /// success dot when done, a danger dot when it failed.
 pub fn agent_state(status: ConversationStatus, t: &Theme) -> (El, &'static str) {
     match status {
-        ConversationStatus::Working => (spinner(t), "running"),
-        ConversationStatus::Failed => (dot(t.danger), "failed"),
-        ConversationStatus::Idle => (dot(t.success), "done"),
+        ConversationStatus::Working => (spinner(t), "Running"),
+        ConversationStatus::Failed => (dot(t.danger), "Failed"),
+        ConversationStatus::Idle => (dot(t.success), "Done"),
     }
 }
 
@@ -158,8 +160,8 @@ pub fn agent_state(status: ConversationStatus, t: &Theme) -> (El, &'static str) 
 pub fn status(status: ConversationStatus, t: &Theme) -> Option<El> {
     let (mark, label) = match status {
         ConversationStatus::Idle => return None,
-        ConversationStatus::Working => (spinner(t), "working"),
-        ConversationStatus::Failed => (dot(t.danger), "failed"),
+        ConversationStatus::Working => (spinner(t), "Working"),
+        ConversationStatus::Failed => (dot(t.danger), "Failed"),
     };
     Some(
         el().size(ICON, ICON)
@@ -492,7 +494,7 @@ impl<'a> Dialog<'a> {
         }
         // The button's box is a control tall around a title-line glyph: pull
         // it up and out so the glyph sits on the title's line and the inset.
-        let dismiss = icon_button(&CLOSE, "close", IconButtonVariant::Ghost, Size::Small)
+        let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::Ghost, Size::Small)
             .on_press(close.clone())
             .build(&t.k)
             .key("close")
@@ -615,7 +617,7 @@ pub fn toast<S: 'static>(
                 .w_full(),
         );
     }
-    let dismiss = icon_button(&CLOSE, "close", IconButtonVariant::GhostMuted, Size::Small)
+    let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::GhostMuted, Size::Small)
         .on_press(close)
         .build(k)
         .key("close")
@@ -692,7 +694,7 @@ impl DialogForm<'_> {
             .field
             .is_some_and(|(value, _)| value.text.trim().is_empty());
         let actions = dialog_actions([
-            button("cancel", ButtonVariant::Ghost, Size::Default)
+            button("Cancel", ButtonVariant::Ghost, Size::Default)
                 .on_press(close.clone())
                 .build(&t.k),
             button(self.action, self.variant, Size::Default)
@@ -836,11 +838,26 @@ pub fn swap_kit_icon(icon: &Icon) -> Option<&'static Icon> {
     (icon.name == rune_kit::shell::SIDEBAR.name).then_some(&SIDEBAR)
 }
 
-/// `name` as a slug, the way the app shows runner ids and choices:
-/// lowercase, its words joined by `-` (`Extra high` is `extra-high`).
-pub fn slug(name: &str) -> String {
-    name.split_whitespace()
-        .collect::<Vec<_>>()
-        .join("-")
-        .to_lowercase()
+/// Display external labels in sentence case without changing names with
+/// established casing (such as `xAI` or `Use workspace context`).
+pub fn sentence_label(label: &str) -> Cow<'_, str> {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) if first.is_lowercase() && !chars.clone().any(char::is_uppercase) => {
+            Cow::Owned(first.to_uppercase().chain(chars).collect())
+        }
+        _ => Cow::Borrowed(label),
+    }
+}
+
+/// Spell out the extra-high tier even when a runner only reports its ID.
+pub fn thinking_label(label: &str) -> Cow<'_, str> {
+    if ["xhigh", "x-high", "extra-high"]
+        .iter()
+        .any(|id| label.eq_ignore_ascii_case(id))
+    {
+        Cow::Borrowed("Extra high")
+    } else {
+        sentence_label(label)
+    }
 }

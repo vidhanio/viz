@@ -476,7 +476,7 @@ fn overflow(s: &mut Desktop) {
     }
     sidebar::preview_delete(s, CHAT);
     s.preview_toast(
-        "couldn't open /home/vidhanio/Projects/viz/crates/viz-desktop/src/sidebar/actions.rs \
+        "Couldn't open /home/vidhanio/Projects/viz/crates/viz-desktop/src/sidebar/actions.rs \
          for writing",
         "error: failed to write \
          /home/vidhanio/Projects/viz/target/preview/export-markdown-notes-4f1c2a/crates/\
@@ -484,7 +484,7 @@ fn overflow(s: &mut Desktop) {
          directory's owner\nhint: or remove it and start the chat again\nnote: the backend \
          kept the previous version on disk",
     );
-    s.preview_toast("offline", "backend disconnected");
+    s.preview_toast("Offline", "The backend disconnected.");
 }
 
 fn queue(s: &mut Desktop) {

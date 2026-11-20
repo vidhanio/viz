@@ -50,20 +50,20 @@ impl Source {
         let paths = match self {
             // Rune's native file dialog is single-select.
             Self::Picker => rfd::FileDialog::new()
-                .set_title("attach files")
+                .set_title("Attach files")
                 .pick_files()
                 .unwrap_or_default(),
             Self::Files(paths) => paths,
             Self::Clipboard(image) => {
                 if image.png().len() > FILE_LIMIT {
                     return Loaded {
-                        errors: vec!["clipboard image exceeds 20 MiB".into()],
+                        errors: vec!["Clipboard image exceeds 20 MiB".into()],
                         ..Loaded::default()
                     };
                 }
                 return Loaded {
                     attachments: vec![Attachment {
-                        name: "clipboard.png".into(),
+                        name: "Clipboard.png".into(),
                         mime: "image/png".into(),
                         data: STANDARD.encode(image.png()),
                     }],
@@ -150,9 +150,9 @@ pub fn button(s: &Desktop, t: &Theme) -> El {
         .as_ref()
         .is_some_and(|state| state.attachments.images)
     {
-        "attach files or paste an image"
+        "Attach files or paste an image"
     } else {
-        "attach files"
+        "Attach files"
     };
     ui::icon_button(
         &ui::PAPERCLIP,
@@ -185,7 +185,7 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
                     .child(
                         ui::icon_button(
                             &ui::CLOSE,
-                            "remove attachment",
+                            "Remove attachment",
                             IconButtonVariant::GhostMuted,
                             Size::Small,
                         )

@@ -308,7 +308,7 @@ impl Reader {
             }),
             "pi.compaction" => self.items.push(Item::Divider {
                 key: format!("e{id}"),
-                label: Some("earlier context summarized"),
+                label: Some("Earlier context summarized"),
             }),
             "viz.agent.prompt" => {
                 self.acp_turn = Some(id.clone());
@@ -435,8 +435,13 @@ impl Reader {
                         str_at(data, "stopReason").filter(|reason| *reason != "end_turn")
                     {
                         let text = match reason {
-                            "cancelled" => "stopped".to_owned(),
-                            _ => format!("turn ended: {}", reason.replace('_', " ")),
+                            "cancelled" => "Stopped".to_owned(),
+                            "max_tokens" => "Reached the token limit".to_owned(),
+                            "max_turn_requests" => {
+                                "Reached the request limit for this turn".to_owned()
+                            }
+                            "refusal" => "The agent declined to continue".to_owned(),
+                            _ => format!("Turn ended: {}", reason.replace('_', " ")),
                         };
                         self.items.push(Item::Progress { key, text });
                     }
@@ -556,9 +561,9 @@ fn assistant(key: &str, message: &Value, items: &mut Vec<Item>, status: ToolStat
     let notice = match str_at(message, "stopReason") {
         Some("error") => Some(
             str_at(message, "errorMessage")
-                .map_or_else(|| "the model returned an error".to_owned(), str::to_owned),
+                .map_or_else(|| "The model returned an error".to_owned(), str::to_owned),
         ),
-        Some("aborted") => Some("answer aborted".to_owned()),
+        Some("aborted") => Some("Answer aborted".to_owned()),
         _ => None,
     };
     if let Some(text) = notice {
@@ -764,7 +769,7 @@ impl Live {
                 .unwrap_or("unknown")
                 .replace('_', " ");
             let detail = str_at(failure, "detail").map_or_default(|detail| format!(": {detail}"));
-            format!("run ended without an answer ({reason}){detail}")
+            format!("Run ended without an answer ({reason}){detail}")
         });
         Self {
             busy,

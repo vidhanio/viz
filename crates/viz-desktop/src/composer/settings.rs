@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use rune::{El, Tx, row};
 use rune_kit::MenuItem;
 use viz_client::protocol::{ConfigOption, ConversationId, OptionKind, OptionValue};
@@ -98,7 +100,7 @@ fn session_options(
         .filter(|option| role(option) == Role::Mode)
         .collect();
     let extra = options.iter().filter(|option| role(option) == Role::Other);
-    let more = picker_width("more", t) + GAP;
+    let more = picker_width("More", t) + GAP;
     let mut shown = 0;
     for (index, option) in modes.iter().enumerate() {
         let width = picker_width(&value_name(option, target), t) + GAP;
@@ -120,7 +122,7 @@ fn session_options(
         let menu = picker(
             s,
             &key,
-            &option.name.to_lowercase(),
+            &ui::sentence_label(&option.name),
             Some(&value_name(option, target)),
             t,
         );
@@ -133,19 +135,19 @@ fn session_options(
     }
     let mut overflow = folded.iter().copied().chain(extra).peekable();
     if overflow.peek().is_some() {
-        let mut menu = picker(s, "more-options", "more", None, t);
+        let mut menu = picker(s, "more-options", "More", None, t);
         if is_open(s, "more-options") {
             for (index, option) in overflow.enumerate() {
                 if index != 0 {
                     menu = menu.separator();
                 }
-                let name = option.name.to_lowercase();
+                let name = ui::sentence_label(&option.name);
                 let label = if folded.iter().any(|folded| folded.id == option.id) {
-                    format!("{name} · {}", value_name(option, target))
+                    Cow::Owned(format!("{name} · {}", value_name(option, target)))
                 } else {
                     name
                 };
-                menu = add_choices(menu.group_label(&label), target, option);
+                menu = add_choices(menu.group_label(label), target, option);
             }
         }
         bar = bar.child(menu.build(&t.overlay, layer));
@@ -250,17 +252,18 @@ pub(super) fn apply(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: String, valu
     }
 }
 
-/// The option's current value as shown: its choice's name, lowercase.
-fn value_name(option: &ConfigOption, target: Options<'_>) -> String {
+/// The current choice's display name, not its wire value.
+fn value_name<'a>(option: &'a ConfigOption, target: Options<'a>) -> Cow<'a, str> {
     match target.value(option) {
-        OptionValue::Boolean(true) => "on".to_owned(),
-        OptionValue::Boolean(false) => "off".to_owned(),
-        OptionValue::Select(value) => option
-            .choices
-            .iter()
-            .find(|choice| choice.value == *value)
-            .map_or(value, |choice| &choice.name)
-            .to_lowercase(),
+        OptionValue::Boolean(true) => Cow::Borrowed("On"),
+        OptionValue::Boolean(false) => Cow::Borrowed("Off"),
+        OptionValue::Select(value) => ui::sentence_label(
+            option
+                .choices
+                .iter()
+                .find(|choice| choice.value == *value)
+                .map_or(value, |choice| &choice.name),
+        ),
     }
 }
 
@@ -274,7 +277,7 @@ fn add_choices(
             menu.item(choice(
                 target,
                 option,
-                if value { "on" } else { "off" },
+                if value { "On" } else { "Off" },
                 OptionValue::Boolean(value),
             ))
         });
@@ -284,7 +287,7 @@ fn add_choices(
         if group != entry.group.as_deref() {
             group = entry.group.as_deref();
             if let Some(group) = group {
-                menu = menu.group_label(group.to_lowercase());
+                menu = menu.group_label(ui::sentence_label(group));
             }
         }
         // Names only: runners' descriptions (Codex's modes) are long prose that
@@ -292,12 +295,12 @@ fn add_choices(
         menu = menu.item(choice(
             target,
             option,
-            &entry.name.to_lowercase(),
+            &ui::sentence_label(&entry.name),
             OptionValue::Select(entry.value.clone()),
         ));
     }
     if option.choices.is_empty() {
-        menu = menu.item(MenuItem::new("no choices").disabled(true));
+        menu = menu.item(MenuItem::new("No choices available").disabled(true));
     }
     menu
 }

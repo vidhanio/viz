@@ -123,7 +123,7 @@ pub fn spawn(
             Err(e) => {
                 set_status(
                     &ui,
-                    Status::Error(format!("starting the connection thread: {e}")),
+                    Status::Error(format!("Couldn't start the connection thread: {e}")),
                 );
                 _ = first.send(());
             }
@@ -183,7 +183,7 @@ async fn run(
                 match session(ui, connection, &mut commands, &mut selected, &mut first).await {
                     Ended::Quit => return,
                     Ended::Lost(e) => {
-                        toast(ui, "lost the connection to the backend", e.to_string());
+                        toast(ui, "Lost the connection to the backend", e.to_string());
                         e.to_string()
                     }
                 }
@@ -219,19 +219,19 @@ fn offline(
         Command::Create { draft, submit, .. } => {
             ui.update(move |s, tx| {
                 s.restore_first_message(draft, submit);
-                s.toast(tx, "offline", None);
+                s.toast(tx, "Offline", None);
             });
         }
         Command::LoadDraft(id) => ui.update(move |s, _| s.draft_loaded(id)),
         Command::Submit(submit) => {
             ui.update(move |s, tx| {
                 s.restore_message(submit);
-                s.toast(tx, "offline", None);
+                s.toast(tx, "Offline", None);
             });
         }
         Command::SearchFiles { .. } => {}
         Command::SearchConversations { request, .. } => {
-            ui.update(move |s, _| s.palette.set_hits(request, Err("offline".into())));
+            ui.update(move |s, _| s.palette.set_hits(request, Err("Offline".into())));
         }
         Command::LoadEarlier { conversation, .. } => {
             ui.update(move |s, tx| s.loaded_earlier(conversation, None, tx));
@@ -239,7 +239,7 @@ fn offline(
         Command::Attach { target, source } => requests::attach(ui, target, source),
         Command::Notify { title, body } => requests::notify(&title, body),
         Command::Reconnect => return false,
-        _ => toast(ui, "offline", "backend disconnected".into()),
+        _ => toast(ui, "Offline", "Backend disconnected".into()),
     }
     true
 }
@@ -323,7 +323,7 @@ async fn session(
         match result {
             Ok(()) => {}
             Err(Error::Closed) => return Ended::Lost(Error::Closed),
-            Err(e) => toast(ui, "request failed", e.to_string()),
+            Err(e) => toast(ui, "Request failed", e.to_string()),
         }
     }
 }
@@ -452,7 +452,7 @@ impl Session<'_> {
                 }
                 match harnesses {
                     Ok(harnesses) => s.harnesses = harnesses,
-                    Err(error) => s.toast(tx, "couldn't load harnesses", Some(error.to_string())),
+                    Err(error) => s.toast(tx, "Couldn't load harnesses", Some(error.to_string())),
                 }
                 s.draft_loaded(id);
             });
@@ -519,7 +519,7 @@ impl Session<'_> {
                 if let Err(e) = result {
                     // The replica is unusable: start over from a fresh full
                     // value.
-                    toast(self.ui, "view out of sync; reloading", e.to_string());
+                    toast(self.ui, "View out of sync; reloading", e.to_string());
                     self.view = None;
                     self.history = None;
                     self.client.unwatch(conversation).await?;
@@ -621,7 +621,7 @@ impl Session<'_> {
                 .await;
             ui.update(move |s, tx| match result {
                 Ok(result) => s.set_harness_options(&harness, result.options),
-                Err(error) => s.toast(tx, "couldn't load model options", Some(error.to_string())),
+                Err(error) => s.toast(tx, "Couldn't load model options", Some(error.to_string())),
             });
         });
     }
