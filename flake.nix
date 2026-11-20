@@ -93,7 +93,14 @@
             pkgs.fontconfig.bin
           ];
 
-          src = craneLib.cleanCargoSource ./.;
+          # Cargo sources plus the base16 schemes the desktop embeds with `include_str!`.
+          src = lib.fileset.toSource {
+            root = ./.;
+            fileset = lib.fileset.unions [
+              (craneLib.fileset.commonCargoSources ./.)
+              ./crates/viz-desktop/themes
+            ];
+          };
           commonArgs = {
             inherit src;
             strictDeps = true;
