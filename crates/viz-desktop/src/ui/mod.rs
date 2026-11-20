@@ -737,8 +737,8 @@ mark! {
     CODEX = "codex", 24.0;
     /// pi's block mark (`pi.dev/favicon.svg`), inset to Lucide's margin.
     PI = "pi", 700.0;
-    /// oh-my-pi's pi with a plug (`can1357/oh-my-pi` `assets/icon.svg`).
-    OMP = "omp", 100.0;
+    /// oh-my-pi's pi mark (`can1357/oh-my-pi` `packages/collab-web/public/favicon.svg`).
+    OMP = "omp", 52.0;
 }
 
 /// A harness's mark, recognized from its configured name's first word
