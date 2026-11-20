@@ -57,11 +57,14 @@ fn workspace(s: &mut Desktop) {
     })
     .into();
     s.conversations = list();
+    s.conversations
+        .retain(|chat| chat.kind != ConversationKind::Subagent);
     s.show(CHAT);
     s.draft.focused = true;
     s.conversation = Some(conversation());
     s.thread = transcript(&[]);
-    s.toggle("e4");
+    s.toggle("acp-1-write-1-activity");
+    s.toggle("acp-1-write-1");
 }
 
 fn list() -> Vec<ConversationSummary> {
@@ -132,6 +135,12 @@ fn list() -> Vec<ConversationSummary> {
                 let marks = ["claude", "codex", "goose", "omp", "pi", "claude"];
                 marks[usize::try_from(id).unwrap_or_default() % marks.len()].into()
             }),
+            model: match id {
+                20 => Some("GPT-5.5".into()),
+                21 => Some("Claude Opus 4.7".into()),
+                _ => None,
+            },
+            thinking: (kind == Subagent).then(|| "high".into()),
             status,
             archived: false,
             // Minutes ago, newest first by id, so "last activity" reads
@@ -158,6 +167,8 @@ fn conversation() -> ConversationState {
         }],
         queue: Vec::new(),
         attachments: AttachmentCapabilities { images: true },
+        live: None,
+        usage: None,
     }
 }
 
@@ -340,7 +351,6 @@ fn palette(s: &mut Desktop) {
 fn attachments(s: &mut Desktop) {
     workspace(s);
     s.thread = transcript(&["export-before.png", "notes.md"]);
-    s.toggle("e4");
     s.attachments = ["Screenshot 2026-11-18.png", "export.log"]
         .map(|name| Attachment {
             name: name.into(),
@@ -373,10 +383,10 @@ fn orchestrator(s: &mut Desktop) {
     s.conversation = Some(state);
 }
 
-/// A chat that delegated: a running and a finished subagent, one spawned and
-/// one messaged, and the subagent menu open.
+/// A chat that delegated to a running and a finished subagent.
 fn subagents(s: &mut Desktop) {
     workspace(s);
+    s.conversations = list();
     s.thread = Thread::from_view(&json!({
         "entries": [
             {"id":1,"kind":"viz.agent.prompt","data":{"text":"Compare the export against the old CLI, and review line endings."}},
@@ -396,32 +406,45 @@ fn subagents(s: &mut Desktop) {
             }},
         ],
     }));
-    s.toggle("e3-group");
     if let Some(state) = &mut s.conversation {
         state.status = ConversationStatus::Working;
     }
 }
 
-/// The same chat with its Agents card open.
+/// The same chat with its timeline activity expanded.
 fn agents(s: &mut Desktop) {
     subagents(s);
-    s.toggle("agents-previous");
-    s.open_picker = Some("agents".into());
+    s.toggle("acp-1-spawn-1-activity");
 }
 
 /// A subagent's own conversation, under its parent.
 fn subagent(s: &mut Desktop) {
     workspace(s);
+    s.conversations = list();
     s.show(ConversationId(20));
     let mut state = conversation();
     state.status = ConversationStatus::Working;
-    s.conversation = Some(state);
+    state.usage = Some(viz_client::protocol::ContextUsage {
+        used: 34_817,
+        size: 200_000,
+    });
+    state.live = serde_json::from_value(json!({
+        "turn": "1",
+        "text": { "key": "1:0", "kind": "thought", "text": "Run both exporters against the same inputs and compare their output." },
+        "tools": [{
+            "id": "compare", "title": "Compare sample exports", "kind": "execute", "status": "in_progress",
+            "startedAt": now_ms() - 11_000,
+            "input": "{\"command\":\"diff -u old.md new.md\",\"timeout\":30}"
+        }]
+    })).ok();
     s.thread = Thread::from_view(&json!({
         "entries": [
             {"id":1,"kind":"viz.agent.prompt","data":{"text":"Compare the markdown export with the old CLI’s output for the sample notes."}},
-            {"id":2,"kind":"viz.agent.text","data":{"text":"Running both exporters over `samples/` now."}},
+            {"id":2,"kind":"viz.agent.text","data":{"text":"I’ll compare the output for `samples/`."}},
         ],
     }));
+    s.thread.sync_acp(state.live.as_ref());
+    s.conversation = Some(state);
 }
 
 /// The workspace with chats listed under their projects.

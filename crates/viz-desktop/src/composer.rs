@@ -28,7 +28,7 @@ const TOOLBAR_GAP: f32 = S4;
 /// The tallest the queue gets before it scrolls.
 const QUEUE_HEIGHT: f32 = 136.0;
 
-pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
+pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> Option<El> {
     if s.selected.is_none() && s.new_chat.is_none() {
         return None;
     }
@@ -39,7 +39,7 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         column = column.child(queue(s, id, &state.queue, t));
     }
     completion::popup(s, t, layer);
-    let editor = editor(s, t, layer);
+    let editor = editor(s, t, layer, reserve);
     Some(
         ui::reading(column.child(editor))
             .key("composer")
@@ -47,7 +47,7 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     )
 }
 
-fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> El {
     let placeholder = if !s.connected() {
         "offline"
     } else if s.busy() {
@@ -70,7 +70,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .on_submit(Desktop::submit);
     let attach =
         (s.new_chat.is_some() || s.conversation.is_some()).then(|| attachments::button(s, t));
-    let budget = settings_budget(s, attach.is_some());
+    let budget = settings_budget(s, attach.is_some(), reserve);
     let card = Card::Surface
         .frame(t)
         .key("composer-card")
@@ -111,9 +111,9 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// Points the settings selects may take in one toolbar row: the main pane
 /// between the open panes, less the composer's margins and the toolbar's other
 /// items.
-fn settings_budget(s: &Desktop, attach: bool) -> f32 {
+fn settings_budget(s: &Desktop, attach: bool, reserve: f32) -> f32 {
     let button = Size::Default.height();
-    let main = s.window_width - s.sidebar.shown_width();
+    let main = s.window_width - s.sidebar.shown_width() - reserve;
     // Both sides: the reading inset, then the card's border and toolbar inset.
     let card = 2.0f32.mul_add(
         -(HAIRLINE + TOOLBAR_INSET),

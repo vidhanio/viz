@@ -211,7 +211,6 @@ fn menu<'a>(s: &'a Desktop, key: &str, t: &Theme) -> (Menu, Option<&'a Context>)
     .key(format!("{key}-actions"));
     let mut menu = Menu::new(format!("{key}-context"))
         .trigger(trigger)
-        .standard()
         .placement(Placement::BottomEnd)
         .min_width(ui::MENU_WIDTH)
         .open(context.is_some())

@@ -93,7 +93,7 @@
                 },
                 "title": {
                   "type": "string",
-                  "description": "Set by the backend: fixed for the orchestrator, a subagent's task, a chat's first message; empty until known"
+                  "description": "A user rename, an ACP session title, or a title from the first prompt; fixed for the orchestrator"
                 },
                 "kind": {
                   "enum": ["orchestrator", "chat", "subagent"]
@@ -129,6 +129,14 @@
                 },
                 "pinned": {
                   "type": "boolean"
+                },
+                "model": {
+                  "type": "string",
+                  "description": "Display name of the selected model, once the runner or orchestrator reports it"
+                },
+                "thinking": {
+                  "type": "string",
+                  "description": "Display name of the selected thinking level, when the model has one"
                 }
               },
               "required": ["id", "title", "kind", "status", "archived", "updatedAt", "unread", "pinned"],
@@ -1241,9 +1249,168 @@
               "required": ["images"],
               "additionalProperties": false,
               "description": "What attachments the runner accepts; files always go as paths"
+            },
+            "live": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "turn": {
+                      "type": "string",
+                      "description": "EntryId of the turn's viz.agent.prompt entry"
+                    },
+                    "text": {
+                      "type": "object",
+                      "properties": {
+                        "key": {
+                          "type": "string",
+                          "description": "Also `data.key` of the viz.agent.text or viz.agent.thought entry that commits it"
+                        },
+                        "kind": {
+                          "enum": ["text", "thought"]
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["key", "kind", "text"],
+                      "additionalProperties": false
+                    },
+                    "tools": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "string",
+                            "description": "ACP toolCallId; unique within one turn"
+                          },
+                          "title": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string",
+                            "description": "Programmatic tool name, when reported by the runner"
+                          },
+                          "kind": {
+                            "anyOf": [
+                              {
+                                "type": "string",
+                                "description": "ACP ToolKind: read | edit | execute | search | fetch | think | other ..."
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "status": {
+                            "enum": ["pending", "in_progress", "completed", "failed"]
+                          },
+                          "viz": {
+                            "type": "string",
+                            "description": "The viz tool this call ran, when it was one"
+                          },
+                          "child": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "description": "pi-durable ConversationId"
+                          },
+                          "startedAt": {
+                            "type": "integer",
+                            "description": "Unix milliseconds when viz first observed the call running"
+                          },
+                          "input": {
+                            "type": "string",
+                            "description": "Raw input: a string as sent, else JSON (fields such as command, path, timeout)"
+                          },
+                          "output": {
+                            "type": "string",
+                            "description": "ACP text content, else readable raw output"
+                          },
+                          "diffs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "path": {
+                                  "type": "string"
+                                },
+                                "oldText": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "newText": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["path", "oldText", "newText"],
+                              "additionalProperties": false
+                            }
+                          },
+                          "locations": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": ["id", "title", "kind", "status"],
+                        "additionalProperties": false
+                      },
+                      "description": "Unfinished tool calls, in the order they started"
+                    }
+                  },
+                  "required": ["turn", "tools"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "An ACP turn's in-progress text and tools; null when none runs"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "used": {
+                      "type": "integer",
+                      "description": "Tokens in context"
+                    },
+                    "size": {
+                      "type": "integer",
+                      "description": "Context window in tokens"
+                    }
+                  },
+                  "required": ["used", "size"],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The ACP runner's last usage_update; null until it sends one"
             }
           },
-          "required": ["status", "harness", "project", "cwd", "options", "commands", "queue", "attachments"],
+          "required": [
+            "status",
+            "harness",
+            "project",
+            "cwd",
+            "options",
+            "commands",
+            "queue",
+            "attachments",
+            "live",
+            "usage"
+          ],
           "additionalProperties": false
         }
       },

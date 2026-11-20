@@ -57,8 +57,7 @@ const Status = oneOf(["idle", "working", "failed"], { description: "working: a t
 export const ConversationSummary = obj({
   id: ConversationId,
   title: str({
-    description:
-      "Set by the backend: fixed for the orchestrator, a subagent's task, a chat's first message; empty until known",
+    description: "A user rename, an ACP session title, or a title from the first prompt; fixed for the orchestrator",
   }),
   kind: oneOf(["orchestrator", "chat", "subagent"]),
   parent: opt(int({ minimum: 1, description: "For a subagent: the conversation that started it" })),
@@ -69,6 +68,8 @@ export const ConversationSummary = obj({
   updatedAt: int({ description: "Unix milliseconds of the last input or turn end; 0 when unknown" }),
   unread: bool({ description: "A turn ended while no app watched the conversation; watching clears it" }),
   pinned: bool(),
+  model: opt(str({ description: "Display name of the selected model, once the runner or orchestrator reports it" })),
+  thinking: opt(str({ description: "Display name of the selected thinking level, when the model has one" })),
 });
 export type ConversationSummary = Static<typeof ConversationSummary>;
 
@@ -113,6 +114,39 @@ export const Attachment = obj({
 });
 export type Attachment = Static<typeof Attachment>;
 
+/** An ACP tool call: the data of a `viz.agent.tool` entry, or an unfinished call in `LiveTurn.tools`. */
+export const ToolRecord = obj({
+  id: str({ description: "ACP toolCallId; unique within one turn" }),
+  title: str(),
+  name: opt(str({ description: "Programmatic tool name, when reported by the runner" })),
+  kind: nullable(str({ description: "ACP ToolKind: read | edit | execute | search | fetch | think | other ..." })),
+  status: oneOf(["pending", "in_progress", "completed", "failed"]),
+  viz: opt(str({ description: "The viz tool this call ran, when it was one" })),
+  child: opt(ConversationId),
+  startedAt: opt(int({ description: "Unix milliseconds when viz first observed the call running" })),
+  input: opt(str({ description: "Raw input: a string as sent, else JSON (fields such as command, path, timeout)" })),
+  output: opt(str({ description: "ACP text content, else readable raw output" })),
+  diffs: opt(arr(obj({ path: str(), oldText: nullable(str()), newText: str() }))),
+  locations: opt(arr(str())),
+});
+export type ToolRecord = Static<typeof ToolRecord>;
+
+/**
+ * The running ACP turn's uncommitted tail, cleared by the commit that appends it as entries or ends the turn. Live text
+ * comes before live tools, the order they will be committed in.
+ */
+export const LiveTurn = obj({
+  turn: str({ description: "EntryId of the turn's viz.agent.prompt entry" }),
+  text: opt(
+    obj({
+      key: str({ description: "Also `data.key` of the viz.agent.text or viz.agent.thought entry that commits it" }),
+      kind: oneOf(["text", "thought"]),
+      text: str(),
+    }),
+  ),
+  tools: arr(ToolRecord, { description: "Unfinished tool calls, in the order they started" }),
+});
+
 /** viz's own per-conversation state, beside pi-durable's view. Sent whole on every change. */
 export const ConversationState = obj({
   status: Status,
@@ -127,6 +161,11 @@ export const ConversationState = obj({
   attachments: obj(
     { images: bool({ description: "The runner takes image prompts" }) },
     { description: "What attachments the runner accepts; files always go as paths" },
+  ),
+  live: nullable(LiveTurn, { description: "An ACP turn's in-progress text and tools; null when none runs" }),
+  usage: nullable(
+    obj({ used: int({ description: "Tokens in context" }), size: int({ description: "Context window in tokens" }) }),
+    { description: "The ACP runner's last usage_update; null until it sends one" },
   ),
 });
 export type ConversationState = Static<typeof ConversationState>;

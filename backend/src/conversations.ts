@@ -10,8 +10,8 @@ import {
 } from "@earendil-works/pi-durable";
 
 import { ChatDoc } from "./agents/chat.ts";
-import { TurnEntry } from "./agents/model.ts";
-import { AcpStateDoc, HarnessOptionsDoc, withModelProfiles } from "./agents/options.ts";
+import { LiveTurnDoc, TurnEntry } from "./agents/model.ts";
+import { AcpStateDoc, HarnessOptionsDoc, modelOption, thinkingOption, withModelProfiles } from "./agents/options.ts";
 import { conversationRecords, MetaDoc } from "./projects.ts";
 import type { ConfigOption, ConversationState, ConversationSummary } from "./protocol.ts";
 import { ORCHESTRATOR_TITLE, TitleDoc } from "./titles.ts";
@@ -108,10 +108,13 @@ export class Conversations {
 
   async summary(record: ConversationRecord, context: Context): Promise<ConversationSummary> {
     const info = await this.#info(record, context);
-    const title =
-      record.id === this.root
-        ? ORCHESTRATOR_TITLE
-        : ((await this.harness.snapshot(TitleDoc, record.id, context))?.title ?? "");
+    const root = record.id === this.root;
+    const [title, options] = await Promise.all([
+      root ? ORCHESTRATOR_TITLE : this.harness.snapshot(TitleDoc, record.id, context).then((doc) => doc?.title ?? ""),
+      root
+        ? this.rootOptions(context)
+        : this.harness.snapshot(AcpStateDoc, record.id, context).then((doc) => doc?.options ?? []),
+    ]);
     return {
       id: record.id,
       title,
@@ -125,6 +128,7 @@ export class Conversations {
       pinned: (record.id !== this.root && info.meta?.pinned) || false,
       unread: info.meta?.unread ?? false,
       updatedAt: info.meta?.updatedAt ?? 0,
+      ...selection(options),
     };
   }
 
@@ -155,12 +159,13 @@ export class Conversations {
               : item.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("");
         return [{ submission: item.id, text }];
       });
-      return { ...base, commands: [], options, queue, attachments: { images } };
+      return { ...base, commands: [], options, queue, attachments: { images }, live: null, usage: null };
     }
-    const [acp, chat, catalog] = await Promise.all([
+    const [acp, chat, catalog, live] = await Promise.all([
       this.harness.snapshot(AcpStateDoc, id, context),
       this.harness.snapshot(ChatDoc, id, context),
       this.harness.snapshot(HarnessOptionsDoc, this.root, context),
+      this.harness.snapshot(LiveTurnDoc, id, context),
     ]);
     const profiles = catalog?.harnesses.find(({ name }) => name === info.harness)?.profiles ?? [];
     return {
@@ -169,6 +174,9 @@ export class Conversations {
       queue: chat?.queue.map(({ submission, text }) => ({ submission, text })) ?? [],
       commands: acp?.commands ?? [],
       options: withModelProfiles(acp?.options ?? [], profiles),
+      live:
+        live?.turn === undefined ? null : { turn: live.turn, ...(live.text && { text: live.text }), tools: live.tools },
+      usage: acp?.usage ?? null,
     };
   }
 
@@ -178,4 +186,15 @@ export class Conversations {
     if (!chat?.runner) throw new Error("ACP chat has no runner");
     return chat.runner.cwd;
   }
+}
+
+/** Display names of the selected model and thinking level, when the options report them. */
+function selection(options: ConfigOption[]): { model?: string; thinking?: string } {
+  const label = (option: ConfigOption | undefined) =>
+    option?.type === "select"
+      ? (option.choices.find(({ value }) => value === option.value)?.name ?? String(option.value))
+      : undefined;
+  const model = label(modelOption(options));
+  const thinking = label(thinkingOption(options));
+  return { ...(model && { model }), ...(thinking && { thinking }) };
 }

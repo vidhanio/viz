@@ -2,8 +2,32 @@ import type { ToolCallUpdate } from "@agentclientprotocol/sdk";
 
 import type { ToolRecord } from "./model.ts";
 
+/** Structured input stays JSON, so clients can read fields such as `command`, `path`, or `timeout`. */
 export function inputText(value: unknown): string | undefined {
-  return JSON.stringify(value, null, 2)?.slice(0, 4000);
+  return (typeof value === "string" ? value : JSON.stringify(value, null, 2))?.slice(0, 4000);
+}
+
+const OUTPUT_FIELDS = ["formatted_output", "aggregated_output", "output", "content", "text", "result"] as const;
+
+/**
+ * Readable text from ACP `rawOutput`, whose shape is runner-specific: a string, text content blocks, a known text field,
+ * or `stdout`/`stderr`; anything else as JSON.
+ */
+function rawText(value: unknown, depth = 0): string | undefined {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || depth > 2) return undefined;
+  if (Array.isArray(value)) {
+    const parts = value.map((item) => rawText(item, depth + 1));
+    return parts.every((part) => part !== undefined) ? parts.join("\n") : undefined;
+  }
+  const record = value as Record<string, unknown>;
+  for (const field of OUTPUT_FIELDS) {
+    const text = rawText(record[field], depth + 1);
+    if (text) return text;
+  }
+  const streams = [record.stdout, record.stderr].filter((item): item is string => typeof item === "string" && !!item);
+  return streams.length ? streams.join("\n") : undefined;
 }
 
 /** ACP and MCP do not share call IDs. Correlate the response itself, not names, titles, or request order. */
@@ -44,11 +68,17 @@ export class ToolContent {
   update(update: ToolCallUpdate, receipts: ToolReceipts): ToolRecord {
     const record = this.record;
     record.title = update.title ?? record.title;
+    if (update.name != null) record.name = update.name;
     record.kind = update.kind ?? record.kind;
     record.status = update.status ?? record.status;
-    if (update.rawInput !== undefined) record.input = inputText(update.rawInput)!;
-    if (update.rawOutput !== undefined) {
-      const raw = typeof update.rawOutput === "string" ? update.rawOutput : JSON.stringify(update.rawOutput, null, 2);
+    if (record.status === "in_progress") record.startedAt ??= Date.now();
+    if (update.rawInput != null) {
+      const input = inputText(update.rawInput);
+      if (input) record.input = input;
+      else delete record.input;
+    }
+    if (update.rawOutput != null) {
+      const raw = rawText(update.rawOutput, 0) ?? JSON.stringify(update.rawOutput, null, 2) ?? "";
       this.#rawOutput = receipts.strip(raw, record).slice(0, 8000);
     }
     if (update.content) {
@@ -76,10 +106,14 @@ export class ToolContent {
       if (update.locations.length) record.locations = [...new Set(update.locations.map(({ path }) => path))];
       else delete record.locations;
     }
-    const text = this.#contentText;
-    const raw = this.#rawOutput;
-    if (text && raw && text !== raw) record.output = `${text}\n${raw}`.slice(0, 8000);
-    else if (text || raw) record.output = text || raw;
+    // ACP content is the display text; raw output is runner metadata, shown only when there is no content.
+    let output = this.#contentText || this.#rawOutput.trim();
+    // omp's execute content starts with an echo of its `$ …` title, even before stdout exists.
+    if (record.kind === "execute" && record.title.startsWith("$ ")) {
+      if (output === record.title) output = "";
+      else if (output.startsWith(`${record.title}\n`)) output = output.slice(record.title.length + 1);
+    }
+    if (output) record.output = output;
     else delete record.output;
     return record;
   }

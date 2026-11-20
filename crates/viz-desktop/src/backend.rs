@@ -535,7 +535,7 @@ impl Session<'_> {
             .as_ref()
             .map_or_else(|| Thread::from_view(view), |history| history.thread(view));
         self.ui
-            .update(move |s, _| s.set_thread(conversation, thread));
+            .update(move |s, tx| s.set_thread(conversation, thread, tx));
         Ok(())
     }
 

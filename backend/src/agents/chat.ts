@@ -22,7 +22,7 @@ import { TitleDoc, titleFrom } from "../titles.ts";
 import { PromptEntry, TurnEntry } from "./model.ts";
 import { AcpStateDoc, type Desired } from "./options.ts";
 import type { Runners } from "./runners.ts";
-import type { AgentSessions, TurnOutcome } from "./sessions.ts";
+import { type AgentSessions, clearLiveTurn, type TurnOutcome } from "./sessions.ts";
 
 export type ChatInput = {
   readonly text: string;
@@ -106,7 +106,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
       prompt: async (task, runtime, context) => {
         const id = runtime.conversationId;
         const { item } = task.state.checkpoint;
-        const claim: { runner?: { name: string; cwd: string } } = {};
+        const claim: { runner?: { name: string; cwd: string; turn: string } } = {};
         let outcome: TurnOutcome;
         try {
           // Claim before making external calls. A rerun may recover the queue but must never resend a claimed prompt.
@@ -118,14 +118,14 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
             const placed = await tx.submission(item.submission);
             if (placed?.status !== "placed" || !placed.entry) throw new Error("ACP prompt is not placed");
             chat.dispatched = true;
-            claim.runner = { name: runner.name, cwd: runner.cwd };
+            claim.runner = { name: runner.name, cwd: runner.cwd, turn: String(placed.entry) };
           }, context);
           const active = claim.runner;
           if (active === undefined) {
             sessions.forget(id);
             outcome = { kind: "failed", error: "viz was interrupted during the ACP turn; the prompt was not resent" };
           } else {
-            const { name, cwd } = active;
+            const { name, cwd, turn } = active;
             const { config } = runners.require(name);
             outcome = await sessions.turn({
               id,
@@ -133,6 +133,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
               config,
               cwd,
               text: item.content,
+              turn,
               ...(item.attachments && { attachments: item.attachments }),
               context,
               commit: (write) =>
@@ -150,6 +151,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
           chat.dispatched = false;
           delete chat.setupFailed;
           await touch(tx, id);
+          await clearLiveTurn(tx, id);
           const answer = await tx.appendEntry(TurnEntry, id, {
             data:
               outcome.kind === "done"
@@ -181,6 +183,7 @@ export function chatScheduler(runners: Runners, sessions: AgentSessions, cwd: st
         chat.dispatched = false;
         delete chat.setupFailed;
         await touch(tx, id);
+        await clearLiveTurn(tx, id);
         const checkpoint = task.state.checkpoint;
         if (checkpoint.phase === "prompt") {
           await tx.appendEntry(TurnEntry, id, { data: { stopReason: "cancelled", error: null } });

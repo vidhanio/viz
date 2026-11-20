@@ -176,8 +176,8 @@ pub enum ConversationKind {
 pub struct ConversationSummary {
     /// Its id.
     pub id: ConversationId,
-    /// Set by the backend: fixed for the orchestrator, a subagent's task, a
-    /// chat's first message; empty until known.
+    /// A user rename, an ACP session title, or a title from the first prompt;
+    /// fixed for the orchestrator.
     pub title: String,
     /// What it is.
     pub kind: ConversationKind,
@@ -199,6 +199,10 @@ pub struct ConversationSummary {
     pub unread: bool,
     /// Show the conversation in the pinned section.
     pub pinned: bool,
+    /// Display name of the selected model, once reported.
+    pub model: Option<String>,
+    /// Display name of the selected thinking level, when the model has one.
+    pub thinking: Option<String>,
 }
 
 /// `conversation.create` params.
@@ -346,6 +350,111 @@ pub struct ConversationState {
     pub queue: Vec<QueuedInput>,
     /// What kind of attachment the current runner accepts directly.
     pub attachments: AttachmentCapabilities,
+    /// An ACP turn's in-progress text and tools; `None` when none runs.
+    pub live: Option<LiveTurn>,
+    /// The ACP runner's last context usage report, if any.
+    pub usage: Option<ContextUsage>,
+}
+
+/// The running ACP turn's uncommitted tail. The commit that appends it as
+/// entries, or ends the turn, clears it; its text comes before its tools.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LiveTurn {
+    /// Entry id of the turn's `viz.agent.prompt` entry, as a string.
+    pub turn: String,
+    /// The text run being streamed, if any.
+    pub text: Option<LiveText>,
+    /// Unfinished tool calls, in the order they started.
+    pub tools: Vec<ToolRecord>,
+}
+
+/// A streamed text run.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct LiveText {
+    /// Stable key; also `data.key` of the entry that commits this run.
+    pub key: String,
+    /// Prose or thinking.
+    pub kind: LiveTextKind,
+    /// The text so far.
+    pub text: String,
+}
+
+/// What a [`LiveText`] run is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LiveTextKind {
+    /// Agent prose.
+    Text,
+    /// Agent thinking.
+    Thought,
+}
+
+/// An ACP tool call: the data of a `viz.agent.tool` entry, or an unfinished
+/// call in [`LiveTurn::tools`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRecord {
+    /// ACP tool call id; unique within one turn.
+    pub id: String,
+    /// Display title.
+    pub title: String,
+    /// Programmatic tool name, when reported by the runner.
+    pub name: Option<String>,
+    /// ACP tool kind, such as `execute` or `edit`.
+    pub kind: Option<String>,
+    /// Progress of the call.
+    pub status: ToolCallStatus,
+    /// The viz tool this call ran, if it was one.
+    pub viz: Option<String>,
+    /// The conversation the call started, if any.
+    pub child: Option<ConversationId>,
+    /// Unix milliseconds when viz first observed the call running.
+    pub started_at: Option<i64>,
+    /// Raw input: a string as sent, else JSON.
+    pub input: Option<String>,
+    /// ACP text content, else readable raw output.
+    pub output: Option<String>,
+    /// File changes.
+    #[serde(default)]
+    pub diffs: Vec<ToolDiff>,
+    /// Paths the call touched.
+    #[serde(default)]
+    pub locations: Vec<String>,
+}
+
+/// Progress of an ACP tool call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolCallStatus {
+    /// Not started.
+    Pending,
+    /// Running.
+    InProgress,
+    /// Finished successfully.
+    Completed,
+    /// Finished with an error.
+    Failed,
+}
+
+/// One file change of a tool call.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolDiff {
+    /// Changed file.
+    pub path: String,
+    /// Previous content; `None` for a new file.
+    pub old_text: Option<String>,
+    /// New content.
+    pub new_text: String,
+}
+
+/// Context window usage reported by an ACP runner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub struct ContextUsage {
+    /// Tokens currently in context.
+    pub used: u64,
+    /// Context window size in tokens.
+    pub size: u64,
 }
 
 /// A working directory shared by a group of chats.

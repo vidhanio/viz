@@ -422,9 +422,10 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
     let (glyph, title) = match result {
         ResultRow::Command(command) => (command.glyph(), command.label(s)),
         ResultRow::Chat(chat) if s.root == Some(chat.id) => (&ui::STAR, chat_title(chat)),
-        ResultRow::Chat(chat) if chat.kind == ConversationKind::Subagent => {
-            (&ui::BOT, chat_title(chat))
-        }
+        ResultRow::Chat(chat) if chat.kind == ConversationKind::Subagent => (
+            chat.harness.as_deref().map_or(&ui::AGENT, ui::harness_icon),
+            chat_title(chat),
+        ),
         ResultRow::Chat(chat) => (
             chat.harness.as_deref().map_or(&ui::CHAT, ui::harness_icon),
             chat_title(chat),

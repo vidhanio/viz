@@ -22,8 +22,9 @@ Out of scope until a job above needs it: git (diffs, checkpoints, worktrees, com
 
 ## Interface
 
-- **Layout.** Sidebar (orchestrator, pinned, chats) and the chat. Overlays: palette, the Agents card, menus, dialogs, toasts. Nothing else.
-- **Sidebar.** Two modes: _Recent_ (chats newest first, project under each title) and _Projects_ (collapsible projects, chats newest first). Subagents never appear in it; they live in their parent chat (timeline cards and the Agents card).
+- **Layout.** Sidebar (orchestrator, pinned, chats) and the chat. A chat with subagents keeps their panel at the top right. Menus, palette, dialogs and toasts are temporary overlays.
+- **Sidebar.** Two modes: _Recent_ (chats newest first, project under each title) and _Projects_ (collapsible projects, chats newest first). Subagents live in their parent's panel and timeline, not the sidebar.
+- **Activity.** Group reasoning and consecutive tools behind a plain-language summary. While a command runs, show it without making the user open the group. Expanded rows show readable command output and changes, not RPC payloads.
 - **Orchestrator.** Visually distinct and never managed like a chat: no pin, archive, rename, move or delete.
 - **Copy.** Short, plain, sentence case. No exclamation marks, filler or marketing. Labels name the thing; buttons name the action.
 

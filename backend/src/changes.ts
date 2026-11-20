@@ -2,7 +2,7 @@ import { BACKGROUND_CONTEXT, type Context } from "@earendil-works/chord/context"
 import { type ConversationId, type Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 
 import { ChatDoc } from "./agents/chat.ts";
-import { TurnEntry } from "./agents/model.ts";
+import { LiveTurnDoc, TurnEntry } from "./agents/model.ts";
 import { AcpStateDoc, HarnessOptionsDoc } from "./agents/options.ts";
 import { SettingsDoc } from "./orchestrator.ts";
 import { MetaDoc, ProjectsDoc, touch } from "./projects.ts";
@@ -100,9 +100,21 @@ export async function observeChanges(harness: Harness, root: ConversationId, con
               break;
             }
             case InboxDoc.definition.kind:
-            case SettingsDoc.definition.kind:
-            case AcpStateDoc.definition.kind:
+            case LiveTurnDoc.definition.kind:
               schedule(change.conversationId);
+              break;
+            case SettingsDoc.definition.kind:
+              // The orchestrator's summary shows its model and thinking level.
+              schedule(change.conversationId, true);
+              break;
+            case AcpStateDoc.definition.kind:
+              // Summaries show the selected model and thinking level; usage and commands only change the state.
+              schedule(
+                change.conversationId,
+                change.kind !== "change" ||
+                  change.ops.length === 0 ||
+                  change.ops.some(([op, path]) => op === "r" || (Array.isArray(path) && path[0] === "options")),
+              );
               break;
             case LiveDoc.definition.kind: {
               if (change.conversationId !== root) break;

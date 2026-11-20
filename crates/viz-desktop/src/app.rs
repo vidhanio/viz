@@ -151,6 +151,7 @@ pub struct Desktop {
     /// The window's width in view points, as last drawn; layout that has to
     /// choose what fits reads it.
     pub window_width: f32,
+    pub tool_clock: i64,
     /// Chats left by navigating, newest last, for back and forward.
     back: Vec<ConversationId>,
     forward: Vec<ConversationId>,
@@ -190,6 +191,7 @@ impl Desktop {
             next_toast: 0,
             focused: true,
             window_width: WINDOW_SIZE.0,
+            tool_clock: crate::theme::now_ms(),
             back: Vec::new(),
             forward: Vec::new(),
         }
@@ -310,9 +312,24 @@ impl Desktop {
     }
 
     /// Takes a new view of the selected conversation.
-    pub fn set_thread(&mut self, conversation: ConversationId, thread: Thread) {
+    pub fn set_thread(&mut self, conversation: ConversationId, thread: Thread, tx: &mut Tx) {
         if self.selected == Some(conversation) {
+            // Backend-driven updates normally snap. Animate the first
+            // populated view, not each streamed change inside the child.
+            if self.thread.items.is_empty()
+                && !thread.items.is_empty()
+                && self
+                    .summary(conversation)
+                    .is_some_and(|chat| chat.parent.is_some())
+            {
+                tx.animated();
+            }
             self.thread = thread;
+            self.thread.sync_acp(
+                self.conversation
+                    .as_ref()
+                    .and_then(|state| state.live.as_ref()),
+            );
         }
     }
 
@@ -322,6 +339,7 @@ impl Desktop {
         }
         let status_changed =
             self.conversation.as_ref().map(|prev| prev.status) != Some(state.status);
+        self.thread.sync_acp(state.live.as_ref());
         self.conversation = Some(state);
         if status_changed {
             self.update_title(tx);
@@ -365,7 +383,7 @@ impl Desktop {
             if let Some(first) = self.thread.items.first() {
                 tx.keep_on_screen(first.key());
             }
-            self.thread = thread;
+            self.set_thread(id, thread, tx);
         }
     }
 

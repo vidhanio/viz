@@ -42,14 +42,23 @@ const HEADLESS_CONNECT_WAIT: Duration = Duration::from_secs(5);
 fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let t = Theme::get(cx.system_dark());
     let mut overlays = Vec::new();
+    let (agents, reserve) = header::agents(s, t);
+    let reading = col()
+        .key("reading-pane")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .pr(reserve)
+        .child(timeline::timeline(s, t, &mut overlays))
+        .children(composer::composer(s, t, &mut overlays, reserve));
     let main = col()
         .key("main")
         .w_full()
         .h_full()
         .min_h(0.0)
         .child(ui::rule(t).key("header-rule"))
-        .child(timeline::timeline(s, t, &mut overlays));
-    let main = main.children(composer::composer(s, t, &mut overlays));
+        .children(agents)
+        .child(reading);
     // The sidebar's header row is a title band above its content: guard it
     // from below, under the sidebar toggle and new-chat button that float
     // over it.
@@ -69,7 +78,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     // rows' trailing slots.
     let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
     let split = split
-        .toolbar(header::toolbar(s, t, &mut overlays))
+        .toolbar(header::toolbar(s, t))
         .titlebar_inset(cx.titlebar_inset())
         .frame_inset(0.0)
         .toolbar_in_panel()
@@ -127,12 +136,8 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if s.palette.is_open() {
         return false;
     }
-    if ev.is_command('b') && !ev.mods.alt {
-        if ev.mods.shift {
-            header::toggle_agents(s);
-        } else {
-            s.sidebar.toggle();
-        }
+    if ev.is_command('b') && !ev.mods.shift && !ev.mods.alt {
+        s.sidebar.toggle();
         return true;
     }
     if ev.mods.shift || ev.mods.alt {
@@ -160,7 +165,22 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
 fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     let completion = composer::poll(s, clock, tx);
     let palette = palette::poll(s, clock, tx);
-    s.expire(clock) || completion || palette
+    let tool_timer = if s.thread.acp_partial.iter().any(|item| {
+        matches!(item, thread::Item::Tool(tool) if tool.status == thread::ToolStatus::Running
+            && tool.started_at.is_some() && tool.timeout_ms.is_some())
+    }) {
+        let now = theme::now_ms();
+        tx.wake_after(Duration::from_millis(500));
+        if now.saturating_sub(s.tool_clock) >= 500 {
+            s.tool_clock = now;
+            true
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+    s.expire(clock) || completion || palette || tool_timer
 }
 
 #[derive(Parser)]
@@ -200,6 +220,7 @@ fn main() {
     let tooling = rune::tooling::Args::parse_from(rune_args.clone());
     let headless = tooling.headless();
     let preview = headless && tooling.scene.is_some();
+    let initial_width = tooling.size.map_or(app::WINDOW_SIZE.0, |(width, _)| width);
     let scene_theme = preview
         .then(|| std::env::var("VIZ_SCENE_THEME").ok())
         .flatten();
@@ -244,6 +265,7 @@ fn main() {
     })
     .init(move || {
         let mut desktop = Desktop::new(commands);
+        desktop.window_width = initial_width;
         // Scenes are deterministic: they neither read nor write the saved
         // sidebar mode and collapsed projects.
         if !preview {

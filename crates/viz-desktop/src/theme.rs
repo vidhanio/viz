@@ -215,8 +215,6 @@ pub struct Theme {
     pub title: TextStyle,
     /// Tool rows and code, 12 on 18.
     pub mono: TextStyle,
-    /// `mono` at the medium weight, for tool names.
-    pub mono_medium: TextStyle,
     /// Small mono for durations and counts, 11.5 on 16.
     pub mono_small: TextStyle,
 }
@@ -674,7 +672,6 @@ impl Theme {
             body,
             title: TextStyle::new(14.0, 600.0).lh(20.0),
             mono,
-            mono_medium: medium(mono),
             mono_small: TextStyle::new(11.5, 400.0).mono().lh(16.0),
             k,
         }
@@ -723,13 +720,26 @@ pub fn duration(ms: u64) -> String {
     }
 }
 
+/// Progress drawn at UI precision without losing range for token counts.
+pub fn fraction(used: u64, size: u64) -> f32 {
+    const STEPS: u16 = 1_000;
+    let steps =
+        u16::try_from(u128::from(used.min(size)) * u128::from(STEPS) / u128::from(size.max(1)))
+            .unwrap_or_default();
+    f32::from(steps) / f32::from(STEPS)
+}
+
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|now| i64::try_from(now.as_millis()).ok())
+        .unwrap_or_default()
+}
+
 /// How long ago `then` (Unix milliseconds) was: `now`, `4m`, `3h`, `2d`.
 pub fn ago(then: i64) -> Option<String> {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?;
-    let now = i64::try_from(now.as_millis()).ok()?;
-    let minutes = (now - then).max(0) / 60_000;
+    let minutes = now_ms().saturating_sub(then).max(0) / 60_000;
     (then > 0).then(|| match minutes {
         0 => "now".to_owned(),
         1..60 => format!("{minutes}m ago"),

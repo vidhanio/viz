@@ -21,8 +21,18 @@ import { type Harness as HarnessConfig, resolveSecret } from "../config.ts";
 import { bridgeEnv } from "../mcp/bridge.ts";
 import { McpServer, type McpTool } from "../mcp/server.ts";
 import type { ConfigOption } from "../protocol.ts";
+import { titleFrom, TitleDoc } from "../titles.ts";
 import { AcpProcess, type AcpEvents } from "./acp.ts";
-import { PlanEntry, ProgressEntry, SessionDoc, TextEntry, ThoughtEntry, ToolEntry } from "./model.ts";
+import {
+  LiveTurnDoc,
+  type LiveText,
+  PlanEntry,
+  ProgressEntry,
+  SessionDoc,
+  TextEntry,
+  ThoughtEntry,
+  ToolEntry,
+} from "./model.ts";
 import {
   AcpStateDoc,
   catalogOptions,
@@ -45,13 +55,24 @@ export type TurnOutcome = { kind: "done"; answer: string; stopReason: StopReason
 type SessionOptions = { id: ConversationId; name: string; config: HarnessConfig; cwd: string };
 type TurnOptions = SessionOptions & {
   text: string;
+  /** The turn's prompt entry ID: the live turn's identity and its text keys' prefix. */
+  turn: string;
   attachments?: StoredAttachment[];
   commit: (write: (tx: Tx) => Promise<void>) => Promise<void>;
   context: Context;
 };
 
 type Update = SessionUpdate | { sessionUpdate: "viz_progress"; text: string };
-type TextRun = { kind: "text" | "thought"; text: string };
+/** The turn's uncommitted tail: `runs` numbers its text runs for their keys. */
+type Transcript = { turn: string; runs: number; text?: LiveText };
+
+/** Session-level updates a runner may send while viz opens or restores the session. */
+const EARLY_UPDATES: Partial<Record<SessionUpdate["sessionUpdate"], true>> = {
+  config_option_update: true,
+  available_commands_update: true,
+  session_info_update: true,
+  usage_update: true,
+};
 
 type ActiveTurn = { context: Context; report: (text: string) => Promise<void> };
 export type ToolScope = {
@@ -296,8 +317,7 @@ export class AgentSessions {
     const events: AcpEvents = {
       onUpdate: (source, update) => {
         if (opening) {
-          if (update.sessionUpdate === "config_option_update" || update.sessionUpdate === "available_commands_update")
-            early.push([source, update]);
+          if (EARLY_UPDATES[update.sessionUpdate]) early.push([source, update]);
         } else if (source === live.sessionId && !signal.aborted) {
           void this.#onUpdate(live, update).catch((error: unknown) => this.#release(live, error));
         }
@@ -460,10 +480,40 @@ export class AgentSessions {
           withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT),
         );
         break;
+      case "session_info_update":
+        // `null` clears the runner's title; keep the one shown rather than blank the chat.
+        if (typeof update.title === "string") await this.#retitle(live, update.title);
+        break;
+      case "usage_update": {
+        const usage = { used: update.used, size: update.size };
+        await this.#harness.commit(
+          async (tx) => {
+            const doc = await tx.doc(AcpStateDoc, live.id);
+            if (doc.usage?.used !== usage.used || doc.usage.size !== usage.size) doc.usage = usage;
+          },
+          withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT),
+        );
+        break;
+      }
       default:
         live.active?.update(update);
     }
     return false;
+  }
+
+  /** The runner's title replaces a fallback or its earlier title, never the user's rename. */
+  async #retitle(live: LiveSession, text: string) {
+    const title = titleFrom(text);
+    if (title === "") return;
+    await this.#harness.commit(
+      async (tx) => {
+        const doc = await tx.doc(TitleDoc, live.id);
+        if (doc.source === "user") return;
+        if (doc.title !== title) doc.title = title;
+        if (doc.source !== "agent") doc.source = "agent";
+      },
+      withAbortSignal(live.lifetime.signal, BACKGROUND_CONTEXT),
+    );
   }
 
   async #setOption(live: LiveSession, id: string, value: OptionValue) {
@@ -477,13 +527,14 @@ export class AgentSessions {
 
   async turn(options: TurnOptions): Promise<TurnOutcome> {
     const { id, text, commit, context } = options;
-    const transcript: { text?: TextRun } = {};
+    const transcript: Transcript = { turn: options.turn, runs: 0 };
     let pending: Update[] = [];
     const answer: string[] = [];
     const tools = new Map<string, ToolContent>();
     const receipts = new ToolReceipts();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let saved = Promise.resolve();
+    let published = false;
     let live: LiveSession | undefined;
     const flush = (final = false) => {
       clearTimeout(timer);
@@ -492,14 +543,17 @@ export class AgentSessions {
       const batch = pending;
       pending = [];
       saved = saved.then(async () => {
-        if (batch.length === 0 && !transcript.text && !(final && tools.size)) return;
+        if (batch.length === 0 && !transcript.text && !tools.size && !published) return;
         await commit(async (tx) => {
           await apply(tx, id, batch, tools, receipts, transcript);
           if (final) {
             await appendText(tx, id, transcript);
             for (const { record } of tools.values()) await tx.appendEntry(ToolEntry, id, { data: record });
-          }
+            tools.clear();
+            await clearLiveTurn(tx, id);
+          } else await publish(tx, id, transcript, tools);
         });
+        published = !final;
       });
       // A failed transcript write invalidates the live turn. The final flush observes the same error.
       void saved.catch((error: unknown) => {
@@ -595,11 +649,32 @@ function declaration(process: AcpProcess, url: string, token: string): McpDeclar
   };
 }
 
-async function appendText(tx: Tx, id: ConversationId, transcript: { text?: TextRun }) {
+async function appendText(tx: Tx, id: ConversationId, transcript: Transcript) {
   const run = transcript.text;
   if (!run) return;
-  await tx.appendEntry(run.kind === "text" ? TextEntry : ThoughtEntry, id, { data: { text: run.text } });
+  await tx.appendEntry(run.kind === "text" ? TextEntry : ThoughtEntry, id, { data: { text: run.text, key: run.key } });
   delete transcript.text;
+}
+
+/** Mirrors the turn's uncommitted text run and unfinished tools, in the order their entries will be appended. */
+async function publish(tx: Tx, id: ConversationId, transcript: Transcript, tools: Map<string, ToolContent>) {
+  const doc = await tx.doc(LiveTurnDoc, id);
+  if (doc.turn !== transcript.turn) doc.turn = transcript.turn;
+  const { text } = transcript;
+  if (!text) {
+    if (doc.text) delete doc.text;
+  } else if (doc.text?.key !== text.key || doc.text.kind !== text.kind) doc.text = { ...text };
+  else if (doc.text.text !== text.text) doc.text.text = text.text;
+  const records = [...tools.values()].map(({ record }) => record);
+  if (JSON.stringify(doc.tools) !== JSON.stringify(records)) doc.tools = structuredClone(records);
+}
+
+/** Drops the live turn; every commit that ends a turn calls this, so a restart never shows a stale tail. */
+export async function clearLiveTurn(tx: Tx, id: ConversationId) {
+  const doc = await tx.doc(LiveTurnDoc, id);
+  if (doc.turn !== undefined) delete doc.turn;
+  if (doc.text) delete doc.text;
+  if (doc.tools.length) doc.tools = [];
 }
 
 async function apply(
@@ -608,7 +683,7 @@ async function apply(
   updates: Update[],
   tools: Map<string, ToolContent>,
   receipts: ToolReceipts,
-  transcript: { text?: TextRun },
+  transcript: Transcript,
 ) {
   for (const update of updates) {
     switch (update.sessionUpdate) {
@@ -619,7 +694,7 @@ async function apply(
         if (transcript.text?.kind === kind) transcript.text.text += update.content.text;
         else {
           await appendText(tx, id, transcript);
-          transcript.text = { kind, text: update.content.text };
+          transcript.text = { key: `${transcript.turn}:${transcript.runs++}`, kind, text: update.content.text };
         }
         if (transcript.text.text.length >= 4096) await appendText(tx, id, transcript);
         break;

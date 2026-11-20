@@ -20,6 +20,8 @@ export const AcpStateDoc = defineDoc<{
   commands: Commands;
   desired: Desired;
   images?: boolean;
+  /** The runner's last ACP `usage_update`: tokens in context and the context window size. */
+  usage?: { used: number; size: number };
 }>({
   kind: "viz.acp.state",
   version: 1,

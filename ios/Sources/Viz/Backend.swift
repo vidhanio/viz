@@ -52,6 +52,8 @@ enum VizProtocol {
     let updatedAt: Int64
     let unread: Bool
     let pinned: Bool
+    let model: String?
+    let thinking: String?
   }
 
   enum OptionValue: Decodable {

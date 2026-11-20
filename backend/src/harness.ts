@@ -363,7 +363,13 @@ export async function openHarness(loaded: LoadedConfig, options: OpenOptions, co
         throw new Error("The orchestrator can't be changed");
       if (unread !== undefined) changes.clearPendingUnread(id);
       const moved = await harness.commit(async (tx) => {
-        if (title !== undefined) (await tx.doc(TitleDoc, id)).title = title;
+        if (title !== undefined) {
+          // A rename outranks the runner's titles; clearing it lets the runner title the chat again.
+          const doc = await tx.doc(TitleDoc, id);
+          doc.title = title;
+          if (title === "") delete doc.source;
+          else doc.source = "user";
+        }
         if (archived !== undefined || pinned !== undefined || unread !== undefined) {
           const meta = await tx.doc(MetaDoc, id);
           if (archived !== undefined) meta.archived = archived;

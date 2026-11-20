@@ -26,12 +26,6 @@ pub const SIDEBAR_SHORTCUT: &str = if cfg!(target_os = "macos") {
 } else {
     "Ctrl+B"
 };
-/// The Agents card's shortcut.
-pub const AGENTS_SHORTCUT: &str = if cfg!(target_os = "macos") {
-    "⇧⌘B"
-} else {
-    "Ctrl+Shift+B"
-};
 
 pub fn button(label: impl Into<String>, variant: ButtonVariant, size: Size) -> Button {
     Button::new(label).variant(variant).control_size(size.kit())
@@ -402,7 +396,6 @@ pub fn picker_menu<S: 'static>(
     close: impl Fn(&mut S) + 'static,
 ) -> Menu {
     Menu::new(format!("{id}-picker"))
-        .standard()
         .placement(Placement::TopStart)
         .min_width(MENU_WIDTH)
         .open(open)
@@ -737,8 +730,8 @@ lucide! {
     PLUS = Plus;
     /// Send.
     ARROW_UP = ArrowUp;
-    /// A subagent, and the Agents card.
-    BOT = Bot;
+    /// Delegated work.
+    AGENT = Workflow;
     CHEVRON = ChevronRight;
     CHEVRON_OPEN = ChevronDown;
     CHEVRON_UP = ChevronUp;
@@ -762,6 +755,12 @@ lucide! {
     EYE = Eye;
     EYE_OFF = EyeOff;
     MINUS = Minus;
+    TERMINAL = Terminal;
+    FILE_READ = FileText;
+    FILE_WRITE = FilePlus;
+    FILE_EDIT = FilePenLine;
+    WRENCH = Wrench;
+    TIMER = Timer;
     /// A harness without a known mark.
     HARNESS = SquareTerminal;
 }

@@ -5,8 +5,11 @@
 
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use serde_json::Value;
-use viz_client::protocol::{ConversationId, EntryId};
+use viz_client::protocol::{
+    ConversationId, EntryId, LiveTextKind, LiveTurn, ToolCallStatus, ToolDiff, ToolRecord,
+};
 
 /// Longest tool-call summary, in characters.
 const SUMMARY_CHARS: usize = 96;
@@ -25,6 +28,10 @@ pub struct Thread {
     pub before: Option<EntryId>,
     /// What's happening right now (`pi.live`).
     pub live: Live,
+    acp_turn: Option<String>,
+    acp_start: usize,
+    acp_text_index: Option<usize>,
+    pub acp_partial: Vec<Item>,
 }
 
 /// One timeline row.
@@ -50,7 +57,7 @@ pub enum Item {
         duration_ms: Option<u64>,
     },
     /// A tool call and, once settled, its result.
-    Tool(Tool),
+    Tool(Box<Tool>),
     /// The latest checklist reported in this ACP turn.
     Plan { key: String, steps: Vec<PlanStep> },
     /// A harness progress message.
@@ -123,8 +130,10 @@ pub struct Tool {
     pub name: String,
     /// One-line summary of the arguments.
     pub summary: String,
-    /// The arguments, pretty-printed and capped.
-    pub arguments: String,
+    /// Recognized human-readable details, never a serialized arguments object.
+    pub input: Option<String>,
+    pub timeout_ms: Option<u64>,
+    pub started_at: Option<i64>,
     /// Progress.
     pub status: ToolStatus,
     /// The result text, or running output, capped.
@@ -137,13 +146,6 @@ pub struct Tool {
     pub viz: Option<String>,
     pub diffs: Vec<ToolDiff>,
     pub locations: Vec<String>,
-}
-
-#[derive(Debug, Clone, Hash)]
-pub struct ToolDiff {
-    pub path: String,
-    pub old: Option<String>,
-    pub new: String,
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +171,63 @@ pub struct Live {
 }
 
 impl Thread {
+    /// Match the separately watched ACP state to the prompt in the transcript.
+    pub fn sync_acp(&mut self, live: Option<&LiveTurn>) {
+        let Some(live) = live.filter(|live| self.acp_turn.as_ref() == Some(&live.turn)) else {
+            return;
+        };
+        self.acp_partial.clear();
+        if let Some(text) = &live.text
+            && self.acp_text_index.is_none_or(|committed| {
+                text_index(&text.key).is_some_and(|index| index > committed)
+            })
+        {
+            let settled = self
+                .items
+                .last()
+                .filter(|_| self.items.len() > self.acp_start);
+            let preceding = match (text.kind, settled) {
+                (LiveTextKind::Text, Some(Item::Text { key, text }))
+                | (LiveTextKind::Thought, Some(Item::Thinking { key, text, .. })) => {
+                    Some((key, text))
+                }
+                _ => None,
+            };
+            let thinking = text.kind == LiveTextKind::Thought;
+            let (key, text) = preceding.map_or_else(
+                || (text.key.clone(), text.text.clone()),
+                |(key, earlier)| (key.clone(), format!("{earlier}{}", text.text)),
+            );
+            self.acp_partial.push(acp_text(key, text, thinking));
+        }
+        for record in &live.tools {
+            // The view and state arrive separately; never reintroduce a
+            // live row after the transcript has committed the same call.
+            let committed = self.items[self.acp_start..]
+                .iter()
+                .any(|item| matches!(item, Item::Tool(tool) if tool.call_id == record.id));
+            if !committed {
+                self.acp_partial.push(Item::Tool(Box::new(Tool::from_acp(
+                    Some(&live.turn),
+                    record.clone(),
+                ))));
+            }
+        }
+    }
+
+    pub fn displayed_history(&self) -> &[Item] {
+        if self
+            .items
+            .last()
+            .zip(self.acp_partial.first())
+            .is_some_and(|(last, first)| last.key() == first.key())
+        {
+            &self.items[..self.items.len() - 1]
+        } else {
+            &self.items
+        }
+    }
+
     /// Reads a conversation view's value.
     pub fn from_view(view: &Value) -> Self {
         Self::from_history(view, &[], before_cursor(view))
@@ -184,21 +243,16 @@ impl Thread {
             items: Vec::new(),
             calls: HashMap::new(),
             plan: None,
+            acp_turn: None,
+            acp_start: 0,
+            acp_text_index: None,
         };
-        let mut acp_busy = false;
         for entry in earlier.iter().chain(array(view.get("entries"))) {
-            match str_at(entry, "kind") {
-                Some("viz.agent.prompt") => acp_busy = true,
-                Some("viz.agent.turn") => {
-                    acp_busy = false;
-                    reader.plan = None;
-                }
-                _ => {}
-            }
             reader.entry(entry);
         }
         reader.live_tools(slots);
         let native_busy = live.is_some_and(|live| live.get("run").is_some());
+        let acp_busy = reader.acp_turn.is_some();
         let mut items = reader.items;
         for item in &mut items {
             if let Item::Tool(tool) = item
@@ -215,6 +269,10 @@ impl Thread {
             items,
             before,
             live,
+            acp_turn: reader.acp_turn,
+            acp_start: reader.acp_start,
+            acp_text_index: reader.acp_text_index,
+            acp_partial: Vec::new(),
         }
     }
 }
@@ -231,6 +289,9 @@ struct Reader {
     /// Item index of each tool call by call id.
     calls: HashMap<String, usize>,
     plan: Option<usize>,
+    acp_turn: Option<String>,
+    acp_start: usize,
+    acp_text_index: Option<usize>,
 }
 
 impl Reader {
@@ -249,7 +310,13 @@ impl Reader {
                 key: format!("e{id}"),
                 label: Some("earlier context summarized"),
             }),
-            "pi.user" | "viz.input" | "viz.agent.prompt" => {
+            "viz.agent.prompt" => {
+                self.acp_turn = Some(id.clone());
+                self.acp_text_index = None;
+                self.prompt(&id, entry, messages);
+                self.acp_start = self.items.len();
+            }
+            "pi.user" | "viz.input" => {
                 self.prompt(&id, entry, messages);
             }
             "pi.assistant" => {
@@ -312,64 +379,31 @@ impl Reader {
                 let Some(text) = entry.pointer("/data/text").and_then(Value::as_str) else {
                     return;
                 };
+                let key = entry.pointer("/data/key").and_then(Value::as_str);
+                if let Some(index) = key.and_then(text_index) {
+                    self.acp_text_index = Some(index);
+                }
                 match (kind, self.items.last_mut()) {
                     ("viz.agent.text", Some(Item::Text { text: previous, .. }))
                     | ("viz.agent.thought", Some(Item::Thinking { text: previous, .. })) => {
                         previous.push_str(text);
                     }
-                    ("viz.agent.text", _) => self.items.push(Item::Text {
-                        key: format!("e{id}"),
-                        text: text.to_owned(),
-                    }),
-                    _ => self.items.push(Item::Thinking {
-                        key: format!("e{id}"),
-                        text: text.to_owned(),
-                        duration_ms: None,
-                    }),
+                    _ => self.items.push(acp_text(
+                        key.map_or_else(|| format!("e{id}"), str::to_owned),
+                        text.to_owned(),
+                        kind == "viz.agent.thought",
+                    )),
                 }
             }
             "viz.agent.tool" => {
-                let Some(data) = entry.get("data") else {
-                    return;
-                };
-                let title = str_at(data, "title").unwrap_or("tool");
-                let status = match str_at(data, "status") {
-                    Some("pending") => ToolStatus::Pending,
-                    Some("in_progress") => ToolStatus::Running,
-                    Some("completed") => ToolStatus::Done,
-                    Some("failed") => ToolStatus::Failed,
-                    _ => ToolStatus::Abandoned,
-                };
-                self.items.push(Item::Tool(Tool {
-                    key: format!("e{id}"),
-                    call_id: str_at(data, "id").unwrap_or_default().to_owned(),
-                    name: str_at(data, "kind").unwrap_or("tool").to_owned(),
-                    summary: first_line(title, SUMMARY_CHARS),
-                    arguments: str_at(data, "input").unwrap_or_default().to_owned(),
-                    status,
-                    output: str_at(data, "output").unwrap_or_default().to_owned(),
-                    duration_ms: None,
-                    child: data
-                        .get("child")
-                        .and_then(Value::as_u64)
-                        .map(ConversationId),
-                    viz: str_at(data, "viz").map(str::to_owned),
-                    diffs: array(data.get("diffs"))
-                        .iter()
-                        .filter_map(|diff| {
-                            Some(ToolDiff {
-                                path: str_at(diff, "path")?.to_owned(),
-                                old: str_at(diff, "oldText").map(str::to_owned),
-                                new: str_at(diff, "newText")?.to_owned(),
-                            })
-                        })
-                        .collect(),
-                    locations: array(data.get("locations"))
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .map(str::to_owned)
-                        .collect(),
-                }));
+                if let Some(data) = entry.get("data")
+                    && let Ok(record) = ToolRecord::deserialize(data)
+                {
+                    self.items.push(Item::Tool(Box::new(Tool::from_acp(
+                        self.acp_turn.as_deref(),
+                        record,
+                    ))));
+                }
             }
             "viz.agent.plan" => self.plan(id, array(entry.pointer("/data/entries"))),
             "viz.agent.progress" => {
@@ -381,6 +415,15 @@ impl Reader {
                 }
             }
             "viz.agent.turn" => {
+                for item in &mut self.items[self.acp_start..] {
+                    if let Item::Tool(tool) = item
+                        && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
+                    {
+                        tool.status = ToolStatus::Abandoned;
+                    }
+                }
+                self.acp_turn = None;
+                self.plan = None;
                 if let Some(data) = entry.get("data") {
                     let key = format!("e{id}");
                     if let Some(error) = str_at(data, "error") {
@@ -506,7 +549,7 @@ fn assistant(key: &str, message: &Value, items: &mut Vec<Item>, status: ToolStat
                     });
                 }
             }
-            Some("toolCall") => items.push(Item::Tool(tool_call(key, part, status))),
+            Some("toolCall") => items.push(Item::Tool(Box::new(tool_call(key, part, status)))),
             _ => {}
         }
     }
@@ -526,16 +569,98 @@ fn assistant(key: &str, message: &Value, items: &mut Vec<Item>, status: ToolStat
     }
 }
 
+fn text_index(key: &str) -> Option<usize> {
+    key.rsplit_once(':')?.1.parse().ok()
+}
+
+const fn acp_text(key: String, text: String, thinking: bool) -> Item {
+    if thinking {
+        Item::Thinking {
+            key,
+            text,
+            duration_ms: None,
+        }
+    } else {
+        Item::Text { key, text }
+    }
+}
+
+impl Tool {
+    fn from_acp(turn: Option<&str>, record: ToolRecord) -> Self {
+        let name = match record.name.as_deref() {
+            Some(
+                "bash" | "read" | "read_file" | "write" | "write_file" | "edit" | "edit_file"
+                | "apply_patch" | "grep" | "glob",
+            ) => record.name,
+            _ => record.kind.filter(|kind| kind != "other").or(record.name),
+        }
+        .unwrap_or_else(|| "tool".to_owned());
+        let arguments = record
+            .input
+            .as_deref()
+            .and_then(|input| serde_json::from_str(input).ok());
+        let (summary, mut input, timeout_ms) = tool_input(&name, arguments.as_ref());
+        if input.is_none() && is_command(&name) {
+            let plain = record
+                .input
+                .as_deref()
+                .filter(|text| arguments.is_none() && !text.trim_start().starts_with(['{', '[']));
+            input = plain
+                .or_else(|| record.title.strip_prefix("$ "))
+                .map(|text| cap_head(text, ARGUMENTS_CHARS));
+        }
+        let status = match record.status {
+            ToolCallStatus::Pending => ToolStatus::Pending,
+            ToolCallStatus::InProgress => ToolStatus::Running,
+            ToolCallStatus::Completed => ToolStatus::Done,
+            ToolCallStatus::Failed => ToolStatus::Failed,
+        };
+        let summary = if summary.is_empty() {
+            let title = if record.title == record.id {
+                ""
+            } else {
+                &record.title
+            };
+            first_line(
+                input
+                    .as_deref()
+                    .or_else(|| (!title.is_empty()).then_some(title))
+                    .or_else(|| record.locations.first().map(String::as_str))
+                    .unwrap_or_default(),
+                SUMMARY_CHARS,
+            )
+        } else {
+            summary
+        };
+        Self {
+            key: format!("acp-{}-{}", turn.unwrap_or_default(), record.id),
+            call_id: record.id,
+            name,
+            summary,
+            input,
+            timeout_ms,
+            started_at: record.started_at,
+            status,
+            output: record.output.unwrap_or_default(),
+            duration_ms: None,
+            child: record.child,
+            viz: record.viz,
+            diffs: record.diffs,
+            locations: record.locations,
+        }
+    }
+}
+
 fn tool_call(key: String, part: &Value, status: ToolStatus) -> Tool {
     let name = str_at(part, "name").unwrap_or("tool").to_owned();
-    let arguments = part.get("arguments");
+    let (summary, input, timeout_ms) = tool_input(&name, part.get("arguments"));
     Tool {
         key,
         call_id: str_at(part, "id").unwrap_or_default().to_owned(),
-        summary: arguments.map_or_default(summary),
-        arguments: arguments
-            .and_then(|arguments| serde_json::to_string_pretty(arguments).ok())
-            .map_or_default(|pretty| cap_head(&pretty, ARGUMENTS_CHARS)),
+        summary,
+        input,
+        timeout_ms,
+        started_at: None,
         name,
         status,
         output: String::new(),
@@ -547,33 +672,59 @@ fn tool_call(key: String, part: &Value, status: ToolStatus) -> Tool {
     }
 }
 
-/// One line for a call's arguments: its main string argument when it has one
-/// (a task, command, path or query), else `key: value` pairs.
-fn summary(arguments: &Value) -> String {
-    const MAIN: [&str; 8] = [
-        "task", "command", "cmd", "path", "query", "pattern", "url", "prompt",
-    ];
-    let Value::Object(fields) = arguments else {
-        return first_line(&arguments.to_string(), SUMMARY_CHARS);
+pub fn is_command(name: &str) -> bool {
+    matches!(name, "bash" | "execute" | "shell" | "terminal")
+}
+
+/// Project tool-specific fields out of native and ACP arguments. Unknown
+/// structure stays in the transcript record, not in the presentation.
+fn tool_input(name: &str, arguments: Option<&Value>) -> (String, Option<String>, Option<u64>) {
+    let Some(args) = arguments else {
+        return (String::new(), None, None);
     };
-    if let Some(main) = MAIN
-        .iter()
-        .find_map(|name| fields.get(*name).and_then(Value::as_str))
-    {
-        return first_line(main, SUMMARY_CHARS);
-    }
-    if let (1, Some(Value::String(only))) = (fields.len(), fields.values().next()) {
-        return first_line(only, SUMMARY_CHARS);
-    }
-    let pairs = fields
-        .iter()
-        .map(|(name, value)| match value {
-            Value::String(s) => format!("{name}: {s}"),
-            other => format!("{name}: {other}"),
+    let field = |keys: &[&str]| keys.iter().find_map(|key| str_at(args, key));
+    let command = field(&["command", "cmd"]).or_else(|| {
+        if is_command(name) {
+            args.as_str()
+        } else {
+            None
+        }
+    });
+    let summary = command
+        .or_else(|| {
+            field(&[
+                "path",
+                "file_path",
+                "filePath",
+                "task",
+                "query",
+                "pattern",
+                "url",
+                "prompt",
+                "i",
+            ])
         })
-        .collect::<Vec<_>>()
-        .join(", ");
-    first_line(&pairs, SUMMARY_CHARS)
+        .filter(|text| !text.starts_with("xd://mcp__viz_"))
+        .or_else(|| args.as_str())
+        .map_or_else(String::new, |text| first_line(text, SUMMARY_CHARS));
+    let input = command
+        .or_else(|| {
+            if matches!(
+                name,
+                "write" | "create" | "edit" | "apply_patch" | "write_file" | "edit_file"
+            ) {
+                field(&["content", "patch", "newText", "new_string"])
+            } else {
+                None
+            }
+        })
+        .map(|text| cap_head(text, ARGUMENTS_CHARS));
+    let millis = |key| args.get(key).and_then(Value::as_u64);
+    let timeout = millis("timeout_ms")
+        .or_else(|| millis("timeoutMs"))
+        .or_else(|| millis("timeout").and_then(|n| n.checked_mul(1_000)))
+        .filter(|ms| *ms > 0);
+    (summary, input, timeout)
 }
 
 /// How much output a part is, in characters, to apportion its message's time.
