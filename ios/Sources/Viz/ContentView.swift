@@ -1,15 +1,20 @@
 import SwiftUI
 
-/// A project-grouped sidebar and the selected conversation's chat.
+/// A project-grouped sidebar and the selected thread's chat.
 struct ContentView: View {
   private enum Selection: Hashable {
-    case conversation(Int)
-    case hit(conversation: Int, entry: Int)
+    case thread(Int)
+    case hit(thread: Int, entry: Int)
 
-    var conversationID: Int {
+    var threadID: Int {
       switch self {
-      case .conversation(let id), .hit(let id, _): id
+      case .thread(let id), .hit(let id, _): id
       }
+    }
+
+    var entry: Int? {
+      guard case .hit(_, let entry) = self else { return nil }
+      return entry
     }
   }
 
@@ -19,50 +24,55 @@ struct ContentView: View {
   }
 
   @Environment(Backend.self) private var backend
-  // iOS App Transport Security requires HTTPS for remote hosts; reach the backend through `tailscale serve`.
-  @AppStorage("backendURL") private var backendURL = "https://viz.tailnet.ts.net"
+  // iOS App Transport Security requires HTTPS for remote hosts.
+  @AppStorage("backendURL") private var backendURL = "https://viz.example.com"
   @AppStorage("backendToken") private var backendToken = ""
   @State private var selection: Selection?
   @State private var drafts: [Int: String] = [:]
-  @State private var sent: [Int: [String]] = [:]
   @State private var errors: [Int: String] = [:]
   @State private var searchText = ""
   @State private var searchResults: SearchResults?
-  @State private var pendingDelete: VizProtocol.ConversationSummary?
+  @State private var pendingDelete: VizProtocol.ThreadSummary?
   @State private var notice: (title: String, detail: String)?
+  @State private var importing = false
 
   var body: some View {
     NavigationSplitView {
       List(selection: $selection) {
         if searchQuery.isEmpty {
-          conversationSections
+          threadSections
           backendSection
         } else {
           searchSection
         }
       }
       .navigationTitle("viz")
-      .searchable(text: $searchText, prompt: "Search conversations")
+      .searchable(text: $searchText, prompt: "Search threads")
+      .toolbar {
+        ToolbarItem(placement: .primaryAction) {
+          newMenu
+        }
+      }
       .task(id: activeSearchQuery) { [query = activeSearchQuery] in
         await loadSearch(query)
       }
       .onChange(of: searchQuery) { _, query in
         if query.isEmpty, case .hit(let id, _) = selection {
-          selection = .conversation(id)
+          selection = .thread(id)
         }
       }
       .alert(
-        pendingDelete.map { "Delete “\(title($0))”?" } ?? "Delete chat?",
+        pendingDelete.map { "Delete “\(title($0))”?" } ?? "Delete thread?",
         isPresented: Binding(
           get: { pendingDelete != nil },
           set: { if !$0 { pendingDelete = nil } }
         ),
         presenting: pendingDelete
-      ) { conversation in
+      ) { thread in
         Button("Cancel", role: .cancel) {}
-        Button("Delete", role: .destructive) { delete(conversation) }
+        Button("Delete", role: .destructive) { delete(thread) }
       } message: { _ in
-        Text("Its subagents are deleted too. This can't be undone.")
+        Text("This can't be undone.")
       }
       .alert(
         notice?.title ?? "",
@@ -75,49 +85,85 @@ struct ContentView: View {
       } message: {
         Text(notice?.detail ?? "")
       }
+      .sheet(isPresented: $importing) {
+        ImportSheet { id in
+          importing = false
+          selection = .thread(id)
+        }
+        .environment(backend)
+      }
     } detail: {
-      if let conversation = openConversation {
-        conversationDetail(conversation)
+      if let thread = selectedThread {
+        ThreadDetail(
+          thread: thread,
+          title: title(thread),
+          target: selection?.entry,
+          draft: Binding(
+            get: { drafts[thread.id, default: ""] }, set: { drafts[thread.id] = $0 }),
+          failure: Binding(get: { errors[thread.id] }, set: { errors[thread.id] = $0 }),
+          open: open(thread:environment:)
+        )
+        .id(thread.id)
       } else {
-        Text("No conversation open")
+        Text("No thread open")
           .foregroundStyle(.secondary)
       }
     }
   }
 
-  private var visibleConversations: [VizProtocol.ConversationSummary] {
-    backend.conversations.filter { !$0.archived }
+  private var connected: Bool {
+    backend.environment != nil
+  }
+
+  private var visibleThreads: [VizProtocol.ThreadSummary] {
+    backend.threads.filter { !$0.archived }
+  }
+
+  private var newMenu: some View {
+    Menu {
+      Section("New thread") {
+        Button("No project") { launch(project: nil) }
+        ForEach(backend.projects) { project in
+          Button(project.name) { launch(project: project.path) }
+        }
+      }
+      Button {
+        importing = true
+      } label: {
+        Label("Import…", systemImage: "square.and.arrow.down")
+      }
+    } label: {
+      Label("New", systemImage: "square.and.pencil")
+    }
+    .disabled(!connected)
   }
 
   @ViewBuilder
-  private var conversationSections: some View {
-    let conversations = visibleConversations.sorted { $0.updatedAt > $1.updatedAt }
-    let pinned = conversations.filter(\.pinned)
+  private var threadSections: some View {
+    let threads = visibleThreads.sorted { $0.updatedAt > $1.updatedAt }
+    let pinned = threads.filter(\.pinned)
     if !pinned.isEmpty {
       Section("Pinned") {
-        ForEach(pinned) { conversation in
-          conversationRow(conversation)
+        ForEach(pinned) { thread in
+          threadRow(thread)
         }
       }
     }
-    if let orchestrator = conversations.first(where: { $0.kind == .orchestrator && !$0.pinned }) {
-      conversationRow(orchestrator)
-    }
-    let chats = conversations.filter { $0.kind != .orchestrator && !$0.pinned }
+    let rest = threads.filter { !$0.pinned }
     ForEach(backend.projects) { project in
       Section(project.name) {
-        ForEach(chats.filter { $0.project == project.id }) { conversation in
-          conversationRow(conversation)
+        ForEach(rest.filter { $0.project == project.path }) { thread in
+          threadRow(thread)
         }
       }
     }
-    let ungrouped = chats.filter { chat in
-      !backend.projects.contains { $0.id == chat.project }
+    let ungrouped = rest.filter { thread in
+      !backend.projects.contains { $0.path == thread.project }
     }
     if !ungrouped.isEmpty {
-      Section("Chats") {
-        ForEach(ungrouped) { conversation in
-          conversationRow(conversation)
+      Section("Threads") {
+        ForEach(ungrouped) { thread in
+          threadRow(thread)
         }
       }
     }
@@ -130,11 +176,18 @@ struct ContentView: View {
       SecureField("Token", text: $backendToken)
       Button("Connect") {
         guard let url = URL(string: backendURL) else { return }
-        selection = nil
-        drafts = [:]
-        sent = [:]
-        errors = [:]
+        resetLocal()
         Task { await backend.connect(url: url, token: backendToken) }
+      }
+      if let current = backend.environment, !backend.environments.isEmpty {
+        Picker(
+          "Environment",
+          selection: Binding(get: { current }, set: { switchEnvironment($0) })
+        ) {
+          ForEach(backend.environments) { environment in
+            Text(environmentLabel(environment)).tag(environment.id)
+          }
+        }
       }
       Text(status)
         .font(.footnote)
@@ -147,12 +200,16 @@ struct ContentView: View {
     }
   }
 
+  private func environmentLabel(_ environment: VizProtocol.Environment) -> String {
+    environment.status == .unreachable ? "\(environment.id) (unreachable)" : environment.id
+  }
+
   private var searchQuery: String {
     searchText.trimmingCharacters(in: .whitespacesAndNewlines)
   }
 
   private var activeSearchQuery: String? {
-    guard case .connected = backend.state, !searchQuery.isEmpty else { return nil }
+    guard connected, !searchQuery.isEmpty else { return nil }
     return searchQuery
   }
 
@@ -162,19 +219,17 @@ struct ContentView: View {
       if let searchResults, searchResults.query == query {
         switch searchResults.result {
         case .success(let hits):
-          let conversations = Dictionary(
-            uniqueKeysWithValues: visibleConversations.map { ($0.id, $0) })
-          let visibleHits = hits.filter { conversations[$0.conversation] != nil }
+          let threads = Dictionary(uniqueKeysWithValues: visibleThreads.map { ($0.id, $0) })
+          let visibleHits = hits.filter { threads[$0.thread] != nil }
           if visibleHits.isEmpty {
             Text("No matches")
               .foregroundStyle(.secondary)
           }
           ForEach(visibleHits) { hit in
-            if let conversation = conversations[hit.conversation] {
-              NavigationLink(value: Selection.hit(conversation: hit.conversation, entry: hit.entry))
-              {
+            if let thread = threads[hit.thread] {
+              NavigationLink(value: Selection.hit(thread: hit.thread, entry: hit.entry)) {
                 VStack(alignment: .leading, spacing: 4) {
-                  conversationTitle(conversation)
+                  threadTitle(thread)
                     .lineLimit(1)
                   Text(highlightedSnippet(hit.snippet))
                     .font(.caption)
@@ -233,76 +288,108 @@ struct ContentView: View {
     return result
   }
 
-  private var openConversation: VizProtocol.ConversationSummary? {
-    if let selection {
-      return visibleConversations.first { $0.id == selection.conversationID }
-    }
-    return visibleConversations.first { $0.kind == .orchestrator }
+  private var selectedThread: VizProtocol.ThreadSummary? {
+    guard let selection else { return nil }
+    return backend.threads.first { $0.id == selection.threadID }
   }
 
-  private func title(_ conversation: VizProtocol.ConversationSummary) -> String {
-    if !conversation.title.isEmpty { return conversation.title }
-    return conversation.kind == .orchestrator ? "Orchestrator" : "Untitled"
+  private func title(_ thread: VizProtocol.ThreadSummary) -> String {
+    thread.title.isEmpty ? "Untitled" : thread.title
   }
 
-  private func conversationRow(_ conversation: VizProtocol.ConversationSummary) -> some View {
-    NavigationLink(value: Selection.conversation(conversation.id)) {
+  private func threadRow(_ thread: VizProtocol.ThreadSummary) -> some View {
+    NavigationLink(value: Selection.thread(thread.id)) {
       HStack {
-        conversationTitle(conversation)
+        threadTitle(thread)
           .lineLimit(1)
         Spacer()
-        Text(statusLabel(conversation.status))
+        Text(statusLabel(thread.status))
           .font(.caption)
           .foregroundStyle(.secondary)
       }
     }
     .swipeActions(allowsFullSwipe: false) {
-      if conversation.kind != .orchestrator {
-        Button(role: .destructive) {
-          pendingDelete = conversation
-        } label: {
-          Label("Delete", systemImage: "trash")
-        }
-        Button {
-          update(conversation, archived: true)
-        } label: {
-          Label("Archive", systemImage: "archivebox")
-        }
-        .tint(.orange)
-        Button {
-          update(conversation, pinned: !conversation.pinned)
-        } label: {
-          Label(
-            conversation.pinned ? "Unpin" : "Pin",
-            systemImage: conversation.pinned ? "pin.slash" : "pin")
-        }
-        .tint(.gray)
+      Button(role: .destructive) {
+        pendingDelete = thread
+      } label: {
+        Label("Delete", systemImage: "trash")
       }
+      Button {
+        update(thread, archived: true)
+      } label: {
+        Label("Archive", systemImage: "archivebox")
+      }
+      .tint(.orange)
+      Button {
+        update(thread, pinned: !thread.pinned)
+      } label: {
+        Label(
+          thread.pinned ? "Unpin" : "Pin",
+          systemImage: thread.pinned ? "pin.slash" : "pin")
+      }
+      .tint(.gray)
     }
   }
 
-  private func conversationTitle(_ conversation: VizProtocol.ConversationSummary) -> some View {
+  private func threadTitle(_ thread: VizProtocol.ThreadSummary) -> some View {
     HStack(spacing: 6) {
-      if conversation.unread {
+      if thread.unread {
         Circle()
           .fill(Color.accentColor)
           .frame(width: 6, height: 6)
           .accessibilityLabel("Unread")
       }
-      Text(title(conversation))
-        .fontWeight(conversation.unread ? .semibold : .regular)
+      Text(title(thread))
+        .fontWeight(thread.unread ? .semibold : .regular)
+    }
+  }
+
+  private func resetLocal() {
+    selection = nil
+    drafts = [:]
+    errors = [:]
+  }
+
+  private func switchEnvironment(_ environment: String) {
+    guard environment != backend.environment else { return }
+    resetLocal()
+    Task { await backend.select(environment: environment) }
+  }
+
+  /// Opens a thread, first switching environments when it lives in another one.
+  private func open(thread: Int, environment: String?) {
+    guard let environment, environment != backend.environment else {
+      selection = .thread(thread)
+      return
+    }
+    resetLocal()
+    Task {
+      await backend.select(environment: environment)
+      selection = .thread(thread)
+    }
+  }
+
+  private func launch(project: String?) {
+    Task {
+      do {
+        let id = try await backend.launch(project: project)
+        await backend.refresh()
+        selection = .thread(id)
+      } catch {
+        notice = ("New thread failed", error.localizedDescription)
+      }
     }
   }
 
   private func update(
-    _ conversation: VizProtocol.ConversationSummary,
+    _ thread: VizProtocol.ThreadSummary,
     archived: Bool? = nil,
     pinned: Bool? = nil
   ) {
     Task {
       do {
-        try await backend.update(conversation: conversation.id, archived: archived, pinned: pinned)
-        if archived == true, selection?.conversationID == conversation.id {
+        try await backend.update(thread: thread.id, archived: archived, pinned: pinned)
+        if archived == true, selection?.threadID == thread.id {
           selection = nil
         }
       } catch {
@@ -311,32 +398,23 @@ struct ContentView: View {
     }
   }
 
-  private func delete(_ conversation: VizProtocol.ConversationSummary) {
-    var subtree: Set<Int> = [conversation.id]
-    for chat in backend.conversations.sorted(by: { $0.id < $1.id }) {
-      if let parent = chat.parent, subtree.contains(parent) { subtree.insert(chat.id) }
-    }
-    let parent = conversation.parent.flatMap { id in
-      visibleConversations.first { $0.id == id }
-    }
+  private func delete(_ thread: VizProtocol.ThreadSummary) {
+    let parent = thread.parentEnvironment == nil ? thread.parent : nil
     Task {
       do {
-        try await backend.delete(conversation: conversation.id)
-        if let selected = selection?.conversationID, subtree.contains(selected) {
-          selection = parent.map { .conversation($0.id) }
+        try await backend.delete(thread: thread.id)
+        if selection?.threadID == thread.id {
+          selection = parent.map { .thread($0) }
         }
-        for id in subtree {
-          drafts[id] = nil
-          sent[id] = nil
-          errors[id] = nil
-        }
+        drafts[thread.id] = nil
+        errors[thread.id] = nil
       } catch {
         notice = ("Delete failed", error.localizedDescription)
       }
     }
   }
 
-  private func statusLabel(_ status: VizProtocol.ConversationSummary.Status) -> String {
+  private func statusLabel(_ status: VizProtocol.ThreadSummary.Status) -> String {
     switch status {
     case .idle: "Idle"
     case .working: "Working"
@@ -344,68 +422,460 @@ struct ContentView: View {
     }
   }
 
-  private func conversationDetail(_ conversation: VizProtocol.ConversationSummary) -> some View {
-    let id = conversation.id
-    let messages = sent[id, default: []]
-    let draft = Binding(get: { drafts[id, default: ""] }, set: { drafts[id] = $0 })
-    return VStack {
-      List(messages.indices, id: \.self) { index in Text(messages[index]) }
-      if let error = errors[id] {
-        Text(error)
-          .font(.footnote)
-          .foregroundStyle(.secondary)
-      }
-      HStack {
-        TextField("Message", text: draft)
-          .textFieldStyle(.roundedBorder)
-        if conversation.status == .working {
-          Button("Stop") {
-            Task {
-              do {
-                try await backend.abort(conversation: id)
-                errors[id] = nil
-              } catch {
-                errors[id] = error.localizedDescription
-              }
-            }
-          }
-        } else {
-          Button("Send") {
-            let text = draft.wrappedValue
-            drafts[id] = ""
-            Task {
-              do {
-                _ = try await backend.submit(text: text, conversation: id)
-                sent[id, default: []].append(text)
-                errors[id] = nil
-              } catch {
-                if drafts[id, default: ""].isEmpty { drafts[id] = text }
-                errors[id] = error.localizedDescription
-              }
-            }
-          }
-          .disabled(draft.wrappedValue.isEmpty)
-        }
-      }
-      .padding()
-    }
-    .navigationTitle(title(conversation))
-    .task(id: conversation.unread ? id : nil) {
-      guard conversation.unread else { return }
-      do {
-        try await backend.update(conversation: id, unread: false)
-      } catch {
-        if !Task.isCancelled { errors[id] = error.localizedDescription }
-      }
-    }
-  }
-
   private var status: String {
     switch backend.state {
     case .disconnected: "Disconnected"
     case .connecting: "Connecting…"
-    case .connected(let version, _): "Connected to viz-backend \(version)"
+    case .connected(let version, let environment):
+      "Connected to viz-backend \(version) (\(environment))"
     case .failed(let message): "Failed: \(message)"
+    }
+  }
+}
+
+/// A watched thread's transcript, live turn, queue, and composer.
+private struct ThreadDetail: View {
+  @Environment(Backend.self) private var backend
+  let thread: VizProtocol.ThreadSummary
+  let title: String
+  /// A search hit's entry to scroll to.
+  let target: Int?
+  @Binding var draft: String
+  @Binding var failure: String?
+  let open: (_ thread: Int, _ environment: String?) -> Void
+
+  init(
+    thread: VizProtocol.ThreadSummary,
+    title: String,
+    target: Int?,
+    draft: Binding<String>,
+    failure: Binding<String?>,
+    open: @escaping (_ thread: Int, _ environment: String?) -> Void
+  ) {
+    self.thread = thread
+    self.title = title
+    self.target = target
+    _draft = draft
+    _failure = failure
+    self.open = open
+  }
+
+  var body: some View {
+    let entries = backend.entries[thread.id] ?? []
+    let state = backend.threadStates[thread.id]
+    let status = state?.status ?? thread.status
+    VStack(spacing: 0) {
+      ScrollViewReader { proxy in
+        List {
+          if backend.earlier[thread.id] != nil {
+            Button("Load earlier") {
+              Task { await loadEarlier() }
+            }
+          }
+          ForEach(entries) { entry in
+            entryRow(entry)
+          }
+          if let live = state?.live {
+            liveRows(live, committed: entries)
+          }
+          if let queue = state?.queue, !queue.isEmpty {
+            Section("Queued") {
+              ForEach(queue) { queued in
+                Text(queued.text)
+                  .foregroundStyle(.secondary)
+                  .swipeActions {
+                    Button(role: .destructive) {
+                      removeQueued(queued.run)
+                    } label: {
+                      Label("Remove", systemImage: "trash")
+                    }
+                  }
+              }
+            }
+          }
+        }
+        .listStyle(.plain)
+        .onChange(of: entries.last?.id, initial: true) { _, last in
+          if target == nil, let last { proxy.scrollTo(last, anchor: .bottom) }
+        }
+        .onChange(of: entries.first?.id, initial: true) { _, _ in
+          reveal(proxy)
+        }
+        .onChange(of: target) { _, _ in
+          reveal(proxy)
+        }
+      }
+      if let failure {
+        Text(failure)
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+      HStack {
+        TextField("Message", text: $draft, axis: .vertical)
+          .lineLimit(1...5)
+          .textFieldStyle(.roundedBorder)
+        if status == .working {
+          Button("Stop") { stop() }
+        }
+        Button("Send") { send() }
+          .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+      }
+      .padding()
+      if let usage = state?.usage, usage.size > 0 {
+        Text("\(usage.used * 100 / usage.size)% of context used")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .padding(.bottom, 4)
+      }
+    }
+    .navigationTitle(title)
+    .toolbar {
+      if let parent = thread.parent {
+        ToolbarItem(placement: .primaryAction) {
+          Button {
+            open(parent, thread.parentEnvironment)
+          } label: {
+            Label("Parent", systemImage: "arrow.up.left")
+          }
+        }
+      }
+    }
+    .task(id: backend.connection) {
+      do {
+        try await backend.watch(thread: thread.id)
+      } catch {
+        if !Task.isCancelled { failure = error.localizedDescription }
+      }
+    }
+    .onDisappear { [id = thread.id, backend = backend] in
+      Task { await backend.unwatch(thread: id) }
+    }
+    .task(id: thread.unread ? thread.id : nil) {
+      guard thread.unread else { return }
+      do {
+        try await backend.update(thread: thread.id, unread: false)
+      } catch {
+        if !Task.isCancelled { failure = error.localizedDescription }
+      }
+    }
+  }
+
+  @ViewBuilder
+  private func entryRow(_ entry: VizProtocol.Entry) -> some View {
+    switch entry.content {
+    case .prompt(let prompt):
+      VStack(alignment: .trailing, spacing: 4) {
+        Text(prompt.text)
+          .padding(8)
+          .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+        ForEach(prompt.attachments ?? []) { attachment in
+          Label(attachment.name, systemImage: "paperclip")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        if let origin = prompt.origin {
+          Text(origin.author.map { "\($0) via \(origin.connector)" } ?? origin.connector)
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+        }
+      }
+      .frame(maxWidth: .infinity, alignment: .trailing)
+    case .text(let message):
+      Text(markdown(message.text))
+        .textSelection(.enabled)
+    case .thought(let message):
+      thoughtRow(message.text)
+    case .tool(let tool):
+      toolRow(tool)
+    case .plan(let plan):
+      VStack(alignment: .leading, spacing: 4) {
+        ForEach(plan.entries.indices, id: \.self) { index in
+          let item = plan.entries[index]
+          Label(item.content, systemImage: planIcon(item.status))
+        }
+      }
+      .font(.callout)
+    case .run(let run):
+      if let error = run.error {
+        Label(error, systemImage: "exclamationmark.triangle")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      } else if run.stopReason == "cancelled" {
+        Text("Stopped")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      } else if run.stopReason != "end_turn" {
+        Text("Ended: \(run.stopReason)")
+          .font(.footnote)
+          .foregroundStyle(.secondary)
+      }
+    case .taskResult(let result):
+      VStack(alignment: .leading, spacing: 4) {
+        Label("Task result", systemImage: "arrow.turn.down.left")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        Text(markdown(result.text))
+          .textSelection(.enabled)
+      }
+    case .unknown(let kind):
+      Text("Unsupported entry: \(kind)")
+        .font(.caption)
+        .foregroundStyle(.secondary)
+    }
+  }
+
+  /// The live turn's text and unfinished tools; text already committed under the same key is skipped.
+  @ViewBuilder
+  private func liveRows(_ live: VizProtocol.LiveTurn, committed: [VizProtocol.Entry]) -> some View {
+    if let text = live.text,
+      !committed.reversed().contains(where: { entry in
+        switch entry.content {
+        case .text(let message), .thought(let message): message.key == text.key
+        default: false
+        }
+      })
+    {
+      switch text.kind {
+      case .text: Text(markdown(text.text))
+      case .thought: thoughtRow(text.text)
+      }
+    }
+    ForEach(live.tools.indices, id: \.self) { index in
+      toolRow(live.tools[index])
+    }
+  }
+
+  private func thoughtRow(_ text: String) -> some View {
+    DisclosureGroup("Thinking") {
+      Text(text)
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+    .foregroundStyle(.secondary)
+  }
+
+  private func toolRow(_ tool: VizProtocol.ToolRecord) -> some View {
+    HStack {
+      Image(systemName: toolIcon(tool.status))
+        .foregroundStyle(.secondary)
+      Text(tool.title)
+        .font(.callout)
+        .lineLimit(2)
+      Spacer()
+      if let child = tool.child {
+        Button("Open") { open(child, tool.childEnvironment) }
+          .buttonStyle(.borderless)
+      }
+    }
+  }
+
+  private func toolIcon(_ status: VizProtocol.ToolRecord.Status) -> String {
+    switch status {
+    case .pending: "circle"
+    case .in_progress: "ellipsis.circle"
+    case .completed: "checkmark.circle"
+    case .failed: "xmark.circle"
+    }
+  }
+
+  private func planIcon(_ status: String) -> String {
+    switch status {
+    case "completed": "checkmark.circle"
+    case "in_progress": "ellipsis.circle"
+    default: "circle"
+    }
+  }
+
+  private func markdown(_ text: String) -> AttributedString {
+    (try? AttributedString(
+      markdown: text,
+      options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+    )) ?? AttributedString(text)
+  }
+
+  /// Scrolls to the target entry, loading older pages until it is loaded.
+  private func reveal(_ proxy: ScrollViewProxy) {
+    guard let target else { return }
+    let entries = backend.entries[thread.id] ?? []
+    if entries.contains(where: { $0.id == target }) {
+      proxy.scrollTo(target, anchor: .center)
+    } else if let first = entries.first, target < first.id, backend.earlier[thread.id] != nil {
+      Task { await loadEarlier() }
+    }
+  }
+
+  private func loadEarlier() async {
+    do {
+      try await backend.loadEarlier(thread: thread.id)
+    } catch {
+      failure = error.localizedDescription
+    }
+  }
+
+  private func send() {
+    let text = draft
+    draft = ""
+    Task {
+      do {
+        _ = try await backend.send(text: text, thread: thread.id)
+        failure = nil
+      } catch {
+        if draft.isEmpty { draft = text }
+        failure = error.localizedDescription
+      }
+    }
+  }
+
+  private func stop() {
+    Task {
+      do {
+        try await backend.stop(thread: thread.id)
+        failure = nil
+      } catch {
+        failure = error.localizedDescription
+      }
+    }
+  }
+
+  private func removeQueued(_ run: Int) {
+    Task {
+      do {
+        try await backend.removeQueued(thread: thread.id, run: run)
+      } catch {
+        failure = error.localizedDescription
+      }
+    }
+  }
+}
+
+/// Lists a harness's own sessions and imports one as a thread.
+private struct ImportSheet: View {
+  @Environment(Backend.self) private var backend
+  @Environment(\.dismiss) private var dismiss
+  let imported: (Int) -> Void
+  @State private var harnesses: [VizProtocol.HarnessCatalog.Harness] = []
+  @State private var harness: String?
+  @State private var project: String?
+  @State private var sessions: [VizProtocol.NativeThread] = []
+  @State private var cursor: String?
+  @State private var loading = false
+  @State private var importingSession: String?
+  @State private var failure: String?
+
+  init(imported: @escaping (Int) -> Void) {
+    self.imported = imported
+  }
+
+  var body: some View {
+    NavigationStack {
+      List {
+        Section {
+          Picker("Harness", selection: $harness) {
+            ForEach(harnesses) { harness in
+              Text(harness.name).tag(Optional(harness.name))
+            }
+          }
+          Picker("Project", selection: $project) {
+            Text("None").tag(String?.none)
+            ForEach(backend.projects) { project in
+              Text(project.name).tag(Optional(project.path))
+            }
+          }
+        }
+        Section("Sessions") {
+          ForEach(sessions) { session in
+            Button {
+              importSession(session)
+            } label: {
+              VStack(alignment: .leading, spacing: 2) {
+                Text(session.title ?? session.sessionId)
+                  .lineLimit(1)
+                HStack {
+                  Text(session.cwd)
+                    .lineLimit(1)
+                  if let updatedAt = session.updatedAt {
+                    Spacer()
+                    Text(
+                      Date(timeIntervalSince1970: Double(updatedAt) / 1000), style: .relative)
+                  }
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+              }
+            }
+            .disabled(importingSession != nil)
+          }
+          if loading {
+            ProgressView()
+          } else if cursor != nil {
+            Button("Load more") {
+              Task { await load(reset: false) }
+            }
+          } else if sessions.isEmpty, failure == nil, harness != nil {
+            Text("No sessions")
+              .foregroundStyle(.secondary)
+          }
+          if let failure {
+            Text(failure)
+              .foregroundStyle(.secondary)
+          }
+        }
+      }
+      .navigationTitle("Import thread")
+      .toolbar {
+        ToolbarItem(placement: .cancellationAction) {
+          Button("Cancel") { dismiss() }
+        }
+      }
+      .task {
+        do {
+          harnesses = try await backend.listHarnesses()
+          harness = harnesses.first(where: \.default)?.name ?? harnesses.first?.name
+        } catch {
+          failure = error.localizedDescription
+        }
+      }
+      .task(id: [harness ?? "", project ?? ""]) {
+        await load(reset: true)
+      }
+    }
+  }
+
+  private func load(reset: Bool) async {
+    guard let harness else { return }
+    let project = project
+    if reset {
+      sessions = []
+      cursor = nil
+    }
+    loading = true
+    failure = nil
+    defer { loading = false }
+    do {
+      let page = try await backend.nativeThreads(
+        harness: harness, project: project, cursor: reset ? nil : cursor)
+      guard !Task.isCancelled, self.harness == harness, self.project == project else { return }
+      sessions.append(contentsOf: page.threads)
+      cursor = page.nextCursor
+    } catch {
+      guard !Task.isCancelled else { return }
+      failure = error.localizedDescription
+    }
+  }
+
+  private func importSession(_ session: VizProtocol.NativeThread) {
+    guard let harness else { return }
+    importingSession = session.sessionId
+    Task {
+      do {
+        let id = try await backend.importThread(
+          harness: harness, sessionId: session.sessionId, cwd: session.cwd, project: project)
+        await backend.refresh()
+        imported(id)
+      } catch {
+        failure = error.localizedDescription
+      }
+      importingSession = nil
     }
   }
 }

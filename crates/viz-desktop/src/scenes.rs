@@ -1,16 +1,16 @@
 //! Deterministic `AppSpec` scenes for inspecting desktop layout without a live
-//! socket.
+//! backend.
 
-use serde_json::json;
 use viz_client::protocol::{
-    Attachment, AttachmentCapabilities, ConfigOption, ConversationId, ConversationKind,
-    ConversationState, ConversationStatus, ConversationSummary, DependentChoice, DependentOption,
-    EntryId, Harness, OptionChoice, OptionKind, OptionValue, Project, QueuedInput, SearchHit,
-    SlashCommand, SubmissionId,
+    Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
+    EntryData, EntryId, Environment, EnvironmentStatus, Harness, LiveText, LiveTextKind, LiveTurn,
+    OptionChoice, OptionKind, OptionValue, PlanEntry, PlanPriority, PlanStatus, Project,
+    PromptAttachment, QueuedInput, RunEnd, RunId, SearchHit, SlashCommand, Task, TaskStatus,
+    ThreadId, ThreadState, ThreadStatus, ThreadSummary, ToolCallStatus, ToolDiff, ToolRecord,
 };
 
 use crate::{
-    app::{Desktop, NewChat, Status},
+    app::{Desktop, NewThread, Status},
     composer, palette, sidebar,
     thread::Thread,
     timeline,
@@ -28,7 +28,6 @@ pub const SCENES: &[Scene] = &[
     ("queue", queue),
     ("empty", empty),
     ("onboarding", onboarding),
-    ("orchestrator", orchestrator),
     ("subagents", subagents),
     ("agents", agents),
     ("subagent", subagent),
@@ -38,127 +37,120 @@ pub const SCENES: &[Scene] = &[
     ("draft-project", draft_project),
 ];
 
-const CHAT: ConversationId = ConversationId(11);
+const THREAD: ThreadId = ThreadId(11);
 
 fn workspace(s: &mut Desktop) {
     s.status = Status::Connected {
         version: "preview".into(),
     };
-    s.root = Some(ConversationId(1));
+    s.environment = Some("local".into());
+    s.environments = vec![Environment {
+        id: "local".into(),
+        url: None,
+        status: EnvironmentStatus::Local,
+    }];
     s.projects = [
-        ("workbench", "Workbench", "/work/workbench"),
-        ("field-notes", "Field notes", "/work/field-notes"),
+        ("Workbench", "/work/workbench"),
+        ("Field notes", "/work/field-notes"),
     ]
-    .map(|(id, name, path)| Project {
-        id: id.into(),
+    .map(|(name, path)| Project {
         name: name.into(),
         path: path.into(),
         created_at: 0,
     })
     .into();
-    s.conversations = list();
-    s.conversations
-        .retain(|chat| chat.kind != ConversationKind::Subagent);
-    s.show(CHAT);
+    s.threads = list();
+    s.threads.retain(|thread| thread.parent.is_none());
+    s.show(THREAD);
     s.draft.focused = true;
-    s.conversation = Some(conversation());
+    s.state = Some(thread());
     s.thread = transcript(&[]);
     s.toggle("acp-1-write-1-activity");
     s.toggle("acp-1-write-1");
 }
 
-fn list() -> Vec<ConversationSummary> {
-    use ConversationKind::{Chat, Orchestrator, Subagent};
-    use ConversationStatus::{Failed, Idle, Working};
+fn list() -> Vec<ThreadSummary> {
+    use ThreadStatus::{Failed, Idle, Working};
 
     [
         (
             21,
             "Review line endings",
-            Subagent,
             Some(11),
-            Some("workbench"),
+            Some("/work/workbench"),
             Idle,
         ),
         (
             20,
             "Compare exports",
-            Subagent,
             Some(11),
-            Some("workbench"),
+            Some("/work/workbench"),
             Working,
         ),
         (
             11,
             "Export markdown notes",
-            Chat,
             None,
-            Some("workbench"),
+            Some("/work/workbench"),
             Idle,
         ),
         (
             10,
             "Trim export whitespace",
-            Chat,
             None,
-            Some("workbench"),
+            Some("/work/workbench"),
             Idle,
         ),
         (
             9,
             "Audit error messages",
-            Chat,
             None,
-            Some("workbench"),
+            Some("/work/workbench"),
             Idle,
         ),
         (
             7,
             "Organize reference links",
-            Chat,
             None,
-            Some("field-notes"),
+            Some("/work/field-notes"),
             Failed,
         ),
-        (4, "Draft release notes", Chat, None, None, Idle),
-        (1, "Orchestrator", Orchestrator, None, None, Idle),
+        (4, "Draft release notes", None, None, Idle),
     ]
-    .map(
-        |(id, title, kind, parent, project, status)| ConversationSummary {
-            id: ConversationId(id),
-            title: title.into(),
-            kind,
-            parent: parent.map(ConversationId),
-            project: project.map(str::to_owned),
-            // Every known mark among the chats.
-            harness: (kind != Orchestrator).then(|| {
-                let marks = ["claude", "codex", "goose", "omp", "pi", "claude"];
-                marks[usize::try_from(id).unwrap_or_default() % marks.len()].into()
-            }),
-            model: match id {
-                20 => Some("GPT-5.5".into()),
-                21 => Some("Claude Opus 4.7".into()),
-                _ => None,
-            },
-            thinking: (kind == Subagent).then(|| "high".into()),
-            status,
-            archived: false,
-            // Minutes ago, newest first by id, so "last activity" reads
-            // like a live session.
-            updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
-            unread: id == 9,
-            pinned: id == 4,
+    .map(|(id, title, parent, project, status)| ThreadSummary {
+        id: ThreadId(id),
+        title: title.into(),
+        parent: parent.map(ThreadId),
+        parent_environment: None,
+        project: project.map(str::to_owned),
+        // Every known mark among the threads.
+        harness: {
+            let marks = ["claude", "codex", "goose", "omp", "pi", "claude"];
+            marks[usize::try_from(id).unwrap_or_default() % marks.len()].into()
         },
-    )
+        model: match id {
+            20 => Some("GPT-5.5".into()),
+            21 => Some("Claude Opus 4.7".into()),
+            _ => None,
+        },
+        thinking: parent.is_some().then(|| "high".into()),
+        status,
+        archived: false,
+        // Minutes ago, newest first by id, so "last activity" reads
+        // like a live session.
+        updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
+        unread: id == 9,
+        pinned: id == 4,
+    })
     .into()
 }
 
-fn conversation() -> ConversationState {
-    ConversationState {
-        status: ConversationStatus::Idle,
-        harness: Some("claude".into()),
-        project: Some("workbench".into()),
-        cwd: Some("/work/workbench".into()),
+fn thread() -> ThreadState {
+    ThreadState {
+        status: ThreadStatus::Idle,
+        harness: "claude".into(),
+        project: Some("/work/workbench".into()),
+        cwd: "/work/workbench".into(),
         options: options(),
         commands: vec![SlashCommand {
             name: "review".into(),
@@ -173,28 +165,61 @@ fn conversation() -> ConversationState {
 }
 
 fn transcript(attachments: &[&str]) -> Thread {
-    let attachments: Vec<_> = attachments
+    let attachments = attachments
         .iter()
-        .map(|name| json!({"name": name, "mime": "image/png", "path": format!("/state/attachments/{name}")}))
+        .map(|&name| PromptAttachment {
+            id: name.to_owned(),
+            name: name.to_owned(),
+            mime: "image/png".into(),
+        })
         .collect();
-    Thread::from_view(&json!({
-        "entries": [
-            {"id":1,"kind":"viz.agent.prompt","data":{"text":"Make the markdown export preserve a final newline.","attachments":attachments}},
-            {"id":2,"kind":"viz.agent.text","data":{"text":"The export drops the final newline when it joins blocks. I’ll fix that at the boundary."}},
-            {"id":3,"kind":"viz.agent.plan","data":{"entries":[
-                {"content":"Read the export pipeline","status":"completed"},
-                {"content":"Preserve the final newline","status":"completed"},
-                {"content":"Check export output","status":"in_progress"}
-            ]}},
-            {"id":4,"kind":"viz.agent.tool","data":{
-                "id":"write-1","title":"Update markdown export","kind":"edit","status":"completed",
-                "output":"Updated 1 file.",
-                "diffs":[{"path":"src/export.rs","oldText":"let body = blocks.join(\"\\n\\n\");\nOk(body)\n","newText":"let body = blocks.join(\"\\n\\n\");\nOk(format!(\"{body}\\n\"))\n"}]
-            }},
-            {"id":5,"kind":"viz.agent.turn","data":{"stopReason":"end_turn","error":null}}
+    preview_thread(
+        [
+            EntryData::Prompt {
+                text: "Make the markdown export preserve a final newline.".into(),
+                attachments,
+                origin: None,
+            },
+            response(
+                "The export drops the final newline when it joins blocks. I’ll fix that at the boundary.",
+            ),
+            EntryData::Plan {
+                entries: [
+                    ("Read the export pipeline", PlanStatus::Completed),
+                    ("Preserve the final newline", PlanStatus::Completed),
+                    ("Check export output", PlanStatus::InProgress),
+                ]
+                .into_iter()
+                .map(|(content, status)| PlanEntry {
+                    content: content.into(),
+                    priority: PlanPriority::Medium,
+                    status,
+                })
+                .collect(),
+            },
+            EntryData::Tool(ToolRecord {
+                output: Some("Updated 1 file.".into()),
+                diffs: vec![ToolDiff {
+                    path: "src/export.rs".into(),
+                    old_text: Some("let body = blocks.join(\"\n\n\");\nOk(body)\n".into()),
+                    new_text: "let body = blocks.join(\"\n\n\");\nOk(format!(\"{body}\n\"))\n"
+                        .into(),
+                }],
+                ..preview_tool(
+                    "write-1",
+                    "Update markdown export",
+                    "edit",
+                    ToolCallStatus::Completed,
+                )
+            }),
+            EntryData::Run(RunEnd {
+                stop_reason: Some("end_turn".into()),
+                error: None,
+                answer: None,
+            }),
         ],
-        "before": 40,
-    }))
+        Some(EntryId(1)),
+    )
 }
 
 /// The model picker open on the session's model.
@@ -209,15 +234,15 @@ fn model_search(s: &mut Desktop) {
     composer::preview_model_menu(s, "fl");
 }
 
-/// A fresh chat in a project with two runners: the harness and the model
+/// A fresh thread in a project with two runners: the harness and the model
 /// picker side by side.
 fn new_agent(s: &mut Desktop) {
     workspace(s);
-    let chat = NewChat::new(0, s.project());
+    let thread = NewThread::new(0, s.project());
     s.selected = None;
-    s.conversation = None;
+    s.state = None;
     s.thread = Thread::default();
-    s.new_chat = Some(chat);
+    s.new_thread = Some(thread);
     s.harnesses = vec![
         Harness {
             name: "omp".into(),
@@ -232,15 +257,15 @@ fn new_agent(s: &mut Desktop) {
     ];
 }
 
-/// A chat's context menu with its Move to project submenu open.
+/// A thread's context menu with its Move to project submenu open.
 fn context_menu(s: &mut Desktop) {
     workspace(s);
-    sidebar::preview_context_menu(s, ConversationId(10), 120.0, 236.0);
+    sidebar::preview_context_menu(s, ThreadId(10), 120.0, 236.0);
 }
 
 /// A runner's catalog as omp reports it: models from several providers
 /// (two sharing a name), thinking levels for the current model and those it
-/// reported for others, a real mode, and an uncategorized switch.
+/// reported for others, and an uncategorized switch.
 fn options() -> Vec<ConfigOption> {
     let levels = |levels: &[(&str, &str)]| DependentOption {
         id: "thinking".into(),
@@ -301,13 +326,6 @@ fn options() -> Vec<ConfigOption> {
                 ("xhigh", "xhigh"),
             ],
         ),
-        option(
-            "mode",
-            "Mode",
-            "mode",
-            "default",
-            &[("default", "Default"), ("plan", "Plan")],
-        ),
         ConfigOption {
             id: "context".into(),
             name: "Include workspace context".into(),
@@ -339,8 +357,8 @@ fn palette(s: &mut Desktop) {
             "Error messages end without a trailing \u{1}newline\u{2} on Windows",
         ),
     ]
-    .map(|(conversation, entry, snippet)| SearchHit {
-        conversation: ConversationId(conversation),
+    .map(|(thread, entry, snippet)| SearchHit {
+        thread: ThreadId(thread),
         entry: EntryId(entry),
         snippet: snippet.into(),
     })
@@ -366,122 +384,138 @@ fn empty(s: &mut Desktop) {
 }
 
 fn onboarding(s: &mut Desktop) {
-    orchestrator(s);
-    s.projects.clear();
-    s.conversations
-        .retain(|chat| chat.kind == ConversationKind::Orchestrator);
-}
-
-/// The orchestrator open on its intro.
-fn orchestrator(s: &mut Desktop) {
     workspace(s);
-    s.show(ConversationId(1));
-    let mut state = conversation();
-    state.project = None;
-    state.harness = None;
-    state.options.clear();
-    s.conversation = Some(state);
+    s.projects.clear();
+    s.threads.clear();
+    s.selected = None;
+    s.state = None;
+    s.thread = Thread::default();
 }
 
-/// A chat that delegated to a running and a finished subagent.
+/// A thread that delegated to a running and a finished subagent.
 fn subagents(s: &mut Desktop) {
     workspace(s);
-    s.conversations = list();
-    s.thread = Thread::from_view(&json!({
-        "entries": [
-            {"id":1,"kind":"viz.agent.prompt","data":{"text":"Compare the export against the old CLI, and review line endings."}},
-            {"id":2,"kind":"viz.agent.text","data":{"text":"I’ll split this: one subagent compares exports, another reviews line endings."}},
-            {"id":3,"kind":"viz.agent.tool","data":{
-                "id":"spawn-1","title":"Compare exports","kind":"other","status":"in_progress",
-                "viz":"spawn_subagent","child":20
-            }},
-            {"id":4,"kind":"viz.agent.tool","data":{
-                "id":"spawn-2","title":"Review line endings","kind":"other","status":"completed",
-                "viz":"spawn_subagent","child":21,
-                "output":"CRLF survives the join; only the final newline was missing.\nNo other changes needed."
-            }},
-            {"id":5,"kind":"viz.agent.tool","data":{
-                "id":"message-1","title":"Compare exports","kind":"other","status":"completed",
-                "viz":"message_subagent","child":20
-            }},
-        ],
-    }));
-    if let Some(state) = &mut s.conversation {
-        state.status = ConversationStatus::Working;
+    s.threads = list();
+    s.tasks = [
+        (20, "Compare exports", TaskStatus::Running),
+        (21, "Review line endings", TaskStatus::Completed),
+    ]
+    .map(|(id, title, status)| Task {
+        id: id.to_string(),
+        parent: THREAD,
+        environment: "local".into(),
+        thread: Some(ThreadId(id)),
+        run: None,
+        status,
+        reachable: true,
+        title: title.into(),
+        result: None,
+        error: None,
+    })
+    .into();
+    s.thread = preview_thread([
+        prompt("Compare the export against the old CLI, and review line endings."),
+        response("I’ll delegate the export comparison and the line-ending review."),
+        EntryData::Tool(ToolRecord {
+            viz: Some("delegate_task".into()), child: Some(ThreadId(20)),
+            ..preview_tool("spawn-1", "Compare exports", "other", ToolCallStatus::InProgress)
+        }),
+        EntryData::Tool(ToolRecord {
+            viz: Some("delegate_task".into()), child: Some(ThreadId(21)),
+            output: Some("CRLF survives the join; only the final newline was missing.\nNo other changes needed.".into()),
+            ..preview_tool("spawn-2", "Review line endings", "other", ToolCallStatus::Completed)
+        }),
+        EntryData::Tool(ToolRecord {
+            viz: Some("thread_send".into()), child: Some(ThreadId(20)),
+            ..preview_tool("message-1", "Compare exports", "other", ToolCallStatus::Completed)
+        }),
+    ], None);
+    if let Some(state) = &mut s.state {
+        state.status = ThreadStatus::Working;
     }
 }
 
-/// The same chat with its timeline activity expanded.
+/// The same thread with its timeline activity expanded.
 fn agents(s: &mut Desktop) {
     subagents(s);
     s.toggle("acp-1-spawn-1-activity");
 }
 
-/// A subagent's own conversation, under its parent.
+/// A subagent's own thread, under its parent.
 fn subagent(s: &mut Desktop) {
     workspace(s);
-    s.conversations = list();
-    s.show(ConversationId(20));
-    let mut state = conversation();
-    state.status = ConversationStatus::Working;
+    s.threads = list();
+    s.show(ThreadId(20));
+    let mut state = thread();
+    state.status = ThreadStatus::Working;
     state.usage = Some(viz_client::protocol::ContextUsage {
         used: 34_817,
         size: 200_000,
     });
-    state.live = serde_json::from_value(json!({
-        "turn": "1",
-        "text": { "key": "1:0", "kind": "thought", "text": "Run both exporters against the same inputs and compare their output." },
-        "tools": [{
-            "id": "compare", "title": "Compare sample exports", "kind": "execute", "status": "in_progress",
-            "startedAt": now_ms() - 11_000,
-            "input": "{\"command\":\"diff -u old.md new.md\",\"timeout\":30}"
-        }]
-    })).ok();
-    s.thread = Thread::from_view(&json!({
-        "entries": [
-            {"id":1,"kind":"viz.agent.prompt","data":{"text":"Compare the markdown export with the old CLI’s output for the sample notes."}},
-            {"id":2,"kind":"viz.agent.text","data":{"text":"I’ll compare the output for `samples/`."}},
+    state.live = Some(LiveTurn {
+        turn: "1".into(),
+        text: Some(LiveText {
+            key: "1:1".into(),
+            kind: LiveTextKind::Thought,
+            text: "Run both exporters against the same inputs and compare their output.".into(),
+        }),
+        tools: vec![ToolRecord {
+            started_at: Some(now_ms() - 11_000),
+            input: Some(r#"{"command":"diff -u old.md new.md","timeout":30}"#.into()),
+            ..preview_tool(
+                "compare",
+                "Compare sample exports",
+                "execute",
+                ToolCallStatus::InProgress,
+            )
+        }],
+    });
+    s.thread = preview_thread(
+        [
+            prompt("Compare the markdown export with the old CLI’s output for the sample notes."),
+            response("I’ll compare the output for `samples/`."),
         ],
-    }));
+        None,
+    );
     s.thread.sync_acp(state.live.as_ref());
-    s.conversation = Some(state);
+    s.state = Some(state);
 }
 
-/// The workspace with chats listed under their projects.
+/// The workspace with threads listed under their projects.
 fn projects(s: &mut Desktop) {
     workspace(s);
     sidebar::preview_projects(s);
 }
 
-/// A fresh chat with its project picker open.
+/// A fresh thread with its project picker open.
 fn draft_project(s: &mut Desktop) {
     new_agent(s);
     s.open_picker = Some(timeline::DRAFT_PROJECT.into());
 }
 
-/// The delete confirmation for the open chat.
+/// The delete confirmation for the open thread.
 fn delete(s: &mut Desktop) {
     workspace(s);
-    sidebar::preview_delete(s, CHAT);
+    sidebar::preview_delete(s, THREAD);
 }
 
 /// Long strings in the delete dialog and the toasts: titles wrap or cut
 /// before the close buttons, details stop at their line caps.
 fn overflow(s: &mut Desktop) {
     workspace(s);
-    if let Some(chat) = s.conversations.iter_mut().find(|chat| chat.id == CHAT) {
-        chat.title = "Which Rust edition does /home/vidhanio/Projects/viz/Cargo.toml use, and \
+    if let Some(thread) = s.threads.iter_mut().find(|thread| thread.id == THREAD) {
+        thread.title = "Which Rust edition does /home/vidhanio/Projects/viz/Cargo.toml use, and \
                       does every crate in the workspace inherit it?"
             .into();
     }
-    sidebar::preview_delete(s, CHAT);
+    sidebar::preview_delete(s, THREAD);
     s.preview_toast(
         "Couldn't open /home/vidhanio/Projects/viz/crates/viz-desktop/src/sidebar/actions.rs \
          for writing",
         "error: failed to write \
          /home/vidhanio/Projects/viz/target/preview/export-markdown-notes-4f1c2a/crates/\
          viz-desktop/src/ui/mod.rs: Permission denied (os error 13)\nhint: check the \
-         directory's owner\nhint: or remove it and start the chat again\nnote: the backend \
+         directory's owner\nhint: or remove it and start the thread again\nnote: the backend \
          kept the previous version on disk",
     );
     s.preview_toast("Offline", "The backend disconnected.");
@@ -489,14 +523,14 @@ fn overflow(s: &mut Desktop) {
 
 fn queue(s: &mut Desktop) {
     workspace(s);
-    if let Some(state) = &mut s.conversation {
-        state.status = ConversationStatus::Working;
+    if let Some(state) = &mut s.state {
+        state.status = ThreadStatus::Working;
         state.queue = [
             (31, "Also handle CRLF line endings"),
             (32, "Then add a note to the changelog about the export fix"),
         ]
-        .map(|(submission, text)| QueuedInput {
-            submission: SubmissionId(submission),
+        .map(|(run, text)| QueuedInput {
+            run: RunId(run),
             text: text.into(),
         })
         .into();
@@ -536,4 +570,48 @@ fn now_ms() -> i64 {
         .ok()
         .and_then(|now| i64::try_from(now.as_millis()).ok())
         .unwrap_or_default()
+}
+
+fn preview_thread(entries: impl IntoIterator<Item = EntryData>, before: Option<EntryId>) -> Thread {
+    let entries = (1_u64..)
+        .zip(entries)
+        .map(|(id, data)| Entry {
+            id: EntryId(id),
+            data,
+        })
+        .collect::<Vec<_>>();
+    Thread::from_entries(&entries, before)
+}
+
+fn prompt(text: &str) -> EntryData {
+    EntryData::Prompt {
+        text: text.into(),
+        attachments: Vec::new(),
+        origin: None,
+    }
+}
+
+fn response(text: &str) -> EntryData {
+    EntryData::Text {
+        text: text.into(),
+        key: "1:0".into(),
+    }
+}
+
+fn preview_tool(id: &str, title: &str, kind: &str, status: ToolCallStatus) -> ToolRecord {
+    ToolRecord {
+        id: id.into(),
+        title: title.into(),
+        name: None,
+        kind: Some(kind.into()),
+        status,
+        viz: None,
+        child: None,
+        child_environment: None,
+        started_at: None,
+        input: None,
+        output: None,
+        diffs: Vec::new(),
+        locations: Vec::new(),
+    }
 }

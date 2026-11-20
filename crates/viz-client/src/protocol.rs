@@ -1,5 +1,4 @@
-//! Protocol v1 types, mirroring `backend/src/protocol.ts` (the source of truth;
-//! its JSON Schema is `protocol/schema.json`).
+//! Shared protocol v2 types for viz backends and clients.
 //!
 //! Each request's params type implements [`Method`], which names the method on
 //! the wire and its result type.
@@ -9,32 +8,37 @@ mod history;
 use std::fmt;
 
 pub use history::{
-    Attachment, AttachmentCapabilities, EntryId, EntryPage, ListEntries, QueuedInput,
-    RemoveQueuedInput, SearchConversations, SearchHit, SearchHits,
+    Attachment, AttachmentCapabilities, Entry, EntryData, EntryId, EntryPage, ListEntries,
+    PlanEntry, PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd,
+    SearchHit, SearchHits, SearchThreads, UpdateQueuedInput,
 };
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::Value;
 
 /// The protocol version this crate speaks.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
-/// A pi-durable conversation id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// A thread id.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
-pub struct ConversationId(pub u64);
+pub struct ThreadId(pub u64);
 
-impl fmt::Display for ConversationId {
+impl fmt::Display for ThreadId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
 }
 
-/// A pi-durable submission id.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+/// A run id.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
+)]
 #[serde(transparent)]
-pub struct SubmissionId(pub u64);
+pub struct RunId(pub u64);
 
-impl fmt::Display for SubmissionId {
+impl fmt::Display for RunId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.0.fmt(f)
     }
@@ -54,44 +58,68 @@ mod private {
 }
 
 macro_rules! methods {
-    ($($params:ty => $name:literal, $response:ty;)*) => {$(
+    ($($params:ty => $name:literal, $response:ty;)*) => {
+        $(
         impl private::Sealed for $params {}
         impl Method for $params {
             const NAME: &'static str = $name;
             type Response = $response;
         }
-    )*};
+        )*
+
+        /// Input and output schemas for every public wire method.
+        #[must_use]
+        pub fn method_schemas() -> serde_json::Value {
+            serde_json::json!({
+                $($name: {
+                    "params": schemars::schema_for!($params),
+                    "result": schemars::schema_for!($response),
+                },)*
+            })
+        }
+    };
 }
 
 methods! {
     HelloParams => "hello", Hello;
-    ListConversations => "conversations.list", ConversationList;
-    UpdateConversation<'_> => "conversation.update", Empty;
-    ConfigureConversation<'_> => "conversation.configure", Empty;
-    AbortConversation => "conversation.abort", Empty;
-    DeleteConversation => "conversation.delete", Empty;
+    ListEnvironments => "environments.list", EnvironmentList;
+    ListTasks => "tasks.list", TaskList;
+    TaskStatusRequest<'_> => "task.status", TaskStatusResult;
+    CancelTask<'_> => "task.cancel", TaskResult;
+    DelegateTask<'_> => "task.delegate", TaskResult;
+    ListHarnessThreads<'_> => "harness.threads", HarnessThreadList;
+    ImportThread<'_> => "thread.import", Imported;
+    WaitThread => "thread.wait", WaitResult;
+    ReadThreadState => "thread.state", ThreadStateResult;
+    ReadProject<'_> => "project.read", ProjectResult;
+    UpdateQueuedInput<'_> => "queue.update", Empty;
+    ListThreads<'_> => "threads.list", ThreadList;
+    UpdateThread<'_> => "thread.update", Empty;
+    ConfigureThread<'_> => "thread.configure", Empty;
+    StopThread => "thread.stop", Empty;
+    DeleteThread => "thread.delete", Empty;
     ListProjects => "projects.list", ProjectList;
     CreateProject<'_> => "project.create", ProjectResult;
-    UpdateProject<'_> => "project.update", ProjectResult;
+    UpdateProject<'_> => "project.update", Empty;
     RemoveProject<'_> => "project.remove", Empty;
     ListHarnesses => "harnesses.list", HarnessList;
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
-    // `CreateConversation` owns its initial settings for callers that queue creation.
-    CreateConversation => "conversation.create", Created;
-    Submit => "conversation.submit", Submitted;
-    Watch => "conversation.watch", Watching;
-    Unwatch => "conversation.unwatch", Watching;
-    SearchConversations<'_> => "conversations.search", SearchHits;
-    ListEntries => "conversation.entries", EntryPage;
+    // `LaunchThread` owns its initial settings for callers that queue creation.
+    LaunchThread => "thread.launch", Launched;
+    SendInput => "thread.send", Sent;
+    Watch => "thread.watch", Watching;
+    Unwatch => "thread.unwatch", Watching;
+    SearchThreads<'_> => "threads.search", SearchHits;
+    ListEntries => "thread.entries", EntryPage;
     RemoveQueuedInput => "queue.remove", Empty;
 }
 
 /// What kind of client is connecting; decides which notifications it receives.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ClientKind {
-    /// Full UI (desktop, mobile): watches whole conversations.
+    /// Full UI (desktop, mobile): watches whole threads.
     App,
     /// Connector (Discord, iMessage, ...): receives replies to its own inputs
     /// only.
@@ -101,7 +129,7 @@ pub enum ClientKind {
 }
 
 /// Identifies a client in `hello`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ClientInfo {
     /// Client kind.
     pub kind: ClientKind,
@@ -110,7 +138,7 @@ pub struct ClientInfo {
 }
 
 /// Where an input came from, so its reply is routed back there.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Origin {
     /// Connector name, matching its `hello` name.
     pub connector: String,
@@ -128,68 +156,61 @@ pub struct Origin {
 }
 
 /// `hello` params: the first request on a connection.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct HelloParams {
     /// The protocol version the client speaks, [`PROTOCOL_VERSION`].
     pub protocol: u32,
     /// Who is connecting.
     pub client: ClientInfo,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
 }
 
 /// `hello` result.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Hello {
     /// Protocol version the backend speaks.
     pub protocol: u32,
     /// Backend version.
     pub version: String,
-    /// The orchestrator's conversation id.
-    pub root: ConversationId,
+    /// The selected environment.
+    pub environment: String,
 }
 
-/// `conversations.list` params.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
-pub struct ListConversations {}
-
-/// `conversations.list` result.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-pub struct ConversationList {
-    /// Every conversation.
-    pub conversations: Vec<ConversationSummary>,
+/// `threads.list` params.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ListThreads<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archived: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<&'a str>,
 }
 
-/// What a conversation is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum ConversationKind {
-    /// The orchestrator: the root conversation.
-    Orchestrator,
-    /// A chat started from an app.
-    Chat,
-    /// An ACP chat started by another ACP chat.
-    Subagent,
+/// `threads.list` result.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct ThreadList {
+    /// Every thread.
+    pub threads: Vec<ThreadSummary>,
 }
 
-/// A `conversations.list` item.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// A `threads.list` item.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationSummary {
+pub struct ThreadSummary {
     /// Its id.
-    pub id: ConversationId,
-    /// A user rename, an ACP session title, or a title from the first prompt;
-    /// fixed for the orchestrator.
+    pub id: ThreadId,
+    /// A user rename, an ACP session title, or a title from the first prompt.
     pub title: String,
-    /// What it is.
-    pub kind: ConversationKind,
-    /// For a subagent: the conversation that started it.
-    pub parent: Option<ConversationId>,
-    /// The project directory this conversation belongs to, if any.
+    /// For a subagent: the thread that started it.
+    pub parent: Option<ThreadId>,
+    pub parent_environment: Option<String>,
+    /// The project directory this thread belongs to, if any.
     pub project: Option<String>,
-    /// The configured ACP runner, if any.
-    pub harness: Option<String>,
-    /// What this conversation is doing.
-    pub status: ConversationStatus,
-    /// Whether the conversation is archived.
+    /// The configured ACP runner.
+    pub harness: String,
+    /// What this thread is doing.
+    pub status: ThreadStatus,
+    /// Whether the thread is archived.
     pub archived: bool,
     /// Time of the last input or turn end in Unix milliseconds; zero if
     /// unknown.
@@ -197,7 +218,7 @@ pub struct ConversationSummary {
     /// A turn settled while no app was watching, or this chat was manually
     /// marked unread.
     pub unread: bool,
-    /// Show the conversation in the pinned section.
+    /// Show the thread in the pinned section.
     pub pinned: bool,
     /// Display name of the selected model, once reported.
     pub model: Option<String>,
@@ -205,9 +226,22 @@ pub struct ConversationSummary {
     pub thinking: Option<String>,
 }
 
-/// `conversation.create` params.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct CreateConversation {
+/// `thread.launch` params.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct LaunchThread {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
     /// Project directory; absent uses the default working directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
@@ -215,21 +249,22 @@ pub struct CreateConversation {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
     /// Initial configuration by option id.
-    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub options: std::collections::BTreeMap<String, OptionValue>,
 }
 
-/// `conversation.create` result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub struct Created {
-    /// The new conversation.
-    pub conversation: ConversationId,
+/// `thread.launch` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct Launched {
+    /// The new thread.
+    pub thread: ThreadId,
+    pub run: Option<RunId>,
 }
 
-/// Availability of a conversation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// Availability of a thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum ConversationStatus {
+pub enum ThreadStatus {
     /// Nothing is running.
     Idle,
     /// A turn is running or waiting.
@@ -239,7 +274,7 @@ pub enum ConversationStatus {
 }
 
 /// Config option value, stored as a string choice or a boolean.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum OptionValue {
     /// A named choice.
@@ -249,7 +284,7 @@ pub enum OptionValue {
 }
 
 /// The control used for a configuration option.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum OptionKind {
     /// A choice among values.
@@ -259,7 +294,7 @@ pub enum OptionKind {
 }
 
 /// A choice offered by a select option.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct OptionChoice {
     /// Value to send.
     pub value: String,
@@ -274,9 +309,9 @@ pub struct OptionChoice {
 }
 
 /// A select setting that depends on the chosen model.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct DependentOption {
-    /// Identifier for `conversation.configure`.
+    /// Identifier for `thread.configure`.
     pub id: String,
     /// Display label.
     pub name: String,
@@ -289,7 +324,7 @@ pub struct DependentOption {
 }
 
 /// A choice in a model-dependent setting.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct DependentChoice {
     /// Value to send.
     pub value: String,
@@ -300,9 +335,9 @@ pub struct DependentChoice {
 }
 
 /// A setting offered by the backend or ACP session.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ConfigOption {
-    /// Identifier for `conversation.configure`.
+    /// Identifier for `thread.configure`.
     pub id: String,
     /// Display label.
     pub name: String,
@@ -320,7 +355,7 @@ pub struct ConfigOption {
 }
 
 /// A slash command offered by the ACP session.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct SlashCommand {
     /// Command name without the slash.
     pub name: String,
@@ -330,19 +365,19 @@ pub struct SlashCommand {
     pub hint: Option<String>,
 }
 
-/// The current application state of a watched conversation.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// The current application state of a watched thread.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct ConversationState {
-    /// Status of this conversation.
-    pub status: ConversationStatus,
-    /// The configured ACP runner, if any.
-    pub harness: Option<String>,
+pub struct ThreadState {
+    /// Status of this thread.
+    pub status: ThreadStatus,
+    /// The configured ACP runner.
+    pub harness: String,
     /// The containing project, if any.
     pub project: Option<String>,
-    /// Working directory, if known.
-    pub cwd: Option<String>,
-    /// Configuration reported by the runner or orchestrator.
+    /// Working directory.
+    pub cwd: String,
+    /// Configuration reported by the runner.
     pub options: Vec<ConfigOption>,
     /// Available slash commands.
     pub commands: Vec<SlashCommand>,
@@ -358,9 +393,9 @@ pub struct ConversationState {
 
 /// The running ACP turn's uncommitted tail. The commit that appends it as
 /// entries, or ends the turn, clears it; its text comes before its tools.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct LiveTurn {
-    /// Entry id of the turn's `viz.agent.prompt` entry, as a string.
+    /// Entry id of the turn's active run, as a string.
     pub turn: String,
     /// The text run being streamed, if any.
     pub text: Option<LiveText>,
@@ -369,7 +404,7 @@ pub struct LiveTurn {
 }
 
 /// A streamed text run.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct LiveText {
     /// Stable key; also `data.key` of the entry that commits this run.
     pub key: String,
@@ -380,7 +415,7 @@ pub struct LiveText {
 }
 
 /// What a [`LiveText`] run is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum LiveTextKind {
     /// Agent prose.
@@ -389,9 +424,9 @@ pub enum LiveTextKind {
     Thought,
 }
 
-/// An ACP tool call: the data of a `viz.agent.tool` entry, or an unfinished
+/// An ACP tool call: the data of a tool entry, or an unfinished
 /// call in [`LiveTurn::tools`].
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolRecord {
     /// ACP tool call id; unique within one turn.
@@ -406,8 +441,9 @@ pub struct ToolRecord {
     pub status: ToolCallStatus,
     /// The viz tool this call ran, if it was one.
     pub viz: Option<String>,
-    /// The conversation the call started, if any.
-    pub child: Option<ConversationId>,
+    /// The thread the call started, if any.
+    pub child: Option<ThreadId>,
+    pub child_environment: Option<String>,
     /// Unix milliseconds when viz first observed the call running.
     pub started_at: Option<i64>,
     /// Raw input: a string as sent, else JSON.
@@ -423,7 +459,7 @@ pub struct ToolRecord {
 }
 
 /// Progress of an ACP tool call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCallStatus {
     /// Not started.
@@ -437,7 +473,7 @@ pub enum ToolCallStatus {
 }
 
 /// One file change of a tool call.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolDiff {
     /// Changed file.
@@ -449,7 +485,7 @@ pub struct ToolDiff {
 }
 
 /// Context window usage reported by an ACP runner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ContextUsage {
     /// Tokens currently in context.
     pub used: u64,
@@ -457,12 +493,10 @@ pub struct ContextUsage {
     pub size: u64,
 }
 
-/// A working directory shared by a group of chats.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// A working directory shared by a group of threads.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
-    /// Backend-assigned id.
-    pub id: String,
     /// Display name.
     pub name: String,
     /// Absolute directory path.
@@ -472,7 +506,7 @@ pub struct Project {
 }
 
 /// A configured ACP runner.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Harness {
     /// Configured name.
     pub name: String,
@@ -483,14 +517,14 @@ pub struct Harness {
 }
 
 /// Empty successful response or notification params.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Empty {}
 
-/// Change a conversation's metadata.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct UpdateConversation<'a> {
-    /// The conversation to change.
-    pub conversation: ConversationId,
+/// Change a thread's metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct UpdateThread<'a> {
+    /// The thread to change.
+    pub thread: ThreadId,
     /// A new title, if changing it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<&'a str>,
@@ -508,44 +542,46 @@ pub struct UpdateConversation<'a> {
     pub project: Option<Option<&'a str>>,
 }
 
-/// Set a conversation's configuration option.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct ConfigureConversation<'a> {
-    /// The conversation to configure.
-    pub conversation: ConversationId,
+/// Set a thread's configuration option.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ConfigureThread<'a> {
+    /// The thread to configure.
+    pub thread: ThreadId,
     /// The option id.
     pub option: &'a str,
     /// The new option value.
     pub value: &'a OptionValue,
 }
 
-/// Stop a conversation's active turn.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct AbortConversation {
-    /// The conversation to stop.
-    pub conversation: ConversationId,
+/// Stop a thread's active turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StopThread {
+    /// The thread to stop.
+    pub thread: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunId>,
 }
 
-/// Delete a conversation and its subagents. The orchestrator can't be deleted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct DeleteConversation {
-    /// The conversation to delete.
-    pub conversation: ConversationId,
+/// Delete a thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct DeleteThread {
+    /// The thread to delete.
+    pub thread: ThreadId,
 }
 
 /// List projects.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ListProjects {}
 
 /// Projects returned by `projects.list`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ProjectList {
     /// All projects.
     pub projects: Vec<Project>,
 }
 
 /// Add a project directory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct CreateProject<'a> {
     /// Existing directory; `~` expands to the backend's home directory.
     pub path: &'a str,
@@ -555,7 +591,7 @@ pub struct CreateProject<'a> {
 }
 
 /// Update a project's display name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct UpdateProject<'a> {
     /// Project id.
     pub project: &'a str,
@@ -565,32 +601,32 @@ pub struct UpdateProject<'a> {
 }
 
 /// The project returned after creation or an update.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ProjectResult {
     /// The resulting project.
     pub project: Project,
 }
 
 /// Remove a project directory from the project list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct RemoveProject<'a> {
     /// Project id.
     pub project: &'a str,
 }
 
 /// List configured ACP runners.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ListHarnesses {}
 
 /// ACP runners returned by `harnesses.list`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct HarnessList {
     /// Configured ACP runners.
     pub harnesses: Vec<Harness>,
 }
 
-/// Fetch the runner's options for a model before creating a conversation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+/// Fetch the runner's options for a model before creating a thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct HarnessOptions {
     /// Configured runner name.
     pub harness: String,
@@ -599,17 +635,17 @@ pub struct HarnessOptions {
 }
 
 /// The runner's options with the requested model selected.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct HarnessOptionsResult {
     /// Options available for the selected model.
     pub options: Vec<ConfigOption>,
 }
 
-/// Search a conversation's working directory for files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// Search a thread's working directory for files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SearchFiles<'a> {
-    /// Conversation whose working directory is searched.
-    pub conversation: ConversationId,
+    /// Thread whose working directory is searched.
+    pub thread: ThreadId,
     /// Fuzzy path query.
     pub query: &'a str,
     /// Limit from 1 to 200; omit to use the backend default.
@@ -618,146 +654,303 @@ pub struct SearchFiles<'a> {
 }
 
 /// Search results from `files.search`.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct FileList {
     /// Matching relative paths.
     pub files: Vec<String>,
 }
 
-/// `conversation.submit` params.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-pub struct Submit {
-    /// Target conversation; `None` is the orchestrator.
+/// `thread.send` params.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SendInput {
+    pub thread: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub conversation: Option<ConversationId>,
+    pub mode: Option<SendMode>,
     /// The input text.
     pub text: String,
-    /// Idempotency key: a retry with the same id returns the same submission.
+    /// Idempotency key: a retry with the same id returns the same run.
     #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// Where the input came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
     /// Files to attach to this input.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
 }
 
-/// `conversation.submit` result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-pub struct Submitted {
-    /// The submission the input became.
-    pub submission: SubmissionId,
+/// How to deliver input to a busy thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum SendMode {
+    Queue,
+    Steer,
 }
 
-/// `conversation.watch` params: start receiving
-/// [`Notification::ConversationView`] for a conversation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// `thread.send` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct Sent {
+    /// The run the input became.
+    pub run: RunId,
+}
+
+/// `thread.watch` params: start receiving
+/// [`Notification::ThreadView`] for a thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Watch {
-    /// The conversation.
-    pub conversation: ConversationId,
+    /// The thread.
+    pub thread: ThreadId,
 }
 
-/// `conversation.unwatch` params: stop watching a conversation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+/// `thread.unwatch` params: stop watching a thread.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Unwatch {
-    /// The conversation.
-    pub conversation: ConversationId,
+    /// The thread.
+    pub thread: ThreadId,
 }
 
-/// `conversation.watch` and `conversation.unwatch` result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+/// `thread.watch` and `thread.unwatch` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Watching {
-    /// Whether this client now watches the conversation.
+    /// Whether this client now watches the thread.
     pub watching: bool,
 }
 
-/// How a submission settled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum SettledStatus {
-    /// Answered.
-    Done,
-    /// Settled without an answer (aborted, failed, or nothing to answer).
-    Unanswered,
-}
-
-/// A notification from the backend.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+/// Notifications pushed after hello.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "method", content = "params")]
 pub enum Notification {
-    /// The answer to an input this connector submitted.
     #[serde(rename = "reply")]
     Reply {
-        /// The input's origin.
         origin: Origin,
-        /// The conversation it was submitted to.
-        conversation: ConversationId,
-        /// The submission.
-        submission: SubmissionId,
-        /// How it settled.
-        status: SettledStatus,
-        /// The answer's text, if any.
+        thread: ThreadId,
+        run: RunId,
+        #[serde(skip_serializing_if = "Option::is_none")]
         text: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        error: Option<String>,
     },
-    /// A revision of a watched conversation's view.
-    #[serde(rename = "conversation.view")]
-    ConversationView(ViewRevision),
-    /// A full update of the application's state for a watched conversation.
-    #[serde(rename = "conversation.state")]
-    ConversationState {
-        /// The conversation that changed.
-        conversation: ConversationId,
-        /// Its latest state.
-        state: ConversationState,
+    #[serde(rename = "thread.view")]
+    ThreadView {
+        thread: ThreadId,
+        entries: Vec<Entry>,
+        reset: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        before: Option<EntryId>,
     },
-    /// Refresh the conversation and project lists.
-    #[serde(rename = "conversations.changed")]
-    ConversationsChanged(Empty),
+    #[serde(rename = "thread.state")]
+    ThreadState {
+        thread: ThreadId,
+        state: ThreadState,
+    },
+    #[serde(rename = "threads.changed")]
+    ThreadsChanged(Empty),
+    #[serde(rename = "tasks.changed")]
+    TasksChanged(Empty),
 }
 
-/// `conversation.view` params: one revision of a watched conversation's view.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
-#[serde(try_from = "RawViewRevision")]
-pub struct ViewRevision {
-    /// The conversation.
-    pub conversation: ConversationId,
-    /// The revision's content.
-    pub revision: Revision,
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ListEnvironments {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct EnvironmentList {
+    pub environments: Vec<Environment>,
 }
 
-/// What a [`ViewRevision`] carries.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Revision {
-    /// The full view: the first revision, and any that replace the replica.
-    Full(Value),
-    /// Chord delta ops against the previous revision (see
-    /// [`delta`](crate::delta)).
-    Delta(Vec<Value>),
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct Environment {
+    pub id: String,
+    pub url: Option<String>,
+    pub status: EnvironmentStatus,
 }
 
-/// `conversation.view` params as sent: `value` or `ops`.
-#[derive(Deserialize)]
-struct RawViewRevision {
-    conversation: ConversationId,
-    #[serde(default)]
-    value: Option<Value>,
-    #[serde(default)]
-    ops: Option<Vec<Value>>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum EnvironmentStatus {
+    Local,
+    Reachable,
+    Unreachable,
 }
 
-impl TryFrom<RawViewRevision> for ViewRevision {
-    type Error = &'static str;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitThread {
+    pub thread: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<RunId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
 
-    fn try_from(raw: RawViewRevision) -> Result<Self, Self::Error> {
-        let revision = match (raw.value, raw.ops) {
-            (Some(value), _) => Revision::Full(value),
-            (None, Some(ops)) => Revision::Delta(ops),
-            (None, None) => return Err("a view revision has neither `value` nor `ops`"),
-        };
-        Ok(Self {
-            conversation: raw.conversation,
-            revision,
-        })
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitResult {
+    pub run: Option<Run>,
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct Run {
+    pub id: RunId,
+    pub thread: ThreadId,
+    pub status: RunStatus,
+    pub answer: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RunStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReadThreadState {
+    pub thread: ThreadId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct ThreadStateResult {
+    pub state: ThreadState,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ReadProject<'a> {
+    pub project: &'a str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ListHarnessThreads<'a> {
+    pub harness: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessThreadList {
+    pub threads: Vec<HarnessThread>,
+    pub next_cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessThread {
+    pub session_id: String,
+    pub cwd: String,
+    pub title: Option<String>,
+    pub updated_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportThread<'a> {
+    pub harness: &'a str,
+    pub session_id: &'a str,
+    pub cwd: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<&'a str>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct Imported {
+    pub thread: ThreadId,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListTasks {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent: Option<ThreadId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct TaskList {
+    pub tasks: Vec<Task>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct Task {
+    pub id: String,
+    pub parent: ThreadId,
+    pub environment: String,
+    pub thread: Option<ThreadId>,
+    pub run: Option<RunId>,
+    pub status: TaskStatus,
+    pub reachable: bool,
+    pub title: String,
+    pub result: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskStatusRequest<'a> {
+    pub task: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wait: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskStatusResult {
+    pub task: Task,
+    pub timed_out: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct CancelTask<'a> {
+    pub task: &'a str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct TaskResult {
+    pub task: Task,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegateTask<'a> {
+    pub parent: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub environment: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub harness: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub model: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
+    pub text: &'a str,
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    pub attachments: &'a [Attachment],
+    #[serde(skip_serializing_if = "slice_is_empty")]
+    pub attachment_ids: &'a [String],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<&'a str>,
+}
+
+const fn slice_is_empty<T>(slice: &&[T]) -> bool {
+    slice.is_empty()
 }

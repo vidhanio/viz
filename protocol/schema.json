@@ -1,224 +1,167 @@
 {
-  "protocol": 1,
-  "definitions": {
-    "Origin": {
-      "type": "object",
-      "properties": {
-        "connector": {
-          "type": "string",
-          "description": "Connector name, matching its `hello` name, e.g. discord"
-        },
-        "channel": {
-          "type": "string",
-          "description": "Connector-specific channel/chat id the reply goes to"
-        },
-        "thread": {
-          "type": "string"
-        },
-        "message": {
-          "type": "string",
-          "description": "Connector-specific id of the message being answered"
-        },
-        "author": {
-          "type": "string",
-          "description": "Human-readable author, shown to the model"
-        }
-      },
-      "required": ["connector", "channel"],
-      "additionalProperties": false
-    }
-  },
+  "protocol": 2,
   "methods": {
     "hello": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HelloParams",
+        "description": "`hello` params: the first request on a connection.",
         "type": "object",
         "properties": {
           "protocol": {
-            "const": 1
+            "description": "The protocol version the client speaks, [`PROTOCOL_VERSION`].",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
           },
           "client": {
+            "description": "Who is connecting.",
+            "$ref": "#/$defs/ClientInfo"
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "protocol",
+          "client"
+        ],
+        "$defs": {
+          "ClientInfo": {
+            "description": "Identifies a client in `hello`.",
             "type": "object",
             "properties": {
               "kind": {
-                "enum": ["app", "connector", "cli"]
+                "description": "Client kind.",
+                "$ref": "#/$defs/ClientKind"
               },
               "name": {
+                "description": "Client name; for connectors, the name inputs' [`Origin::connector`] use.",
                 "type": "string"
               }
             },
-            "required": ["kind", "name"],
-            "additionalProperties": false
+            "required": [
+              "kind",
+              "name"
+            ]
+          },
+          "ClientKind": {
+            "description": "What kind of client is connecting; decides which notifications it receives.",
+            "oneOf": [
+              {
+                "description": "Full UI (desktop, mobile): watches whole threads.",
+                "type": "string",
+                "const": "app"
+              },
+              {
+                "description": "Connector (Discord, iMessage, ...): receives replies to its own inputs\nonly.",
+                "type": "string",
+                "const": "connector"
+              },
+              {
+                "description": "One-off command-line client.",
+                "type": "string",
+                "const": "cli"
+              }
+            ]
           }
-        },
-        "required": ["protocol", "client"],
-        "additionalProperties": false
+        }
       },
       "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Hello",
+        "description": "`hello` result.",
         "type": "object",
         "properties": {
           "protocol": {
-            "const": 1
+            "description": "Protocol version the backend speaks.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
           },
           "version": {
+            "description": "Backend version.",
             "type": "string"
           },
-          "root": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
+          "environment": {
+            "description": "The selected environment.",
+            "type": "string"
           }
         },
-        "required": ["protocol", "version", "root"],
-        "additionalProperties": false
+        "required": [
+          "protocol",
+          "version",
+          "environment"
+        ]
       }
     },
-    "conversations.list": {
+    "environments.list": {
       "params": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListEnvironments",
+        "type": "object"
       },
       "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "EnvironmentList",
         "type": "object",
         "properties": {
-          "conversations": {
+          "environments": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "pi-durable ConversationId"
-                },
-                "title": {
-                  "type": "string",
-                  "description": "A user rename, an ACP session title, or a title from the first prompt; fixed for the orchestrator"
-                },
-                "kind": {
-                  "enum": ["orchestrator", "chat", "subagent"]
-                },
-                "parent": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "For a subagent: the conversation that started it"
-                },
-                "project": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Backend-assigned project id"
-                },
-                "harness": {
-                  "type": "string",
-                  "description": "ACP runner name; absent for the orchestrator"
-                },
-                "status": {
-                  "enum": ["idle", "working", "failed"],
-                  "description": "working: a turn runs or inputs wait"
-                },
-                "archived": {
-                  "type": "boolean"
-                },
-                "updatedAt": {
-                  "type": "integer",
-                  "description": "Unix milliseconds of the last input or turn end; 0 when unknown"
-                },
-                "unread": {
-                  "type": "boolean",
-                  "description": "A turn ended while no app watched the conversation; watching clears it"
-                },
-                "pinned": {
-                  "type": "boolean"
-                },
-                "model": {
-                  "type": "string",
-                  "description": "Display name of the selected model, once the runner or orchestrator reports it"
-                },
-                "thinking": {
-                  "type": "string",
-                  "description": "Display name of the selected thinking level, when the model has one"
-                }
-              },
-              "required": ["id", "title", "kind", "status", "archived", "updatedAt", "unread", "pinned"],
-              "additionalProperties": false
+              "$ref": "#/$defs/Environment"
             }
           }
         },
-        "required": ["conversations"],
-        "additionalProperties": false
-      }
-    },
-    "conversation.create": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Backend-assigned project id"
-          },
-          "harness": {
-            "type": "string",
-            "description": "Configured ACP runner; default [backend].default_harness"
-          },
-          "options": {
+        "required": [
+          "environments"
+        ],
+        "$defs": {
+          "Environment": {
             "type": "object",
-            "additionalProperties": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "boolean"
-                }
-              ]
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/EnvironmentStatus"
+              }
             },
-            "description": "Initial ConfigOption values by id, e.g. a model picked before the first message"
+            "required": [
+              "id",
+              "status"
+            ]
+          },
+          "EnvironmentStatus": {
+            "type": "string",
+            "enum": [
+              "local",
+              "reachable",
+              "unreachable"
+            ]
           }
-        },
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          }
-        },
-        "required": ["conversation"],
-        "additionalProperties": false
+        }
       }
     },
-    "conversation.update": {
+    "tasks.list": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListTasks",
         "type": "object",
         "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "title": {
-            "type": "string",
-            "minLength": 1
-          },
-          "archived": {
-            "type": "boolean"
-          },
-          "pinned": {
-            "type": "boolean"
-          },
-          "unread": {
-            "type": "boolean"
-          },
-          "project": {
+          "parent": {
             "anyOf": [
               {
-                "type": "string",
-                "minLength": 1,
-                "description": "Backend-assigned project id"
+                "$ref": "#/$defs/ThreadId"
               },
               {
                 "type": "null"
@@ -226,1257 +169,4741 @@
             ]
           }
         },
-        "required": ["conversation"],
-        "additionalProperties": false
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
       },
       "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    "conversation.configure": {
-      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TaskList",
         "type": "object",
         "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          },
-          "option": {
-            "type": "string"
-          },
-          "value": {
-            "anyOf": [
-              {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Task"
+            }
+          }
+        },
+        "required": [
+          "tasks"
+        ],
+        "$defs": {
+          "Task": {
+            "type": "object",
+            "properties": {
+              "id": {
                 "type": "string"
               },
-              {
+              "parent": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "thread": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "run": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/TaskStatus"
+              },
+              "reachable": {
                 "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              },
+              "result": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
               }
+            },
+            "required": [
+              "id",
+              "parent",
+              "environment",
+              "status",
+              "reachable",
+              "title"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "TaskStatus": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
             ]
           }
-        },
-        "required": ["conversation", "option", "value"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
+        }
       }
     },
-    "conversation.abort": {
+    "task.status": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TaskStatusRequest",
         "type": "object",
         "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
+          "task": {
+            "type": "string"
+          },
+          "wait": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "timeoutMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
           }
         },
-        "required": ["conversation"],
-        "additionalProperties": false
+        "required": [
+          "task"
+        ]
       },
       "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    "conversation.delete": {
-      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TaskStatusResult",
         "type": "object",
         "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
+          "task": {
+            "$ref": "#/$defs/Task"
+          },
+          "timedOut": {
+            "type": "boolean"
           }
         },
-        "required": ["conversation"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
+        "required": [
+          "task",
+          "timedOut"
+        ],
+        "$defs": {
+          "Task": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parent": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "thread": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "run": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/TaskStatus"
+              },
+              "reachable": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              },
+              "result": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "parent",
+              "environment",
+              "status",
+              "reachable",
+              "title"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "TaskStatus": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          }
+        }
       }
     },
-    "conversation.submit": {
+    "task.cancel": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CancelTask",
         "type": "object",
         "properties": {
-          "conversation": {
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TaskResult",
+        "type": "object",
+        "properties": {
+          "task": {
+            "$ref": "#/$defs/Task"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "$defs": {
+          "Task": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "parent": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "environment": {
+                "type": "string"
+              },
+              "thread": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "run": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/TaskStatus"
+              },
+              "reachable": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              },
+              "result": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "parent",
+              "environment",
+              "status",
+              "reachable",
+              "title"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
             "type": "integer",
-            "minimum": 1,
-            "description": "Default: the root (orchestrator) conversation"
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "TaskStatus": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
+          }
+        }
+      }
+    },
+    "task.delegate": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DelegateTask",
+        "type": "object",
+        "properties": {
+          "parent": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thinking": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thread": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "text": {
             "type": "string"
           },
-          "requestId": {
-            "type": "string",
-            "description": "Idempotency key: a retry with the same id returns the same submission"
-          },
-          "origin": {
-            "type": "object",
-            "properties": {
-              "connector": {
-                "type": "string",
-                "description": "Connector name, matching its `hello` name, e.g. discord"
-              },
-              "channel": {
-                "type": "string",
-                "description": "Connector-specific channel/chat id the reply goes to"
-              },
-              "thread": {
-                "type": "string"
-              },
-              "message": {
-                "type": "string",
-                "description": "Connector-specific id of the message being answered"
-              },
-              "author": {
-                "type": "string",
-                "description": "Human-readable author, shown to the model"
-              }
-            },
-            "required": ["connector", "channel"],
-            "additionalProperties": false
-          },
           "attachments": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string",
-                  "minLength": 1
-                },
-                "mime": {
-                  "type": "string",
-                  "description": "e.g. image/png, text/plain"
-                },
-                "data": {
-                  "type": "string",
-                  "description": "Base64, at most 20 MiB decoded"
-                }
-              },
-              "required": ["name", "mime", "data"],
-              "additionalProperties": false
+              "$ref": "#/$defs/Attachment"
             }
-          }
-        },
-        "required": ["text"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "submission": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable SubmissionId"
-          }
-        },
-        "required": ["submission"],
-        "additionalProperties": false
-      }
-    },
-    "conversation.watch": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          }
-        },
-        "required": ["conversation"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "watching": {
-            "type": "boolean"
-          }
-        },
-        "required": ["watching"],
-        "additionalProperties": false
-      }
-    },
-    "conversation.unwatch": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
-          }
-        },
-        "required": ["conversation"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "watching": {
-            "type": "boolean"
-          }
-        },
-        "required": ["watching"],
-        "additionalProperties": false
-      }
-    },
-    "projects.list": {
-      "params": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "projects": {
+          },
+          "attachmentIds": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Backend-assigned project id"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string",
-                  "description": "Absolute directory; the cwd of the project's chats"
-                },
-                "createdAt": {
-                  "type": "integer",
-                  "description": "Unix milliseconds"
-                }
-              },
-              "required": ["id", "name", "path", "createdAt"],
-              "additionalProperties": false
+              "type": "string"
             }
-          }
-        },
-        "required": ["projects"],
-        "additionalProperties": false
-      }
-    },
-    "project.create": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string",
-            "minLength": 1,
-            "description": "An existing directory; `~` expands to $HOME"
           },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Default: the directory's name"
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
-        "required": ["path"],
-        "additionalProperties": false
+        "required": [
+          "parent",
+          "text",
+          "attachments",
+          "attachmentIds"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "Attachment": {
+            "description": "A file attached to an input.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "mime": {
+                "description": "Media type.",
+                "type": "string"
+              },
+              "data": {
+                "description": "Base64 bytes, at most 20 MiB decoded.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "mime",
+              "data"
+            ]
+          }
+        }
       },
       "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TaskResult",
         "type": "object",
         "properties": {
-          "project": {
+          "task": {
+            "$ref": "#/$defs/Task"
+          }
+        },
+        "required": [
+          "task"
+        ],
+        "$defs": {
+          "Task": {
             "type": "object",
             "properties": {
               "id": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Backend-assigned project id"
-              },
-              "name": {
                 "type": "string"
               },
-              "path": {
-                "type": "string",
-                "description": "Absolute directory; the cwd of the project's chats"
+              "parent": {
+                "$ref": "#/$defs/ThreadId"
               },
-              "createdAt": {
-                "type": "integer",
-                "description": "Unix milliseconds"
-              }
-            },
-            "required": ["id", "name", "path", "createdAt"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["project"],
-        "additionalProperties": false
-      }
-    },
-    "project.update": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Backend-assigned project id"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1
-          }
-        },
-        "required": ["project"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Backend-assigned project id"
-              },
-              "name": {
+              "environment": {
                 "type": "string"
               },
-              "path": {
-                "type": "string",
-                "description": "Absolute directory; the cwd of the project's chats"
-              },
-              "createdAt": {
-                "type": "integer",
-                "description": "Unix milliseconds"
-              }
-            },
-            "required": ["id", "name", "path", "createdAt"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["project"],
-        "additionalProperties": false
-      }
-    },
-    "project.remove": {
-      "params": {
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Backend-assigned project id"
-          }
-        },
-        "required": ["project"],
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      }
-    },
-    "harnesses.list": {
-      "params": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
-      },
-      "result": {
-        "type": "object",
-        "properties": {
-          "harnesses": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "name": {
-                  "type": "string"
-                },
-                "default": {
-                  "type": "boolean"
-                },
-                "options": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string"
-                      },
-                      "name": {
-                        "type": "string"
-                      },
-                      "description": {
-                        "type": "string"
-                      },
-                      "value": {
-                        "anyOf": [
-                          {
-                            "type": "string"
-                          },
-                          {
-                            "type": "boolean"
-                          }
-                        ]
-                      },
-                      "category": {
-                        "anyOf": [
-                          {
-                            "type": "string",
-                            "description": "model | thought_level | mode | other ACP categories"
-                          },
-                          {
-                            "type": "null"
-                          }
-                        ]
-                      },
-                      "type": {
-                        "enum": ["select", "boolean"]
-                      },
-                      "choices": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "value": {
-                              "type": "string"
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "description": {
-                              "type": "string"
-                            },
-                            "group": {
-                              "type": "string",
-                              "description": "Group label, e.g. the model's provider"
-                            },
-                            "thinking": {
-                              "type": "object",
-                              "properties": {
-                                "id": {
-                                  "type": "string"
-                                },
-                                "name": {
-                                  "type": "string"
-                                },
-                                "description": {
-                                  "type": "string"
-                                },
-                                "value": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "boolean"
-                                    }
-                                  ]
-                                },
-                                "choices": {
-                                  "type": "array",
-                                  "items": {
-                                    "type": "object",
-                                    "properties": {
-                                      "value": {
-                                        "type": "string"
-                                      },
-                                      "name": {
-                                        "type": "string"
-                                      },
-                                      "description": {
-                                        "type": "string"
-                                      }
-                                    },
-                                    "required": ["value", "name"],
-                                    "additionalProperties": false
-                                  }
-                                }
-                              },
-                              "required": ["id", "name", "value", "choices"],
-                              "additionalProperties": false,
-                              "description": "Thinking levels reported for this model"
-                            }
-                          },
-                          "required": ["value", "name"],
-                          "additionalProperties": false
-                        }
-                      }
-                    },
-                    "required": ["id", "name", "value", "category", "type", "choices"],
-                    "additionalProperties": false
+              "thread": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
                   }
-                }
+                ]
               },
-              "required": ["name", "default", "options"],
-              "additionalProperties": false
-            }
+              "run": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "$ref": "#/$defs/TaskStatus"
+              },
+              "reachable": {
+                "type": "boolean"
+              },
+              "title": {
+                "type": "string"
+              },
+              "result": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "parent",
+              "environment",
+              "status",
+              "reachable",
+              "title"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "TaskStatus": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled"
+            ]
           }
-        },
-        "required": ["harnesses"],
-        "additionalProperties": false
+        }
       }
     },
-    "harnesses.options": {
+    "harness.threads": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListHarnessThreads",
         "type": "object",
         "properties": {
           "harness": {
             "type": "string"
           },
-          "model": {
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "harness"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessThreadList",
+        "type": "object",
+        "properties": {
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/HarnessThread"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "threads"
+        ],
+        "$defs": {
+          "HarnessThread": {
+            "type": "object",
+            "properties": {
+              "sessionId": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "updatedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              }
+            },
+            "required": [
+              "sessionId",
+              "cwd"
+            ]
+          }
+        }
+      }
+    },
+    "thread.import": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ImportThread",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "sessionId",
+          "cwd"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Imported",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "thread.wait": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "WaitThread",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timeoutMs": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "WaitResult",
+        "type": "object",
+        "properties": {
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Run"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "timedOut": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "timedOut"
+        ],
+        "$defs": {
+          "Run": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/RunId"
+              },
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "status": {
+                "$ref": "#/$defs/RunStatus"
+              },
+              "answer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "thread",
+              "status"
+            ]
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunStatus": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "completed",
+              "failed",
+              "cancelled",
+              "interrupted"
+            ]
+          }
+        }
+      }
+    },
+    "thread.state": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ReadThreadState",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadStateResult",
+        "type": "object",
+        "properties": {
+          "state": {
+            "$ref": "#/$defs/ThreadState"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "$defs": {
+          "ThreadState": {
+            "description": "The current application state of a watched thread.",
+            "type": "object",
+            "properties": {
+              "status": {
+                "description": "Status of this thread.",
+                "$ref": "#/$defs/ThreadStatus"
+              },
+              "harness": {
+                "description": "The configured ACP runner.",
+                "type": "string"
+              },
+              "project": {
+                "description": "The containing project, if any.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "cwd": {
+                "description": "Working directory.",
+                "type": "string"
+              },
+              "options": {
+                "description": "Configuration reported by the runner.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ConfigOption"
+                }
+              },
+              "commands": {
+                "description": "Available slash commands.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/SlashCommand"
+                }
+              },
+              "queue": {
+                "description": "Inputs waiting for their turn.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/QueuedInput"
+                }
+              },
+              "attachments": {
+                "description": "What kind of attachment the current runner accepts directly.",
+                "$ref": "#/$defs/AttachmentCapabilities"
+              },
+              "live": {
+                "description": "An ACP turn's in-progress text and tools; `None` when none runs.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LiveTurn"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "usage": {
+                "description": "The ACP runner's last context usage report, if any.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ContextUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "status",
+              "harness",
+              "cwd",
+              "options",
+              "commands",
+              "queue",
+              "attachments"
+            ]
+          },
+          "ThreadStatus": {
+            "description": "Availability of a thread.",
+            "oneOf": [
+              {
+                "description": "Nothing is running.",
+                "type": "string",
+                "const": "idle"
+              },
+              {
+                "description": "A turn is running or waiting.",
+                "type": "string",
+                "const": "working"
+              },
+              {
+                "description": "The last turn failed.",
+                "type": "string",
+                "const": "failed"
+              }
+            ]
+          },
+          "ConfigOption": {
+            "description": "A setting offered by the backend or ACP session.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Identifier for `thread.configure`.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "category": {
+                "description": "Semantic category supplied by the runner.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "description": "Type of control.",
+                "$ref": "#/$defs/OptionKind"
+              },
+              "value": {
+                "description": "Current value.",
+                "$ref": "#/$defs/OptionValue"
+              },
+              "choices": {
+                "description": "Available choices, empty for a boolean.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/OptionChoice"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type",
+              "value",
+              "choices"
+            ]
+          },
+          "OptionKind": {
+            "description": "The control used for a configuration option.",
+            "oneOf": [
+              {
+                "description": "A choice among values.",
+                "type": "string",
+                "const": "select"
+              },
+              {
+                "description": "A boolean toggle.",
+                "type": "string",
+                "const": "boolean"
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "OptionChoice": {
+            "description": "A choice offered by a select option.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "description": "Value to send.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "group": {
+                "description": "Optional group label.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thinking": {
+                "description": "Thinking levels reported for this model, if available.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DependentOption"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "name"
+            ]
+          },
+          "DependentOption": {
+            "description": "A select setting that depends on the chosen model.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Identifier for `thread.configure`.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "description": "Default or current value, depending on the surrounding catalog.",
+                "$ref": "#/$defs/OptionValue"
+              },
+              "choices": {
+                "description": "Available choices.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/DependentChoice"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "value",
+              "choices"
+            ]
+          },
+          "DependentChoice": {
+            "description": "A choice in a model-dependent setting.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "description": "Value to send.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "name"
+            ]
+          },
+          "SlashCommand": {
+            "description": "A slash command offered by the ACP session.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Command name without the slash.",
+                "type": "string"
+              },
+              "description": {
+                "description": "What the command does.",
+                "type": "string"
+              },
+              "hint": {
+                "description": "Optional argument hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "description"
+            ]
+          },
+          "QueuedInput": {
+            "description": "An input waiting for the next turn, removable until dispatched.",
+            "type": "object",
+            "properties": {
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "run",
+              "text"
+            ]
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "AttachmentCapabilities": {
+            "description": "Attachment capabilities of a thread's runner.",
+            "type": "object",
+            "properties": {
+              "images": {
+                "description": "The runner accepts image prompts. Files can always be sent as paths.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "images"
+            ]
+          },
+          "LiveTurn": {
+            "description": "The running ACP turn's uncommitted tail. The commit that appends it as\nentries, or ends the turn, clears it; its text comes before its tools.",
+            "type": "object",
+            "properties": {
+              "turn": {
+                "description": "Entry id of the turn's active run, as a string.",
+                "type": "string"
+              },
+              "text": {
+                "description": "The text run being streamed, if any.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/LiveText"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tools": {
+                "description": "Unfinished tool calls, in the order they started.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolRecord"
+                }
+              }
+            },
+            "required": [
+              "turn",
+              "tools"
+            ]
+          },
+          "LiveText": {
+            "description": "A streamed text run.",
+            "type": "object",
+            "properties": {
+              "key": {
+                "description": "Stable key; also `data.key` of the entry that commits this run.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Prose or thinking.",
+                "$ref": "#/$defs/LiveTextKind"
+              },
+              "text": {
+                "description": "The text so far.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "kind",
+              "text"
+            ]
+          },
+          "LiveTextKind": {
+            "description": "What a [`LiveText`] run is.",
+            "oneOf": [
+              {
+                "description": "Agent prose.",
+                "type": "string",
+                "const": "text"
+              },
+              {
+                "description": "Agent thinking.",
+                "type": "string",
+                "const": "thought"
+              }
+            ]
+          },
+          "ToolRecord": {
+            "description": "An ACP tool call: the data of a tool entry, or an unfinished\ncall in [`LiveTurn::tools`].",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "ACP tool call id; unique within one turn.",
+                "type": "string"
+              },
+              "title": {
+                "description": "Display title.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Programmatic tool name, when reported by the runner.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "ACP tool kind, such as `execute` or `edit`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "description": "Progress of the call.",
+                "$ref": "#/$defs/ToolCallStatus"
+              },
+              "viz": {
+                "description": "The viz tool this call ran, if it was one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "child": {
+                "description": "The thread the call started, if any.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "childEnvironment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "description": "Unix milliseconds when viz first observed the call running.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "input": {
+                "description": "Raw input: a string as sent, else JSON.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "output": {
+                "description": "ACP text content, else readable raw output.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "diffs": {
+                "description": "File changes.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolDiff"
+                },
+                "default": []
+              },
+              "locations": {
+                "description": "Paths the call touched.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "status"
+            ]
+          },
+          "ToolCallStatus": {
+            "description": "Progress of an ACP tool call.",
+            "oneOf": [
+              {
+                "description": "Not started.",
+                "type": "string",
+                "const": "pending"
+              },
+              {
+                "description": "Running.",
+                "type": "string",
+                "const": "in_progress"
+              },
+              {
+                "description": "Finished successfully.",
+                "type": "string",
+                "const": "completed"
+              },
+              {
+                "description": "Finished with an error.",
+                "type": "string",
+                "const": "failed"
+              }
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ToolDiff": {
+            "description": "One file change of a tool call.",
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Changed file.",
+                "type": "string"
+              },
+              "oldText": {
+                "description": "Previous content; `None` for a new file.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "newText": {
+                "description": "New content.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "newText"
+            ]
+          },
+          "ContextUsage": {
+            "description": "Context window usage reported by an ACP runner.",
+            "type": "object",
+            "properties": {
+              "used": {
+                "description": "Tokens currently in context.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "size": {
+                "description": "Context window size in tokens.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "used",
+              "size"
+            ]
+          }
+        }
+      }
+    },
+    "project.read": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ReadProject",
+        "type": "object",
+        "properties": {
+          "project": {
             "type": "string"
           }
         },
-        "required": ["harness", "model"],
-        "additionalProperties": false
+        "required": [
+          "project"
+        ]
       },
       "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ProjectResult",
+        "description": "The project returned after creation or an update.",
         "type": "object",
         "properties": {
-          "options": {
+          "project": {
+            "description": "The resulting project.",
+            "$ref": "#/$defs/Project"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "$defs": {
+          "Project": {
+            "description": "A working directory shared by a group of threads.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "path": {
+                "description": "Absolute directory path.",
+                "type": "string"
+              },
+              "createdAt": {
+                "description": "Creation time in Unix milliseconds.",
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "createdAt"
+            ]
+          }
+        }
+      }
+    },
+    "queue.update": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "UpdateQueuedInput",
+        "description": "Reorder a queued run or change its text.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "before": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread",
+          "run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "threads.list": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListThreads",
+        "description": "`threads.list` params.",
+        "type": "object",
+        "properties": {
+          "archived": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadList",
+        "description": "`threads.list` result.",
+        "type": "object",
+        "properties": {
+          "threads": {
+            "description": "Every thread.",
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "id": {
-                  "type": "string"
-                },
-                "name": {
-                  "type": "string"
-                },
-                "description": {
-                  "type": "string"
-                },
-                "value": {
-                  "anyOf": [
-                    {
-                      "type": "string"
-                    },
-                    {
-                      "type": "boolean"
-                    }
-                  ]
-                },
-                "category": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "description": "model | thought_level | mode | other ACP categories"
-                    },
-                    {
-                      "type": "null"
-                    }
-                  ]
-                },
-                "type": {
-                  "enum": ["select", "boolean"]
-                },
-                "choices": {
-                  "type": "array",
-                  "items": {
-                    "type": "object",
-                    "properties": {
-                      "value": {
-                        "type": "string"
-                      },
-                      "name": {
-                        "type": "string"
-                      },
-                      "description": {
-                        "type": "string"
-                      },
-                      "group": {
-                        "type": "string",
-                        "description": "Group label, e.g. the model's provider"
-                      },
-                      "thinking": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string"
-                          },
-                          "name": {
-                            "type": "string"
-                          },
-                          "description": {
-                            "type": "string"
-                          },
-                          "value": {
-                            "anyOf": [
-                              {
-                                "type": "string"
-                              },
-                              {
-                                "type": "boolean"
-                              }
-                            ]
-                          },
-                          "choices": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "value": {
-                                  "type": "string"
-                                },
-                                "name": {
-                                  "type": "string"
-                                },
-                                "description": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["value", "name"],
-                              "additionalProperties": false
-                            }
-                          }
-                        },
-                        "required": ["id", "name", "value", "choices"],
-                        "additionalProperties": false,
-                        "description": "Thinking levels reported for this model"
-                      }
-                    },
-                    "required": ["value", "name"],
-                    "additionalProperties": false
-                  }
-                }
-              },
-              "required": ["id", "name", "value", "category", "type", "choices"],
-              "additionalProperties": false
+              "$ref": "#/$defs/ThreadSummary"
             }
           }
         },
-        "required": ["options"],
-        "additionalProperties": false
+        "required": [
+          "threads"
+        ],
+        "$defs": {
+          "ThreadSummary": {
+            "description": "A `threads.list` item.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Its id.",
+                "$ref": "#/$defs/ThreadId"
+              },
+              "title": {
+                "description": "A user rename, an ACP session title, or a title from the first prompt.",
+                "type": "string"
+              },
+              "parent": {
+                "description": "For a subagent: the thread that started it.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "parentEnvironment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "description": "The project directory this thread belongs to, if any.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "harness": {
+                "description": "The configured ACP runner.",
+                "type": "string"
+              },
+              "status": {
+                "description": "What this thread is doing.",
+                "$ref": "#/$defs/ThreadStatus"
+              },
+              "archived": {
+                "description": "Whether the thread is archived.",
+                "type": "boolean"
+              },
+              "updatedAt": {
+                "description": "Time of the last input or turn end in Unix milliseconds; zero if\nunknown.",
+                "type": "integer",
+                "format": "int64"
+              },
+              "unread": {
+                "description": "A turn settled while no app was watching, or this chat was manually\nmarked unread.",
+                "type": "boolean"
+              },
+              "pinned": {
+                "description": "Show the thread in the pinned section.",
+                "type": "boolean"
+              },
+              "model": {
+                "description": "Display name of the selected model, once reported.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thinking": {
+                "description": "Display name of the selected thinking level, when the model has one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "harness",
+              "status",
+              "archived",
+              "updatedAt",
+              "unread",
+              "pinned"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ThreadStatus": {
+            "description": "Availability of a thread.",
+            "oneOf": [
+              {
+                "description": "Nothing is running.",
+                "type": "string",
+                "const": "idle"
+              },
+              {
+                "description": "A turn is running or waiting.",
+                "type": "string",
+                "const": "working"
+              },
+              {
+                "description": "The last turn failed.",
+                "type": "string",
+                "const": "failed"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "thread.update": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "UpdateThread",
+        "description": "Change a thread's metadata.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The thread to change.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "title": {
+            "description": "A new title, if changing it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "archived": {
+            "description": "A new archive status, if changing it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "pinned": {
+            "description": "A new pinned status, if changing it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "unread": {
+            "description": "A new unread status, if changing it.",
+            "type": [
+              "boolean",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "`None` leaves the project alone; `Some(None)` clears it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "thread.configure": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ConfigureThread",
+        "description": "Set a thread's configuration option.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The thread to configure.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "option": {
+            "description": "The option id.",
+            "type": "string"
+          },
+          "value": {
+            "description": "The new option value.",
+            "$ref": "#/$defs/OptionValue"
+          }
+        },
+        "required": [
+          "thread",
+          "option",
+          "value"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "thread.stop": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "StopThread",
+        "description": "Stop a thread's active turn.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The thread to stop.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "thread.delete": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DeleteThread",
+        "description": "Delete a thread.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The thread to delete.",
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "projects.list": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListProjects",
+        "description": "List projects.",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ProjectList",
+        "description": "Projects returned by `projects.list`.",
+        "type": "object",
+        "properties": {
+          "projects": {
+            "description": "All projects.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Project"
+            }
+          }
+        },
+        "required": [
+          "projects"
+        ],
+        "$defs": {
+          "Project": {
+            "description": "A working directory shared by a group of threads.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "path": {
+                "description": "Absolute directory path.",
+                "type": "string"
+              },
+              "createdAt": {
+                "description": "Creation time in Unix milliseconds.",
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "createdAt"
+            ]
+          }
+        }
+      }
+    },
+    "project.create": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CreateProject",
+        "description": "Add a project directory.",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Existing directory; `~` expands to the backend's home directory.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name; omit to use the directory name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ProjectResult",
+        "description": "The project returned after creation or an update.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "The resulting project.",
+            "$ref": "#/$defs/Project"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "$defs": {
+          "Project": {
+            "description": "A working directory shared by a group of threads.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "path": {
+                "description": "Absolute directory path.",
+                "type": "string"
+              },
+              "createdAt": {
+                "description": "Creation time in Unix milliseconds.",
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "name",
+              "path",
+              "createdAt"
+            ]
+          }
+        }
+      }
+    },
+    "project.update": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "UpdateProject",
+        "description": "Update a project's display name.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Project id.",
+            "type": "string"
+          },
+          "name": {
+            "description": "New display name.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "project.remove": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RemoveProject",
+        "description": "Remove a project directory from the project list.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "description": "Project id.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "harnesses.list": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListHarnesses",
+        "description": "List configured ACP runners.",
+        "type": "object"
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessList",
+        "description": "ACP runners returned by `harnesses.list`.",
+        "type": "object",
+        "properties": {
+          "harnesses": {
+            "description": "Configured ACP runners.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Harness"
+            }
+          }
+        },
+        "required": [
+          "harnesses"
+        ],
+        "$defs": {
+          "Harness": {
+            "description": "A configured ACP runner.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Configured name.",
+                "type": "string"
+              },
+              "default": {
+                "description": "Whether this is the backend default.",
+                "type": "boolean"
+              },
+              "options": {
+                "description": "Session options advertised the last time the runner reported them.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ConfigOption"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "default",
+              "options"
+            ]
+          },
+          "ConfigOption": {
+            "description": "A setting offered by the backend or ACP session.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Identifier for `thread.configure`.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "category": {
+                "description": "Semantic category supplied by the runner.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "description": "Type of control.",
+                "$ref": "#/$defs/OptionKind"
+              },
+              "value": {
+                "description": "Current value.",
+                "$ref": "#/$defs/OptionValue"
+              },
+              "choices": {
+                "description": "Available choices, empty for a boolean.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/OptionChoice"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type",
+              "value",
+              "choices"
+            ]
+          },
+          "OptionKind": {
+            "description": "The control used for a configuration option.",
+            "oneOf": [
+              {
+                "description": "A choice among values.",
+                "type": "string",
+                "const": "select"
+              },
+              {
+                "description": "A boolean toggle.",
+                "type": "string",
+                "const": "boolean"
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "OptionChoice": {
+            "description": "A choice offered by a select option.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "description": "Value to send.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "group": {
+                "description": "Optional group label.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thinking": {
+                "description": "Thinking levels reported for this model, if available.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DependentOption"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "name"
+            ]
+          },
+          "DependentOption": {
+            "description": "A select setting that depends on the chosen model.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Identifier for `thread.configure`.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "description": "Default or current value, depending on the surrounding catalog.",
+                "$ref": "#/$defs/OptionValue"
+              },
+              "choices": {
+                "description": "Available choices.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/DependentChoice"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "value",
+              "choices"
+            ]
+          },
+          "DependentChoice": {
+            "description": "A choice in a model-dependent setting.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "description": "Value to send.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "name"
+            ]
+          }
+        }
+      }
+    },
+    "harnesses.options": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessOptions",
+        "description": "Fetch the runner's options for a model before creating a thread.",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "description": "Configured runner name.",
+            "type": "string"
+          },
+          "model": {
+            "description": "Model option value.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "harness",
+          "model"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessOptionsResult",
+        "description": "The runner's options with the requested model selected.",
+        "type": "object",
+        "properties": {
+          "options": {
+            "description": "Options available for the selected model.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ConfigOption"
+            }
+          }
+        },
+        "required": [
+          "options"
+        ],
+        "$defs": {
+          "ConfigOption": {
+            "description": "A setting offered by the backend or ACP session.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Identifier for `thread.configure`.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "category": {
+                "description": "Semantic category supplied by the runner.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "type": {
+                "description": "Type of control.",
+                "$ref": "#/$defs/OptionKind"
+              },
+              "value": {
+                "description": "Current value.",
+                "$ref": "#/$defs/OptionValue"
+              },
+              "choices": {
+                "description": "Available choices, empty for a boolean.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/OptionChoice"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "type",
+              "value",
+              "choices"
+            ]
+          },
+          "OptionKind": {
+            "description": "The control used for a configuration option.",
+            "oneOf": [
+              {
+                "description": "A choice among values.",
+                "type": "string",
+                "const": "select"
+              },
+              {
+                "description": "A boolean toggle.",
+                "type": "string",
+                "const": "boolean"
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "OptionChoice": {
+            "description": "A choice offered by a select option.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "description": "Value to send.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "group": {
+                "description": "Optional group label.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thinking": {
+                "description": "Thinking levels reported for this model, if available.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DependentOption"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "name"
+            ]
+          },
+          "DependentOption": {
+            "description": "A select setting that depends on the chosen model.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Identifier for `thread.configure`.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "value": {
+                "description": "Default or current value, depending on the surrounding catalog.",
+                "$ref": "#/$defs/OptionValue"
+              },
+              "choices": {
+                "description": "Available choices.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/DependentChoice"
+                }
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "value",
+              "choices"
+            ]
+          },
+          "DependentChoice": {
+            "description": "A choice in a model-dependent setting.",
+            "type": "object",
+            "properties": {
+              "value": {
+                "description": "Value to send.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Display label.",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional explanation.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "value",
+              "name"
+            ]
+          }
+        }
       }
     },
     "files.search": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SearchFiles",
+        "description": "Search a thread's working directory for files.",
         "type": "object",
         "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
+          "thread": {
+            "description": "Thread whose working directory is searched.",
+            "$ref": "#/$defs/ThreadId"
           },
           "query": {
-            "type": "string",
-            "description": "Fuzzy path query; empty lists the first files"
+            "description": "Fuzzy path query.",
+            "type": "string"
           },
           "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200
+            "description": "Limit from 1 to 200; omit to use the backend default.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 65535
           }
         },
-        "required": ["conversation", "query"],
-        "additionalProperties": false
+        "required": [
+          "thread",
+          "query"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
       },
       "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "FileList",
+        "description": "Search results from `files.search`.",
         "type": "object",
         "properties": {
           "files": {
+            "description": "Matching relative paths.",
             "type": "array",
             "items": {
-              "type": "string",
-              "description": "Path relative to the conversation's cwd"
+              "type": "string"
             }
           }
         },
-        "required": ["files"],
-        "additionalProperties": false
+        "required": [
+          "files"
+        ]
       }
     },
-    "conversations.search": {
+    "thread.launch": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "LaunchThread",
+        "description": "`thread.launch` params.",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thinking": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Attachment"
+            }
+          },
+          "requestId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "project": {
+            "description": "Project directory; absent uses the default working directory.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "harness": {
+            "description": "Configured runner; absent uses the backend default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "options": {
+            "description": "Initial configuration by option id.",
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/OptionValue"
+            }
+          }
+        },
+        "$defs": {
+          "Attachment": {
+            "description": "A file attached to an input.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "mime": {
+                "description": "Media type.",
+                "type": "string"
+              },
+              "data": {
+                "description": "Base64 bytes, at most 20 MiB decoded.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "mime",
+              "data"
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Launched",
+        "description": "`thread.launch` result.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The new thread.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "thread.send": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SendInput",
+        "description": "`thread.send` params.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "mode": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/SendMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "text": {
+            "description": "The input text.",
+            "type": "string"
+          },
+          "requestId": {
+            "description": "Idempotency key: a retry with the same id returns the same run.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin": {
+            "description": "Where the input came from.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Origin"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "attachments": {
+            "description": "Files to attach to this input.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Attachment"
+            }
+          }
+        },
+        "required": [
+          "thread",
+          "text"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "SendMode": {
+            "description": "How to deliver input to a busy thread.",
+            "type": "string",
+            "enum": [
+              "queue",
+              "steer"
+            ]
+          },
+          "Origin": {
+            "description": "Where an input came from, so its reply is routed back there.",
+            "type": "object",
+            "properties": {
+              "connector": {
+                "description": "Connector name, matching its `hello` name.",
+                "type": "string"
+              },
+              "channel": {
+                "description": "Connector-specific channel/chat id the reply goes to.",
+                "type": "string"
+              },
+              "thread": {
+                "description": "Connector-specific thread id.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "message": {
+                "description": "Connector-specific id of the message being answered.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "description": "Human-readable author, shown to the model.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "connector",
+              "channel"
+            ]
+          },
+          "Attachment": {
+            "description": "A file attached to an input.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "mime": {
+                "description": "Media type.",
+                "type": "string"
+              },
+              "data": {
+                "description": "Base64 bytes, at most 20 MiB decoded.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "mime",
+              "data"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Sent",
+        "description": "`thread.send` result.",
+        "type": "object",
+        "properties": {
+          "run": {
+            "description": "The run the input became.",
+            "$ref": "#/$defs/RunId"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "$defs": {
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "thread.watch": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Watch",
+        "description": "`thread.watch` params: start receiving\n[`Notification::ThreadView`] for a thread.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The thread.",
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Watching",
+        "description": "`thread.watch` and `thread.unwatch` result.",
+        "type": "object",
+        "properties": {
+          "watching": {
+            "description": "Whether this client now watches the thread.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "watching"
+        ]
+      }
+    },
+    "thread.unwatch": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Unwatch",
+        "description": "`thread.unwatch` params: stop watching a thread.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The thread.",
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Watching",
+        "description": "`thread.watch` and `thread.unwatch` result.",
+        "type": "object",
+        "properties": {
+          "watching": {
+            "description": "Whether this client now watches the thread.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "watching"
+        ]
+      }
+    },
+    "threads.search": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SearchThreads",
+        "description": "Search across transcripts.",
         "type": "object",
         "properties": {
           "query": {
-            "type": "string",
-            "minLength": 1
+            "type": "string"
           },
           "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 65535
           }
         },
-        "required": ["query"],
-        "additionalProperties": false
+        "required": [
+          "query"
+        ]
       },
       "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SearchHits",
+        "description": "Matches for a full-text transcript search.",
         "type": "object",
         "properties": {
           "hits": {
             "type": "array",
             "items": {
-              "type": "object",
-              "properties": {
-                "conversation": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "pi-durable ConversationId"
-                },
-                "entry": {
-                  "type": "integer",
-                  "minimum": 1,
-                  "description": "pi-durable EntryId"
-                },
-                "snippet": {
-                  "type": "string",
-                  "description": "Matching text with the match wrapped in \u0001 \u0002 markers"
-                }
-              },
-              "required": ["conversation", "entry", "snippet"],
-              "additionalProperties": false
+              "$ref": "#/$defs/SearchHit"
             }
           }
         },
-        "required": ["hits"],
-        "additionalProperties": false
+        "required": [
+          "hits"
+        ],
+        "$defs": {
+          "SearchHit": {
+            "description": "An entry that matched a transcript search.",
+            "type": "object",
+            "properties": {
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "entry": {
+                "$ref": "#/$defs/EntryId"
+              },
+              "snippet": {
+                "description": "Matching text, highlighted ranges delimited by U+0001 and U+0002.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "thread",
+              "entry",
+              "snippet"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "EntryId": {
+            "description": "A transcript entry id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
       }
     },
-    "conversation.entries": {
+    "thread.entries": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListEntries",
+        "description": "Read entries older than the supplied cursor.",
         "type": "object",
         "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
           },
           "before": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "Return entries with smaller ids than this"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EntryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "limit": {
-            "type": "integer",
-            "minimum": 1,
-            "maximum": 200
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 65535
           }
         },
-        "required": ["conversation", "before"],
-        "additionalProperties": false
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "EntryId": {
+            "description": "A transcript entry id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
       },
       "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "EntryPage",
+        "description": "A page of transcript entries, in ascending id order.",
         "type": "object",
         "properties": {
           "entries": {
             "type": "array",
-            "items": {},
-            "description": "pi-durable EntryRecords in ascending id order, as in the view"
+            "items": {
+              "$ref": "#/$defs/Entry"
+            }
           },
           "before": {
-            "type": "integer",
-            "description": "Set when older entries remain"
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EntryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
-        "required": ["entries"],
-        "additionalProperties": false
+        "required": [
+          "entries"
+        ],
+        "$defs": {
+          "Entry": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/EntryId"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "prompt"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      },
+                      "attachments": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/PromptAttachment"
+                        },
+                        "default": []
+                      },
+                      "origin": {
+                        "anyOf": [
+                          {
+                            "$ref": "#/$defs/Origin"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text",
+                      "key"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "thought"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "text": {
+                        "type": "string"
+                      },
+                      "key": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "text",
+                      "key"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "tool"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/ToolRecord"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "plan"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "entries": {
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/PlanEntry"
+                        }
+                      }
+                    },
+                    "required": [
+                      "entries"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "run"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/RunEnd"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "task_result"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "task": {
+                        "type": "string"
+                      },
+                      "text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "task",
+                      "text"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              }
+            ]
+          },
+          "EntryId": {
+            "description": "A transcript entry id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "PromptAttachment": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "mime"
+            ]
+          },
+          "Origin": {
+            "description": "Where an input came from, so its reply is routed back there.",
+            "type": "object",
+            "properties": {
+              "connector": {
+                "description": "Connector name, matching its `hello` name.",
+                "type": "string"
+              },
+              "channel": {
+                "description": "Connector-specific channel/chat id the reply goes to.",
+                "type": "string"
+              },
+              "thread": {
+                "description": "Connector-specific thread id.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "message": {
+                "description": "Connector-specific id of the message being answered.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "author": {
+                "description": "Human-readable author, shown to the model.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "connector",
+              "channel"
+            ]
+          },
+          "ToolRecord": {
+            "description": "An ACP tool call: the data of a tool entry, or an unfinished\ncall in [`LiveTurn::tools`].",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "ACP tool call id; unique within one turn.",
+                "type": "string"
+              },
+              "title": {
+                "description": "Display title.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Programmatic tool name, when reported by the runner.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "description": "ACP tool kind, such as `execute` or `edit`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "status": {
+                "description": "Progress of the call.",
+                "$ref": "#/$defs/ToolCallStatus"
+              },
+              "viz": {
+                "description": "The viz tool this call ran, if it was one.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "child": {
+                "description": "The thread the call started, if any.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "childEnvironment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "description": "Unix milliseconds when viz first observed the call running.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "input": {
+                "description": "Raw input: a string as sent, else JSON.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "output": {
+                "description": "ACP text content, else readable raw output.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "diffs": {
+                "description": "File changes.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolDiff"
+                },
+                "default": []
+              },
+              "locations": {
+                "description": "Paths the call touched.",
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              }
+            },
+            "required": [
+              "id",
+              "title",
+              "status"
+            ]
+          },
+          "ToolCallStatus": {
+            "description": "Progress of an ACP tool call.",
+            "oneOf": [
+              {
+                "description": "Not started.",
+                "type": "string",
+                "const": "pending"
+              },
+              {
+                "description": "Running.",
+                "type": "string",
+                "const": "in_progress"
+              },
+              {
+                "description": "Finished successfully.",
+                "type": "string",
+                "const": "completed"
+              },
+              {
+                "description": "Finished with an error.",
+                "type": "string",
+                "const": "failed"
+              }
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "ToolDiff": {
+            "description": "One file change of a tool call.",
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Changed file.",
+                "type": "string"
+              },
+              "oldText": {
+                "description": "Previous content; `None` for a new file.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "newText": {
+                "description": "New content.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "newText"
+            ]
+          },
+          "PlanEntry": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "priority": {
+                "$ref": "#/$defs/PlanPriority"
+              },
+              "status": {
+                "$ref": "#/$defs/PlanStatus"
+              }
+            },
+            "required": [
+              "content",
+              "priority",
+              "status"
+            ]
+          },
+          "PlanPriority": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "PlanStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed"
+            ]
+          },
+          "RunEnd": {
+            "type": "object",
+            "properties": {
+              "stopReason": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "answer": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
       }
     },
     "queue.remove": {
       "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RemoveQueuedInput",
+        "description": "Remove an input from the queue.",
         "type": "object",
         "properties": {
-          "conversation": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable ConversationId"
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
           },
-          "submission": {
-            "type": "integer",
-            "minimum": 1,
-            "description": "pi-durable SubmissionId"
+          "run": {
+            "$ref": "#/$defs/RunId"
           }
         },
-        "required": ["conversation", "submission"],
-        "additionalProperties": false
+        "required": [
+          "thread",
+          "run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
       },
       "result": {
-        "type": "object",
-        "properties": {},
-        "additionalProperties": false
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
       }
     }
   },
-  "notifications": {
-    "conversation.view": {
-      "type": "object",
-      "properties": {
-        "conversation": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "pi-durable ConversationId"
+  "notification": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "Notification",
+    "description": "Notifications pushed after hello.",
+    "oneOf": [
+      {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "reply"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "$ref": "#/$defs/Origin"
+              },
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "origin",
+              "thread",
+              "run"
+            ]
+          }
         },
-        "value": {},
-        "ops": {}
+        "required": [
+          "method",
+          "params"
+        ]
       },
-      "required": ["conversation"],
-      "additionalProperties": false
-    },
-    "conversation.state": {
-      "type": "object",
-      "properties": {
-        "conversation": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "pi-durable ConversationId"
+      {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "thread.view"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Entry"
+                }
+              },
+              "reset": {
+                "type": "boolean"
+              },
+              "before": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EntryId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "thread",
+              "entries",
+              "reset"
+            ]
+          }
         },
-        "state": {
-          "type": "object",
-          "properties": {
-            "status": {
-              "enum": ["idle", "working", "failed"],
-              "description": "working: a turn runs or inputs wait"
+        "required": [
+          "method",
+          "params"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "thread.state"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "state": {
+                "$ref": "#/$defs/ThreadState"
+              }
             },
-            "harness": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "project": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "minLength": 1,
-                  "description": "Backend-assigned project id"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "cwd": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            },
-            "options": {
-              "type": "array",
-              "items": {
+            "required": [
+              "thread",
+              "state"
+            ]
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "threads.changed"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "tasks.changed"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ]
+      }
+    ],
+    "$defs": {
+      "Origin": {
+        "description": "Where an input came from, so its reply is routed back there.",
+        "type": "object",
+        "properties": {
+          "connector": {
+            "description": "Connector name, matching its `hello` name.",
+            "type": "string"
+          },
+          "channel": {
+            "description": "Connector-specific channel/chat id the reply goes to.",
+            "type": "string"
+          },
+          "thread": {
+            "description": "Connector-specific thread id.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "message": {
+            "description": "Connector-specific id of the message being answered.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "author": {
+            "description": "Human-readable author, shown to the model.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connector",
+          "channel"
+        ]
+      },
+      "ThreadId": {
+        "description": "A thread id.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "RunId": {
+        "description": "A run id.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "Entry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/EntryId"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "prompt"
+              },
+              "data": {
                 "type": "object",
                 "properties": {
-                  "id": {
+                  "text": {
                     "type": "string"
                   },
-                  "name": {
-                    "type": "string"
+                  "attachments": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/PromptAttachment"
+                    },
+                    "default": []
                   },
-                  "description": {
-                    "type": "string"
-                  },
-                  "value": {
+                  "origin": {
                     "anyOf": [
                       {
-                        "type": "string"
-                      },
-                      {
-                        "type": "boolean"
-                      }
-                    ]
-                  },
-                  "category": {
-                    "anyOf": [
-                      {
-                        "type": "string",
-                        "description": "model | thought_level | mode | other ACP categories"
+                        "$ref": "#/$defs/Origin"
                       },
                       {
                         "type": "null"
                       }
                     ]
+                  }
+                },
+                "required": [
+                  "text"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "text"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
                   },
-                  "type": {
-                    "enum": ["select", "boolean"]
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text",
+                  "key"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "thought"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
                   },
-                  "choices": {
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text",
+                  "key"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tool"
+              },
+              "data": {
+                "$ref": "#/$defs/ToolRecord"
+              }
+            },
+            "required": [
+              "kind",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "plan"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "entries": {
                     "type": "array",
                     "items": {
-                      "type": "object",
-                      "properties": {
-                        "value": {
-                          "type": "string"
-                        },
-                        "name": {
-                          "type": "string"
-                        },
-                        "description": {
-                          "type": "string"
-                        },
-                        "group": {
-                          "type": "string",
-                          "description": "Group label, e.g. the model's provider"
-                        },
-                        "thinking": {
-                          "type": "object",
-                          "properties": {
-                            "id": {
-                              "type": "string"
-                            },
-                            "name": {
-                              "type": "string"
-                            },
-                            "description": {
-                              "type": "string"
-                            },
-                            "value": {
-                              "anyOf": [
-                                {
-                                  "type": "string"
-                                },
-                                {
-                                  "type": "boolean"
-                                }
-                              ]
-                            },
-                            "choices": {
-                              "type": "array",
-                              "items": {
-                                "type": "object",
-                                "properties": {
-                                  "value": {
-                                    "type": "string"
-                                  },
-                                  "name": {
-                                    "type": "string"
-                                  },
-                                  "description": {
-                                    "type": "string"
-                                  }
-                                },
-                                "required": ["value", "name"],
-                                "additionalProperties": false
-                              }
-                            }
-                          },
-                          "required": ["id", "name", "value", "choices"],
-                          "additionalProperties": false,
-                          "description": "Thinking levels reported for this model"
-                        }
-                      },
-                      "required": ["value", "name"],
-                      "additionalProperties": false
+                      "$ref": "#/$defs/PlanEntry"
                     }
                   }
                 },
-                "required": ["id", "name", "value", "category", "type", "choices"],
-                "additionalProperties": false
-              },
-              "description": "Empty until the runner's session reports them"
-            },
-            "commands": {
-              "type": "array",
-              "items": {
-                "type": "object",
-                "properties": {
-                  "name": {
-                    "type": "string",
-                    "description": "Without the leading /"
-                  },
-                  "description": {
-                    "type": "string"
-                  },
-                  "hint": {
-                    "anyOf": [
-                      {
-                        "type": "string"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
-                  }
-                },
-                "required": ["name", "description", "hint"],
-                "additionalProperties": false
+                "required": [
+                  "entries"
+                ]
               }
             },
-            "queue": {
-              "type": "array",
-              "items": {
+            "required": [
+              "kind",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "run"
+              },
+              "data": {
+                "$ref": "#/$defs/RunEnd"
+              }
+            },
+            "required": [
+              "kind",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "task_result"
+              },
+              "data": {
                 "type": "object",
                 "properties": {
-                  "submission": {
-                    "type": "integer",
-                    "minimum": 1,
-                    "description": "pi-durable SubmissionId"
+                  "task": {
+                    "type": "string"
                   },
                   "text": {
                     "type": "string"
                   }
                 },
-                "required": ["submission", "text"],
-                "additionalProperties": false
-              },
-              "description": "Inputs waiting for the next turn"
+                "required": [
+                  "task",
+                  "text"
+                ]
+              }
             },
-            "attachments": {
-              "type": "object",
-              "properties": {
-                "images": {
-                  "type": "boolean",
-                  "description": "The runner takes image prompts"
-                }
-              },
-              "required": ["images"],
-              "additionalProperties": false,
-              "description": "What attachments the runner accepts; files always go as paths"
-            },
-            "live": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "turn": {
-                      "type": "string",
-                      "description": "EntryId of the turn's viz.agent.prompt entry"
-                    },
-                    "text": {
-                      "type": "object",
-                      "properties": {
-                        "key": {
-                          "type": "string",
-                          "description": "Also `data.key` of the viz.agent.text or viz.agent.thought entry that commits it"
-                        },
-                        "kind": {
-                          "enum": ["text", "thought"]
-                        },
-                        "text": {
-                          "type": "string"
-                        }
-                      },
-                      "required": ["key", "kind", "text"],
-                      "additionalProperties": false
-                    },
-                    "tools": {
-                      "type": "array",
-                      "items": {
-                        "type": "object",
-                        "properties": {
-                          "id": {
-                            "type": "string",
-                            "description": "ACP toolCallId; unique within one turn"
-                          },
-                          "title": {
-                            "type": "string"
-                          },
-                          "name": {
-                            "type": "string",
-                            "description": "Programmatic tool name, when reported by the runner"
-                          },
-                          "kind": {
-                            "anyOf": [
-                              {
-                                "type": "string",
-                                "description": "ACP ToolKind: read | edit | execute | search | fetch | think | other ..."
-                              },
-                              {
-                                "type": "null"
-                              }
-                            ]
-                          },
-                          "status": {
-                            "enum": ["pending", "in_progress", "completed", "failed"]
-                          },
-                          "viz": {
-                            "type": "string",
-                            "description": "The viz tool this call ran, when it was one"
-                          },
-                          "child": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "description": "pi-durable ConversationId"
-                          },
-                          "startedAt": {
-                            "type": "integer",
-                            "description": "Unix milliseconds when viz first observed the call running"
-                          },
-                          "input": {
-                            "type": "string",
-                            "description": "Raw input: a string as sent, else JSON (fields such as command, path, timeout)"
-                          },
-                          "output": {
-                            "type": "string",
-                            "description": "ACP text content, else readable raw output"
-                          },
-                          "diffs": {
-                            "type": "array",
-                            "items": {
-                              "type": "object",
-                              "properties": {
-                                "path": {
-                                  "type": "string"
-                                },
-                                "oldText": {
-                                  "anyOf": [
-                                    {
-                                      "type": "string"
-                                    },
-                                    {
-                                      "type": "null"
-                                    }
-                                  ]
-                                },
-                                "newText": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": ["path", "oldText", "newText"],
-                              "additionalProperties": false
-                            }
-                          },
-                          "locations": {
-                            "type": "array",
-                            "items": {
-                              "type": "string"
-                            }
-                          }
-                        },
-                        "required": ["id", "title", "kind", "status"],
-                        "additionalProperties": false
-                      },
-                      "description": "Unfinished tool calls, in the order they started"
-                    }
-                  },
-                  "required": ["turn", "tools"],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "An ACP turn's in-progress text and tools; null when none runs"
-            },
-            "usage": {
-              "anyOf": [
-                {
-                  "type": "object",
-                  "properties": {
-                    "used": {
-                      "type": "integer",
-                      "description": "Tokens in context"
-                    },
-                    "size": {
-                      "type": "integer",
-                      "description": "Context window in tokens"
-                    }
-                  },
-                  "required": ["used", "size"],
-                  "additionalProperties": false
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "The ACP runner's last usage_update; null until it sends one"
-            }
-          },
-          "required": [
-            "status",
-            "harness",
-            "project",
-            "cwd",
-            "options",
-            "commands",
-            "queue",
-            "attachments",
-            "live",
-            "usage"
-          ],
-          "additionalProperties": false
-        }
+            "required": [
+              "kind",
+              "data"
+            ]
+          }
+        ]
       },
-      "required": ["conversation", "state"],
-      "additionalProperties": false
-    },
-    "conversations.changed": {
-      "type": "object",
-      "properties": {},
-      "additionalProperties": false
-    },
-    "reply": {
-      "type": "object",
-      "properties": {
-        "origin": {
-          "type": "object",
-          "properties": {
-            "connector": {
-              "type": "string",
-              "description": "Connector name, matching its `hello` name, e.g. discord"
+      "EntryId": {
+        "description": "A transcript entry id.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 0
+      },
+      "PromptAttachment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "mime": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "mime"
+        ]
+      },
+      "ToolRecord": {
+        "description": "An ACP tool call: the data of a tool entry, or an unfinished\ncall in [`LiveTurn::tools`].",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "ACP tool call id; unique within one turn.",
+            "type": "string"
+          },
+          "title": {
+            "description": "Display title.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Programmatic tool name, when reported by the runner.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "ACP tool kind, such as `execute` or `edit`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "description": "Progress of the call.",
+            "$ref": "#/$defs/ToolCallStatus"
+          },
+          "viz": {
+            "description": "The viz tool this call ran, if it was one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "child": {
+            "description": "The thread the call started, if any.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "childEnvironment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "description": "Unix milliseconds when viz first observed the call running.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "input": {
+            "description": "Raw input: a string as sent, else JSON.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "output": {
+            "description": "ACP text content, else readable raw output.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "diffs": {
+            "description": "File changes.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ToolDiff"
             },
-            "channel": {
-              "type": "string",
-              "description": "Connector-specific channel/chat id the reply goes to"
-            },
-            "thread": {
+            "default": []
+          },
+          "locations": {
+            "description": "Paths the call touched.",
+            "type": "array",
+            "items": {
               "type": "string"
             },
-            "message": {
-              "type": "string",
-              "description": "Connector-specific id of the message being answered"
-            },
-            "author": {
-              "type": "string",
-              "description": "Human-readable author, shown to the model"
-            }
+            "default": []
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "status"
+        ]
+      },
+      "ToolCallStatus": {
+        "description": "Progress of an ACP tool call.",
+        "oneOf": [
+          {
+            "description": "Not started.",
+            "type": "string",
+            "const": "pending"
           },
-          "required": ["connector", "channel"],
-          "additionalProperties": false
+          {
+            "description": "Running.",
+            "type": "string",
+            "const": "in_progress"
+          },
+          {
+            "description": "Finished successfully.",
+            "type": "string",
+            "const": "completed"
+          },
+          {
+            "description": "Finished with an error.",
+            "type": "string",
+            "const": "failed"
+          }
+        ]
+      },
+      "ToolDiff": {
+        "description": "One file change of a tool call.",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Changed file.",
+            "type": "string"
+          },
+          "oldText": {
+            "description": "Previous content; `None` for a new file.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "newText": {
+            "description": "New content.",
+            "type": "string"
+          }
         },
-        "conversation": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "pi-durable ConversationId"
+        "required": [
+          "path",
+          "newText"
+        ]
+      },
+      "PlanEntry": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "priority": {
+            "$ref": "#/$defs/PlanPriority"
+          },
+          "status": {
+            "$ref": "#/$defs/PlanStatus"
+          }
         },
-        "submission": {
-          "type": "integer",
-          "minimum": 1,
-          "description": "pi-durable SubmissionId"
-        },
-        "status": {
-          "enum": ["done", "unanswered"]
-        },
-        "text": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ]
+        "required": [
+          "content",
+          "priority",
+          "status"
+        ]
+      },
+      "PlanPriority": {
+        "type": "string",
+        "enum": [
+          "high",
+          "medium",
+          "low"
+        ]
+      },
+      "PlanStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "in_progress",
+          "completed"
+        ]
+      },
+      "RunEnd": {
+        "type": "object",
+        "properties": {
+          "stopReason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
-      "required": ["origin", "conversation", "submission", "status", "text"],
-      "additionalProperties": false
+      "ThreadState": {
+        "description": "The current application state of a watched thread.",
+        "type": "object",
+        "properties": {
+          "status": {
+            "description": "Status of this thread.",
+            "$ref": "#/$defs/ThreadStatus"
+          },
+          "harness": {
+            "description": "The configured ACP runner.",
+            "type": "string"
+          },
+          "project": {
+            "description": "The containing project, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cwd": {
+            "description": "Working directory.",
+            "type": "string"
+          },
+          "options": {
+            "description": "Configuration reported by the runner.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ConfigOption"
+            }
+          },
+          "commands": {
+            "description": "Available slash commands.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/SlashCommand"
+            }
+          },
+          "queue": {
+            "description": "Inputs waiting for their turn.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/QueuedInput"
+            }
+          },
+          "attachments": {
+            "description": "What kind of attachment the current runner accepts directly.",
+            "$ref": "#/$defs/AttachmentCapabilities"
+          },
+          "live": {
+            "description": "An ACP turn's in-progress text and tools; `None` when none runs.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LiveTurn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "usage": {
+            "description": "The ACP runner's last context usage report, if any.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ContextUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "status",
+          "harness",
+          "cwd",
+          "options",
+          "commands",
+          "queue",
+          "attachments"
+        ]
+      },
+      "ThreadStatus": {
+        "description": "Availability of a thread.",
+        "oneOf": [
+          {
+            "description": "Nothing is running.",
+            "type": "string",
+            "const": "idle"
+          },
+          {
+            "description": "A turn is running or waiting.",
+            "type": "string",
+            "const": "working"
+          },
+          {
+            "description": "The last turn failed.",
+            "type": "string",
+            "const": "failed"
+          }
+        ]
+      },
+      "ConfigOption": {
+        "description": "A setting offered by the backend or ACP session.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Identifier for `thread.configure`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Optional explanation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "category": {
+            "description": "Semantic category supplied by the runner.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "description": "Type of control.",
+            "$ref": "#/$defs/OptionKind"
+          },
+          "value": {
+            "description": "Current value.",
+            "$ref": "#/$defs/OptionValue"
+          },
+          "choices": {
+            "description": "Available choices, empty for a boolean.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/OptionChoice"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "type",
+          "value",
+          "choices"
+        ]
+      },
+      "OptionKind": {
+        "description": "The control used for a configuration option.",
+        "oneOf": [
+          {
+            "description": "A choice among values.",
+            "type": "string",
+            "const": "select"
+          },
+          {
+            "description": "A boolean toggle.",
+            "type": "string",
+            "const": "boolean"
+          }
+        ]
+      },
+      "OptionValue": {
+        "description": "Config option value, stored as a string choice or a boolean.",
+        "anyOf": [
+          {
+            "description": "A named choice.",
+            "type": "string"
+          },
+          {
+            "description": "On or off.",
+            "type": "boolean"
+          }
+        ]
+      },
+      "OptionChoice": {
+        "description": "A choice offered by a select option.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Value to send.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Optional explanation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "group": {
+            "description": "Optional group label.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thinking": {
+            "description": "Thinking levels reported for this model, if available.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DependentOption"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "value",
+          "name"
+        ]
+      },
+      "DependentOption": {
+        "description": "A select setting that depends on the chosen model.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Identifier for `thread.configure`.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Optional explanation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "value": {
+            "description": "Default or current value, depending on the surrounding catalog.",
+            "$ref": "#/$defs/OptionValue"
+          },
+          "choices": {
+            "description": "Available choices.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DependentChoice"
+            }
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "value",
+          "choices"
+        ]
+      },
+      "DependentChoice": {
+        "description": "A choice in a model-dependent setting.",
+        "type": "object",
+        "properties": {
+          "value": {
+            "description": "Value to send.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Display label.",
+            "type": "string"
+          },
+          "description": {
+            "description": "Optional explanation.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "value",
+          "name"
+        ]
+      },
+      "SlashCommand": {
+        "description": "A slash command offered by the ACP session.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Command name without the slash.",
+            "type": "string"
+          },
+          "description": {
+            "description": "What the command does.",
+            "type": "string"
+          },
+          "hint": {
+            "description": "Optional argument hint.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "description"
+        ]
+      },
+      "QueuedInput": {
+        "description": "An input waiting for the next turn, removable until dispatched.",
+        "type": "object",
+        "properties": {
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "run",
+          "text"
+        ]
+      },
+      "AttachmentCapabilities": {
+        "description": "Attachment capabilities of a thread's runner.",
+        "type": "object",
+        "properties": {
+          "images": {
+            "description": "The runner accepts image prompts. Files can always be sent as paths.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "images"
+        ]
+      },
+      "LiveTurn": {
+        "description": "The running ACP turn's uncommitted tail. The commit that appends it as\nentries, or ends the turn, clears it; its text comes before its tools.",
+        "type": "object",
+        "properties": {
+          "turn": {
+            "description": "Entry id of the turn's active run, as a string.",
+            "type": "string"
+          },
+          "text": {
+            "description": "The text run being streamed, if any.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/LiveText"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tools": {
+            "description": "Unfinished tool calls, in the order they started.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ToolRecord"
+            }
+          }
+        },
+        "required": [
+          "turn",
+          "tools"
+        ]
+      },
+      "LiveText": {
+        "description": "A streamed text run.",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Stable key; also `data.key` of the entry that commits this run.",
+            "type": "string"
+          },
+          "kind": {
+            "description": "Prose or thinking.",
+            "$ref": "#/$defs/LiveTextKind"
+          },
+          "text": {
+            "description": "The text so far.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "kind",
+          "text"
+        ]
+      },
+      "LiveTextKind": {
+        "description": "What a [`LiveText`] run is.",
+        "oneOf": [
+          {
+            "description": "Agent prose.",
+            "type": "string",
+            "const": "text"
+          },
+          {
+            "description": "Agent thinking.",
+            "type": "string",
+            "const": "thought"
+          }
+        ]
+      },
+      "ContextUsage": {
+        "description": "Context window usage reported by an ACP runner.",
+        "type": "object",
+        "properties": {
+          "used": {
+            "description": "Tokens currently in context.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "size": {
+            "description": "Context window size in tokens.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "used",
+          "size"
+        ]
+      },
+      "Empty": {
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
     }
   }
 }

@@ -1,4 +1,4 @@
-//! Where viz keeps its config, state and sockets.
+//! Where viz keeps its config and state.
 
 use std::{env, path::PathBuf};
 
@@ -12,8 +12,6 @@ pub struct Paths {
     /// `$STATE_DIRECTORY` (systemd `StateDirectory=`), default
     /// `$XDG_STATE_HOME/viz`: databases and logs.
     pub state_dir: PathBuf,
-    /// `$XDG_RUNTIME_DIR/viz`, falling back to the state dir: sockets.
-    pub runtime_dir: PathBuf,
 }
 
 impl Paths {
@@ -30,19 +28,10 @@ impl Paths {
             Some(dir) => dir,
             None => xdg("XDG_STATE_HOME", ".local/state")?.join("viz"),
         };
-        let runtime_dir =
-            var("XDG_RUNTIME_DIR").map_or_else(|| state_dir.clone(), |dir| dir.join("viz"));
         Ok(Self {
             config_dir,
             state_dir,
-            runtime_dir,
         })
-    }
-
-    /// The backend's default local socket.
-    #[must_use]
-    pub fn default_socket(&self) -> PathBuf {
-        self.runtime_dir.join("backend.sock")
     }
 }
 

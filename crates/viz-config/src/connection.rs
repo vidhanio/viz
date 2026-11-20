@@ -1,19 +1,18 @@
 //! Connection settings common to all viz clients.
 
-use std::path::PathBuf;
-
 use serde::Deserialize;
 
 use crate::Secret;
+
+/// The default local backend origin.
+pub const DEFAULT_URL: &str = "http://127.0.0.1:7420";
 
 /// The client's `[backend]` connection table.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Connection {
-    /// Local socket, defaulting to [`crate::Paths::default_socket`].
-    pub socket: Option<PathBuf>,
-    /// Remote base URL, taking precedence over the local socket.
+    /// Base HTTP(S) origin, defaulting to [`DEFAULT_URL`].
     pub url: Option<String>,
-    /// Bearer token required for a remote URL.
+    /// Bearer token required for a non-loopback address.
     pub token: Option<Secret>,
 }

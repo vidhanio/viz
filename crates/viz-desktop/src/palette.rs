@@ -1,14 +1,14 @@
-//! Keyboard launcher for desktop commands, chats, and transcript search.
+//! Keyboard launcher for desktop commands, threads, and transcript search.
 
 use std::time::Duration;
 
 use rune::{El, Icon, Key, KeyEvent, ScrollSpec, Span, TextEdit, Tx, col, icon, rich, row, text};
 use rune_kit::{Keybind, TextInput};
-use viz_client::protocol::{ConversationId, ConversationKind, ConversationSummary, SearchHit};
+use viz_client::protocol::{SearchHit, ThreadId, ThreadSummary};
 
 use crate::{
-    app::{Desktop, chat_title},
-    backend::{ChatChange, Command},
+    app::{Desktop, thread_title},
+    backend::{Command, ThreadChange},
     sidebar,
     theme::{DIALOG_INSET, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
     ui,
@@ -137,7 +137,7 @@ pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
             let request = s.palette.request;
             let query = s.palette.input.text.trim().to_owned();
             s.palette.search = Search::Pending;
-            if !s.send(Command::SearchConversations { request, query }, tx) {
+            if !s.send(Command::SearchThreads { request, query }, tx) {
                 s.palette.search = Search::Complete(Err("The backend is offline.".into()));
             }
         }
@@ -148,7 +148,7 @@ pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Local {
-    NewChat,
+    NewThread,
     AddProject,
     Sidebar,
     Pin,
@@ -158,7 +158,7 @@ enum Local {
 }
 
 const COMMANDS: [Local; 7] = [
-    Local::NewChat,
+    Local::NewThread,
     Local::AddProject,
     Local::Sidebar,
     Local::Pin,
@@ -169,23 +169,23 @@ const COMMANDS: [Local; 7] = [
 
 impl Local {
     fn label(self, s: &Desktop) -> &'static str {
-        let chat = s.selected.and_then(|id| s.summary(id));
+        let thread = s.selected.and_then(|id| s.summary(id));
         match self {
-            Self::NewChat => "New chat",
+            Self::NewThread => "New thread",
             Self::AddProject => "Add project",
             Self::Sidebar => "Toggle sidebar",
-            Self::Pin if chat.is_some_and(|chat| chat.pinned) => "Unpin chat",
-            Self::Pin => "Pin chat",
-            Self::Archive if chat.is_some_and(|chat| chat.archived) => "Unarchive chat",
-            Self::Archive => "Archive chat",
-            Self::Delete => "Delete chat",
+            Self::Pin if thread.is_some_and(|thread| thread.pinned) => "Unpin thread",
+            Self::Pin => "Pin thread",
+            Self::Archive if thread.is_some_and(|thread| thread.archived) => "Unarchive thread",
+            Self::Archive => "Archive thread",
+            Self::Delete => "Delete thread",
             Self::Stop => "Stop response",
         }
     }
 
     const fn glyph(self) -> &'static Icon {
         match self {
-            Self::NewChat => &ui::COMPOSE,
+            Self::NewThread => &ui::COMPOSE,
             Self::AddProject => &ui::FOLDER,
             Self::Archive => &ui::ARCHIVE,
             Self::Sidebar => &ui::SIDEBAR,
@@ -197,7 +197,7 @@ impl Local {
 
     const fn shortcut(self) -> Option<&'static str> {
         match self {
-            Self::NewChat => Some("N"),
+            Self::NewThread => Some("N"),
             Self::Stop => Some("."),
             _ => None,
         }
@@ -210,40 +210,37 @@ impl Local {
         if !s.connected() {
             return false;
         }
-        let chat = s.selected.and_then(|id| s.summary(id));
+        let thread = s.selected.and_then(|id| s.summary(id));
         match self {
-            Self::NewChat => s.new_chat.is_none(),
+            Self::NewThread => s.new_thread.is_none(),
             Self::AddProject | Self::Sidebar => true,
-            Self::Pin | Self::Archive | Self::Delete => {
-                s.new_chat.is_none()
-                    && chat.is_some_and(|chat| chat.kind != ConversationKind::Orchestrator)
-            }
+            Self::Pin | Self::Archive | Self::Delete => s.new_thread.is_none() && thread.is_some(),
             Self::Stop => s.selected.is_some() && s.busy(),
         }
     }
 
     fn run(self, s: &mut Desktop, tx: &mut Tx) {
-        let chat = s
+        let thread = s
             .selected
             .and_then(|id| s.summary(id))
-            .map(|chat| (chat.id, chat.pinned, chat.archived));
+            .map(|thread| (thread.id, thread.pinned, thread.archived));
         match self {
-            Self::NewChat => s.create_here(tx),
+            Self::NewThread => s.create_here(tx),
             Self::AddProject => sidebar::open_add_project(s, tx),
             Self::Sidebar => s.sidebar.toggle(),
             Self::Pin => {
-                if let Some((id, pinned, _)) = chat {
-                    s.send(Command::Update(id, ChatChange::Pin(!pinned)), tx);
+                if let Some((id, pinned, _)) = thread {
+                    s.send(Command::Update(id, ThreadChange::Pin(!pinned)), tx);
                 }
             }
             Self::Archive => {
-                if let Some((id, _, archived)) = chat {
-                    s.send(Command::Update(id, ChatChange::Archive(!archived)), tx);
+                if let Some((id, _, archived)) = thread {
+                    s.send(Command::Update(id, ThreadChange::Archive(!archived)), tx);
                 }
             }
             Self::Delete => {
-                if let Some((id, _, _)) = chat {
-                    sidebar::open_delete_chat(s, id, tx);
+                if let Some((id, _, _)) = thread {
+                    sidebar::open_delete_thread(s, id, tx);
                 }
             }
             Self::Stop => s.abort(tx),
@@ -254,22 +251,16 @@ impl Local {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Choice {
     Command(Local),
-    Chat(ConversationId),
-    Message {
-        conversation: ConversationId,
-        entry: u64,
-    },
+    Thread(ThreadId),
+    Message { thread: ThreadId, entry: u64 },
 }
 
 impl Choice {
     fn key(self) -> String {
         match self {
             Self::Command(command) => format!("palette-command-{command:?}"),
-            Self::Chat(id) => format!("palette-chat-{id}"),
-            Self::Message {
-                conversation,
-                entry,
-            } => format!("palette-hit-{conversation}-{entry}"),
+            Self::Thread(id) => format!("palette-thread-{id}"),
+            Self::Message { thread, entry } => format!("palette-hit-{thread}-{entry}"),
         }
     }
 
@@ -279,7 +270,7 @@ impl Choice {
         }
         let available = match self {
             Self::Command(command) => command.available(s),
-            Self::Chat(_) | Self::Message { .. } => s.connected(),
+            Self::Thread(_) | Self::Message { .. } => s.connected(),
         };
         if !available {
             return;
@@ -287,10 +278,7 @@ impl Choice {
         close(s);
         match self {
             Self::Command(command) => command.run(s, tx),
-            Self::Chat(id)
-            | Self::Message {
-                conversation: id, ..
-            } => s.select(id, tx),
+            Self::Thread(id) | Self::Message { thread: id, .. } => s.select(id, tx),
         }
     }
 }
@@ -298,7 +286,7 @@ impl Choice {
 #[derive(Clone, Copy)]
 enum ResultRow<'a> {
     Command(Local),
-    Chat(&'a ConversationSummary),
+    Thread(&'a ThreadSummary),
     Message(&'a SearchHit),
 }
 
@@ -306,9 +294,9 @@ impl ResultRow<'_> {
     const fn choice(self) -> Choice {
         match self {
             Self::Command(command) => Choice::Command(command),
-            Self::Chat(chat) => Choice::Chat(chat.id),
+            Self::Thread(thread) => Choice::Thread(thread.id),
             Self::Message(hit) => Choice::Message {
-                conversation: hit.conversation,
+                thread: hit.thread,
                 entry: hit.entry.0,
             },
         }
@@ -317,8 +305,8 @@ impl ResultRow<'_> {
     const fn group(self, recent: bool) -> &'static str {
         match self {
             Self::Command(_) => "Commands",
-            Self::Chat(_) if recent => "Recent chats",
-            Self::Chat(_) => "Chats",
+            Self::Thread(_) if recent => "Recent threads",
+            Self::Thread(_) => "Threads",
             Self::Message(_) => "Messages",
         }
     }
@@ -348,18 +336,16 @@ fn rows(s: &Desktop, recent: bool) -> impl Iterator<Item = ResultRow<'_>> {
         .filter(move |command| command.available(s) && matches_filter(command.label(s), filter))
         .map(ResultRow::Command);
     let connected = s.connected();
-    let chats = if connected {
-        s.conversations.as_slice()
-    } else {
-        &[]
-    }
-    .iter()
-    .filter(move |chat| (!recent || !chat.archived) && matches_filter(chat_title(chat), filter))
-    .take(if recent { RECENT_LIMIT } else { CHAT_LIMIT })
-    .map(ResultRow::Chat);
+    let threads = if connected { s.threads.as_slice() } else { &[] }
+        .iter()
+        .filter(move |thread| {
+            (!recent || !thread.archived) && matches_filter(thread_title(thread), filter)
+        })
+        .take(if recent { RECENT_LIMIT } else { CHAT_LIMIT })
+        .map(ResultRow::Thread);
     let hits = if connected { s.palette.hits() } else { &[] };
     commands
-        .chain(chats)
+        .chain(threads)
         .chain(hits.iter().map(ResultRow::Message))
 }
 
@@ -421,16 +407,8 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
     let choice = result.choice();
     let (glyph, title) = match result {
         ResultRow::Command(command) => (command.glyph(), command.label(s)),
-        ResultRow::Chat(chat) if s.root == Some(chat.id) => (&ui::STAR, chat_title(chat)),
-        ResultRow::Chat(chat) if chat.kind == ConversationKind::Subagent => (
-            chat.harness.as_deref().map_or(&ui::AGENT, ui::harness_icon),
-            chat_title(chat),
-        ),
-        ResultRow::Chat(chat) => (
-            chat.harness.as_deref().map_or(&ui::CHAT, ui::harness_icon),
-            chat_title(chat),
-        ),
-        ResultRow::Message(hit) => (&ui::SEARCH, s.title(hit.conversation)),
+        ResultRow::Thread(thread) => (ui::harness_icon(&thread.harness), thread_title(thread)),
+        ResultRow::Message(hit) => (&ui::SEARCH, s.title(hit.thread)),
     };
     let label = text(title).font(t.ui).color(t.text).truncate();
     let labels = col().grow(1.0).shrink().min_w(0.0).child(label);
@@ -470,7 +448,7 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
 
 fn search_note(s: &Desktop, any_choices: bool, t: &Theme) -> Option<El> {
     let (label, detail) = if !s.connected() {
-        ("Connect to search chats and messages", None)
+        ("Connect to search threads and messages", None)
     } else if s.palette.filter.is_empty() {
         return None;
     } else {
@@ -562,8 +540,8 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         list = list.child(note.key("search-status"));
     }
     let field = TextInput::new(&s.palette.input)
-        .label("Search commands, chats, and messages")
-        .placeholder("Type a command or search chats…")
+        .label("Search commands, threads, and messages")
+        .placeholder("Type a command or search threads…")
         .plain()
         .leading_icon(&ui::SEARCH)
         .width(None)

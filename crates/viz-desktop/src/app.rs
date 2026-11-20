@@ -11,14 +11,13 @@ use rune::{TextEdit, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, ConfigOption, ConversationId, ConversationKind, ConversationState,
-    ConversationStatus, ConversationSummary, CreateConversation, Harness, OptionValue, Project,
-    Submit,
+    Attachment, ConfigOption, Environment, Harness, HarnessThread, HarnessThreadList, LaunchThread,
+    OptionValue, Project, SendInput, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
 };
 
 use crate::{
     attachments::{self, Loaded, Source, Target as AttachmentTarget},
-    backend::{ChatChange, Command},
+    backend::{Command, ThreadChange},
     composer::{Completion, ModelMenu},
     palette::Palette,
     sidebar::Navigation,
@@ -61,7 +60,7 @@ pub struct Toast {
 
 /// A local draft. No ACP session is open until its first send.
 #[derive(Debug)]
-pub struct NewChat {
+pub struct NewThread {
     pub id: u64,
     pub project: Option<String>,
     pub harness: Option<String>,
@@ -70,11 +69,11 @@ pub struct NewChat {
     loading_choices: bool,
 }
 
-impl NewChat {
+impl NewThread {
     pub fn new(id: u64, project: Option<&Project>) -> Self {
         Self {
             id,
-            project: project.map(|project| project.id.clone()),
+            project: project.map(|project| project.path.clone()),
             harness: None,
             options: BTreeMap::new(),
             sending: false,
@@ -106,6 +105,17 @@ impl Default for Draft {
     }
 }
 
+#[derive(Debug)]
+pub struct ImportBrowser {
+    pub harness: String,
+    pub project: Option<String>,
+    pub threads: Vec<HarnessThread>,
+    pub next: Option<String>,
+    pub loading: bool,
+    pub importing: bool,
+    pub error: Option<String>,
+}
+
 /// The window's state.
 #[derive(Debug)]
 pub struct Desktop {
@@ -114,19 +124,21 @@ pub struct Desktop {
     pub status: Status,
     /// Where the backend is, once the config is read.
     pub endpoint: Option<String>,
-    /// The orchestrator's conversation, once connected.
-    pub root: Option<ConversationId>,
-    /// Every conversation as the backend lists it, titles included.
-    pub conversations: Vec<ConversationSummary>,
+    pub environment: Option<String>,
+    pub environments: Vec<Environment>,
+    pub tasks: Vec<Task>,
+    pub imports: Option<ImportBrowser>,
+    /// Every thread as the backend lists it, titles included.
+    pub threads: Vec<ThreadSummary>,
     pub projects: Vec<Project>,
     pub harnesses: Vec<Harness>,
-    /// The conversation in the main pane.
-    pub selected: Option<ConversationId>,
+    /// The thread in the main pane.
+    pub selected: Option<ThreadId>,
     /// Its transcript and live state, once its view arrives.
     pub thread: Thread,
     pub history_loading: bool,
-    pub conversation: Option<ConversationState>,
-    pub new_chat: Option<NewChat>,
+    pub state: Option<ThreadState>,
+    pub new_thread: Option<NewThread>,
     next_draft: u64,
     /// Timeline rows the user opened (tool calls, thinking), by key.
     pub expanded: HashSet<String>,
@@ -134,7 +146,9 @@ pub struct Desktop {
     pub draft: TextEdit,
     pub attachments: Vec<Attachment>,
     attachment_reads: HashSet<AttachmentTarget>,
-    drafts: HashMap<ConversationId, Draft>,
+    environment_epoch: u64,
+    drafts: HashMap<ThreadId, Draft>,
+    inactive_drafts: HashMap<String, HashMap<ThreadId, Draft>>,
     pub completion: Completion,
     pub model_menu: ModelMenu,
     pub open_picker: Option<String>,
@@ -152,9 +166,9 @@ pub struct Desktop {
     /// choose what fits reads it.
     pub window_width: f32,
     pub tool_clock: i64,
-    /// Chats left by navigating, newest last, for back and forward.
-    back: Vec<ConversationId>,
-    forward: Vec<ConversationId>,
+    /// Threads left by navigating, newest last, for back and forward.
+    back: Vec<ThreadId>,
+    forward: Vec<ThreadId>,
 }
 
 impl Desktop {
@@ -166,21 +180,26 @@ impl Desktop {
             commands,
             status: Status::Connecting,
             endpoint: None,
-            root: None,
-            conversations: Vec::new(),
+            environment: None,
+            environments: Vec::new(),
+            tasks: Vec::new(),
+            imports: None,
+            threads: Vec::new(),
             projects: Vec::new(),
             harnesses: Vec::new(),
             selected: None,
             thread: Thread::default(),
             history_loading: false,
-            conversation: None,
-            new_chat: None,
+            state: None,
+            new_thread: None,
             next_draft: 0,
             expanded: HashSet::new(),
             draft,
             attachments: Vec::new(),
             attachment_reads: HashSet::new(),
+            environment_epoch: 0,
             drafts: HashMap::new(),
+            inactive_drafts: HashMap::new(),
             completion: Completion::default(),
             model_menu: ModelMenu::default(),
             open_picker: None,
@@ -203,92 +222,96 @@ impl Desktop {
         Self::new(mpsc::unbounded_channel().0)
     }
 
-    /// The orchestrator is in the main pane. It owns no agents, so it has no
-    /// Agents card.
-    pub fn orchestrator_open(&self) -> bool {
-        self.selected.is_some() && self.selected == self.root
-    }
-
     /// Connected to a backend.
     pub const fn connected(&self) -> bool {
         matches!(self.status, Status::Connected { .. })
     }
 
-    /// Takes a new conversation list. A turn that ended or failed where the
+    /// Takes a new thread list. A turn that ended or failed where the
     /// user isn't looking becomes a desktop notification.
-    pub fn set_conversations(&mut self, conversations: Vec<ConversationSummary>, tx: &mut Tx) {
-        use ConversationStatus::{Failed, Idle, Working};
-        for chat in &conversations {
-            let Some(before) = self.summary(chat.id).map(|old| old.status) else {
+    pub fn set_threads(&mut self, threads: Vec<ThreadSummary>, tx: &mut Tx) {
+        use ThreadStatus::{Failed, Idle, Working};
+        for thread in &threads {
+            let Some(before) = self.summary(thread.id).map(|old| old.status) else {
                 continue;
             };
             let ran = before == Working;
-            let watched = self.focused && self.selected == Some(chat.id);
-            let body = match chat.status {
-                _ if before == chat.status || watched => continue,
+            let watched = self.focused && self.selected == Some(thread.id);
+            let body = match thread.status {
+                _ if before == thread.status || watched => continue,
                 // A subagent's end reaches its parent, which notifies in turn.
-                _ if chat.kind == ConversationKind::Subagent => continue,
+                _ if thread.parent.is_some() => continue,
                 Idle if ran => "Finished",
                 Failed if ran => "Failed",
                 _ => continue,
             };
             self.send(
                 Command::Notify {
-                    title: chat_title(chat).to_owned(),
+                    title: thread_title(thread).to_owned(),
                     body,
                 },
                 tx,
             );
         }
-        // The selected chat may have been deleted by any client. Use the old
+        // The selected thread may have been deleted by any client. Use the old
         // list to find its nearest surviving parent before discarding it.
         let fallback = self
             .selected
             .and_then(|id| self.summary(id))
-            .filter(|chat| !conversations.iter().any(|current| current.id == chat.id))
+            .filter(|thread| !threads.iter().any(|current| current.id == thread.id))
             .and_then(|old| {
-                let mut ancestor = old.parent;
+                let mut ancestor = old.parent.filter(|_| {
+                    old.parent_environment
+                        .as_ref()
+                        .is_none_or(|env| Some(env) == self.environment.as_ref())
+                });
                 while let Some(id) = ancestor {
-                    if conversations.iter().any(|current| current.id == id) {
+                    if threads.iter().any(|current| current.id == id) {
                         return Some(id);
                     }
                     ancestor = self.summary(id).and_then(|parent| parent.parent);
                 }
-                self.root
+                None
             });
-        self.conversations = conversations;
-        if let Some(fallback) = fallback
-            && self.connected()
-            && self.new_chat.is_none()
+        self.threads = threads;
+        if self.connected()
+            && self.new_thread.is_none()
+            && self.selected.is_some_and(|id| self.summary(id).is_none())
         {
-            self.select(fallback, tx);
+            if let Some(id) = fallback {
+                self.select(id, tx);
+            } else {
+                self.clear_selection();
+                self.send(Command::ClearSelection, tx);
+            }
         }
     }
 
-    /// The window gained or lost focus; coming back reads the open chat.
+    /// The window gained or lost focus; coming back reads the open thread.
     pub fn set_focus(&mut self, focused: bool, tx: &mut Tx) {
         self.focused = focused;
         if focused
             && self.connected()
             && let Some(id) = self
                 .selected
-                .filter(|&id| self.summary(id).is_some_and(|chat| chat.unread))
+                .filter(|&id| self.summary(id).is_some_and(|thread| thread.unread))
         {
-            self.send(Command::Update(id, ChatChange::Unread(false)), tx);
+            self.send(Command::Update(id, ThreadChange::Unread(false)), tx);
         }
     }
 
-    /// Shows `conversation`, empty until its view arrives.
-    pub fn show(&mut self, conversation: ConversationId) {
-        if self.selected != Some(conversation) || self.new_chat.is_some() {
+    /// Shows `thread`, empty until its view arrives.
+    pub fn show(&mut self, thread: ThreadId) {
+        if self.selected != Some(thread) || self.new_thread.is_some() {
             self.save_draft();
-            self.new_chat = None;
-            self.selected = Some(conversation);
-            let draft = self.drafts.remove(&conversation).unwrap_or_default();
+            self.new_thread = None;
+            self.selected = Some(thread);
+            let draft = self.drafts.remove(&thread).unwrap_or_default();
             self.draft = draft.edit;
             self.attachments = draft.attachments;
             self.reset_thread();
-            self.navigation.reveal(conversation, &self.conversations);
+            self.navigation
+                .reveal(thread, &self.threads, self.environment.as_deref());
         }
     }
 
@@ -302,45 +325,57 @@ impl Desktop {
         }
     }
 
+    pub fn clear_selection(&mut self) {
+        self.save_draft();
+        self.reset_thread();
+    }
+
     fn reset_thread(&mut self) {
         self.thread = Thread::default();
         self.history_loading = false;
-        self.conversation = None;
+        self.state = None;
         self.expanded.clear();
         self.completion.reset();
         self.open_picker = None;
     }
 
-    /// Takes a new view of the selected conversation.
-    pub fn set_thread(&mut self, conversation: ConversationId, thread: Thread, tx: &mut Tx) {
-        if self.selected == Some(conversation) {
-            // Backend-driven updates normally snap. Animate the first
-            // populated view, not each streamed change inside the child.
-            if self.thread.items.is_empty()
-                && !thread.items.is_empty()
-                && self
-                    .summary(conversation)
-                    .is_some_and(|chat| chat.parent.is_some())
-            {
-                tx.animated();
-            }
-            self.thread = thread;
-            self.thread.sync_acp(
-                self.conversation
-                    .as_ref()
-                    .and_then(|state| state.live.as_ref()),
-            );
-        }
-    }
-
-    pub fn set_conversation(&mut self, id: ConversationId, state: ConversationState, tx: &mut Tx) {
+    /// Applies a reset or appends committed ACP activity to the current
+    /// viewport.
+    pub fn apply_view(
+        &mut self,
+        id: ThreadId,
+        entries: &[viz_client::protocol::Entry],
+        reset: bool,
+        before: Option<viz_client::protocol::EntryId>,
+        tx: &mut Tx,
+    ) {
         if self.selected != Some(id) {
             return;
         }
-        let status_changed =
-            self.conversation.as_ref().map(|prev| prev.status) != Some(state.status);
+        if reset {
+            if !entries.is_empty()
+                && self
+                    .summary(id)
+                    .is_some_and(|thread| thread.parent.is_some())
+            {
+                tx.animated();
+            }
+            self.thread = Thread::from_entries(entries, before);
+            self.history_loading = false;
+        } else {
+            self.thread.append(entries);
+        }
+        self.thread
+            .sync_acp(self.state.as_ref().and_then(|state| state.live.as_ref()));
+    }
+
+    pub fn set_state(&mut self, id: ThreadId, state: ThreadState, tx: &mut Tx) {
+        if self.selected != Some(id) {
+            return;
+        }
+        let status_changed = self.state.as_ref().map(|prev| prev.status) != Some(state.status);
         self.thread.sync_acp(state.live.as_ref());
-        self.conversation = Some(state);
+        self.state = Some(state);
         if status_changed {
             self.update_title(tx);
         }
@@ -348,11 +383,11 @@ impl Desktop {
 
     pub fn update_title(&self, tx: &mut Tx) {
         tx.set_title(
-            match (&self.status, self.conversation.as_ref().map(|s| s.status)) {
+            match (&self.status, self.state.as_ref().map(|s| s.status)) {
                 (Status::Error(_), _) => "viz — Offline",
                 (Status::Connecting, _) => "viz — Connecting",
-                (_, Some(ConversationStatus::Working)) => "viz — Working",
-                (_, Some(ConversationStatus::Failed)) => "viz — Failed",
+                (_, Some(ThreadStatus::Working)) => "viz — Working",
+                (_, Some(ThreadStatus::Failed)) => "viz — Failed",
                 _ => "viz",
             },
         );
@@ -361,20 +396,14 @@ impl Desktop {
     pub fn load_earlier(&mut self, tx: &mut Tx) {
         if !self.history_loading
             && self.connected()
-            && let (Some(conversation), Some(before)) = (self.selected, self.thread.before)
-            && self.send(
-                Command::LoadEarlier {
-                    conversation,
-                    before,
-                },
-                tx,
-            )
+            && let (Some(thread), Some(before)) = (self.selected, self.thread.before)
+            && self.send(Command::LoadEarlier { thread, before }, tx)
         {
             self.history_loading = true;
         }
     }
 
-    pub fn loaded_earlier(&mut self, id: ConversationId, thread: Option<Thread>, tx: &mut Tx) {
+    pub fn loaded_earlier(&mut self, id: ThreadId, thread: Option<Thread>, tx: &mut Tx) {
         if self.selected != Some(id) {
             return;
         }
@@ -383,7 +412,9 @@ impl Desktop {
             if let Some(first) = self.thread.items.first() {
                 tx.keep_on_screen(first.key());
             }
-            self.set_thread(id, thread, tx);
+            self.thread = thread;
+            self.thread
+                .sync_acp(self.state.as_ref().and_then(|state| state.live.as_ref()));
         }
     }
 
@@ -395,22 +426,22 @@ impl Desktop {
         false
     }
 
-    /// Opens `conversation` in the main pane, remembering where it came from
+    /// Opens `thread` in the main pane, remembering where it came from
     /// for [`Desktop::go_back`].
-    pub fn select(&mut self, conversation: ConversationId, tx: &mut Tx) {
-        if let Some(current) = self.selected.filter(|current| *current != conversation) {
+    pub fn select(&mut self, thread: ThreadId, tx: &mut Tx) {
+        if let Some(current) = self.selected.filter(|current| *current != thread) {
             self.back.push(current);
             self.forward.clear();
         }
-        self.open(conversation, tx);
+        self.open(thread, tx);
     }
 
-    /// The chat open before this one.
+    /// The thread open before this one.
     pub fn go_back(&mut self, tx: &mut Tx) {
         self.travel(true, tx);
     }
 
-    /// The chat [`Desktop::go_back`] left.
+    /// The thread [`Desktop::go_back`] left.
     pub fn go_forward(&mut self, tx: &mut Tx) {
         self.travel(false, tx);
     }
@@ -421,9 +452,9 @@ impl Desktop {
         } else {
             (&mut self.forward, &mut self.back)
         };
-        // Deleted chats drop out of the history as it's walked.
+        // Deleted threads drop out of the history as it's walked.
         let Some(next) = std::iter::from_fn(|| from.pop())
-            .find(|id| self.conversations.iter().any(|chat| chat.id == *id))
+            .find(|id| self.threads.iter().any(|thread| thread.id == *id))
         else {
             return;
         };
@@ -433,66 +464,65 @@ impl Desktop {
         self.open(next, tx);
     }
 
-    fn open(&mut self, conversation: ConversationId, tx: &mut Tx) {
-        self.show(conversation);
+    fn open(&mut self, thread: ThreadId, tx: &mut Tx) {
+        self.show(thread);
         self.update_title(tx);
         tx.focus("draft", false);
-        self.send(Command::Select(conversation), tx);
-        if self.connected() && self.summary(conversation).is_some_and(|chat| chat.unread) {
-            self.send(Command::Update(conversation, ChatChange::Unread(false)), tx);
+        self.send(Command::Select(thread), tx);
+        if self.connected() && self.summary(thread).is_some_and(|thread| thread.unread) {
+            self.send(Command::Update(thread, ThreadChange::Unread(false)), tx);
         }
     }
 
-    /// Prepares a chat in the open chat's project (none from the
-    /// orchestrator or a loose chat); the draft's project picker changes it.
+    /// Prepares a draft in the open thread’s project, if any.
     pub fn create_here(&mut self, tx: &mut Tx) {
-        let chat = NewChat::new(self.next_draft, self.project());
-        self.prepare_chat(chat, tx);
+        let thread = NewThread::new(self.next_draft, self.project());
+        self.prepare_thread(thread, tx);
     }
 
     /// Open a draft for a project without creating its backend session.
     pub fn create_in_project(&mut self, id: &str, tx: &mut Tx) {
-        if let Some(project) = self.projects.iter().find(|project| project.id == id) {
-            let chat = NewChat::new(self.next_draft, Some(project));
-            self.prepare_chat(chat, tx);
+        if let Some(project) = self.projects.iter().find(|project| project.path == id) {
+            let thread = NewThread::new(self.next_draft, Some(project));
+            self.prepare_thread(thread, tx);
         }
     }
 
     /// The backend added `project`. Listed at once (the list refresh may come
     /// later), and an open draft takes it: a folder added while drafting is
-    /// the one the chat is meant for, whether it came from the draft's own
+    /// the one the thread is meant for, whether it came from the draft's own
     /// add button, the sidebar or the palette.
     pub fn project_added(&mut self, project: Project) {
-        if let Some(chat) = &mut self.new_chat
-            && !chat.sending
+        if let Some(thread) = &mut self.new_thread
+            && !thread.sending
         {
-            chat.project = Some(project.id.clone());
+            thread.project = Some(project.path.clone());
         }
-        if !self.projects.iter().any(|known| known.id == project.id) {
-            let at = self
-                .projects
-                .partition_point(|known| (&known.name, &known.id) < (&project.name, &project.id));
+        if !self.projects.iter().any(|known| known.path == project.path) {
+            let at = self.projects.partition_point(|known| {
+                (&known.name, &known.path) < (&project.name, &project.path)
+            });
             self.projects.insert(at, project);
         }
     }
 
-    fn prepare_chat(&mut self, mut chat: NewChat, tx: &mut Tx) {
-        if !self.connected() || self.new_chat.is_some() {
+    fn prepare_thread(&mut self, mut thread: NewThread, tx: &mut Tx) {
+        if !self.connected() || self.new_thread.is_some() {
             return;
         }
         self.next_draft += 1;
-        chat.loading_choices = self.send(Command::LoadDraft(chat.id), tx);
-        self.save_draft();
-        self.reset_thread();
-        self.new_chat = Some(chat);
+        thread.loading_choices = self.send(Command::LoadDraft(thread.id), tx);
+        self.clear_selection();
+        self.send(Command::ClearSelection, tx);
+        self.new_thread = Some(thread);
         self.update_title(tx);
         tx.focus("draft", false);
     }
 
     /// The draft's runner choices arrived (or failed to).
     pub fn draft_loaded(&mut self, id: u64) {
-        if let Some(chat) = self.new_chat.as_mut().filter(|chat| chat.id == id) {
-            chat.loading_choices = false;
+        if let Some(thread) = self.new_thread.as_mut().filter(|thread| thread.id == id) {
+            thread.loading_choices = false;
         }
     }
 
@@ -509,50 +539,51 @@ impl Desktop {
         }
     }
 
-    pub fn created(&mut self, draft: u64, conversation: ConversationId, tx: &mut Tx) {
-        let Some(chat) = self.new_chat.as_ref().filter(|chat| chat.id == draft) else {
+    pub fn created(&mut self, draft: u64, id: ThreadId, tx: &mut Tx) {
+        let Some(thread) = self.new_thread.as_ref().filter(|thread| thread.id == draft) else {
             return;
         };
-        if let Some(project) = &chat.project {
+        if let Some(project) = &thread.project {
             self.navigation.expand_project(project);
         }
-        self.new_chat = None;
-        self.selected = Some(conversation);
+        self.new_thread = None;
+        self.selected = Some(id);
         tx.focus("draft", false);
-        self.send(Command::Select(conversation), tx);
+        self.send(Command::Select(id), tx);
     }
 
-    pub fn restore_first_message(&mut self, id: u64, submit: Submit) {
-        if let Some(chat) = self.new_chat.as_mut().filter(|chat| chat.id == id) {
-            chat.sending = false;
-            restore_draft(&mut self.draft, &mut self.attachments, submit);
+    pub fn restore_first_message(&mut self, id: u64, params: LaunchThread) {
+        if let Some(thread) = self.new_thread.as_mut().filter(|thread| thread.id == id) {
+            thread.sending = false;
+            restore_draft(
+                &mut self.draft,
+                &mut self.attachments,
+                params.text.as_deref().unwrap_or_default(),
+                params.attachments,
+            );
         }
     }
 
-    pub fn project_id(&self) -> Option<&str> {
-        if let Some(chat) = &self.new_chat {
-            return chat.project.as_deref();
+    pub fn project_path(&self) -> Option<&str> {
+        if let Some(thread) = &self.new_thread {
+            return thread.project.as_deref();
         }
         let id = self.selected?;
         self.summary(id).map_or_else(
-            || {
-                self.conversation
-                    .as_ref()
-                    .and_then(|s| s.project.as_deref())
-            },
+            || self.state.as_ref().and_then(|s| s.project.as_deref()),
             |summary| summary.project.as_deref(),
         )
     }
 
     pub fn project(&self) -> Option<&Project> {
-        let id = self.project_id()?;
-        self.projects.iter().find(|project| project.id == id)
+        let id = self.project_path()?;
+        self.projects.iter().find(|project| project.path == id)
     }
 
     pub fn busy(&self) -> bool {
         matches!(
-            self.conversation.as_ref().map(|s| s.status),
-            Some(ConversationStatus::Working)
+            self.state.as_ref().map(|s| s.status),
+            Some(ThreadStatus::Working)
         )
     }
 
@@ -562,6 +593,168 @@ impl Desktop {
             && let Some(id) = self.selected
         {
             self.send(Command::Abort(id), tx);
+        }
+    }
+
+    /// Selects another environment and optionally opens a thread there.
+    pub fn open_in_environment(
+        &mut self,
+        environment: String,
+        thread: Option<ThreadId>,
+        tx: &mut Tx,
+    ) {
+        if self.environment.as_deref() == Some(&environment) {
+            if let Some(thread) = thread {
+                self.select(thread, tx);
+            }
+            return;
+        }
+        if !self.send(
+            Command::Environment {
+                environment: environment.clone(),
+                thread,
+            },
+            tx,
+        ) {
+            return;
+        }
+        self.save_draft();
+        if let Some(previous) = self.environment.take()
+            && !self.drafts.is_empty()
+        {
+            self.inactive_drafts
+                .insert(previous, mem::take(&mut self.drafts));
+        }
+        self.drafts = self
+            .inactive_drafts
+            .remove(&environment)
+            .unwrap_or_default();
+        self.status = Status::Connecting;
+        self.environment = Some(environment);
+        self.new_thread = None;
+        self.draft.clear();
+        self.attachments.clear();
+        self.attachment_reads.clear();
+        self.environment_epoch = self.environment_epoch.wrapping_add(1);
+        self.back.clear();
+        self.forward.clear();
+        self.threads.clear();
+        self.projects.clear();
+        self.harnesses.clear();
+        self.tasks.clear();
+        self.imports = None;
+        self.navigation.dismiss_overlays();
+        self.palette = Palette::default();
+        self.reset_thread();
+        self.update_title(tx);
+    }
+
+    pub fn import_scope(&self) -> Option<(&str, Option<&str>)> {
+        let harness = self.new_thread.as_ref().map_or_else(
+            || {
+                self.state
+                    .as_ref()
+                    .map(|state| state.harness.as_str())
+                    .or_else(|| {
+                        self.selected
+                            .and_then(|id| self.summary(id))
+                            .map(|thread| thread.harness.as_str())
+                    })
+                    .or_else(|| {
+                        self.harnesses
+                            .iter()
+                            .find(|harness| harness.default)
+                            .map(|harness| harness.name.as_str())
+                    })
+            },
+            |draft| {
+                draft
+                    .active_harness(&self.harnesses)
+                    .map(|harness| harness.name.as_str())
+            },
+        )?;
+        Some((harness, self.project_path()))
+    }
+
+    pub fn browse_imports(&mut self, tx: &mut Tx) {
+        let Some((harness, project)) = self.import_scope() else {
+            return;
+        };
+        self.imports = Some(ImportBrowser {
+            harness: harness.to_owned(),
+            project: project.map(str::to_owned),
+            threads: Vec::new(),
+            next: None,
+            loading: false,
+            importing: false,
+            error: None,
+        });
+        self.import_page(tx);
+    }
+
+    pub fn import_page(&mut self, tx: &mut Tx) {
+        let Some(browser) = self.imports.as_mut().filter(|browser| !browser.loading) else {
+            return;
+        };
+        browser.loading = true;
+        browser.error = None;
+        let command = Command::BrowseImports {
+            harness: browser.harness.clone(),
+            project: browser.project.clone(),
+            cursor: browser.next.clone(),
+        };
+        if !self.send(command, tx)
+            && let Some(browser) = &mut self.imports
+        {
+            browser.loading = false;
+        }
+    }
+
+    pub fn import_thread(&mut self, session_id: String, cwd: String, tx: &mut Tx) {
+        let Some(browser) = self.imports.as_mut().filter(|browser| !browser.importing) else {
+            return;
+        };
+        browser.importing = true;
+        let command = Command::Import {
+            harness: browser.harness.clone(),
+            project: browser.project.clone(),
+            session_id,
+            cwd,
+        };
+        if !self.send(command, tx)
+            && let Some(browser) = &mut self.imports
+        {
+            browser.importing = false;
+        }
+    }
+
+    pub fn import_result(&mut self, result: Result<ThreadId, String>, tx: &mut Tx) {
+        let Some(browser) = &mut self.imports else {
+            return;
+        };
+        match result {
+            Ok(thread) => {
+                self.imports = None;
+                self.select(thread, tx);
+            }
+            Err(error) => {
+                browser.importing = false;
+                self.toast(tx, "Couldn't import thread", Some(error));
+            }
+        }
+    }
+
+    pub fn import_page_loaded(&mut self, result: Result<HarnessThreadList, String>) {
+        let Some(browser) = &mut self.imports else {
+            return;
+        };
+        browser.loading = false;
+        match result {
+            Ok(page) => {
+                browser.threads.extend(page.threads);
+                browser.next = page.next_cursor;
+            }
+            Err(error) => browser.error = Some(error),
         }
     }
 
@@ -576,11 +769,11 @@ impl Desktop {
         if !self.connected() {
             return None;
         }
-        if let Some(chat) = &self.new_chat {
-            return (!chat.sending).then_some(AttachmentTarget::Draft(chat.id));
+        if let Some(thread) = &self.new_thread {
+            return (!thread.sending).then_some(AttachmentTarget::Draft(thread.id));
         }
-        self.conversation.as_ref()?;
-        self.selected.map(AttachmentTarget::Conversation)
+        self.state.as_ref()?;
+        self.selected.map(AttachmentTarget::Thread)
     }
 
     pub fn can_attach(&self) -> bool {
@@ -592,7 +785,14 @@ impl Desktop {
         if let Some(target) = self
             .attachment_target()
             .filter(|target| !self.attachment_reads.contains(target))
-            && self.send(Command::Attach { target, source }, tx)
+            && self.send(
+                Command::Attach {
+                    scope: self.environment_epoch,
+                    target,
+                    source,
+                },
+                tx,
+            )
         {
             self.attachment_reads.insert(target);
             return true;
@@ -600,23 +800,31 @@ impl Desktop {
         false
     }
 
-    pub fn loaded_attachments(&mut self, target: AttachmentTarget, loaded: Loaded, tx: &mut Tx) {
-        self.attachment_reads.remove(&target);
+    pub fn loaded_attachments(
+        &mut self,
+        scope: u64,
+        target: AttachmentTarget,
+        loaded: Loaded,
+        tx: &mut Tx,
+    ) {
+        if scope != self.environment_epoch || !self.attachment_reads.remove(&target) {
+            return;
+        }
         let mut errors = loaded.errors;
         if !loaded.attachments.is_empty() {
             let existing = match target {
                 AttachmentTarget::Draft(id) => {
-                    if self.new_chat.as_ref().is_none_or(|chat| chat.id != id) {
+                    if self
+                        .new_thread
+                        .as_ref()
+                        .is_none_or(|thread| thread.id != id)
+                    {
                         return;
                     }
                     &mut self.attachments
                 }
-                AttachmentTarget::Conversation(id) if self.selected == Some(id) => {
-                    &mut self.attachments
-                }
-                AttachmentTarget::Conversation(id) => {
-                    &mut self.drafts.entry(id).or_default().attachments
-                }
+                AttachmentTarget::Thread(id) if self.selected == Some(id) => &mut self.attachments,
+                AttachmentTarget::Thread(id) => &mut self.drafts.entry(id).or_default().attachments,
             };
             let mut size = existing.iter().map(|file| file.data.len()).sum::<usize>();
             for file in loaded.attachments {
@@ -638,36 +846,41 @@ impl Desktop {
 
     pub fn can_send(&self) -> bool {
         self.can_attach()
-            && self.new_chat.as_ref().is_none_or(|chat| {
-                !chat.loading_choices && chat.active_harness(&self.harnesses).is_some()
+            && self.new_thread.as_ref().is_none_or(|thread| {
+                !thread.loading_choices && thread.active_harness(&self.harnesses).is_some()
             })
             && (!self.draft.text.trim().is_empty() || !self.attachments.is_empty())
     }
 
-    /// Creates a draft's session on first send, or sends to an existing chat.
-    pub fn submit(&mut self, tx: &mut Tx) {
+    /// Creates a draft's session on first send, or sends to an existing thread.
+    pub fn send_input(&mut self, tx: &mut Tx) {
         if !self.can_send() {
             return;
         }
-        let submit = Submit {
-            conversation: self.selected,
-            text: self.draft.text.clone(),
-            attachments: mem::take(&mut self.attachments),
-            ..Submit::default()
-        };
-        let command = if let Some(chat) = &mut self.new_chat {
-            chat.sending = true;
+        let command = if let Some(thread) = &mut self.new_thread {
+            thread.sending = true;
             Command::Create {
-                draft: chat.id,
-                params: CreateConversation {
-                    project: chat.project.clone(),
-                    harness: chat.harness.clone(),
-                    options: chat.options.clone(),
+                draft: thread.id,
+                params: LaunchThread {
+                    project: thread.project.clone(),
+                    harness: thread.harness.clone(),
+                    options: thread.options.clone(),
+                    text: Some(self.draft.text.clone()),
+                    attachments: mem::take(&mut self.attachments),
+                    ..LaunchThread::default()
                 },
-                submit,
             }
+        } else if let Some(thread) = self.selected {
+            Command::SendInput(SendInput {
+                thread,
+                text: self.draft.text.clone(),
+                attachments: mem::take(&mut self.attachments),
+                request_id: None,
+                origin: None,
+                mode: None,
+            })
         } else {
-            Command::Submit(submit)
+            return;
         };
         match self.commands.send(command) {
             Ok(()) => {
@@ -678,13 +891,15 @@ impl Desktop {
             }
             Err(error) => {
                 match error.0 {
-                    Command::Create { draft, submit, .. } => {
-                        if let Some(chat) = self.new_chat.as_mut().filter(|chat| chat.id == draft) {
-                            chat.sending = false;
+                    Command::Create { draft, params } => {
+                        if let Some(thread) =
+                            self.new_thread.as_mut().filter(|thread| thread.id == draft)
+                        {
+                            thread.sending = false;
                         }
-                        self.attachments = submit.attachments;
+                        self.attachments = params.attachments;
                     }
-                    Command::Submit(submit) => self.attachments = submit.attachments,
+                    Command::SendInput(send_input) => self.attachments = send_input.attachments,
                     _ => unreachable!("only inputs are sent by the composer"),
                 }
                 self.toast(tx, "Offline", None);
@@ -692,39 +907,26 @@ impl Desktop {
         }
     }
 
-    pub fn restore_message(&mut self, submit: Submit) {
-        let Some(conversation) = submit.conversation else {
-            return;
-        };
-        let (draft, attachments) = if self.selected == Some(conversation) {
+    pub fn restore_message(&mut self, send_input: SendInput) {
+        let thread = send_input.thread;
+        let (draft, attachments) = if self.selected == Some(thread) {
             (&mut self.draft, &mut self.attachments)
         } else {
-            let draft = self.drafts.entry(conversation).or_default();
+            let draft = self.drafts.entry(thread).or_default();
             (&mut draft.edit, &mut draft.attachments)
         };
-        restore_draft(draft, attachments, submit);
+        restore_draft(draft, attachments, &send_input.text, send_input.attachments);
     }
 
-    /// The conversation as listed, once the list has it.
-    pub fn summary(&self, conversation: ConversationId) -> Option<&ConversationSummary> {
-        self.conversations
-            .iter()
-            .find(|summary| summary.id == conversation)
+    /// The thread as listed, once the list has it.
+    pub fn summary(&self, thread: ThreadId) -> Option<&ThreadSummary> {
+        self.threads.iter().find(|summary| summary.id == thread)
     }
 
-    /// The conversation's name in the sidebar and header: the backend's title,
+    /// The thread's name in the sidebar and header: the backend's title,
     /// or what it is until the backend has one.
-    pub fn title(&self, conversation: ConversationId) -> &str {
-        self.summary(conversation).map_or_else(
-            || {
-                if self.root == Some(conversation) {
-                    "Orchestrator"
-                } else {
-                    "New chat"
-                }
-            },
-            chat_title,
-        )
+    pub fn title(&self, thread: ThreadId) -> &str {
+        self.summary(thread).map_or("New thread", thread_title)
     }
 
     /// Shows a toast for [`TOAST_LIFE`].
@@ -774,26 +976,27 @@ impl Desktop {
     }
 }
 
-fn restore_draft(draft: &mut TextEdit, attachments: &mut Vec<Attachment>, mut submit: Submit) {
-    if !submit.text.is_empty() {
+fn restore_draft(
+    draft: &mut TextEdit,
+    attachments: &mut Vec<Attachment>,
+    text: &str,
+    mut files: Vec<Attachment>,
+) {
+    if !text.is_empty() {
         if !draft.text.is_empty() {
             draft.set_caret(0);
             draft.insert("\n\n");
             draft.set_caret(0);
         }
-        draft.insert(&submit.text);
+        draft.insert(text);
     }
-    submit.attachments.append(attachments);
-    *attachments = submit.attachments;
+    files.append(attachments);
+    *attachments = files;
 }
 
-pub fn chat_title(chat: &ConversationSummary) -> &str {
-    if !chat.title.is_empty() {
-        return &chat.title;
+pub fn thread_title(thread: &ThreadSummary) -> &str {
+    if !thread.title.is_empty() {
+        return &thread.title;
     }
-    match chat.kind {
-        ConversationKind::Orchestrator => "Orchestrator",
-        ConversationKind::Chat => "New chat",
-        ConversationKind::Subagent => "Subagent",
-    }
+    "New thread"
 }

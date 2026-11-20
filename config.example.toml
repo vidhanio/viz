@@ -8,63 +8,39 @@
 # is removed), or { env = "NAME" }. Prefer file or env for real credentials.
 
 [backend]
-# Mode-0600 Unix listener. Default: $XDG_RUNTIME_DIR/viz/backend.sock, or
-# backend.sock in the default state directory if $XDG_RUNTIME_DIR is unset.
-# socket = "/run/user/1000/viz/backend.sock"
-# TCP listener (host:port), unset by default. Use a tailnet or LAN address;
-# remote clients require a bearer token, also unset by default.
-# listen = "100.64.0.1:7420"
+# Defaults to 127.0.0.1:7420. Clients use a URL; there is no Unix socket.
+# For other hosts, put an HTTPS reverse proxy in front of this listener.
+# A token is required for non-loopback binds and when linking an environment.
+# listen = "127.0.0.1:7420"
 # token = { file = "/run/secrets/viz-token" }
 # State storage: $STATE_DIRECTORY under systemd, otherwise $XDG_STATE_HOME/viz
-# (default ~/.local/state/viz). Holds viz.sqlite, memory.sqlite, the derived
-# search.sqlite index, and attachments/.
+# (default ~/.local/state/viz). The Rust backend uses a fresh workspace database.
 # state_dir = "/var/lib/viz"
-# Default ACP runner for new app chats and orchestrator delegation. A sole
-# runner is implicit; with several, name one here or choose one per request.
-# Existing chats keep their runner; their subagents use it unless overridden.
-# With none configured, only the orchestrator is available.
+# Stable identity; required to differ from every linked environment's ID.
+# environment = "workstation"
+# Working directory of threads without a project (default $HOME).
+# cwd = "/home/me"
+# A sole harness is the implicit default. With several, set this or select per thread.
 # default_harness = "claude"
 
-# Optional pi-ai provider credentials, keyed by provider ID. If omitted, pi-ai
-# uses the provider's environment variable (e.g. ANTHROPIC_API_KEY,
-# OPENAI_API_KEY, OPENROUTER_API_KEY). Home Manager can load an environmentFile.
-# [providers.anthropic]
-# api_key = { file = "/run/secrets/anthropic" }
+# Configure peers in both directions for remote delegation. A peer's token
+# is the bearer token configured on that peer. Use a base URL, not the RPC route.
+# [environments.lab]
+# url = "https://lab.example.com"
+# token = { file = "/run/secrets/viz-lab-token" }
 
-[orchestrator]
-# Required: default { provider = "pi-ai provider ID", model = "model ID" }.
-model = { provider = "anthropic", model = "claude-opus-5-5" }
-# Thinking: off, minimal, low, medium, high, or xhigh; defaults to the model's own.
-# Model and thinking selections made in the orchestrator persist across restarts.
-thinking = "medium"
-# Extra system prompt instructions, unset by default.
-# instructions = "Prefer short answers on Discord."
-# Working directory for orchestrator tools, default $HOME.
-# cwd = "/home/me"
-
-# The orchestrator's uniichat memory. Pick a cheap, fast model: turns wait for
-# earlier messages to be summarized, and failures are logged and retried every 60 s.
-[memory]
-# Required { provider, model }.
-compactor = { provider = "anthropic", model = "claude-haiku-5-5" }
-# Same thinking levels as the orchestrator; defaults to the model's own.
-thinking = "high"
-
-# Optional named ACP runners for app chats and subagents. Only configure runners
-# you trust: they run as the backend user without a sandbox, and viz grants every
-# ACP permission request.
+# Trusted ACP runners run under the backend account and own their model credentials.
+# viz does not add a sandbox or interactive permission policy.
 # [harnesses.claude]
 # Required executable on PATH or an absolute path.
 # command = "claude-agent-acp"
 # Arguments, default []; extra environment (Secret values), default {}.
-# Backend provider credentials are not forwarded automatically.
+# Only the runner's own credentials and its explicitly configured extra environment are used.
 # env.ANTHROPIC_API_KEY = { env = "ANTHROPIC_API_KEY" }
 # Optional defaults; if unset, use the runner's values. Use values reported by
-# the runner. viz matches category (model, thought_level, mode), then option ID
-# if no category matches. Choices made in a conversation override these defaults.
+# the runner. Thread choices take precedence over these defaults.
 # model = "claude-opus-5-5"
 # effort = "high"
-# mode = "default"
 # [harnesses.codex]
 # command = "codex-acp"
 # [harnesses.omp]

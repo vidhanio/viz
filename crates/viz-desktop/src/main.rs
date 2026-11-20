@@ -1,4 +1,4 @@
-//! viz desktop app: conversations in a sidebar, the selected one's timeline,
+//! viz desktop app: threads in a sidebar, the selected one's timeline,
 //! and a composer, in viz's own theme (`theme.rs`) through rune-kit. `cargo
 //! run -p viz-desktop` opens the window; `-- --snap out.png` renders it
 //! headless.
@@ -27,7 +27,7 @@ use rune_kit::{
 };
 use tokio::sync::mpsc;
 use viz_client::Endpoint;
-use viz_config::{ClientFile, Paths};
+use viz_config::ClientFile;
 
 use crate::{
     app::Desktop,
@@ -50,7 +50,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .min_h(0.0)
         .pr(reserve)
         .child(timeline::timeline(s, t, &mut overlays))
-        .children(composer::composer(s, t, &mut overlays, reserve));
+        .children(composer::composer(s, t, &mut overlays));
     let main = col()
         .key("main")
         .w_full()
@@ -60,7 +60,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .children(agents)
         .child(reading);
     // The sidebar's header row is a title band above its content: guard it
-    // from below, under the sidebar toggle and new-chat button that float
+    // from below, under the sidebar toggle and new-thread button that float
     // over it.
     let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
         ui::drag_guard("sidebar-drag-guard")
@@ -90,9 +90,9 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
                 .shortcut(ui::SIDEBAR_SHORTCUT)
                 .in_header()
                 .unread(
-                    s.conversations
+                    s.threads
                         .iter()
-                        .any(|chat| chat.unread && !chat.archived),
+                        .any(|thread| thread.unread && !thread.archived),
                 ),
         )
         .reduced_motion(cx.is_reduced_motion())
@@ -226,11 +226,7 @@ fn main() {
         .flatten();
     let (theme_error, endpoint) = match viz_config::load::<DesktopConfig>(&file) {
         Ok(config) => {
-            let endpoint = Paths::from_env()
-                .map_err(|e| e.to_string())
-                .and_then(|paths| {
-                    Endpoint::from_connection(&config.backend, &paths).map_err(|e| e.to_string())
-                });
+            let endpoint = Endpoint::from_connection(&config.backend).map_err(|e| e.to_string());
             (
                 theme::install(&config.theme, scene_theme.as_deref()),
                 endpoint,

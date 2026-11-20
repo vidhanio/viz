@@ -1,9 +1,10 @@
 //! Discord connector: forwards allowed users' DMs and mentions into the
-//! orchestrator and posts the replies to those inputs back where they came
+//! configured thread and posts the replies to those inputs back where they came
 //! from.
 //!
 //! ```toml
 //! bot_token = { file = "/run/secrets/viz-discord" }
+//! thread = 42
 //! allowed_users = [123456789012345678]
 //! ```
 
@@ -21,9 +22,9 @@ use serenity::{
 use unicode_segmentation::UnicodeSegmentation as _;
 use viz_client::{
     Client, Connection, Endpoint,
-    protocol::{ClientInfo, ClientKind, Notification, Origin, Submit},
+    protocol::{ClientInfo, ClientKind, Notification, Origin, SendInput, ThreadId},
 };
-use viz_config::{ClientFile, Connection as BackendConnection, Paths, Secret};
+use viz_config::{ClientFile, Connection as BackendConnection, Secret};
 
 /// The connector's name: its config filename, `hello` name and origins.
 const NAME: &str = "discord";
@@ -45,12 +46,15 @@ struct DiscordConfig {
     #[serde(default)]
     backend: BackendConnection,
     bot_token: Option<Secret>,
+    thread: Option<ThreadId>,
+    environment: Option<String>,
     /// Users whose messages are forwarded. Everyone else is ignored.
     allowed_users: HashSet<UserId>,
 }
 
 struct Handler {
     viz: Client,
+    thread: ThreadId,
     allowed_users: HashSet<UserId>,
 }
 
@@ -68,7 +72,10 @@ impl EventHandler for Handler {
         if !is_dm && !msg.mentions_me(&ctx).await.unwrap_or(false) {
             return;
         }
-        let submit = Submit {
+        let submit = SendInput {
+            thread: self.thread,
+            mode: None,
+            attachments: Vec::new(),
             text: msg.content,
             request_id: Some(format!("{NAME}:{}", msg.id)),
             origin: Some(Origin {
@@ -78,9 +85,8 @@ impl EventHandler for Handler {
                 message: Some(msg.id.to_string()),
                 author: Some(msg.author.name),
             }),
-            ..Submit::default()
         };
-        if let Err(e) = self.viz.submit(&submit).await {
+        if let Err(e) = self.viz.send(&submit).await {
             tracing::error!("forwarding message {}: {e}", msg.id);
         }
         _ = msg.channel_id.broadcast_typing(&ctx.http).await;
@@ -156,6 +162,10 @@ async fn main() -> anyhow::Result<()> {
         .config
         .map_or_else(|| ClientFile::connector(NAME), ClientFile::path);
     let discord: DiscordConfig = viz_config::load(&file)?;
+    let thread = discord
+        .thread
+        .filter(|id| id.0 > 0)
+        .context("discord: configure a positive thread id")?;
     let token = discord
         .bot_token
         .context("discord: missing bot_token")?
@@ -164,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
         !discord.allowed_users.is_empty(),
         "discord: allowed_users is empty: nobody could talk to viz"
     );
-    let endpoint = Endpoint::from_connection(&discord.backend, &Paths::from_env()?)?;
+    let endpoint = Endpoint::from_connection(&discord.backend)?;
     let Connection {
         client: viz,
         mut notifications,
@@ -175,6 +185,7 @@ async fn main() -> anyhow::Result<()> {
             kind: ClientKind::Connector,
             name: NAME.to_owned(),
         },
+        discord.environment,
     )
     .await?;
     tracing::info!("connected to viz-backend {} at {endpoint}", hello.version);
@@ -185,6 +196,7 @@ async fn main() -> anyhow::Result<()> {
     let mut client = serenity::Client::builder(token, intents)
         .event_handler(Handler {
             viz,
+            thread,
             allowed_users: discord.allowed_users,
         })
         .await?;
@@ -192,10 +204,16 @@ async fn main() -> anyhow::Result<()> {
 
     let replies = tokio::spawn(async move {
         while let Some(notification) = notifications.recv().await {
-            let Notification::Reply { origin, text, .. } = notification else {
+            let Notification::Reply {
+                origin,
+                text,
+                error,
+                ..
+            } = notification
+            else {
                 continue;
             };
-            let Some(text) = text.filter(|text| !text.is_empty()) else {
+            let Some(text) = text.filter(|text| !text.is_empty()).or(error) else {
                 continue;
             };
             if let Err(e) = post_reply(&http, &origin, &text).await {

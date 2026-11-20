@@ -84,9 +84,9 @@ impl Completion {
 }
 
 pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
-    let Some(conversation) = s
+    let Some(thread) = s
         .selected
-        .filter(|_| s.connected() && s.open_picker.is_none() && s.conversation.is_some())
+        .filter(|_| s.connected() && s.open_picker.is_none() && s.state.is_some())
     else {
         return clear(s);
     };
@@ -113,7 +113,7 @@ pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
         let query = token.query.to_owned();
         s.send(
             Command::SearchFiles {
-                conversation,
+                thread,
                 request,
                 query,
             },
@@ -132,7 +132,7 @@ fn clear(s: &mut Desktop) -> bool {
 }
 
 fn commands<'a>(s: &'a Desktop, query: &'a str) -> impl Iterator<Item = &'a SlashCommand> {
-    s.conversation
+    s.state
         .iter()
         .flat_map(|state| &state.commands)
         .filter(move |command| {
@@ -167,7 +167,7 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .on_choose(choose);
     let popup = match token.kind {
         Kind::Slash
-            if s.conversation
+            if s.state
                 .as_ref()
                 .is_some_and(|state| !state.commands.is_empty()) =>
         {

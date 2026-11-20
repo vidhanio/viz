@@ -10,7 +10,7 @@ mod secret;
 
 pub use crate::{
     client_file::{ClientFile, load},
-    connection::Connection,
+    connection::{Connection, DEFAULT_URL},
     error::{Error, Result},
     paths::Paths,
     secret::{ResolveSecretError, Secret},

@@ -1,29 +1,26 @@
 //! The backend connection: a tokio runtime on its own thread that connects
-//! (retrying while the backend is down), watches the selected conversation, and
+//! (retrying while the backend is down), watches the selected thread, and
 //! pushes state into the UI.
 
 mod requests;
 
-use std::{cmp::Reverse, time::Duration};
+use std::{cmp::Reverse, sync::Arc, time::Duration};
 
 use rune::AppHandle;
-use serde_json::Value;
 use tokio::sync::mpsc;
 use viz_client::{
-    Client, Connection, Endpoint, Error, delta,
+    Client, Connection, Endpoint, Error,
     protocol::{
-        ClientInfo, ClientKind, ConfigureConversation, ConversationId, CreateConversation,
-        CreateProject, EntryId, HarnessOptions, Notification, OptionValue, RemoveProject,
-        RemoveQueuedInput, Revision, SearchFiles, SubmissionId, Submit, UpdateConversation,
-        UpdateProject, ViewRevision,
+        CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
+        HarnessOptions, ImportThread, LaunchThread, ListEnvironments, ListHarnessThreads,
+        ListTasks, Notification, OptionValue, RemoveProject, RemoveQueuedInput, RunId, SearchFiles,
+        SendInput, ThreadId, UpdateProject, UpdateThread,
     },
 };
 
-use self::requests::History;
 use crate::{
     app::{Desktop, Status},
     attachments::{Source, Target as AttachmentTarget},
-    thread::Thread,
 };
 
 /// How long to wait between connection attempts.
@@ -33,13 +30,29 @@ const NOT_FOUND: i64 = -32001;
 /// What the UI asks of the backend.
 #[derive(Debug)]
 pub enum Command {
-    /// Watch this conversation instead.
-    Select(ConversationId),
+    /// Watch this thread instead.
+    Select(ThreadId),
+    ClearSelection,
+    Environment {
+        environment: String,
+        thread: Option<ThreadId>,
+    },
+    BrowseImports {
+        harness: String,
+        project: Option<String>,
+        cursor: Option<String>,
+    },
+    Import {
+        harness: String,
+        project: Option<String>,
+        session_id: String,
+        cwd: String,
+    },
+    CancelTask(String),
     /// Bind and send the first input of the fresh composer.
     Create {
         draft: u64,
-        params: CreateConversation,
-        submit: Submit,
+        params: LaunchThread,
     },
     /// A runner's options with `model` selected, for a draft that picked a
     /// model whose thinking levels the catalog doesn't know yet.
@@ -49,38 +62,39 @@ pub enum Command {
     },
     /// A fresh draft's runner choices.
     LoadDraft(u64),
-    Update(ConversationId, ChatChange),
-    Delete(ConversationId),
+    Update(ThreadId, ThreadChange),
+    Delete(ThreadId),
     Configure {
-        conversation: ConversationId,
+        thread: ThreadId,
         option: String,
         value: OptionValue,
     },
-    Abort(ConversationId),
+    Abort(ThreadId),
     Project(ProjectChange),
     SearchFiles {
-        conversation: ConversationId,
+        thread: ThreadId,
         request: u64,
         query: String,
     },
-    SearchConversations {
+    SearchThreads {
         request: u64,
         query: String,
     },
     LoadEarlier {
-        conversation: ConversationId,
+        thread: ThreadId,
         before: EntryId,
     },
     RemoveQueued {
-        conversation: ConversationId,
-        submission: SubmissionId,
+        thread: ThreadId,
+        run: RunId,
     },
     Attach {
+        scope: u64,
         target: AttachmentTarget,
         source: Source,
     },
-    /// Submit an input, including any locally prepared attachments.
-    Submit(Submit),
+    /// Sends an input, including any locally prepared attachments.
+    SendInput(SendInput),
     /// Show a desktop notification.
     Notify {
         title: String,
@@ -91,7 +105,7 @@ pub enum Command {
 }
 
 #[derive(Debug)]
-pub enum ChatChange {
+pub enum ThreadChange {
     Title(String),
     Archive(bool),
     Pin(bool),
@@ -162,7 +176,7 @@ async fn run(
             set_status(ui, Status::Error(detail.clone()));
             signal(&mut first);
             while let Some(command) = commands.recv().await {
-                if !offline(ui, command, &mut None) {
+                if !offline(ui, command, &mut None, &mut None) {
                     set_status(ui, Status::Error(detail.clone()));
                 }
             }
@@ -171,17 +185,23 @@ async fn run(
     };
     let shown = endpoint.to_string();
     ui.update(move |s, _| s.endpoint = Some(shown));
-    // Survives reconnects, so the window keeps its conversation.
+    // Survives reconnects, so the window keeps its thread.
     let mut selected = None;
+    let mut environment = None;
     loop {
         let info = ClientInfo {
             kind: ClientKind::App,
             name: "desktop".into(),
         };
-        let lost = match Client::connect(&endpoint, info).await {
+        let lost = match Client::connect(&endpoint, info, environment.clone()).await {
             Ok(connection) => {
                 match session(ui, connection, &mut commands, &mut selected, &mut first).await {
                     Ended::Quit => return,
+                    Ended::Environment { target, thread } => {
+                        selected = thread;
+                        environment = Some(target);
+                        continue;
+                    }
                     Ended::Lost(e) => {
                         toast(ui, "Lost the connection to the backend", e.to_string());
                         e.to_string()
@@ -198,7 +218,7 @@ async fn run(
             tokio::select! {
                 () = &mut retry => break,
                 command = commands.recv() => match command {
-                    Some(command) => if !offline(ui, command, &mut selected) {
+                    Some(command) => if !offline(ui, command, &mut selected, &mut environment) {
                         break;
                     },
                     None => return,
@@ -212,31 +232,45 @@ async fn run(
 fn offline(
     ui: &AppHandle<Desktop>,
     command: Command,
-    selected: &mut Option<ConversationId>,
+    selected: &mut Option<ThreadId>,
+    target: &mut Option<String>,
 ) -> bool {
     match command {
-        Command::Select(conversation) => *selected = Some(conversation),
-        Command::Create { draft, submit, .. } => {
+        Command::Select(thread) => *selected = Some(thread),
+        Command::ClearSelection => *selected = None,
+        Command::Environment {
+            environment,
+            thread,
+        } => {
+            *selected = thread;
+            *target = Some(environment);
+            return false;
+        }
+        Command::Create { draft, params } => {
             ui.update(move |s, tx| {
-                s.restore_first_message(draft, submit);
+                s.restore_first_message(draft, params);
                 s.toast(tx, "Offline", None);
             });
         }
         Command::LoadDraft(id) => ui.update(move |s, _| s.draft_loaded(id)),
-        Command::Submit(submit) => {
+        Command::SendInput(send_input) => {
             ui.update(move |s, tx| {
-                s.restore_message(submit);
+                s.restore_message(send_input);
                 s.toast(tx, "Offline", None);
             });
         }
         Command::SearchFiles { .. } => {}
-        Command::SearchConversations { request, .. } => {
+        Command::SearchThreads { request, .. } => {
             ui.update(move |s, _| s.palette.set_hits(request, Err("Offline".into())));
         }
-        Command::LoadEarlier { conversation, .. } => {
-            ui.update(move |s, tx| s.loaded_earlier(conversation, None, tx));
+        Command::LoadEarlier { thread, .. } => {
+            ui.update(move |s, tx| s.loaded_earlier(thread, None, tx));
         }
-        Command::Attach { target, source } => requests::attach(ui, target, source),
+        Command::Attach {
+            scope,
+            target,
+            source,
+        } => requests::attach(ui, scope, target, source),
         Command::Notify { title, body } => requests::notify(&title, body),
         Command::Reconnect => return false,
         _ => toast(ui, "Offline", "Backend disconnected".into()),
@@ -250,6 +284,10 @@ enum Ended {
     Quit,
     /// The connection failed.
     Lost(Error),
+    Environment {
+        target: String,
+        thread: Option<ThreadId>,
+    },
 }
 
 /// One connection's life: list, watch, and serve commands until it closes.
@@ -257,7 +295,7 @@ async fn session(
     ui: &AppHandle<Desktop>,
     connection: Connection,
     commands: &mut mpsc::UnboundedReceiver<Command>,
-    selected: &mut Option<ConversationId>,
+    selected: &mut Option<ThreadId>,
     first: &mut Option<std::sync::mpsc::Sender<()>>,
 ) -> Ended {
     let Connection {
@@ -265,41 +303,43 @@ async fn session(
         mut notifications,
         hello,
     } = connection;
-    let watched = selected.unwrap_or(hello.root);
     let mut session = Session {
         ui,
         client,
-        watched,
-        view: None,
-        history: None,
+        environment: Arc::from(hello.environment.as_str()),
+        watched: None,
+        entries: Vec::new(),
+        before: None,
     };
-    let (version, root) = (hello.version, hello.root);
     let started = async {
-        let watch = async {
-            match session.client.watch(watched).await {
-                Err(Error::Rpc {
-                    code: NOT_FOUND, ..
-                }) if watched != root => {
-                    session.client.watch(root).await?;
-                    Ok(root)
-                }
-                result => result.map(|()| watched),
-            }
-        };
-        let ((), harnesses, watched) = tokio::try_join!(
+        let ((), harnesses, environments) = tokio::try_join!(
             session.refresh_list(),
             session.client.list_harnesses(),
-            watch
+            session.client.request(&ListEnvironments {}),
         )?;
-        session.watched = watched;
-        *selected = Some(watched);
+        if let Some(thread) = *selected {
+            match session.switch(Some(thread)).await {
+                Err(Error::Rpc {
+                    code: NOT_FOUND, ..
+                }) => *selected = None,
+                result => result?,
+            }
+        }
+        let watched = *selected;
         ui.update(move |s, tx| {
-            s.status = Status::Connected { version };
-            s.root = Some(root);
+            s.status = Status::Connected {
+                version: hello.version,
+            };
+            s.environment = Some(hello.environment);
+            s.environments = environments.environments;
             s.harnesses = harnesses;
-            if s.new_chat.is_none() {
-                s.show(watched);
-                tx.focus("draft", false);
+            if s.new_thread.is_none() {
+                if let Some(thread) = watched {
+                    s.show(thread);
+                    tx.focus("draft", false);
+                } else {
+                    s.clear_selection();
+                }
             }
             s.update_title(tx);
         });
@@ -316,6 +356,10 @@ async fn session(
                 None => Err(Error::Closed),
             },
             command = commands.recv() => match command {
+                Some(Command::Environment { environment, thread }) => {
+                    session.client.close();
+                    return Ended::Environment { target: environment, thread };
+                }
                 Some(command) => session.on_command(command, selected).await,
                 None => return Ended::Quit,
             },
@@ -331,42 +375,54 @@ async fn session(
 struct Session<'a> {
     ui: &'a AppHandle<Desktop>,
     client: Client,
-    /// The conversation whose view this session holds.
-    watched: ConversationId,
-    /// Its latest view, once the first value arrives.
-    view: Option<Value>,
-    history: Option<History>,
+    environment: Arc<str>,
+    watched: Option<ThreadId>,
+    entries: Vec<Arc<Vec<Entry>>>,
+    before: Option<EntryId>,
 }
 
 impl Session<'_> {
     async fn on_command(
         &mut self,
         command: Command,
-        selected: &mut Option<ConversationId>,
+        selected: &mut Option<ThreadId>,
     ) -> viz_client::Result<()> {
         match command {
-            Command::Select(conversation) => {
-                *selected = Some(conversation);
-                self.switch(conversation).await
+            Command::Select(thread) => {
+                self.select(thread).await?;
+                *selected = Some(thread);
+                Ok(())
             }
-            Command::Create {
-                draft,
-                params,
-                mut submit,
+            Command::ClearSelection => {
+                self.switch(None).await?;
+                *selected = None;
+                Ok(())
+            }
+            Command::Create { draft, params } => self.launch(draft, params).await,
+            Command::BrowseImports {
+                harness,
+                project,
+                cursor,
             } => {
-                let conversation = match self.client.create_conversation(&params).await {
-                    Ok(id) => id,
-                    Err(error) => {
-                        self.ui
-                            .update(move |s, _| s.restore_first_message(draft, submit));
-                        return Err(error);
-                    }
-                };
-                self.ui
-                    .update(move |s, tx| s.created(draft, conversation, tx));
-                submit.conversation = Some(conversation);
-                self.submit(submit).await
+                self.browse_imports(&harness, project.as_deref(), cursor.as_deref())
+                    .await;
+                Ok(())
             }
+            Command::Import {
+                harness,
+                project,
+                session_id,
+                cwd,
+            } => {
+                self.import_thread(&harness, project.as_deref(), &session_id, &cwd)
+                    .await;
+                Ok(())
+            }
+            Command::CancelTask(task) => {
+                self.client.request(&CancelTask { task: &task }).await?;
+                self.refresh_tasks().await
+            }
+            Command::Environment { .. } => unreachable!("environment changes replace the session"),
             Command::LoadDraft(id) => {
                 self.load_draft(id);
                 Ok(())
@@ -375,68 +431,127 @@ impl Session<'_> {
                 self.harness_options(harness, model);
                 Ok(())
             }
-            Command::Update(conversation, change) => self.update_chat(conversation, &change).await,
-            Command::Delete(conversation) => self.client.delete_conversation(conversation).await,
+            Command::Update(thread, change) => self.update_thread(thread, &change).await,
+            Command::Delete(thread) => self.client.delete_thread(thread).await,
             Command::Configure {
-                conversation,
+                thread,
                 option,
                 value,
             } => {
                 self.client
-                    .configure_conversation(&ConfigureConversation {
-                        conversation,
+                    .configure_thread(&ConfigureThread {
+                        thread,
                         option: &option,
                         value: &value,
                     })
                     .await
             }
-            Command::Abort(id) => self.client.abort_conversation(id).await,
+            Command::Abort(id) => self.client.stop_thread(id).await,
             Command::Project(change) => self.project(change).await,
             Command::SearchFiles {
-                conversation,
+                thread,
                 request,
                 query,
             } => {
-                self.search(conversation, request, query);
+                self.search(thread, request, query);
                 Ok(())
             }
-            Command::SearchConversations { request, query } => {
+            Command::SearchThreads { request, query } => {
                 requests::search(self.ui, &self.client, request, query);
                 Ok(())
             }
-            Command::LoadEarlier {
-                conversation,
-                before,
-            } => self.load_earlier(conversation, before).await,
-            Command::RemoveQueued {
-                conversation,
-                submission,
-            } => {
+            Command::LoadEarlier { thread, before } => self.load_earlier(thread, before).await,
+            Command::RemoveQueued { thread, run } => {
                 self.client
-                    .remove_queued_input(&RemoveQueuedInput {
-                        conversation,
-                        submission,
-                    })
+                    .remove_queued_input(&RemoveQueuedInput { thread, run })
                     .await
             }
             Command::Notify { title, body } => {
                 requests::notify(&title, body);
                 Ok(())
             }
-            Command::Attach { target, source } => {
-                requests::attach(self.ui, target, source);
+            Command::Attach {
+                scope,
+                target,
+                source,
+            } => {
+                requests::attach(self.ui, scope, target, source);
                 Ok(())
             }
-            Command::Submit(submit) => self.submit(submit).await,
+            Command::SendInput(send_input) => self.send_input(send_input).await,
             // Already connected.
             Command::Reconnect => Ok(()),
         }
     }
 
-    async fn submit(&self, submit: Submit) -> viz_client::Result<()> {
-        let result = self.client.submit(&submit).await;
+    async fn select(&mut self, thread: ThreadId) -> viz_client::Result<()> {
+        if let Err(error) = self.switch(Some(thread)).await {
+            let previous = self.watched;
+            self.ui.update(move |s, tx| {
+                if s.selected == Some(thread) {
+                    if let Some(previous) = previous {
+                        s.show(previous);
+                    } else {
+                        s.clear_selection();
+                    }
+                    s.update_title(tx);
+                }
+            });
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    async fn launch(&self, draft: u64, params: LaunchThread) -> viz_client::Result<()> {
+        match self.client.launch_thread(&params).await {
+            Ok(thread) => self.ui.update(move |s, tx| s.created(draft, thread, tx)),
+            Err(error) => {
+                self.ui
+                    .update(move |s, _| s.restore_first_message(draft, params));
+                return Err(error);
+            }
+        }
+        Ok(())
+    }
+
+    async fn browse_imports(&self, harness: &str, project: Option<&str>, cursor: Option<&str>) {
+        let result = self
+            .client
+            .request(&ListHarnessThreads {
+                harness,
+                project,
+                cursor,
+            })
+            .await
+            .map_err(|error| error.to_string());
+        self.ui.update(move |s, _| s.import_page_loaded(result));
+    }
+
+    async fn import_thread(
+        &self,
+        harness: &str,
+        project: Option<&str>,
+        session_id: &str,
+        cwd: &str,
+    ) {
+        let result = self
+            .client
+            .request(&ImportThread {
+                harness,
+                project,
+                session_id,
+                cwd,
+            })
+            .await
+            .map(|imported| imported.thread)
+            .map_err(|error| error.to_string());
+        self.ui.update(move |s, tx| s.import_result(result, tx));
+    }
+
+    async fn send_input(&self, send_input: SendInput) -> viz_client::Result<()> {
+        let result = self.client.send(&send_input).await;
         if result.is_err() {
-            self.ui.update(move |s, _| s.restore_message(submit));
+            self.ui.update(move |s, _| s.restore_message(send_input));
         }
         result.map(drop)
     }
@@ -447,7 +562,7 @@ impl Session<'_> {
         tokio::spawn(async move {
             let harnesses = client.list_harnesses().await;
             ui.update(move |s, tx| {
-                if s.new_chat.as_ref().is_none_or(|chat| chat.id != id) {
+                if s.new_thread.as_ref().is_none_or(|thread| thread.id != id) {
                     return;
                 }
                 match harnesses {
@@ -459,13 +574,13 @@ impl Session<'_> {
         });
     }
 
-    async fn update_chat(
+    async fn update_thread(
         &self,
-        conversation: ConversationId,
-        change: &ChatChange,
+        thread: ThreadId,
+        change: &ThreadChange,
     ) -> viz_client::Result<()> {
-        let mut params = UpdateConversation {
-            conversation,
+        let mut params = UpdateThread {
+            thread,
             title: None,
             archived: None,
             pinned: None,
@@ -473,93 +588,98 @@ impl Session<'_> {
             project: None,
         };
         match change {
-            ChatChange::Title(title) => params.title = Some(title),
-            ChatChange::Archive(archived) => params.archived = Some(*archived),
-            ChatChange::Pin(pinned) => params.pinned = Some(*pinned),
-            ChatChange::Unread(unread) => params.unread = Some(*unread),
-            ChatChange::Project(project) => params.project = Some(project.as_deref()),
+            ThreadChange::Title(title) => params.title = Some(title),
+            ThreadChange::Archive(archived) => params.archived = Some(*archived),
+            ThreadChange::Pin(pinned) => params.pinned = Some(*pinned),
+            ThreadChange::Unread(unread) => params.unread = Some(*unread),
+            ThreadChange::Project(project) => params.project = Some(project.as_deref()),
         }
-        self.client.update_conversation(&params).await
+        self.client.update_thread(&params).await
     }
 
     async fn on_notification(&mut self, notification: Notification) -> viz_client::Result<()> {
         match notification {
-            Notification::ConversationsChanged(_) => self.refresh_list().await,
-            Notification::ConversationState {
-                conversation,
-                state,
-            } => {
-                self.ui
-                    .update(move |s, tx| s.set_conversation(conversation, state, tx));
+            Notification::ThreadsChanged(_) => self.refresh_list().await,
+            Notification::TasksChanged(_) => self.refresh_tasks().await,
+            Notification::ThreadState { thread, state } => {
+                self.ui.update(move |s, tx| s.set_state(thread, state, tx));
                 Ok(())
             }
-            Notification::ConversationView(view) => self.on_view(view).await,
+            Notification::ThreadView {
+                thread,
+                entries,
+                reset,
+                before,
+            } => {
+                if self.watched == Some(thread) {
+                    if reset {
+                        self.entries.clear();
+                        self.before = before;
+                    }
+                    let entries = Arc::new(entries);
+                    self.entries.push(Arc::clone(&entries));
+                    self.ui
+                        .update(move |s, tx| s.apply_view(thread, &entries, reset, before, tx));
+                }
+                Ok(())
+            }
             Notification::Reply { .. } => Ok(()),
         }
     }
 
-    async fn on_view(
-        &mut self,
-        ViewRevision {
-            conversation,
-            revision,
-        }: ViewRevision,
-    ) -> viz_client::Result<()> {
-        if conversation != self.watched {
+    async fn switch(&mut self, thread: Option<ThreadId>) -> viz_client::Result<()> {
+        if thread == self.watched {
             return Ok(());
         }
-        let view = match (revision, &mut self.view) {
-            (Revision::Full(value), view) => view.insert(value),
-            (Revision::Delta(ops), Some(view)) => {
-                let result = if let Some(history) = &mut self.history {
-                    history.apply(view, &ops)
-                } else {
-                    delta::apply(view, &ops)
-                };
-                if let Err(e) = result {
-                    // The replica is unusable: start over from a fresh full
-                    // value.
-                    toast(self.ui, "View out of sync; reloading", e.to_string());
-                    self.view = None;
-                    self.history = None;
-                    self.client.unwatch(conversation).await?;
-                    return self.client.watch(conversation).await;
-                }
-                view
+        if let Some(id) = thread {
+            self.client.watch(id).await?;
+        }
+        let previous = self.watched;
+        self.watched = thread;
+        self.entries.clear();
+        self.before = None;
+        if let Some(previous) = previous
+            && let Err(error) = self.client.unwatch(previous).await
+        {
+            if matches!(error, Error::Closed) {
+                return Err(error);
             }
-            // Ignore deltas until a full view arrives.
-            (Revision::Delta(_), None) => return Ok(()),
-        };
-        let thread = self
-            .history
-            .as_ref()
-            .map_or_else(|| Thread::from_view(view), |history| history.thread(view));
-        self.ui
-            .update(move |s, tx| s.set_thread(conversation, thread, tx));
+            toast(self.ui, "Couldn't release thread watch", error.to_string());
+        }
         Ok(())
     }
 
-    async fn switch(&mut self, conversation: ConversationId) -> viz_client::Result<()> {
-        if conversation == self.watched {
-            return Ok(());
-        }
-        self.client.unwatch(self.watched).await?;
-        self.watched = conversation;
-        self.view = None;
-        self.history = None;
-        self.client.watch(conversation).await
+    async fn refresh_tasks(&self) -> viz_client::Result<()> {
+        let tasks = self.client.request(&ListTasks::default()).await?.tasks;
+        let environment = Arc::clone(&self.environment);
+        self.ui.update(move |s, _| {
+            if s.environment
+                .as_deref()
+                .is_none_or(|active| active == environment.as_ref())
+            {
+                s.tasks = tasks;
+            }
+        });
+        Ok(())
     }
 
     async fn refresh_list(&self) -> viz_client::Result<()> {
-        let (mut conversations, mut projects) = tokio::try_join!(
-            self.client.list_conversations(),
-            self.client.list_projects()
+        let (mut threads, mut projects, ()) = tokio::try_join!(
+            self.client.list_threads(),
+            self.client.list_projects(),
+            self.refresh_tasks(),
         )?;
-        conversations.sort_unstable_by_key(|chat| Reverse((chat.updated_at, chat.id)));
-        projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
+        threads.sort_unstable_by_key(|thread| Reverse((thread.updated_at, thread.id)));
+        projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
+        let environment = Arc::clone(&self.environment);
         self.ui.update(move |s, tx| {
-            s.set_conversations(conversations, tx);
-            s.projects = projects;
+            if s.environment
+                .as_deref()
+                .is_none_or(|active| active == environment.as_ref())
+            {
+                s.projects = projects;
+                s.set_threads(threads, tx);
+            }
         });
         Ok(())
     }
@@ -574,14 +694,14 @@ impl Session<'_> {
                 self.ui.update(move |s, _| s.project_added(project));
                 Ok(())
             }
-            ProjectChange::Rename { id, name } => self
-                .client
-                .update_project(&UpdateProject {
-                    project: id,
-                    name: Some(name),
-                })
-                .await
-                .map(drop),
+            ProjectChange::Rename { id, name } => {
+                self.client
+                    .update_project(&UpdateProject {
+                        project: id,
+                        name: Some(name),
+                    })
+                    .await
+            }
             ProjectChange::Remove(id) => {
                 self.client
                     .remove_project(&RemoveProject { project: id })
@@ -590,19 +710,19 @@ impl Session<'_> {
         }
     }
 
-    fn search(&self, conversation: ConversationId, request: u64, query: String) {
+    fn search(&self, thread: ThreadId, request: u64, query: String) {
         let ui = self.ui.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
             let result = client
                 .search_files(&SearchFiles {
-                    conversation,
+                    thread,
                     query: &query,
                     limit: Some(24),
                 })
                 .await;
             ui.update(move |s, _| {
-                if s.selected == Some(conversation) {
+                if s.selected == Some(thread) {
                     s.completion.file_result(request, result);
                 }
             });
@@ -612,6 +732,7 @@ impl Session<'_> {
     fn harness_options(&self, harness: String, model: String) {
         let ui = self.ui.clone();
         let client = self.client.clone();
+        let environment = Arc::clone(&self.environment);
         tokio::spawn(async move {
             let result = client
                 .harness_options(&HarnessOptions {
@@ -619,9 +740,16 @@ impl Session<'_> {
                     model,
                 })
                 .await;
-            ui.update(move |s, tx| match result {
-                Ok(result) => s.set_harness_options(&harness, result.options),
-                Err(error) => s.toast(tx, "Couldn't load model options", Some(error.to_string())),
+            ui.update(move |s, tx| {
+                if s.environment.as_deref() != Some(environment.as_ref()) {
+                    return;
+                }
+                match result {
+                    Ok(result) => s.set_harness_options(&harness, result.options),
+                    Err(error) => {
+                        s.toast(tx, "Couldn't load model options", Some(error.to_string()));
+                    }
+                }
             });
         });
     }

@@ -1,6 +1,6 @@
-//! The sidebar: the orchestrator, then pinned chats, then top-level chats
+//! The sidebar: environments, pinned threads, and other threads
 //! either newest first (Recent) or under their projects (Projects).
-//! Subagents live in their parent chat, not here.
+//! Subagents live in their parent thread, not here.
 
 mod actions;
 
@@ -12,20 +12,18 @@ use std::{
 use rune::{Color, El, TextEdit, Tx, col, el, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, shell::Sidebar};
 use serde_json::{Value, json};
-use viz_client::protocol::{
-    ConversationId, ConversationKind, ConversationStatus, ConversationSummary, Project,
-};
+use viz_client::protocol::{EnvironmentStatus, Project, ThreadId, ThreadSummary};
 
 use crate::{
-    app::{Desktop, Status, chat_title},
+    app::{Desktop, Status, thread_title},
     theme::{
-        self, HAIRLINE, ICON, ORCHESTRATOR_ROW, PROJECT_BOX_INSET, ROW_INSET, S8, SIDEBAR_PAD,
-        Size, TOOLBAR_HEIGHT, Theme,
+        self, HAIRLINE, ICON, PROJECT_BOX_INSET, ROW_INSET, S8, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT,
+        Theme,
     },
     ui::{self, TreeLine},
 };
 
-/// How the sidebar lists top-level chats.
+/// How the sidebar lists top-level threads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Mode {
     /// Newest first, each with its project under the title.
@@ -73,6 +71,11 @@ impl Default for Navigation {
 }
 
 impl Navigation {
+    pub(crate) fn dismiss_overlays(&mut self) {
+        self.menu = None;
+        self.edit = None;
+    }
+
     /// Takes the sidebar's mode and collapsed projects from
     /// `$XDG_STATE_HOME/viz/desktop.json` and keeps them there from now on.
     /// A missing or unreadable file leaves the defaults.
@@ -116,13 +119,13 @@ impl Navigation {
         _ = std::fs::write(path, saved.to_string());
     }
 
-    /// Opens the project holding `id`'s top-level chat.
-    pub fn reveal(&mut self, id: ConversationId, summaries: &[ConversationSummary]) {
-        let top = top_level(summaries, id);
+    /// Opens the project holding `id`'s top-level thread.
+    pub fn reveal(&mut self, id: ThreadId, summaries: &[ThreadSummary], environment: Option<&str>) {
+        let top = top_level(summaries, id, environment);
         if let Some(project) = summaries
             .iter()
-            .find(|chat| chat.id == top)
-            .and_then(|chat| chat.project.as_deref())
+            .find(|thread| thread.id == top)
+            .and_then(|thread| thread.project.as_deref())
         {
             self.expand_project(project);
         }
@@ -149,50 +152,37 @@ impl Navigation {
     }
 }
 
-/// `parent`'s subagents, running first, then newest first.
-pub fn subagents(
-    summaries: &[ConversationSummary],
-    parent: ConversationId,
-) -> Vec<&ConversationSummary> {
-    let mut children: Vec<_> = summaries
-        .iter()
-        .filter(|chat| chat.parent == Some(parent) && chat.id != parent)
-        .collect();
-    children.sort_by_key(|chat| {
-        (
-            chat.status != ConversationStatus::Working,
-            std::cmp::Reverse(chat.updated_at),
-        )
-    });
-    children
-}
-
-/// The top-level chat `id` belongs to: itself, or the oldest ancestor its
-/// parent links reach. Parents are older than their children; malformed links
-/// stop the walk rather than loop.
-pub fn top_level(summaries: &[ConversationSummary], id: ConversationId) -> ConversationId {
+/// The topmost parent available in this environment.
+fn top_level(summaries: &[ThreadSummary], id: ThreadId, environment: Option<&str>) -> ThreadId {
     let mut top = id;
     while let Some(parent) = summaries
         .iter()
-        .find(|chat| chat.id == top)
-        .and_then(|chat| chat.parent)
-        .filter(|parent| *parent < top && summaries.iter().any(|chat| chat.id == *parent))
+        .find(|thread| thread.id == top)
+        .and_then(|thread| {
+            thread.parent.filter(|_| {
+                thread
+                    .parent_environment
+                    .as_deref()
+                    .is_none_or(|parent| Some(parent) == environment)
+            })
+        })
+        .filter(|parent| *parent < top && summaries.iter().any(|thread| thread.id == *parent))
     {
         top = parent;
     }
     top
 }
 
-/// Top-level chats by place, filtered once per frame.
+/// Top-level threads by place, filtered once per frame.
 struct Outline<'a> {
     state: &'a Desktop,
-    /// The open chat's top-level chat: subagents highlight their parent.
-    open: Option<ConversationId>,
-    projects: HashMap<&'a str, Vec<&'a ConversationSummary>>,
-    loose: Vec<&'a ConversationSummary>,
-    pinned: Vec<&'a ConversationSummary>,
-    /// Every listed chat but the pinned ones, newest first.
-    recent: Vec<&'a ConversationSummary>,
+    /// A delegated thread highlights its top-level parent.
+    open: Option<ThreadId>,
+    projects: HashMap<&'a str, Vec<&'a ThreadSummary>>,
+    loose: Vec<&'a ThreadSummary>,
+    pinned: Vec<&'a ThreadSummary>,
+    /// Every listed thread but the pinned ones, newest first.
+    recent: Vec<&'a ThreadSummary>,
     query: String,
 }
 
@@ -201,53 +191,56 @@ impl<'a> Outline<'a> {
         let query = state.navigation.filter.text.trim().to_lowercase();
         let mut outline = Self {
             state,
-            open: state.selected.map(|id| top_level(&state.conversations, id)),
+            open: state
+                .selected
+                .map(|id| top_level(&state.threads, id, state.environment.as_deref())),
             projects: HashMap::new(),
             loose: Vec::new(),
             pinned: Vec::new(),
             recent: Vec::new(),
             query,
         };
-        let known_projects: HashSet<_> = state.projects.iter().map(|p| p.id.as_str()).collect();
+        let known_projects: HashSet<_> = state.projects.iter().map(|p| p.path.as_str()).collect();
         let matching_projects: HashSet<_> = state
             .projects
             .iter()
             .filter(|project| outline.matches(&project.name) || outline.matches(&project.path))
-            .map(|project| project.id.as_str())
+            .map(|project| project.path.as_str())
             .collect();
-        for chat in &state.conversations {
-            let child = chat.parent.is_some_and(|parent| {
-                parent < chat.id && state.conversations.iter().any(|other| other.id == parent)
+        for thread in &state.threads {
+            let child = thread.parent.is_some_and(|parent| {
+                thread
+                    .parent_environment
+                    .as_ref()
+                    .is_none_or(|env| Some(env) == state.environment.as_ref())
+                    && parent < thread.id
+                    && state.threads.iter().any(|other| other.id == parent)
             });
-            if chat.kind == ConversationKind::Orchestrator
-                || Some(chat.id) == state.root
-                || child
-                || (chat.archived && !state.navigation.archived)
-            {
+            if child || (thread.archived && !state.navigation.archived) {
                 continue;
             }
-            let project = chat
+            let project = thread
                 .project
                 .as_deref()
                 .filter(|id| known_projects.contains(id));
-            if !outline.matches(chat_title(chat))
+            if !outline.matches(thread_title(thread))
                 && !project.is_some_and(|id| matching_projects.contains(id))
             {
                 continue;
             }
-            if chat.pinned {
-                outline.pinned.push(chat);
+            if thread.pinned {
+                outline.pinned.push(thread);
             } else {
-                outline.recent.push(chat);
+                outline.recent.push(thread);
                 if let Some(project) = project {
-                    outline.projects.entry(project).or_default().push(chat);
+                    outline.projects.entry(project).or_default().push(thread);
                 } else {
-                    outline.loose.push(chat);
+                    outline.loose.push(thread);
                 }
             }
         }
-        let newest = |chats: &mut Vec<&ConversationSummary>| {
-            chats.sort_by_key(|chat| std::cmp::Reverse(chat.updated_at));
+        let newest = |threads: &mut Vec<&ThreadSummary>| {
+            threads.sort_by_key(|thread| std::cmp::Reverse(thread.updated_at));
         };
         newest(&mut outline.pinned);
         newest(&mut outline.recent);
@@ -261,44 +254,46 @@ impl<'a> Outline<'a> {
     }
 
     fn visible_project(&self, project: &Project) -> bool {
-        self.projects.contains_key(project.id.as_str())
+        self.projects.contains_key(project.path.as_str())
             || self.matches(&project.name)
             || self.matches(&project.path)
     }
 
-    /// A top-level chat's row, its title at rest in `ink`. With `detail`, a
+    /// A top-level thread's row, its title at rest in `ink`. With `detail`, a
     /// quiet second line names its project.
-    fn chat(
+    fn thread(
         &self,
-        chat: &ConversationSummary,
+        thread: &ThreadSummary,
         ink: Color,
         detail: bool,
         t: &Theme,
         layer: &mut Vec<El>,
     ) -> El {
-        let id = chat.id;
+        let id = thread.id;
         let s = self.state;
         let selected = self.open == Some(id);
-        let key = format!("chat-{id}");
+        let key = format!("thread-{id}");
         let menu_open = actions::menu_open(s, &key);
-        let rest = ui::status(chat.status, t).or_else(|| {
-            chat.unread.then(|| {
+        let rest = ui::status(thread.status, t).or_else(|| {
+            thread.unread.then(|| {
                 ui::dot(t.accent)
                     .role("status")
                     .label("Unread")
                     .help("Unread")
             })
         });
-        let menu = actions::chat_menu(s, chat, &key, t, layer);
+        let menu = actions::thread_menu(s, thread, &key, t, layer);
         let place = detail.then(|| {
-            chat.project
+            thread
+                .project
                 .as_deref()
-                .and_then(|id| s.projects.iter().find(|p| p.id == id))
+                .and_then(|id| s.projects.iter().find(|p| p.path == id))
                 .map_or("No project", |project| project.name.as_str())
         });
         // The runner's mark, in the title's ink.
-        let mark = chat.harness.as_deref().map(|harness| {
-            let ink = if chat.archived {
+        let mark = {
+            let harness = &thread.harness;
+            let ink = if thread.archived {
                 t.faint
             } else if selected {
                 t.text
@@ -309,20 +304,20 @@ impl<'a> Outline<'a> {
                 .color(ink)
                 .help(harness)
                 .a11y_hidden()
-        });
+        };
         let mut node = TreeLine {
             key: &key,
-            label: chat_title(chat),
+            label: thread_title(thread),
             detail: place,
             depth: 0,
-            strong: chat.unread && !chat.archived,
-            dim: chat.archived,
+            strong: thread.unread && !thread.archived,
+            dim: thread.archived,
             selected,
             ink,
         }
-        .build(mark, ui::trailing(rest, Some(menu), menu_open), t)
+        .build(Some(mark), ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
-        if chat.unread {
+        if thread.unread {
             node = node.description("Unread");
         }
         if s.connected() {
@@ -335,8 +330,9 @@ impl<'a> Outline<'a> {
 
     fn project(&self, project: &Project, t: &Theme, layer: &mut Vec<El>) -> El {
         let s = self.state;
-        let open = !self.query.is_empty() || !s.navigation.collapsed_projects.contains(&project.id);
-        let id = project.id.clone();
+        let open =
+            !self.query.is_empty() || !s.navigation.collapsed_projects.contains(&project.path);
+        let id = project.path.clone();
         let key = format!("project-{id}");
         let menu_open = actions::menu_open(s, &key);
         // The folder, turning into the disclosure under the pointer.
@@ -375,23 +371,23 @@ impl<'a> Outline<'a> {
                 s.navigation.menu = Some(actions::Context::at(&key, at));
             });
         }
-        // The project and its chats share one filled box a step above the
-        // sidebar, which is the nesting: chats keep the project row's columns
+        // The project and its threads share one filled box a step above the
+        // sidebar, which is the nesting: threads keep the project row's columns
         // (their marks under its folder) instead of stepping in, and only
         // their tree level says they're inside. The header reads in full ink,
-        // its chats a step quieter than loose ones. The inset plus a row's
+        // its threads a step quieter than loose ones. The inset plus a row's
         // radius makes the box's radius, so a highlighted row's corners run
         // parallel to it.
         let mut branch = col()
-            .key(format!("project-branch-{}", project.id))
+            .key(format!("project-branch-{}", project.path))
             .w_full()
             .padding(PROJECT_BOX_INSET)
             .radius(Size::Default.radius() + PROJECT_BOX_INSET)
             .fill(t.group)
             .child(node);
-        if let Some(chats) = self.projects.get(project.id.as_str()).filter(|_| open) {
-            branch = branch.children(chats.iter().map(|chat| {
-                self.chat(chat, t.muted.mix(t.faint, 0.5), false, t, layer)
+        if let Some(threads) = self.projects.get(project.path.as_str()).filter(|_| open) {
+            branch = branch.children(threads.iter().map(|thread| {
+                self.thread(thread, t.muted.mix(t.faint, 0.5), false, t, layer)
                     .level(2)
             }));
         }
@@ -407,12 +403,12 @@ fn open_match(s: &mut Desktop, tx: &mut Tx) {
         .chain(s.projects.iter().filter_map(|project| {
             outline
                 .projects
-                .get(project.id.as_str())
-                .and_then(|chats| chats.first())
+                .get(project.path.as_str())
+                .and_then(|threads| threads.first())
         }))
         .chain(&outline.loose)
         .next()
-        .map(|chat| chat.id);
+        .map(|thread| thread.id);
     if let Some(id) = id.filter(|_| !outline.query.is_empty()) {
         s.navigation.filter.clear();
         s.select(id, tx);
@@ -420,14 +416,14 @@ fn open_match(s: &mut Desktop, tx: &mut Tx) {
 }
 
 pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
-    let tree = conversation_tree(s, t, layer);
+    let tree = thread_tree(s, t, layer);
     let mut bar = Sidebar::new()
         .label("Workspace")
         .inset(0.0)
         .header_gap(S8)
         .header_padding(0.0, 0.0);
-    if let Some(orchestrator) = orchestrator(s, t) {
-        bar = bar.header(orchestrator);
+    if !s.environments.is_empty() {
+        bar = bar.header(environments(s, t));
     }
     bar = bar.header(filter(s, t)).child(tree);
     if let Some(footer) = footer(s, t) {
@@ -439,6 +435,7 @@ pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// Mounts sidebar dialogs independently of whether the sidebar is visible.
 pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     actions::dialog(s, t, layer);
+    actions::imports(s, t, layer);
 }
 
 /// Opens the add-project dialog from the sidebar or palette.
@@ -446,28 +443,28 @@ pub fn open_add_project(s: &mut Desktop, tx: &mut Tx) {
     actions::add_project(s, tx);
 }
 
-/// Opens the confirmation for deleting a chat from the command palette.
-pub fn open_delete_chat(s: &mut Desktop, id: ConversationId, tx: &mut Tx) {
-    actions::delete_chat(s, id, tx);
+/// Opens the confirmation for deleting a thread from the command palette.
+pub fn open_delete_thread(s: &mut Desktop, id: ThreadId, tx: &mut Tx) {
+    actions::delete_thread(s, id, tx);
 }
 
-/// A chat's context menu with its Move to project submenu open, in a preview
+/// A thread's context menu with its Move to project submenu open, in a preview
 /// scene.
-pub fn preview_context_menu(s: &mut Desktop, id: ConversationId, x: f32, y: f32) {
-    s.navigation.menu = Some(actions::Context::preview(&format!("chat-{id}"), x, y));
+pub fn preview_context_menu(s: &mut Desktop, id: ThreadId, x: f32, y: f32) {
+    s.navigation.menu = Some(actions::Context::preview(&format!("thread-{id}"), x, y));
 }
 
 /// Shows the delete confirmation for `id` in a preview scene.
-pub fn preview_delete(s: &mut Desktop, id: ConversationId) {
-    s.navigation.edit = Some(actions::Edit::DeleteChat(id));
+pub fn preview_delete(s: &mut Desktop, id: ThreadId) {
+    s.navigation.edit = Some(actions::Edit::DeleteThread(id));
 }
 
-/// Lists chats under their projects in a preview scene.
+/// Lists threads under their projects in a preview scene.
 pub const fn preview_projects(s: &mut Desktop) {
     s.navigation.mode = Mode::Projects;
 }
 
-/// The sidebar header's buttons while it's open: add project, then new chat,
+/// The sidebar header's buttons while it's open: add project, then new thread,
 /// before the sidebar toggle rune-kit places.
 pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
     let add = ui::icon_button(
@@ -480,27 +477,38 @@ pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
     .on_press_tx(open_add_project)
     .build(&t.k)
     .key("add-project");
+    let import = ui::icon_button(
+        &ui::SEARCH,
+        "Import thread",
+        IconButtonVariant::GhostMuted,
+        Size::Default,
+    )
+    .disabled(!s.connected() || s.import_scope().is_none())
+    .on_press_tx(Desktop::browse_imports)
+    .build(&t.k)
+    .key("import-thread");
     row()
         .key("sidebar-header-buttons")
         .gap(theme::S4)
         .child(add)
-        .child(new_chat_button(s, t))
+        .child(import)
+        .child(new_thread_button(s, t))
 }
 
-/// New chat, as an icon button: in the sidebar's header row while the sidebar
+/// New thread, as an icon button: in the sidebar's header row while the sidebar
 /// is open, after the sidebar toggle in the toolbar while it's closed.
-pub fn new_chat_button(s: &Desktop, t: &Theme) -> El {
+pub fn new_thread_button(s: &Desktop, t: &Theme) -> El {
     ui::icon_button(
         &ui::COMPOSE,
-        "New chat",
+        "New thread",
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
     .shortcut(format!("{}+N", ui::COMMAND_KEY))
-    .disabled(!s.connected() || s.new_chat.is_some())
+    .disabled(!s.connected() || s.new_thread.is_some())
     .on_press_tx(Desktop::create_here)
     .build(&t.k)
-    .key("new-chat")
+    .key("new-thread")
 }
 
 /// Where [`header_buttons`] sit, from the window's top left: one gap before
@@ -513,92 +521,72 @@ pub fn header_origin(s: &Desktop) -> (f32, f32) {
     )
 }
 
-/// The orchestrator: its own row above the tree, never pinned or nested.
-fn orchestrator(s: &Desktop, t: &Theme) -> Option<El> {
-    let root = s.root.and_then(|id| s.summary(id))?;
-    let id = root.id;
-    let selected = s.selected == Some(id);
-    let (detail, color) = match root.status {
-        ConversationStatus::Working => ("Working".to_owned(), t.muted),
-        ConversationStatus::Failed => ("Last run failed".to_owned(), t.danger),
-        ConversationStatus::Idle => (
-            theme::ago(root.updated_at)
-                .map_or_else(|| "Idle".to_owned(), |ago| format!("Idle · {ago}")),
-            t.faint,
-        ),
-    };
-    let rest = ui::status(root.status, t).or_else(|| root.unread.then(|| ui::dot(t.accent)));
-    Some(
-        row()
-            .key("orchestrator")
-            .role("link")
-            .label("Orchestrator")
-            .description(detail.clone())
-            .w_full()
-            .h(ORCHESTRATOR_ROW)
-            .pl(ROW_INSET)
-            .gap(S8)
-            .center_y()
-            .radius(Size::Default.radius())
-            .fill(if selected {
-                t.selected
-            } else {
-                rune::Color::TRANSPARENT
-            })
-            .hover(if selected { t.selected } else { t.hover })
-            .hover_group_focus()
-            .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .child(ui::lead(
-                icon(&ui::STAR, ICON).color(t.accent),
-                ORCHESTRATOR_ROW,
-            ))
-            .child(
-                col()
-                    .grow(1.0)
-                    .shrink()
-                    .min_w(0.0)
-                    .child(
-                        text("Orchestrator")
-                            .font(t.ui_medium)
-                            .color(t.text)
-                            .a11y_hidden(),
-                    )
-                    .child(
-                        text(detail)
-                            .key("orchestrator-status")
-                            .font(t.small)
-                            .color(color)
-                            .truncate()
-                            .a11y_hidden(),
-                    ),
-            )
-            .child(ui::trailing(rest, None, false))
-            .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx)),
-    )
+fn environments(s: &Desktop, t: &Theme) -> El {
+    col()
+        .key("environments")
+        .px(ROW_INSET)
+        .gap(theme::S4)
+        .child(ui::section("Environments", t))
+        .children(s.environments.iter().map(|env| {
+            let id = env.id.clone();
+            let selected = s.environment.as_ref() == Some(&id);
+            let (label, color) = match env.status {
+                EnvironmentStatus::Local => ("Local", t.success),
+                EnvironmentStatus::Reachable => ("Reachable", t.success),
+                EnvironmentStatus::Unreachable => ("Unreachable", t.faint),
+            };
+            row()
+                .key(format!("environment-{id}"))
+                .role("button")
+                .label(id.clone())
+                .description(label)
+                .help(env.url.as_deref().unwrap_or(label))
+                .focusable(true)
+                .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+                .radius(Size::Small.radius())
+                .h(Size::Small.height())
+                .px(theme::S4)
+                .gap(S8)
+                .center_y()
+                .fill(if selected {
+                    t.hover
+                } else {
+                    Color::TRANSPARENT
+                })
+                .hover(t.hover)
+                .child(ui::dot(color))
+                .child(
+                    text(id.clone())
+                        .font(t.small)
+                        .color(t.text)
+                        .truncate()
+                        .shrink(),
+                )
+                .on_press_tx(move |s: &mut Desktop, tx| s.open_in_environment(id.clone(), None, tx))
+        }))
 }
 
 fn filter(s: &Desktop, t: &Theme) -> El {
     ui::text_field(
         &s.navigation.filter,
-        "Filter chats",
-        "Filter chats",
+        "Filter threads",
+        "Filter threads",
         Size::Default,
     )
     .leading_icon(&ui::SEARCH)
     .on_edit(|s: &mut Desktop| &mut s.navigation.filter)
     .on_submit(open_match)
     .build(&t.k)
-    .key("chat-filter")
+    .key("thread-filter")
 }
 
-fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let outline = Outline::new(s);
     let recent = s.navigation.mode == Mode::Recent;
     let mut tree = col()
-        .key("conversation-tree")
+        .key("thread-tree")
         .role("tree")
-        .label("Conversations")
+        .label("Threads")
         .w_full();
     if !outline.pinned.is_empty() {
         tree = tree
@@ -607,16 +595,16 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 outline
                     .pinned
                     .iter()
-                    .map(|chat| outline.chat(chat, t.muted, recent, t, layer)),
+                    .map(|thread| outline.thread(thread, t.muted, recent, t, layer)),
             );
     }
     let archived = s.navigation.archived;
     let show_archived = ui::icon_button(
         &ui::ARCHIVE,
         if archived {
-            "Hide archived chats"
+            "Hide archived threads"
         } else {
-            "Show archived chats"
+            "Show archived threads"
         },
         IconButtonVariant::GhostMuted,
         Size::Small,
@@ -631,7 +619,7 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             outline
                 .recent
                 .iter()
-                .map(|chat| outline.chat(chat, t.muted, true, t, layer)),
+                .map(|thread| outline.thread(thread, t.muted, true, t, layer)),
         );
     }
     tree = tree.child(
@@ -644,18 +632,18 @@ fn conversation_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     );
     if !outline.loose.is_empty() {
         tree = tree
-            .child(ui::section_row("chats-heading", "No project", None, t))
+            .child(ui::section_row("threads-heading", "No project", None, t))
             .children(
                 outline
                     .loose
                     .iter()
-                    .map(|chat| outline.chat(chat, t.muted, false, t, layer)),
+                    .map(|thread| outline.thread(thread, t.muted, false, t, layer)),
             );
     }
     tree
 }
 
-/// The section row that picks how chats are listed, with the archived toggle
+/// The section row that picks how threads are listed, with the archived toggle
 /// in its trailing slot.
 fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
     let tab = |mode: Mode, label: &'static str| {
@@ -675,7 +663,7 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
     row()
         .key("sidebar-mode")
         .role("radiogroup")
-        .label("List chats by")
+        .label("List threads by")
         .w_full()
         .h(theme::TREE_ROW)
         .mt(theme::S12)

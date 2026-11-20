@@ -1,5 +1,5 @@
 {
-  description = "viz: an all-in-one personal agent and meta-harness";
+  description = "viz: persistent ACP threads and tasks across environments";
 
   nixConfig = {
     extra-substituters = [ "https://nix-community.cachix.org" ];
@@ -25,11 +25,6 @@
     crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # Accepts current bun lockfile versions: nix-community/bun2nix#110.
-    bun2nix = {
-      url = "github:Mic92/bun2nix/lockfile-v2-v3";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
@@ -100,6 +95,7 @@
               (craneLib.fileset.commonCargoSources ./.)
               ./crates/viz-desktop/themes
               ./crates/viz-desktop/icons
+              ./crates/viz-backend/src/workspace/schema.sql
             ];
           };
           commonArgs = {
@@ -144,35 +140,11 @@
         {
           _module.args.pkgs = import inputs.nixpkgs {
             inherit system;
-            overlays = [
-              inputs.rust-overlay.overlays.default
-              inputs.bun2nix.overlays.default
-            ];
+            overlays = [ inputs.rust-overlay.overlays.default ];
           };
 
           packages = {
-            viz-backend = pkgs.bun2nix.mkDerivation {
-              packageJson = ./backend/package.json;
-              src = ./backend;
-              bunDeps = pkgs.bun2nix.fetchBunDeps { bunNix = ./backend/bun.nix; };
-              # `--bytecode` compiles to CommonJS, which has no top-level await.
-              bunCompileToBytecode = false;
-              meta.mainProgram = "viz-backend";
-              nativeBuildInputs = [ pkgs.makeWrapper ];
-              # The backend shells out to these: git for projects, worktrees, checkpoints, diffs and commits (ssh for
-              # ssh remotes on push), gh for pull requests. Appended, so a user's own versions on PATH win. In
-              # postInstall: bun2nix sets dontFixup, as stripping would corrupt the compiled executable.
-              postInstall = ''
-                wrapProgram $out/bin/viz-backend \
-                  --suffix PATH : ${
-                    lib.makeBinPath [
-                      pkgs.git
-                      pkgs.gh
-                      pkgs.openssh
-                    ]
-                  }
-              '';
-            };
+            viz-backend = crate "viz-backend" { };
             viz = crate "viz" { };
             viz-discord = crate "viz-discord" { };
             viz-imessage = crate "viz-imessage" { };
@@ -204,16 +176,6 @@
                 cargoClippyExtraArgs = "--all-targets -- --deny warnings";
               }
             );
-            backend = pkgs.bun2nix.mkDerivation {
-              pname = "viz-backend-check";
-              inherit (self'.packages.viz-backend) version src bunDeps;
-              buildPhase = ''
-                runHook preBuild
-                bun check
-                runHook postBuild
-              '';
-              installPhase = "touch $out";
-            };
           };
 
           devShells.default = craneLib.devShell {
@@ -222,9 +184,6 @@
               pkgs.cargo-edit
               pkgs.cargo-deny
               pkgs.pkg-config
-              # backend
-              pkgs.bun
-              pkgs.bun2nix
               # ios
               swiftPkgs.swift
               swiftPkgs.swiftpm
@@ -241,8 +200,6 @@
             LD_LIBRARY_PATH = lib.makeLibraryPath desktopRuntimeLibs;
 
             shellHook = ''
-              repo_root=$(git rev-parse --show-toplevel)
-              (cd "$repo_root/backend" && bun install --frozen-lockfile --silent)
               if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
                 && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
                 echo "viz: no Darwin SDK for iOS builds; run 'xtool setup' (see docs/findings/ios-on-linux.md)" >&2
@@ -265,21 +222,8 @@
                 package = swiftPkgs.swift-format;
               };
             };
-            settings.formatter.bun-fmt = {
-              command = lib.getExe pkgs.bun;
-              options = [ "fmt" ];
-              includes = [
-                "*.js"
-                "*.ts"
-                "*.json"
-                "*.md"
-                "*.yaml"
-                "*.yml"
-              ];
-            };
             settings.global.excludes = [
               "*.lock"
-              "backend/bun.nix"
               ".envrc"
               "*/.gitignore"
               ".gitignore"

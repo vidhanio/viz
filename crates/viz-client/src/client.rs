@@ -10,32 +10,29 @@ use std::{
 };
 
 use futures_util::{SinkExt, StreamExt};
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
-    net::UnixStream,
     sync::{mpsc, oneshot},
 };
 use tokio_tungstenite::{
     WebSocketStream,
-    tungstenite::{Message, client::IntoClientRequest, http::HeaderValue},
+    tungstenite::{Message, Utf8Bytes, client::IntoClientRequest, http::HeaderValue},
 };
 
 use crate::{
     Endpoint, Error, Result,
     protocol::{
-        AbortConversation, ClientInfo, ConfigureConversation, ConversationId, ConversationSummary,
-        CreateConversation, CreateProject, DeleteConversation, EntryPage, Harness, HarnessOptions,
-        HarnessOptionsResult, Hello, HelloParams, ListConversations, ListEntries, ListHarnesses,
-        ListProjects, Method, Notification, PROTOCOL_VERSION, Project, RemoveProject,
-        RemoveQueuedInput, SearchConversations, SearchFiles, SearchHit, SubmissionId, Submit,
-        Unwatch, UpdateConversation, UpdateProject, Watch,
+        ClientInfo, ConfigureThread, CreateProject, DeleteThread, EntryPage, Harness,
+        HarnessOptions, HarnessOptionsResult, Hello, HelloParams, LaunchThread, ListEntries,
+        ListHarnesses, ListProjects, ListThreads, Method, Notification, PROTOCOL_VERSION, Project,
+        RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SearchHit, SearchThreads, SendInput,
+        StopThread, ThreadId, ThreadSummary, Unwatch, UpdateProject, UpdateThread, Watch,
     },
 };
 
 /// The WebSocket path the backend serves the protocol on.
-const RPC_PATH: &str = "/v1/rpc";
+const RPC_PATH: &str = "/v2/rpc";
 
 /// A connected client. Cheap to clone; calls may run concurrently.
 #[derive(Debug, Clone)]
@@ -75,40 +72,31 @@ impl Client {
     /// # Panics
     ///
     /// Panics if called outside a Tokio runtime.
-    pub async fn connect(endpoint: &Endpoint, info: ClientInfo) -> Result<Connection> {
+    pub async fn connect(
+        endpoint: &Endpoint,
+        info: ClientInfo,
+        environment: Option<String>,
+    ) -> Result<Connection> {
         let connect_err = |source: Box<dyn std::error::Error + Send + Sync>| Error::Connect {
             endpoint: endpoint.to_string(),
             source,
         };
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let (notify_tx, notifications) = mpsc::unbounded_channel();
         let pending = Arc::<PendingCalls>::default();
-        let outgoing = match endpoint {
-            Endpoint::Unix(path) => {
-                let stream = UnixStream::connect(path)
-                    .await
-                    .map_err(|e| connect_err(e.into()))?;
-                let request = format!("ws://localhost{RPC_PATH}")
-                    .into_client_request()
-                    .map_err(|e| connect_err(e.into()))?;
-                let (ws, _) = tokio_tungstenite::client_async(request, stream)
-                    .await
-                    .map_err(|e| connect_err(e.into()))?;
-                spawn_io(ws, Arc::clone(&pending), notify_tx)
-            }
-            Endpoint::Remote { url, token } => {
-                let ws_url = format!("{}{RPC_PATH}", url.replacen("http", "ws", 1));
-                let mut request = ws_url
-                    .into_client_request()
-                    .map_err(|e| connect_err(e.into()))?;
-                let auth = HeaderValue::from_str(&format!("Bearer {token}"))
-                    .map_err(|e| connect_err(e.into()))?;
-                request.headers_mut().insert("authorization", auth);
-                let (ws, _) = tokio_tungstenite::connect_async(request)
-                    .await
-                    .map_err(|e| connect_err(e.into()))?;
-                spawn_io(ws, Arc::clone(&pending), notify_tx)
-            }
-        };
+        let ws_url = format!("ws{}{RPC_PATH}", &endpoint.url[4..]);
+        let mut request = ws_url
+            .into_client_request()
+            .map_err(|e| connect_err(e.into()))?;
+        if let Some(token) = &endpoint.token {
+            let auth = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|e| connect_err(e.into()))?;
+            request.headers_mut().insert("authorization", auth);
+        }
+        let (ws, _) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(|e| connect_err(e.into()))?;
+        let outgoing = spawn_io(ws, Arc::clone(&pending), notify_tx);
         let client = Self {
             outgoing,
             pending,
@@ -118,6 +106,7 @@ impl Client {
             .request(&HelloParams {
                 protocol: PROTOCOL_VERSION,
                 client: info,
+                environment,
             })
             .await?;
         if hello.protocol != PROTOCOL_VERSION {
@@ -132,69 +121,72 @@ impl Client {
         })
     }
 
-    /// Lists every conversation, titled by the backend.
-    ///
-    /// # Errors
-    ///
-    /// See [`Client::submit`].
-    pub async fn list_conversations(&self) -> Result<Vec<ConversationSummary>> {
-        Ok(self.request(&ListConversations {}).await?.conversations)
+    /// Closes this WebSocket and fails calls that are still pending.
+    pub fn close(&self) {
+        _ = self.outgoing.send(Message::Close(None));
     }
 
-    /// Creates a chat.
+    /// Lists every thread, titled by the backend.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn create_conversation(&self, params: &CreateConversation) -> Result<ConversationId> {
-        Ok(self.request(params).await?.conversation)
+    /// See [`Client::send`].
+    pub async fn list_threads(&self) -> Result<Vec<ThreadSummary>> {
+        Ok(self.request(&ListThreads::default()).await?.threads)
     }
 
-    /// Changes a conversation's title, archive status, or project.
+    /// Launches a thread.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn update_conversation(&self, params: &UpdateConversation<'_>) -> Result<()> {
+    /// See [`Client::send`].
+    pub async fn launch_thread(&self, params: &LaunchThread) -> Result<ThreadId> {
+        Ok(self.request(params).await?.thread)
+    }
+
+    /// Changes a thread's title, archive status, or project.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::send`].
+    pub async fn update_thread(&self, params: &UpdateThread<'_>) -> Result<()> {
         self.request(params).await.map(drop)
     }
 
-    /// Sets a conversation's configuration.
+    /// Sets a thread's configuration.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn configure_conversation(&self, params: &ConfigureConversation<'_>) -> Result<()> {
+    /// See [`Client::send`].
+    pub async fn configure_thread(&self, params: &ConfigureThread<'_>) -> Result<()> {
         self.request(params).await.map(drop)
     }
 
-    /// Stops a conversation's active turn.
+    /// Stops a thread's active turn.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn abort_conversation(&self, conversation: ConversationId) -> Result<()> {
-        self.request(&AbortConversation { conversation })
+    /// See [`Client::send`].
+    pub async fn stop_thread(&self, thread: ThreadId) -> Result<()> {
+        self.request(&StopThread { thread, run: None })
             .await
             .map(drop)
     }
 
-    /// Deletes a conversation and its subagents.
+    /// Deletes a thread without rewriting or deleting other threads.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn delete_conversation(&self, conversation: ConversationId) -> Result<()> {
-        self.request(&DeleteConversation { conversation })
-            .await
-            .map(drop)
+    /// See [`Client::send`].
+    pub async fn delete_thread(&self, thread: ThreadId) -> Result<()> {
+        self.request(&DeleteThread { thread }).await.map(drop)
     }
 
     /// Lists available project directories.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn list_projects(&self) -> Result<Vec<Project>> {
         Ok(self.request(&ListProjects {}).await?.projects)
     }
@@ -203,7 +195,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn create_project(&self, params: &CreateProject<'_>) -> Result<Project> {
         Ok(self.request(params).await?.project)
     }
@@ -212,16 +204,16 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn update_project(&self, params: &UpdateProject<'_>) -> Result<Project> {
-        Ok(self.request(params).await?.project)
+    /// See [`Client::send`].
+    pub async fn update_project(&self, params: &UpdateProject<'_>) -> Result<()> {
+        self.request(params).await.map(drop)
     }
 
     /// Removes a project.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn remove_project(&self, params: &RemoveProject<'_>) -> Result<()> {
         self.request(params).await.map(drop)
     }
@@ -230,45 +222,42 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn list_harnesses(&self) -> Result<Vec<Harness>> {
         Ok(self.request(&ListHarnesses {}).await?.harnesses)
     }
 
     /// Fetches the available settings for a model without creating a
-    /// conversation.
+    /// thread.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn harness_options(&self, params: &HarnessOptions) -> Result<HarnessOptionsResult> {
         self.request(params).await
     }
 
-    /// Finds files in the conversation's working directory.
+    /// Finds files in the thread's working directory.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn search_files(&self, params: &SearchFiles<'_>) -> Result<Vec<String>> {
         Ok(self.request(params).await?.files)
     }
 
-    /// Searches transcript text across conversations.
+    /// Searches transcript text across threads.
     ///
     /// # Errors
-    /// See [`Client::submit`].
-    pub async fn search_conversations(
-        &self,
-        params: &SearchConversations<'_>,
-    ) -> Result<Vec<SearchHit>> {
+    /// See [`Client::send`].
+    pub async fn search_threads(&self, params: &SearchThreads<'_>) -> Result<Vec<SearchHit>> {
         Ok(self.request(params).await?.hits)
     }
 
     /// Reads a page of earlier transcript entries.
     ///
     /// # Errors
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn list_entries(&self, params: &ListEntries) -> Result<EntryPage> {
         self.request(params).await
     }
@@ -276,43 +265,47 @@ impl Client {
     /// Removes an input that has not yet been dispatched.
     ///
     /// # Errors
-    /// See [`Client::submit`].
+    /// See [`Client::send`].
     pub async fn remove_queued_input(&self, params: &RemoveQueuedInput) -> Result<()> {
         self.request(params).await.map(drop)
     }
 
-    /// Submits an input; see [`Submit`].
+    /// Sends an input and returns its run ID.
     ///
     /// # Errors
     ///
     /// Returns [`Error::Rpc`] for a backend error, [`Error::Encode`] or
     /// [`Error::Decode`] for a request or response that isn't valid protocol,
     /// or [`Error::Closed`].
-    pub async fn submit(&self, submit: &Submit) -> Result<SubmissionId> {
-        Ok(self.request(submit).await?.submission)
+    pub async fn send(&self, send: &SendInput) -> Result<RunId> {
+        Ok(self.request(send).await?.run)
     }
 
-    /// Starts receiving [`Notification::ConversationView`] for
-    /// `conversation`, beginning with its full view.
+    /// Starts receiving [`Notification::ThreadView`] for
+    /// `thread`, beginning with its full view.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn watch(&self, conversation: ConversationId) -> Result<()> {
-        self.request(&Watch { conversation }).await.map(drop)
+    /// See [`Client::send`].
+    pub async fn watch(&self, thread: ThreadId) -> Result<()> {
+        self.request(&Watch { thread }).await.map(drop)
     }
 
-    /// Stops watching `conversation`.
+    /// Stops watching `thread`.
     ///
     /// # Errors
     ///
-    /// See [`Client::submit`].
-    pub async fn unwatch(&self, conversation: ConversationId) -> Result<()> {
-        self.request(&Unwatch { conversation }).await.map(drop)
+    /// See [`Client::send`].
+    pub async fn unwatch(&self, thread: ThreadId) -> Result<()> {
+        self.request(&Unwatch { thread }).await.map(drop)
     }
 
     /// Calls the method `params` belong to and decodes its result.
-    async fn request<M: Method>(&self, params: &M) -> Result<M::Response> {
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::send`].
+    pub async fn request<M: Method>(&self, params: &M) -> Result<M::Response> {
         let method = M::NAME;
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let request = serde_json::to_string(&Request {
@@ -328,9 +321,8 @@ impl Client {
             self.pending.take(id);
             return Err(Error::Closed);
         }
-        let response = rx
-            .await
-            .map_err(|_| Error::Closed)?
+        let raw = rx.await.map_err(|_| Error::Closed)?;
+        let response: Response<M::Response> = serde_json::from_str(raw.as_str())
             .map_err(|source| Error::Decode { method, source })?;
         if let Some(ErrorObject { code, message }) = response.error {
             return Err(Error::Rpc {
@@ -339,7 +331,13 @@ impl Client {
                 message,
             });
         }
-        serde_json::from_value(response.result).map_err(|source| Error::Decode { method, source })
+        response.result.ok_or_else(|| Error::Decode {
+            method,
+            source: serde_json::Error::io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "response missing result or error",
+            )),
+        })
     }
 }
 
@@ -354,9 +352,8 @@ struct Request<'a, P> {
 
 /// A JSON-RPC response, less its `id`.
 #[derive(Deserialize)]
-struct Response {
-    #[serde(default)]
-    result: Value,
+struct Response<R> {
+    result: Option<R>,
     error: Option<ErrorObject>,
 }
 
@@ -370,7 +367,7 @@ struct ErrorObject {
 }
 
 /// Where a response goes: its call, or the decoding error in its place.
-type Responder = oneshot::Sender<serde_json::Result<Response>>;
+type Responder = oneshot::Sender<Utf8Bytes>;
 
 /// Calls awaiting their responses, by request id.
 #[derive(Default)]
@@ -418,17 +415,18 @@ where
     tokio::spawn(async move {
         loop {
             tokio::select! {
-                Some(message) = rx.recv() => {
-                    if sink.send(message).await.is_err() {
+                outgoing = rx.recv() => {
+                    let Some(message) = outgoing else { break };
+                    let closing = matches!(message, Message::Close(_));
+                    if sink.send(message).await.is_err() || closing {
                         break;
                     }
                 }
                 incoming = stream.next() => {
                     let Some(Ok(message)) = incoming else { break };
                     let Message::Text(text) = message else { continue };
-                    dispatch(&text, &pending, &notifications);
+                    dispatch(text, &pending, &notifications);
                 }
-                else => break,
             }
         }
         // Close the queue first: a call made from here on fails to send instead
@@ -439,26 +437,32 @@ where
     tx
 }
 
+#[derive(Deserialize)]
+struct Route {
+    id: Option<u64>,
+    method: Option<IgnoredAny>,
+}
+
 /// Routes one incoming message: a response to its call, a notification to the
 /// notification queue.
 fn dispatch(
-    text: &str,
+    text: Utf8Bytes,
     pending: &PendingCalls,
     notifications: &mpsc::UnboundedSender<Notification>,
 ) {
-    let message: Value = match serde_json::from_str(text) {
+    let route: Route = match serde_json::from_str(text.as_str()) {
         Ok(message) => message,
         Err(e) => {
             tracing::warn!("backend sent invalid JSON: {e}");
             return;
         }
     };
-    if let Some(id) = message.get("id").and_then(Value::as_u64) {
+    if let Some(id) = route.id {
         if let Some(responder) = pending.take(id) {
-            _ = responder.send(serde_json::from_value(message));
+            _ = responder.send(text);
         }
-    } else if message.get("method").is_some() {
-        match serde_json::from_value(message) {
+    } else if route.method.is_some() {
+        match serde_json::from_str(text.as_str()) {
             Ok(notification) => _ = notifications.send(notification),
             Err(e) => tracing::debug!("ignoring unknown notification: {e}"),
         }

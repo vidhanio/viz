@@ -10,14 +10,14 @@ use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
     diff::{FileDiff, LineKind},
 };
-use viz_client::protocol::ConversationStatus;
+use viz_client::protocol::ThreadStatus;
 
 use crate::{
-    app::{Desktop, NewChat, Status},
+    app::{Desktop, NewThread, Status},
     attachments, header, sidebar,
     theme::{
-        self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_LARGE, ICON_SMALL, S2, S4,
-        S8, S12, S16, S24, S32, S40, Size, Theme,
+        self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, S2, S4, S8, S12, S16,
+        S24, S32, S40, Size, Theme,
     },
     thread::{Item, PlanStep, Tool, ToolStatus, User, is_command},
     ui::{self, Card},
@@ -40,14 +40,13 @@ enum Kind {
     Mine,
     Prose,
     Activity,
-    Turn,
     Notice,
 }
 
 /// Points above a row of kind `next` that follows one of kind `prev`.
 const fn space(prev: Kind, next: Kind) -> f32 {
     match (prev, next) {
-        (Kind::Turn, _) | (_, Kind::Turn) | (Kind::Activity, Kind::Activity) => 0.0,
+        (Kind::Activity, Kind::Activity) => 0.0,
         (Kind::Mine, _) => S24,
         (_, Kind::Mine) => S32,
         _ => S16,
@@ -71,11 +70,7 @@ impl Rows {
 /// The scrolling timeline, or what to show in its place.
 pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let thread = &s.thread;
-    let empty = thread.items.is_empty()
-        && thread.before.is_none()
-        && !s.busy()
-        && !thread.live.busy
-        && thread.live.failure.is_none();
+    let empty = thread.items.is_empty() && thread.before.is_none() && !s.busy();
     let body = if empty {
         empty_state(s, t, layer).pt(EMPTY_TOP)
     } else {
@@ -92,14 +87,7 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .displayed_history()
                 .iter()
                 .map(|item| (item, false))
-                .chain(
-                    thread
-                        .live
-                        .partial
-                        .iter()
-                        .chain(&thread.acp_partial)
-                        .map(|item| (item, true)),
-                ),
+                .chain(thread.acp_partial.iter().map(|item| (item, true))),
             &mut rows,
             t,
         );
@@ -114,7 +102,7 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     if !thread.items.is_empty()
         && let Some(id) = s
             .selected
-            .filter(|&id| s.summary(id).is_some_and(|chat| chat.parent.is_some()))
+            .filter(|&id| s.summary(id).is_some_and(|thread| thread.parent.is_some()))
     {
         body = body
             .key(format!("subagent-timeline-{id}"))
@@ -194,7 +182,6 @@ fn items<'a>(
                     .pl(ACTIVITY_TEXT)
                     .pr(CARD_INSET),
             ),
-            Item::Divider { key, label } => rows.push(Kind::Turn, divider(key, *label, t)),
             Item::Notice { key, text } => rows.push(Kind::Notice, notice(key, text, t)),
         }
     }
@@ -231,12 +218,12 @@ fn activity_group<'a>(
     }
     let label = match (tool_count, spawn_count) {
         (0, 0) => if thinking { "Thinking" } else { "Thought" }.to_owned(),
-        (0, n) => format!("Spawned {n} {}", plural(n, "subagent", "subagents")),
+        (0, n) => format!("Delegated {n} {}", plural(n, "task", "tasks")),
         (n, 0) => format!("Called {n} {}", plural(n, "tool", "tools")),
         (tools, agents) => format!(
-            "Called {tools} {}, spawned {agents} {}",
+            "Called {tools} {}, delegated {agents} {}",
             plural(tools, "tool", "tools"),
-            plural(agents, "subagent", "subagents")
+            plural(agents, "task", "tasks")
         ),
     };
     let mut heading = disclosure(&key, open, t).label(label.clone()).child(
@@ -249,7 +236,7 @@ fn activity_group<'a>(
     );
     if spawn_count > 0 {
         let agents = burst.clone().filter_map(|(item, _)| match item {
-            Item::Tool(tool) if spawned(tool) => tool.child.and_then(|child| s.summary(child)),
+            Item::Tool(tool) if spawned(tool) => local_child(s, tool),
             _ => None,
         });
         heading = heading.child(agent_marks(agents, spawn_count, t));
@@ -272,12 +259,8 @@ fn activity_group<'a>(
         });
         for (item, streaming) in burst.clone() {
             match item {
-                Item::Thinking {
-                    key,
-                    text,
-                    duration_ms,
-                } => {
-                    details = details.child(thought(key, text, *duration_ms, streaming, t));
+                Item::Thinking { key, text } => {
+                    details = details.child(thought(key, text, streaming, t));
                 }
                 Item::Tool(tool) if spawned(tool) => {
                     if first_spawn == Some(tool.key.as_str()) {
@@ -353,56 +336,39 @@ fn disclosure(key: &str, open: bool, t: &Theme) -> El {
     .on_press(move |s: &mut Desktop| s.toggle(&toggle))
 }
 
-/// What's happening now: the streaming answer and its caret, a quiet
-/// working line before there's anything to show, a retry or compaction, or
-/// why the last run ended without an answer.
+/// The streamed answer’s caret, or a quiet line while the run has not emitted
+/// activity.
 fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
-    let live = &s.thread.live;
-    let partial = if live.partial.is_empty() {
-        &s.thread.acp_partial
-    } else {
-        &live.partial
-    };
-    if s.busy() || live.busy {
-        let writing = matches!(partial.last(), Some(Item::Text { .. }));
-        let running = s
-            .thread
-            .items
-            .iter()
-            .rev()
-            .take_while(|item| !matches!(item, Item::User(_)))
-            .any(|item| matches!(item, Item::Tool(tool) if tool.status == ToolStatus::Running));
-        let status = match (&live.retry, live.compacting) {
-            (Some(error), _) => Some((format!("Retrying: {error}"), t.warning)),
-            (None, true) => Some(("Compacting context".to_owned(), t.muted)),
-            (None, false) if partial.is_empty() && !running => {
-                Some(("Working".to_owned(), t.muted))
-            }
-            (None, false) => None,
-        };
-        if let Some((label, color)) = status {
-            rows.push(
-                Kind::Activity,
-                activity("working", ui::spinner(t))
-                    .role("status")
-                    .label(label.clone())
-                    .child(text(label).font(t.ui).color(color).truncate().shrink()),
-            );
-        } else if writing {
-            rows.push(
-                Kind::Activity,
-                el().key("caret")
-                    .w(S2)
-                    .h(ICON)
-                    .radius(HAIRLINE)
-                    .fill(t.accent)
-                    .looping(LoopSpec::opacity(1.0, 0.0, 0.0, 1.0))
-                    .a11y_hidden(),
-            );
-        }
+    if !s.busy() {
+        return;
     }
-    if let Some(failure) = &live.failure {
-        rows.push(Kind::Notice, notice("run-failure", failure, t));
+    let partial = &s.thread.acp_partial;
+    let running = s
+        .thread
+        .items
+        .iter()
+        .rev()
+        .take_while(|item| !matches!(item, Item::User(_)))
+        .any(|item| matches!(item, Item::Tool(tool) if tool.status == ToolStatus::Running));
+    if partial.is_empty() && !running {
+        rows.push(
+            Kind::Activity,
+            activity("working", ui::spinner(t))
+                .role("status")
+                .label("Working")
+                .child(text("Working").font(t.ui).color(t.muted)),
+        );
+    } else if matches!(partial.last(), Some(Item::Text { .. })) {
+        rows.push(
+            Kind::Activity,
+            el().key("caret")
+                .w(S2)
+                .h(ICON)
+                .radius(HAIRLINE)
+                .fill(t.accent)
+                .looping(LoopSpec::opacity(1.0, 0.0, 0.0, 1.0))
+                .a11y_hidden(),
+        );
     }
 }
 
@@ -426,57 +392,41 @@ fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         Status::Connecting => return ui::empty(None, "Connecting…", "", None, t),
         Status::Connected { .. } => {}
     }
-    if s.selected.is_none() && s.new_chat.is_none() {
-        return ui::empty(None, "No chat selected", "", None, t);
-    }
-    // First run: nothing to chat in yet, so the one action is adding a
-    // project; the orchestrator's intro carries it when that's what's open.
-    let onboarding = s.projects.is_empty() && s.new_chat.is_none();
-    let add_project = || {
-        ui::button("Add project", ButtonVariant::Submit, Size::Large)
-            .icon(&ui::PLUS)
-            .on_press_tx(sidebar::open_add_project)
-            .build(&t.k)
-            .key("add-project-empty")
-    };
-    if s.orchestrator_open() {
-        let intro = ui::empty(
-            Some(icon(&ui::STAR, ICON_LARGE).color(t.accent)),
-            "Orchestrator",
-            "Remembers across chats and starts agents for you.",
-            onboarding.then(add_project),
-            t,
-        );
-        return if onboarding {
-            intro
+    if s.selected.is_none() && s.new_thread.is_none() {
+        let (title, detail, action) = if s.projects.is_empty() {
+            (
+                "No thread selected",
+                "Threads can run in a project’s folder.",
+                ui::button("Add project", ButtonVariant::Outline, Size::Large)
+                    .icon(&ui::PLUS)
+                    .on_press_tx(sidebar::open_add_project),
+            )
         } else {
-            intro.child(shortcuts(&[("K", "Commands"), ("N", "New chat")], t))
+            (
+                "No thread selected",
+                "Select a thread or start a new one.",
+                ui::button("New thread", ButtonVariant::Outline, Size::Large)
+                    .icon(&ui::COMPOSE)
+                    .on_press_tx(Desktop::create_here),
+            )
         };
+        return ui::empty(None, title, detail, Some(action.build(&t.k)), t);
     }
-    if onboarding {
-        return ui::empty(
-            None,
-            "Add a project",
-            "Chats run in a project’s folder.",
-            Some(add_project()),
-            t,
-        );
-    }
-    chat_hint(s, t, layer)
+    thread_hint(s, t, layer)
 }
 
-/// An empty chat: where it runs, and the few keys that work from here. A
+/// An empty thread: where it runs, and the few keys that work from here. A
 /// draft's place is still a choice, so it shows the project picker instead.
-fn chat_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
-    let Some(chat) = &s.new_chat else {
+fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+    let Some(thread) = &s.new_thread else {
         let title = s
             .project()
-            .map_or("New chat", |project| project.name.as_str());
+            .map_or("New thread", |project| project.name.as_str());
         return ui::empty(None, title, "", None, t)
-            .child(shortcuts(&[("N", "New chat"), ("K", "Commands")], t));
+            .child(shortcuts(&[("N", "New thread"), ("K", "Commands")], t));
     };
-    let choose_harness = !chat.sending
-        && chat.harness.is_none()
+    let choose_harness = !thread.sending
+        && thread.harness.is_none()
         && s.harnesses.len() > 1
         && s.harnesses.iter().all(|harness| !harness.default);
     // `ui::empty`'s column, with the picker row where its title goes.
@@ -486,7 +436,7 @@ fn chat_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .max_w(EMPTY_WIDTH)
         .gap(S8)
         .items_center()
-        .child(draft_project(s, chat, t, layer))
+        .child(draft_project(s, thread, t, layer))
         .children(choose_harness.then(|| {
             text("Choose a harness below.")
                 .font(t.ui)
@@ -494,7 +444,7 @@ fn chat_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .wrap()
                 .align(rune::Align::Center)
         }))
-        // A draft is already the new chat.
+        // A draft is already the new thread.
         .child(shortcuts(&[("K", "Commands")], t))
 }
 
@@ -504,8 +454,8 @@ pub const DRAFT_PROJECT: &str = "draft-project";
 /// Where a draft will run: a picker of every project and none, and an add
 /// button whose new project the draft takes once the backend has it
 /// (`Desktop::project_added`). Fixed once the first message is on its way.
-fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> El {
-    let open = s.open_picker.as_deref() == Some(DRAFT_PROJECT) && !chat.sending;
+fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> El {
+    let open = s.open_picker.as_deref() == Some(DRAFT_PROJECT) && !thread.sending;
     let current = s
         .project()
         .map_or("No project", |project| project.name.as_str());
@@ -519,7 +469,7 @@ fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) ->
     )
     .on_press(|s: &mut Desktop| {
         s.open_picker = if s.open_picker.as_deref() == Some(DRAFT_PROJECT)
-            || s.new_chat.as_ref().is_none_or(|chat| chat.sending)
+            || s.new_thread.as_ref().is_none_or(|thread| thread.sending)
         {
             None
         } else {
@@ -534,7 +484,7 @@ fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) ->
         .trigger(trigger);
     if open {
         let choice = |label: &str, glyph: &'static rune::Icon, id: Option<&str>| {
-            let picked = chat.project.as_deref() == id;
+            let picked = thread.project.as_deref() == id;
             let id = id.map(str::to_owned);
             MenuItem::new(label)
                 .icon(glyph)
@@ -542,17 +492,19 @@ fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) ->
                 .on_select_tx(move |s: &mut Desktop, tx| {
                     s.open_picker = None;
                     tx.focus("draft", false);
-                    if let Some(chat) = &mut s.new_chat {
-                        chat.project.clone_from(&id);
+                    if let Some(thread) = &mut s.new_thread {
+                        thread.project.clone_from(&id);
                     }
                 })
         };
-        menu = menu.item(choice("No project", &ui::CHAT, None)).separator();
+        menu = menu
+            .item(choice("No project", &ui::THREAD, None))
+            .separator();
         menu = ui::menu_items(
             menu,
             s.projects
                 .iter()
-                .map(|project| choice(&project.name, &ui::FOLDER, Some(&project.id))),
+                .map(|project| choice(&project.name, &ui::FOLDER, Some(&project.path))),
         );
     }
     let add = ui::icon_button(
@@ -561,7 +513,7 @@ fn draft_project(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) ->
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
-    .disabled(chat.sending)
+    .disabled(thread.sending)
     .on_press_tx(sidebar::open_add_project)
     .build(&t.k)
     .key("draft-add-project");
@@ -652,15 +604,8 @@ fn prose(key: &str, source: &str, streaming: bool, t: &Theme) -> El {
 }
 
 /// Render reasoning directly inside an open activity burst.
-fn thought(key: &str, thought: &str, duration_ms: Option<u64>, streaming: bool, t: &Theme) -> El {
-    let label = if streaming {
-        "Thinking".to_owned()
-    } else {
-        duration_ms.map_or_else(
-            || "Thought".to_owned(),
-            |ms| format!("Thought for {}", theme::duration(ms)),
-        )
-    };
+fn thought(key: &str, thought: &str, streaming: bool, t: &Theme) -> El {
+    let label = if streaming { "Thinking" } else { "Thought" };
     col()
         .key(key.to_owned())
         .w_full()
@@ -668,7 +613,7 @@ fn thought(key: &str, thought: &str, duration_ms: Option<u64>, streaming: bool, 
         .pr(CARD_INSET)
         .py(S4)
         .gap(S4)
-        .child(ui::section(&label, t))
+        .child(ui::section(label, t))
         .child(
             text(if thought.trim().is_empty() {
                 "Reasoning hidden"
@@ -687,11 +632,11 @@ fn thought(key: &str, thought: &str, duration_ms: Option<u64>, streaming: bool, 
 fn tool_mark(tool: &Tool) -> (&'static rune::Icon, &str) {
     if let Some(call) = subagent_call(tool) {
         let label = match call {
-            Call::Spawn => "Start subagent",
-            Call::Message => "Message subagent",
-            Call::Read => "Read subagent",
-            Call::List => "List subagents",
-            Call::Cancel => "Stop subagent",
+            Call::Spawn => "Delegate task",
+            Call::Message => "Message thread",
+            Call::Read => "Read activity",
+            Call::List => "List tasks",
+            Call::Cancel => "Stop task",
         };
         return (&ui::AGENT, label);
     }
@@ -731,7 +676,7 @@ fn meta(tool: &Tool, now: i64, t: &Theme) -> Option<El> {
         ToolStatus::Pending => Some(faint("Pending".to_owned())),
         ToolStatus::Abandoned => Some(faint("Stopped".to_owned())),
         ToolStatus::Failed => Some(text("Failed").font(t.small).color(t.danger)),
-        ToolStatus::Done => tool.duration_ms.map(|ms| faint(theme::duration(ms))),
+        ToolStatus::Done => None,
     }
 }
 
@@ -979,26 +924,46 @@ enum Call {
 fn subagent_call(tool: &Tool) -> Option<Call> {
     let name = tool.viz.as_deref().unwrap_or(tool.name.as_str());
     match name {
-        "spawn_subagent" => Some(Call::Spawn),
-        "spawn_chat" if tool.child.is_some() => Some(Call::Spawn),
-        "message_subagent" => Some(Call::Message),
-        "read_subagent" => Some(Call::Read),
-        "list_subagents" => Some(Call::List),
-        "cancel_subagent" => Some(Call::Cancel),
+        "delegate_task" => Some(Call::Spawn),
+        "thread_launch" if tool.child.is_some() => Some(Call::Spawn),
+        "thread_send" => Some(Call::Message),
+        "task_status" | "thread_read" => Some(Call::Read),
+        "list_tasks" => Some(Call::List),
+        "task_cancel" | "thread_stop" => Some(Call::Cancel),
         _ => None,
     }
 }
 
-/// A subagent's title: its conversation's, or the call's summary.
+fn local_child<'a>(s: &'a Desktop, tool: &Tool) -> Option<&'a viz_client::protocol::ThreadSummary> {
+    tool.child_environment
+        .as_ref()
+        .is_none_or(|environment| s.environment.as_ref() == Some(environment))
+        .then(|| tool.child.and_then(|id| s.summary(id)))
+        .flatten()
+}
+
+fn open_child(
+    s: &mut Desktop,
+    child: viz_client::protocol::ThreadId,
+    environment: Option<&str>,
+    tx: &mut Tx,
+) {
+    if let Some(environment) = environment {
+        s.open_in_environment(environment.to_owned(), Some(child), tx);
+    } else {
+        s.select(child, tx);
+    }
+}
+
+/// A subagent's title: its thread's, or the call's summary.
 fn subagent_title<'a>(s: &'a Desktop, tool: &'a Tool) -> &'a str {
-    tool.child
-        .and_then(|child| s.summary(child))
+    local_child(s, tool)
         .map(|summary| summary.title.as_str())
         .filter(|title| !title.is_empty())
         .unwrap_or(&tool.summary)
 }
 
-/// Where a subagent stands: its conversation's live status, else its call's.
+/// Where a subagent stands: its thread's live status, else its call's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Agent {
     Working,
@@ -1009,14 +974,11 @@ enum Agent {
 
 impl Agent {
     fn of(s: &Desktop, tool: &Tool) -> Self {
-        let status = tool
-            .child
-            .and_then(|child| s.summary(child))
-            .map(|chat| chat.status);
+        let status = local_child(s, tool).map(|thread| thread.status);
         match (status, tool.status) {
-            (Some(ConversationStatus::Working), _)
+            (Some(ThreadStatus::Working), _)
             | (None, ToolStatus::Running | ToolStatus::Pending) => Self::Working,
-            (Some(ConversationStatus::Failed), _) | (None, ToolStatus::Failed) => Self::Failed,
+            (Some(ThreadStatus::Failed), _) | (None, ToolStatus::Failed) => Self::Failed,
             (None, ToolStatus::Abandoned) => Self::Stopped,
             _ => Self::Done,
         }
@@ -1042,14 +1004,14 @@ impl Agent {
 }
 
 fn agent_marks<'a>(
-    agents: impl Iterator<Item = &'a viz_client::protocol::ConversationSummary>,
+    agents: impl Iterator<Item = &'a viz_client::protocol::ThreadSummary>,
     total: usize,
     t: &Theme,
 ) -> El {
     const MARKS: usize = 3;
     let mut stack = row().center_y().a11y_hidden();
-    for chat in agents.take(MARKS) {
-        let mark = chat.harness.as_deref().map_or(&ui::AGENT, ui::harness_icon);
+    for thread in agents.take(MARKS) {
+        let mark = ui::harness_icon(&thread.harness);
         stack = stack.child(
             el().size(S24, S24)
                 .ml(-S4)
@@ -1073,8 +1035,8 @@ fn agent_marks<'a>(
 fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let title = subagent_title(s, tool);
     let agent = Agent::of(s, tool);
-    let chat = tool.child.and_then(|id| s.summary(id));
-    let identity = chat.map_or_else(
+    let thread = local_child(s, tool);
+    let identity = thread.map_or_else(
         || {
             row()
                 .gap(S8)
@@ -1092,7 +1054,7 @@ fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
                         .shrink(),
                 )
         },
-        |chat| header::agent_identity(chat, t),
+        |thread| header::agent_identity(thread, t),
     );
     let mut link = row()
         .key(tool.key.clone())
@@ -1108,11 +1070,14 @@ fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         .child(identity)
         .child(agent.mark(t));
     if let Some(child) = tool.child {
+        let environment = tool.child_environment.clone();
         link = link
             .hover(t.hover)
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| s.select(child, tx))
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                open_child(s, child, environment.as_deref(), tx);
+            })
             .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint));
     }
     link
@@ -1131,7 +1096,7 @@ fn agent_stack<'a>(
         .fill(t.surface)
         .padding(S4);
     if count > 1 {
-        stack = stack.child(ui::section(&format!("{count} subagents"), t).px(S8).py(S4));
+        stack = stack.child(ui::section(&format!("{count} tasks"), t).px(S8).py(S4));
     }
     stack.children(tools.map(|tool| subagent_link(s, tool, t)))
 }
@@ -1143,7 +1108,7 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
         Call::Spawn => "Started",
         Call::Message => "Messaged",
         Call::Read => "Read",
-        Call::List => "Listed subagents",
+        Call::List => "Listed tasks",
         Call::Cancel => "Stopped",
     };
     let name = (call != Call::List).then(|| subagent_title(s, tool).to_owned());
@@ -1173,32 +1138,18 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
     if let Some(meta) = meta(tool, s.tool_clock, t) {
         line = line.child(meta.key("meta"));
     }
+    let environment = tool.child_environment.clone();
     match tool.child {
         Some(child) => line
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .help("Open the subagent")
+            .help("Open thread")
             .hover(t.hover)
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| s.select(child, tx)),
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                open_child(s, child, environment.as_deref(), tx);
+            }),
         None => line,
     }
-}
-
-/// A turn boundary: room, and a short faint rule; or a quiet label for
-/// other markers.
-fn divider(key: &str, label: Option<&str>, t: &Theme) -> El {
-    let mark = label.map_or_else(
-        || el().w(S40).h(HAIRLINE).fill(t.hairline),
-        |label| text(label.to_owned()).font(t.small).color(t.faint),
-    );
-    row()
-        .key(key.to_owned())
-        .role("separator")
-        .label(label.unwrap_or("New turn").to_owned())
-        .w_full()
-        .py(S24)
-        .center()
-        .child(mark)
 }
 
 /// An answer that didn't come: a danger-tinted line.

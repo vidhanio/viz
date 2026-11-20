@@ -5,10 +5,7 @@ result-*
 
 # rust
 target/
-
-# bun
 node_modules/
-backend/dist/
 
 # swift / xtool
 ios/.build/

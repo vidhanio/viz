@@ -1,51 +1,58 @@
-//! Where the backend is: the local socket or a remote URL with its token.
+//! Validated backend addresses and their optional credentials.
 
-use std::{fmt, path::PathBuf};
+use std::{fmt, net::IpAddr};
 
-use viz_config::{Connection, Paths, ResolveSecretError};
+use tokio_tungstenite::tungstenite::http::Uri;
+use viz_config::{Connection, DEFAULT_URL, ResolveSecretError};
 
-/// Where the backend is.
+/// An HTTP(S) origin and, when configured, a bearer token.
 ///
 /// `Debug` never shows the token.
 #[derive(Clone, PartialEq, Eq)]
-pub enum Endpoint {
-    /// The local Unix socket. No token: socket permissions are the auth.
-    Unix(PathBuf),
-    /// A remote backend's `http://host:port` and its token.
-    Remote {
-        /// Base URL, without a trailing slash.
-        url: String,
-        /// Bearer token.
-        token: String,
-    },
+pub struct Endpoint {
+    pub(crate) url: String,
+    pub(crate) token: Option<String>,
 }
 
 impl Endpoint {
-    /// Uses the remote URL when set, otherwise the configured or default
-    /// socket.
+    /// Resolves connection settings, using the loopback origin by default.
     ///
     /// # Errors
     ///
-    /// Returns an error if a remote URL is set but no token resolves.
-    pub fn from_connection(
-        connection: &Connection,
-        paths: &Paths,
-    ) -> Result<Self, ResolveEndpointError> {
-        let Some(url) = &connection.url else {
-            return Ok(Self::Unix(
-                connection
-                    .socket
-                    .clone()
-                    .unwrap_or_else(|| paths.default_socket()),
-            ));
-        };
+    /// Returns an error if the origin is invalid, uses HTTP off loopback, or
+    /// a bearer token is required but cannot be resolved.
+    pub fn from_connection(connection: &Connection) -> Result<Self, ResolveEndpointError> {
+        let url = connection.url.as_deref().unwrap_or(DEFAULT_URL);
+        let uri: Uri = url.parse().map_err(|_| ResolveEndpointError::InvalidUrl)?;
+        let scheme = uri.scheme_str().ok_or(ResolveEndpointError::InvalidUrl)?;
+        let authority = uri.authority().ok_or(ResolveEndpointError::InvalidUrl)?;
+        if !matches!(scheme, "http" | "https")
+            || authority.as_str().contains('@')
+            || url.contains('#')
+            || !matches!(uri.path(), "" | "/")
+            || uri.query().is_some()
+        {
+            return Err(ResolveEndpointError::InvalidUrl);
+        }
+        let host = authority.host();
+        let loopback = host.eq_ignore_ascii_case("localhost")
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback());
+        if !loopback && scheme == "http" {
+            return Err(ResolveEndpointError::RemoteHttp);
+        }
         let token = connection
             .token
             .as_ref()
-            .ok_or(ResolveEndpointError::MissingToken)?
-            .resolve()?;
-        Ok(Self::Remote {
-            url: url.trim_end_matches('/').to_owned(),
+            .map(viz_config::Secret::resolve)
+            .transpose()?;
+        if !loopback && token.is_none() {
+            return Err(ResolveEndpointError::MissingToken);
+        }
+        Ok(Self {
+            url: format!("{scheme}://{authority}"),
             token,
         })
     }
@@ -53,32 +60,31 @@ impl Endpoint {
 
 impl fmt::Debug for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unix(path) => f.debug_tuple("Unix").field(path).finish(),
-            Self::Remote { url, .. } => f
-                .debug_struct("Remote")
-                .field("url", url)
-                .finish_non_exhaustive(),
-        }
+        f.debug_struct("Endpoint")
+            .field("url", &self.url)
+            .finish_non_exhaustive()
     }
 }
 
 impl fmt::Display for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Unix(path) => write!(f, "unix:{}", path.display()),
-            Self::Remote { url, .. } => f.write_str(url),
-        }
+        f.write_str(&self.url)
     }
 }
 
 /// Why [`Endpoint::from_connection`] failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveEndpointError {
-    /// `[backend].url` is set but `[backend].token` is not.
-    #[error("resolving secret: [backend].url requires [backend].token")]
+    /// The address is not a valid HTTP(S) origin.
+    #[error("[backend].url must be an HTTP or HTTPS origin without a path, query, or credentials")]
+    InvalidUrl,
+    /// Only loopback origins may use plaintext HTTP.
+    #[error("[backend].url must use HTTPS outside loopback")]
+    RemoteHttp,
+    /// The remote origin needs a bearer token.
+    #[error("a non-loopback [backend].url requires [backend].token")]
     MissingToken,
-    /// The token didn't resolve.
+    /// The configured token could not be resolved.
     #[error(transparent)]
     Token(#[from] ResolveSecretError),
 }

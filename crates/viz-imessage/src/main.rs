@@ -2,7 +2,7 @@
 //! running on a Mac.
 //!
 //! ```toml
-//! server_url = "http://mac.tailnet.ts.net:1234"
+//! server_url = "https://bluebubbles.example.net"
 //! password = { file = "/run/secrets/viz-bluebubbles" }
 //! allowed_handles = ["+15555550123", "me@example.com"]
 //! ```
@@ -20,7 +20,7 @@ use viz_client::{
     Client, Endpoint,
     protocol::{ClientInfo, ClientKind},
 };
-use viz_config::{ClientFile, Connection, Paths, Secret};
+use viz_config::{ClientFile, Connection, Secret};
 
 /// The connector's name: its config filename, `hello` name and origins.
 const NAME: &str = "imessage";
@@ -37,6 +37,8 @@ struct Args {
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ImessageConfig {
+    /// The environment to connect to for the configuration check.
+    environment: Option<String>,
     #[serde(default)]
     backend: Connection,
     /// BlueBubbles server base URL.
@@ -70,13 +72,14 @@ async fn main() -> anyhow::Result<()> {
         !imessage.allowed_handles.is_empty(),
         "imessage: allowed_handles is empty: nobody could talk to viz"
     );
-    let endpoint = Endpoint::from_connection(&imessage.backend, &Paths::from_env()?)?;
+    let endpoint = Endpoint::from_connection(&imessage.backend)?;
     let hello = Client::connect(
         &endpoint,
         ClientInfo {
             kind: ClientKind::Connector,
             name: NAME.to_owned(),
         },
+        imessage.environment,
     )
     .await?
     .hello;

@@ -2,13 +2,8 @@
 # --config overrides $VIZ_DESKTOP_CONFIG, then the default path. No config.d/ layers;
 # a missing file uses defaults.
 [backend]
-# Default: $XDG_RUNTIME_DIR/viz/backend.sock, or backend.sock in $STATE_DIRECTORY
-# or $XDG_STATE_HOME/viz (default ~/.local/state/viz) if runtime dir is unset.
-# For a custom socket, use the same path as the backend's [backend].socket.
-# socket = "/run/user/1000/viz/backend.sock"
-# Remote base URL and bearer token both default to unset. A URL takes precedence
-# over the socket and requires an explicit client token (no backend config fallback).
-# url = "https://viz-host.tailnet.ts.net"
+# Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
+# url = "https://viz.example.com"
 # Secrets accept "inline", { file = "/run/secrets/x" } (one trailing line ending
 # is removed), or { env = "NAME" }.
 # token = { file = "/run/secrets/viz-token" }

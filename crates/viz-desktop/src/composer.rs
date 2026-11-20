@@ -1,4 +1,4 @@
-//! Per-conversation composer, settings, completions, and queued input.
+//! Per-thread composer, settings, completions, and queued input.
 
 mod completion;
 mod draft;
@@ -9,13 +9,13 @@ pub use completion::{Completion, poll};
 pub use model::{ModelMenu, preview as preview_model_menu};
 use rune::{El, ScrollSpec, col, row, text, text_input};
 use rune_kit::IconButtonVariant;
-use viz_client::protocol::{ConversationId, QueuedInput};
+use viz_client::protocol::{QueuedInput, ThreadId};
 
 use crate::{
     app::Desktop,
     attachments,
     backend::Command,
-    theme::{CARD_INSET, HAIRLINE, ICON, READING_INSET, READING_WIDTH, S4, S8, S48, Size, Theme},
+    theme::{CARD_INSET, ICON, READING_INSET, S4, S8, S48, Size, Theme},
     ui::{self, Card},
 };
 
@@ -28,18 +28,18 @@ const TOOLBAR_GAP: f32 = S4;
 /// The tallest the queue gets before it scrolls.
 const QUEUE_HEIGHT: f32 = 136.0;
 
-pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> Option<El> {
-    if s.selected.is_none() && s.new_chat.is_none() {
+pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
+    if s.selected.is_none() && s.new_thread.is_none() {
         return None;
     }
     let mut column = col().gap(S8);
-    if let Some((id, state)) = s.selected.zip(s.conversation.as_ref())
+    if let Some((id, state)) = s.selected.zip(s.state.as_ref())
         && !state.queue.is_empty()
     {
         column = column.child(queue(s, id, &state.queue, t));
     }
     completion::popup(s, t, layer);
-    let editor = editor(s, t, layer, reserve);
+    let editor = editor(s, t, layer);
     Some(
         ui::reading(column.child(editor))
             .key("composer")
@@ -47,13 +47,11 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> Op
     )
 }
 
-fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> El {
+fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let placeholder = if !s.connected() {
         "Offline"
     } else if s.busy() {
         "Queue a message"
-    } else if s.orchestrator_open() {
-        "Message the orchestrator"
     } else {
         "Ask anything"
     };
@@ -67,10 +65,8 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> El {
         .on_edit(|s: &mut Desktop| &mut s.draft)
         .on_input_paste(attachments::paste)
         .on_key(completion::on_key)
-        .on_submit(Desktop::submit);
-    let attach =
-        (s.new_chat.is_some() || s.conversation.is_some()).then(|| attachments::button(s, t));
-    let budget = settings_budget(s, attach.is_some(), reserve);
+        .on_submit(Desktop::send_input);
+    let attach = (s.new_thread.is_some() || s.state.is_some()).then(|| attachments::button(s, t));
     let card = Card::Surface
         .frame(t)
         .key("composer-card")
@@ -93,12 +89,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> El {
                 .gap(TOOLBAR_GAP)
                 .center_y()
                 .children(attach)
-                .child(
-                    settings::toolbar(s, t, layer, budget)
-                        .grow(1.0)
-                        .shrink()
-                        .min_w(0.0),
-                )
+                .child(settings::toolbar(s, t, layer).grow(1.0).shrink().min_w(0.0))
                 .child(send_button(s, t)),
         );
     if s.can_attach() {
@@ -108,27 +99,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>, reserve: f32) -> El {
     }
 }
 
-/// Points the settings selects may take in one toolbar row: the main pane
-/// between the open panes, less the composer's margins and the toolbar's other
-/// items.
-fn settings_budget(s: &Desktop, attach: bool, reserve: f32) -> f32 {
-    let button = Size::Default.height();
-    let main = s.window_width - s.sidebar.shown_width() - reserve;
-    // Both sides: the reading inset, then the card's border and toolbar inset.
-    let card = 2.0f32.mul_add(
-        -(HAIRLINE + TOOLBAR_INSET),
-        2.0f32.mul_add(-READING_INSET, main).min(READING_WIDTH),
-    );
-    let send = TOOLBAR_GAP.mul_add(2.0, button);
-    let fixed = if attach {
-        send + button + TOOLBAR_GAP
-    } else {
-        send
-    };
-    card - fixed
-}
-
-fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> El {
+fn queue(s: &Desktop, id: ThreadId, inputs: &[QueuedInput], t: &Theme) -> El {
     Card::Surface
         .frame(t)
         .key("queue")
@@ -148,14 +119,14 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
                 .child(ui::section("Queued", t)),
         )
         .children(inputs.iter().map(|input| {
-            let submission = input.submission;
+            let run = input.run;
             let title = input
                 .text
                 .lines()
                 .find(|line| !line.trim().is_empty())
                 .unwrap_or("Attachment");
             row()
-                .key(format!("queue-{submission}"))
+                .key(format!("queue-{run}"))
                 .w_full()
                 .h(Size::Small.height())
                 .center_y()
@@ -178,13 +149,7 @@ fn queue(s: &Desktop, id: ConversationId, inputs: &[QueuedInput], t: &Theme) -> 
                     )
                     .disabled(!s.connected())
                     .on_press_tx(move |s: &mut Desktop, tx| {
-                        s.send(
-                            Command::RemoveQueued {
-                                conversation: id,
-                                submission,
-                            },
-                            tx,
-                        );
+                        s.send(Command::RemoveQueued { thread: id, run }, tx);
                     })
                     .build(&t.k)
                     .key("remove"),
@@ -210,7 +175,7 @@ fn send_button(s: &Desktop, t: &Theme) -> El {
             Size::Default,
         )
         .disabled(!s.can_send())
-        .on_press_tx(Desktop::submit)
+        .on_press_tx(Desktop::send_input)
         .build(&t.k)
         .key("send")
     }

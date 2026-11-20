@@ -9,7 +9,7 @@ use rune_kit::{
     Button, ButtonVariant, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
     Placement, PopupList, Select, SelectAppearance, TextInput,
 };
-use viz_client::protocol::ConversationStatus;
+use viz_client::protocol::ThreadStatus;
 
 use crate::theme::{
     CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON,
@@ -145,23 +145,13 @@ pub fn spinner(t: &Theme) -> El {
     Loader::new().size(ICON_SMALL).color(t.muted).build(&t.k)
 }
 
-/// A subagent's state as a mark and a word: a spinner while it runs, a
-/// success dot when done, a danger dot when it failed.
-pub fn agent_state(status: ConversationStatus, t: &Theme) -> (El, &'static str) {
-    match status {
-        ConversationStatus::Working => (spinner(t), "Running"),
-        ConversationStatus::Failed => (dot(t.danger), "Failed"),
-        ConversationStatus::Idle => (dot(t.success), "Done"),
-    }
-}
-
-/// A conversation's run state as an icon-sized mark: a spinner while it works,
+/// A thread's run state as an icon-sized mark: a spinner while it works,
 /// a danger dot after a failure, nothing while idle.
-pub fn status(status: ConversationStatus, t: &Theme) -> Option<El> {
+pub fn status(status: ThreadStatus, t: &Theme) -> Option<El> {
     let (mark, label) = match status {
-        ConversationStatus::Idle => return None,
-        ConversationStatus::Working => (spinner(t), "Working"),
-        ConversationStatus::Failed => (dot(t.danger), "Failed"),
+        ThreadStatus::Idle => return None,
+        ThreadStatus::Working => (spinner(t), "Working"),
+        ThreadStatus::Failed => (dot(t.danger), "Failed"),
     };
     Some(
         el().size(ICON, ICON)
@@ -206,7 +196,7 @@ pub struct TreeLine<'a> {
     pub dim: bool,
     pub selected: bool,
     /// The label's ink at rest: `muted` for most rows, `text` for a project's
-    /// header, quieter for the chats inside it.
+    /// header, quieter for the threads inside it.
     pub ink: Color,
 }
 
@@ -434,7 +424,7 @@ const TITLE_LINES: usize = 2;
 const TOAST_DETAIL_LINES: usize = 4;
 
 /// A dialog: a title of up to [`TITLE_LINES`], what it's about (`subject`,
-/// one quiet line cut in the middle so a long path or chat title keeps both
+/// one quiet line cut in the middle so a long path or thread title keeps both
 /// ends) and a description, beside the close button's own column; then the
 /// body, which insets itself like [`dialog_body`].
 pub struct Dialog<'a> {
@@ -725,9 +715,7 @@ macro_rules! lucide {
 }
 
 lucide! {
-    /// The orchestrator's mark.
-    STAR = Sparkle;
-    /// New chat.
+    /// New thread.
     COMPOSE = SquarePen;
     PLUS = Plus;
     /// Send.
@@ -741,7 +729,7 @@ lucide! {
     FOLDER = Folder;
     /// Add project.
     FOLDER_PLUS = FolderPlus;
-    CHAT = MessageSquare;
+    THREAD = MessageSquare;
     STOP = Square;
     SIDEBAR = PanelLeft;
     PIN = Pin;

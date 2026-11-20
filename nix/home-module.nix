@@ -17,14 +17,8 @@ let
   vizPackages = self.packages.${pkgs.stdenv.hostPlatform.system};
 
   tomlFormat = pkgs.formats.toml { };
-  socket = if cfg.socket != null then cfg.socket else cfg.settings.backend.socket or null;
-  backendSettings = lib.recursiveUpdate cfg.settings (
-    lib.optionalAttrs (cfg.socket != null) { backend.socket = cfg.socket; }
-  );
+  backendSettings = cfg.settings;
   generatedSettings = tomlFormat.generate "viz-settings.toml" backendSettings;
-  clientSettings =
-    settings:
-    lib.recursiveUpdate (lib.optionalAttrs (socket != null) { backend.socket = socket; }) settings;
 
   stylixColors = config.lib.stylix.colors or null;
   stylixPolarity = config.stylix.polarity or "either";
@@ -32,17 +26,16 @@ let
   base16 = lib.genAttrs (map (suffix: "base0${suffix}") (lib.stringToCharacters "0123456789ABCDEF")) (
     key: "#${stylixColors.${key}}"
   );
-  desktopSettings = clientSettings (
+  desktopSettings =
     cfg.desktop.settings
     // lib.optionalAttrs applyStylix {
       theme =
         lib.optionalAttrs (stylixPolarity != "light") { dark.colors = base16; }
         // lib.optionalAttrs (stylixPolarity != "dark") { light.colors = base16; }
         // (cfg.desktop.settings.theme or { });
-    }
-  );
-  cliSettings = clientSettings cfg.cli.settings;
-  connectorSettings = lib.mapAttrs (_: connector: clientSettings connector.settings) cfg.connectors;
+    };
+  cliSettings = cfg.cli.settings;
+  connectorSettings = lib.mapAttrs (_: connector: connector.settings) cfg.connectors;
   connectorSources = lib.mapAttrs (
     name: settings: tomlFormat.generate "viz-${name}.toml" settings
   ) connectorSettings;
@@ -110,7 +103,7 @@ let
 in
 {
   options.programs.viz = {
-    enable = mkEnableOption "viz, an all-in-one personal agent";
+    enable = mkEnableOption "viz, a persistent ACP workspace";
 
     package = mkOption {
       type = types.package;
@@ -124,13 +117,9 @@ in
       default = { };
       example = lib.literalExpression ''
         {
-          orchestrator = {
-            model = { provider = "anthropic"; model = "claude-opus-5-5"; };
-            thinking = "high";
-          };
-          memory.compactor = { provider = "anthropic"; model = "claude-haiku-5-5"; };
           backend = {
-            listen = "100.100.1.2:7420";
+            environment = "workstation";
+            listen = "127.0.0.1:7420";
             token.file = config.sops.secrets."viz/token".path;
             default_harness = "claude";
           };
@@ -148,16 +137,6 @@ in
         values stay out of the Nix store. Configure clients separately with
         {option}`programs.viz.cli.settings`, {option}`programs.viz.desktop.settings`,
         or {option}`programs.viz.connectors.<name>.settings`.
-      '';
-    };
-
-    socket = mkOption {
-      type = types.nullOr types.str;
-      default = null;
-      description = ''
-        Shared Unix socket path for the backend and clients. When unset, clients
-        inherit the socket declared in {option}`programs.viz.settings.backend.socket`,
-        if any. A client can override it in its own settings.
       '';
     };
 
@@ -191,9 +170,8 @@ in
         type = types.bool;
         default = true;
         description = ''
-          Run `viz-backend.service` as a systemd user service with `StateDirectory=viz`
-          and `RuntimeDirectory=viz`. Changes to the generated backend settings
-          trigger a restart.
+          Run `viz-backend.service` as a systemd user service with `StateDirectory=viz`.
+          Changes to the generated backend settings trigger a restart.
         '';
       };
       package = mkOption {
@@ -236,6 +214,7 @@ in
           discord.settings = {
             bot_token.file = config.sops.secrets."viz/discord".path;
             allowed_users = [ 123456789012345678 ];
+            thread = 42;
           };
         }
       '';
@@ -292,15 +271,19 @@ in
 
     systemd.user.services = {
       viz-backend = mkIf cfg.backend.enable (service {
-        description = "viz backend (pi-durable orchestrator)";
+        description = "viz backend environment";
         inherit (cfg.backend) package;
         restartTriggers = [ settingsSource ];
         extraService = {
-          # $XDG_STATE_HOME/viz (exported as $STATE_DIRECTORY) and $XDG_RUNTIME_DIR/viz.
+          Type = "notify";
+          NotifyAccess = "main";
+          KillMode = "mixed";
+          UMask = "0077";
+          StandardOutput = "journal";
+          StandardError = "journal";
+          # $XDG_STATE_HOME/viz is exported as $STATE_DIRECTORY.
           StateDirectory = "viz";
           StateDirectoryMode = "0700";
-          RuntimeDirectory = "viz";
-          RuntimeDirectoryMode = "0700";
         };
       });
     }

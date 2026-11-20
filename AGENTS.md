@@ -1,6 +1,6 @@
 # AGENTS.md
 
-viz is an all-in-one personal agent and meta-harness. The **orchestrator** is the only conversation that runs viz's native agent (pi-durable root with unbounded history and compaction). Connectors send to it by default. App chats and all delegations use external harnesses over ACP; pi-durable stores their transcripts and schedules work without running their models.
+viz is an ACP workspace. Each environment stores its own projects, threads, and durable runs in SQLite. Configured environments can delegate durable tasks to each other over HTTP(S). External harnesses run every model; viz owns no model loop.
 
 viz is in active development with a single user. Do not preserve backward compatibility for configs, stored state, protocol versions, or clients: change them directly and delete local state when needed.
 
@@ -8,58 +8,54 @@ The code is the documentation: read it before changing anything structural. `TOD
 
 ## Layout
 
-| Path                   | What                                                      | Language                     |
-| ---------------------- | --------------------------------------------------------- | ---------------------------- |
-| `backend/`             | `viz-backend`: pi-durable harness + HTTP/WebSocket server | TypeScript on Bun            |
-| `protocol/schema.json` | Generated JSON Schema of the client protocol              | generated (`bun run schema`) |
-| `crates/viz-config`    | Per-client XDG TOML config, `Secret` type                 | Rust                         |
-| `crates/viz-client`    | Protocol types + JSON-RPC/WebSocket client                | Rust                         |
-| `crates/viz`           | `viz` CLI (`config`, `status`, `send`)                    | Rust                         |
-| `crates/viz-discord`   | Discord connector                                         | Rust (serenity)              |
-| `crates/viz-imessage`  | iMessage connector (scaffold, BlueBubbles)                | Rust                         |
-| `crates/viz-desktop`   | Desktop app                                               | Rust (Rune)                  |
-| `ios/`                 | iOS app, built on Linux with xtool                        | Swift/SwiftUI                |
-| `nix/home-module.nix`  | Home Manager module (`homeModules.default`)               | Nix                          |
-| `flake.nix`            | Packages, checks, dev shell, treefmt                      | Nix                          |
+| Path                   | What                                                      |
+| ---------------------- | --------------------------------------------------------- |
+| `crates/viz-backend`   | Tokio/Axum backend, Toasty SQLite workspace, ACP and MCP  |
+| `crates/viz-client`    | Shared Serde protocol types and JSON-RPC WebSocket client |
+| `protocol/schema.json` | JSON Schema generated from the Rust wire types            |
+| `crates/viz-config`    | XDG config and `Secret`                                   |
+| `crates/viz`           | Clap CLI (`config`, `status`, `send`)                     |
+| `crates/viz-discord`   | Discord connector (serenity)                              |
+| `crates/viz-imessage`  | iMessage connector scaffold (BlueBubbles)                 |
+| `crates/viz-desktop`   | Rune desktop app                                          |
+| `ios/`                 | Swift/SwiftUI app, built on Linux with xtool              |
+| `nix/home-module.nix`  | Home Manager module (`homeModules.default`)               |
+| `flake.nix`            | Packages, checks, dev shell, treefmt                      |
 
-Everything is Rust except the backend (TypeScript, because pi-durable is a TS library) and the iOS app (Swift). New connectors are new crates `crates/viz-<name>` reading `connectors/<name>.toml`.
+New connectors are crates named `viz-<name>` and read `connectors/<name>.toml`.
 
 ## Environment
 
-Use the dev shell (`direnv allow`, or `nix develop`); run tools by plain name. It provides the nightly Rust toolchain, Bun + bun2nix, Swift 6.4 + xtool (from nixpkgs PR #548520, the `nixpkgs-xtool` input), Rune's native libraries, and `treefmt`. Entering the shell runs `bun install --frozen-lockfile` in `backend/`.
+Use the dev shell (`direnv allow` or `nix develop`). It provides nightly Rust, Swift 6.4 + xtool (from `nixpkgs-xtool`), Rune's native libraries, and `treefmt`.
 
-- Bun only: `bun add`, `bun check` (typecheck), `bun fmt`. Never npm/npx/tsc/prettier. Adding a dependency regenerates `backend/bun.nix` via the `postinstall` script (needs `bun2nix` on `PATH`, i.e. the dev shell); commit both `bun.lock` and `bun.nix`.
-- Pin `@earendil-works/*` packages exactly and together (pi-durable is experimental; `main` has breaking changes vs npm).
 - `rustfmt.toml` uses unstable options: format with `treefmt` (nightly rustfmt), not stable `cargo fmt`.
 - Rune is unpublished and pinned by git rev; when bumping, update `workspace.dependencies.rune` **and** every `[patch.crates-io]` rev in `Cargo.toml` together (see `docs/findings/rune.md`).
-- iOS (details: `docs/findings/ios-on-linux.md`): one-time `xtool setup` (Apple ID or App Store Connect key, then the Xcode .xip; `swift sdk list` must show `darwin`); the shell warns while the SDK is missing. `cd ios && xtool dev` builds, signs and installs on a USB-paired device but doesn't launch it (tap the icon or `xtool launch`; the installed bundle id may be prefixed, e.g. `XTL-….io.vidhan.viz`). No simulator or SwiftUI previews on Linux: test on the device; logs via `idevicesyslog`/`idevicedebug run`. Free accounts re-sign every 7 days; push and TestFlight need a paid account and, for release, a macOS runner. Only `swiftc -typecheck` of non-SwiftUI files works in CI. iOS enforces ATS: reach the backend over HTTPS (`tailscale serve`).
+- iOS (details: `docs/findings/ios-on-linux.md`): one-time `xtool setup` (Apple ID or App Store Connect key, then the Xcode .xip); `swift sdk list` must show `darwin`. `cd ios && xtool dev` builds, signs and installs on a USB-paired device; tap the icon or use `xtool launch`. No simulator or SwiftUI previews on Linux; only non-SwiftUI files can be checked with `swiftc -typecheck`. iOS enforces ATS; reach the backend over HTTPS.
 
 ## Local config
 
-Use gitignored `viz.local.toml`, `viz.local/`, and `.viz/` for local development. The backend reads `viz.local.toml` via `.envrc`'s `VIZ_CONFIG`: set `[backend].socket` and `[backend].state_dir` under `.viz/`, `[providers.<id>].api_key`, `[orchestrator].model`, and `[memory].compactor`. Put the same `[backend].socket` in `viz.local/cli.toml` and `viz.local/desktop.toml`; `.envrc` exports their `VIZ_CLI_CONFIG` and `VIZ_DESKTOP_CONFIG` when the files exist. Start with `bun backend/src/main.ts`, `cargo run -p viz -- send "..."`, and `cargo run -p viz-desktop`. Never commit local config or print its secrets.
+Use gitignored `viz.local.toml`, `viz.local/`, and `.viz/` for local development. `.envrc` exports `VIZ_CONFIG`, `VIZ_CLI_CONFIG`, and `VIZ_DESKTOP_CONFIG` when their files exist. In the backend config, set `[backend].state_dir = ".viz/state"`; change `[backend].listen` and the clients' `[backend].url` together if the defaults (`127.0.0.1:7420` and `http://127.0.0.1:7420`) are in use. Start with `cargo run -p viz-backend`, `cargo run -p viz-desktop`, and `cargo run -p viz -- send --thread 42 "..."`. Never commit local config or print its secrets.
 
 For app chats and delegation, configure a real ACP executable under `[harnesses.<name>]` (for example `command = "omp"`, `args = ["acp"]`). With several configured runners, set `[backend].default_harness`; with only one, it is implicit. Configure the runner's credentials separately; only explicitly configured `[harnesses.<name>].env` credentials are passed from viz. Exercise ACP changes with a real runner and a fresh temporary state directory, without replacing an active backend or touching its SQLite files.
 
 ## Verification
 
-**No tests.** Don't write, keep, or run tests of any kind (unit, integration, `bun test`, `cargo test`, `#[cfg(test)]`, test fixtures, faux-model harnesses). A test is a second, worse copy of the logic; read the invariants from the code and get it right there. If a change needs explaining, write it into the code's comments.
+**No tests.** Don't write or run unit or integration tests, `cargo test`, fixtures, or faux-model harnesses. Read the invariants from the code; explain non-obvious decisions in comments.
 
-Before declaring a change done, run only the static gate (CI runs the same via `nix flake check`):
+Run the static gate (CI runs it via `nix flake check`):
 
 ```sh
 treefmt --fail-on-change
-(cd backend && bun check)
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-After changing `backend/src/protocol.ts`: `cd backend && bun run schema`, then update `crates/viz-client/src/protocol.rs` and `ios/Sources/Viz/Backend.swift` to match.
+After changing shared wire types, run `cargo run -p viz-backend -- schema --output protocol/schema.json` and update `ios/Sources/Viz/Backend.swift` to match.
 
 ## Conventions
 
 - Cargo: declare all direct dependencies under `[workspace.dependencies]` in the root `Cargo.toml`. Members inherit them with `dep.workspace = true` or `{ workspace = true, features = [...] }` for crate-specific features.
 - Config: the backend layers `config.toml` and `config.d/*.toml` (later wins, tables merge); clients load separate TOML files under the same config directory. Secrets are `"inline" | { file = "..." } | { env = "..." }`. Reference: the `*.example.toml` files.
-- State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); sockets in `$XDG_RUNTIME_DIR/viz`. Only `viz-backend` writes `viz.sqlite` (pi-durable is single-writer).
-- Rename pi-durable extensions, tools, and tasks directly. When storage shapes change, delete the local state directory (`.viz/state`) rather than migrating it.
+- State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); only the owning backend writes its environment's workspace database. Storage changes do not use migration shims.
 - Commit often, as soon as a coherent change passes verification. Each commit must stand on its own: keep an API or config change with its callers and generated artifacts; split independent work. Use lowercase Conventional Commit subjects. Do not include unrelated work or secrets.
 
 ## Where things go

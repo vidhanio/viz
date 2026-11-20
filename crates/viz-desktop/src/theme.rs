@@ -70,7 +70,6 @@ pub const S48: f32 = 48.0;
 pub const HAIRLINE: f32 = 1.0;
 pub const ICON_SMALL: f32 = 12.0;
 pub const ICON: f32 = 16.0;
-pub const ICON_LARGE: f32 = 20.0;
 pub const DOT: f32 = 6.0;
 
 /// Chips, key caps and other marks inside a control.
@@ -97,8 +96,6 @@ pub const TREE_ROW_TALL: f32 = S40;
 pub const TREE_STEP: f32 = ICON + S8;
 /// The fixed slot every sidebar row ends in (status, unread, actions).
 pub const TRAILING: f32 = Size::Default.height();
-/// The orchestrator's two-line row.
-pub const ORCHESTRATOR_ROW: f32 = S40 + S4;
 /// The gap inside a Projects-mode project's box, around its rows.
 pub const PROJECT_BOX_INSET: f32 = S2;
 
@@ -173,7 +170,7 @@ pub struct Theme {
     pub overlay: Kit,
     /// Cards on the main pane (composer, expanded tool output, code).
     pub surface: Color,
-    /// A group's fill on the sidebar (a project and its chats): one step
+    /// A group's fill on the sidebar (a project and its threads): one step
     /// above `surface`, as overlays sit, so it reads without an outline.
     pub group: Color,
     /// One-pixel rules and outlines.
@@ -190,7 +187,7 @@ pub struct Theme {
     pub faint: Color,
     /// The one accent.
     pub accent: Color,
-    /// The open conversation's row.
+    /// The open thread's row.
     pub selected: Color,
     /// Errors.
     pub danger: Color,
@@ -734,15 +731,4 @@ pub fn now_ms() -> i64 {
         .ok()
         .and_then(|now| i64::try_from(now.as_millis()).ok())
         .unwrap_or_default()
-}
-
-/// How long ago `then` (Unix milliseconds) was: `now`, `4m`, `3h`, `2d`.
-pub fn ago(then: i64) -> Option<String> {
-    let minutes = now_ms().saturating_sub(then).max(0) / 60_000;
-    (then > 0).then(|| match minutes {
-        0 => "now".to_owned(),
-        1..60 => format!("{minutes}m ago"),
-        60..1_440 => format!("{}h ago", minutes / 60),
-        _ => format!("{}d ago", minutes / 1_440),
-    })
 }

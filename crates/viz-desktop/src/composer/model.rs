@@ -121,8 +121,8 @@ impl<'a> Levels<'a> {
             Self::Model(option) => &option.value,
         };
         let chosen = match target {
-            Options::Draft(chat) => chat.options.get(self.id()),
-            Options::Conversation(_) => None,
+            Options::Draft(thread) => thread.options.get(self.id()),
+            Options::Thread(_) => None,
         };
         [chosen, Some(own)]
             .into_iter()
@@ -197,15 +197,9 @@ impl<'a> Picker<'a> {
     }
 }
 
-/// The trigger, and the menu while it's open, with the trigger's width.
-pub(super) fn picker(
-    s: &Desktop,
-    picker: &Picker<'_>,
-    t: &Theme,
-    layer: &mut Vec<El>,
-) -> (El, f32) {
+/// The trigger and the menu while it is open.
+pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) -> El {
     let label = picker.label();
-    let width = settings::trigger_width(&label, ui::MODEL_TRIGGER_MAX, t);
     let open = settings::is_open(s, KEY);
     let current = picker.model_value().map(row_key);
     let trigger = ui::select_trigger(KEY, "Model", Some(&label), open, ui::MODEL_TRIGGER_MAX, t)
@@ -228,7 +222,7 @@ pub(super) fn picker(
     if open {
         menu(s, picker, t, layer);
     }
-    (trigger, width)
+    trigger
 }
 
 /// Opens the picker in a preview scene, with `query` typed.
@@ -627,8 +621,8 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
     s.model_menu.chosen = None;
     let chosen = OptionValue::Select(value.to_owned());
     let draft = match owner {
-        Owner::Conversation(_) => {
-            let changed = s.conversation.as_ref().is_some_and(|state| {
+        Owner::Thread(_) => {
+            let changed = s.state.as_ref().is_some_and(|state| {
                 state
                     .options
                     .iter()
@@ -641,23 +635,23 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
         }
         Owner::Draft(draft) => draft,
     };
-    let Some(chat) = s.new_chat.as_mut().filter(|chat| chat.id == draft) else {
+    let Some(thread) = s.new_thread.as_mut().filter(|thread| thread.id == draft) else {
         return;
     };
-    chat.options.insert(id.to_owned(), chosen);
-    let Some(harness) = chat.active_harness(&s.harnesses) else {
+    thread.options.insert(id.to_owned(), chosen);
+    let Some(harness) = thread.active_harness(&s.harnesses) else {
         return;
     };
     // The draft's level under the new model: kept where it offers it, else
     // the model's default. Until the runner reports an unseen model's
     // levels, its default applies.
-    let (stale, fetch) = match Picker::new(Options::Draft(chat), &harness.options) {
+    let (stale, fetch) = match Picker::new(Options::Draft(thread), &harness.options) {
         Some(Picker {
             levels: Some(levels),
             ..
         }) => {
             let kept = matches!(
-                chat.options.get(levels.id()),
+                thread.options.get(levels.id()),
                 Some(OptionValue::Select(level)) if levels.has(level)
             );
             ((!kept).then(|| vec![levels.id().to_owned()]), None)
@@ -668,7 +662,7 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
         _ => (None, None),
     };
     for level in stale.into_iter().flatten() {
-        chat.options.remove(&level);
+        thread.options.remove(&level);
     }
     if let Some(harness) = fetch {
         s.send(
@@ -715,7 +709,7 @@ fn thinking_ids(harness: &Harness) -> Vec<String> {
                 .iter()
                 .filter_map(|choice| choice.thinking.as_ref().map(|levels| levels.id.clone()))
                 .collect(),
-            Role::Mode | Role::Other => Vec::new(),
+            Role::Hidden | Role::Other => Vec::new(),
         })
         .collect()
 }

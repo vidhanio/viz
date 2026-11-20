@@ -2,46 +2,23 @@
 
 Roadmap and open work. Check items off in the same change that lands them.
 
-## Done (scaffold, 2026-11-17)
-
-- [x] Flake: dev shell (nightly Rust, Bun + bun2nix, Swift 6.4 + xtool from `nixpkgs-xtool`, Rune libs, treefmt), packages, checks, `homeModules.default`
-- [x] Layered XDG TOML config in Rust (`viz-config`) and TS (`backend/src/config.ts`), secrets as inline/file/env
-- [x] Split backend and client config files; Home Manager generates them separately and shares custom socket paths
-- [x] Backend: pi-durable harness on SQLite (Bun `node:sqlite`), orchestrator root conversation, JSON-RPC/WebSocket server on Unix socket + token-authenticated TCP, connector reply routing
-- [x] `viz-client` (Rust), `viz` CLI (`config`, `status`, `send`)
-- [x] `viz-discord` connector (DMs + mentions from allowed users → orchestrator → reply in place)
-- [x] Home Manager module: `settings`, `mutableSettings` (upstream impure merger), `environmentFile`, services for backend and connectors
-- [x] iOS app skeleton (xtool project, WebSocket client, sidebar + chat)
-- [x] AGENTS.md, findings
-
 ## Backend
 
-- [ ] **Durable connector outbox.** Replies to connectors are routed in memory and dropped if the connector is offline or the backend restarts mid-run. Persist pending replies (pi-durable document keyed by connector), deliver on reconnect, let connectors ack; dedupe by submission id.
-- [x] **uniichat memory** for the orchestrator (`backend/src/memory/`): transcript-derived messages, summary tree in `memory.sqlite`, 128 KB view before each turn, `zoom`/`date`, Anthropic cache mark on the view
-- [ ] Memory follow-ups: prompt-cache marks on compaction calls (uniichat marks their view block too); images in messages and `zoom` (uniichat stores them by hash); `zoom` on a subagent's conversation (uniichat's `zoom("Name")`); import past Claude/ChatGPT chats as a separate tree side; tell the user when turns wait on a failing compactor instead of only logging; pi-durable's own compaction is still enabled as a safety net for very long single turns
-- [x] **Orchestrator tools** (t3code's thread toolkit, uniichat's `spawn`/`tell`): `list_conversations`, `read_conversation`, `search_conversations`, `spawn_chat` (background, reports back as a `[chat N]` input), `message_conversation` (queues), `cancel_conversation`.
-- [ ] Orchestrator tools follow-ups: steer into a running ACP turn, scheduled tasks (pi-durable timers).
-- [x] **Detached ACP delegation**: the orchestrator delegates only through `spawn_chat`; chat results arrive as inputs.
-- [x] **Scoped MCP for ACP agents**: loopback HTTP or stdio bridge, per-session token, no access to unrelated conversations.
-- [x] **Persistent ACP app chats**: keep the runner process and session across turns, restore the same session via `session/resume` or `session/load` after restart, and fail explicitly if restoration is unsupported. The orchestrator is the only native model loop.
-- [x] **Long-lived ACP subagents**: finished subagents accept follow-ups; ACP agents spawn/list/read/message/cancel their own subagents over MCP. Parent transcript tool records link to the affected child when its runner forwards the result.
-- [x] **Delegation targets**: `list_spawn_options` discovers harnesses, searchable models and model-specific thinking levels. `spawn_chat` and `spawn_subagent` apply optional model/thinking overrides before the first prompt.
-- [x] **ACP permissions**: viz allows every request (first `allow_once`, else `allow_always`).
-- [ ] Broader MCP toolkit (see Orchestrator tools above), with deferred discovery via `tool_search`.
-- [x] Conversation metadata (`viz.meta`: project, parent, archived, pinned, unread, timestamps) for the sidebar; rename.
-- [x] **Conversation deletion**: tombstone a chat subtree, stop its turns, and remove its search hits. Protect the orchestrator from thread management.
-- [x] **ADE workspace** (t3code parity, 2026-11-18): projects, per-chat model/effort/mode from the runner's ACP config options (config = default), slash commands, `@` file search, stop, queue view and removal, attachments, full-text search, history paging.
-- [ ] ADE follow-ups (from the t3code gap analysis): terminal panes (server PTYs; Bun lacks openpty), in-thread find, edit-from-here / fork a chat at a message, plan-mode approve → implement, usage and limits panel, settings UI and rebindable keys, harness probe (capabilities and models per runner before a chat exists), scratch directories for project-less chats.
-- [ ] Credentials: persist pi-ai `CredentialStore` in the state dir; OAuth login (Claude Pro/Max, ChatGPT, Copilot) driven from a UI.
-- [ ] Auth: per-client tokens, pairing codes (QR for iOS), scopes; `tailscale serve` helper (t3code's `--tailscale-serve`).
-- [ ] Expose viz as an ACP agent itself, so editors (Zed) can talk to the orchestrator.
-- [ ] Reload config without restart (currently restart via systemd `X-Restart-Triggers`).
-- [ ] Decide whether to track pi-durable `main` (breaking changes queued) or stay on npm releases.
+- [x] Rust/Tokio backend, Toasty SQLite workspace, and Serde TOML config with lexical drop-ins.
+- [x] Configured environments over ordinary HTTP(S), independent stores, and a URL-only client connection.
+- [x] Reusable ACP threads, per-input runs, and durable delegated tasks. Deliver the task result to its parent once, without making later runs part of that task.
+- [x] Project metadata keyed by absolute directory, searchable transcripts, paged entries, queue editing, and attachments.
+- [x] Discover ACP model and thinking options. Import existing ACP sessions when the harness supports listing and loading.
+- [x] Session-scoped MCP tools for delegation, threads, projects, and environment discovery.
+- [ ] Durable connector outbox: persist replies when a connector disconnects, and deduplicate on reconnect.
+- [ ] Scheduled tasks, editing or forking a thread at a past message, and in-thread find.
+- [ ] Real ACP steering if the protocol gains an in-turn submission method.
+- [ ] Pairing and per-client tokens.
 
 ## Protocol
 
-- [ ] Generate Rust (`typify`) and Swift (`quicktype` or hand-rolled from schema) types from `protocol/schema.json` instead of mirroring by hand.
-- [ ] Methods: compact, fork. (Done: abort, configure, archive, delete, paging via `conversation.entries`.)
+- [x] Backend and Rust clients share Serde types and generate JSON Schema from them.
+- [ ] Generate Swift payload types from the schema.
 
 ## Connectors
 
@@ -52,35 +29,31 @@ Roadmap and open work. Check items off in the same change that lands them.
 
 ## Desktop (Rune)
 
-- [x] Skeleton: sidebar + transcript + input, live view via delta ops
-- [x] Redesign on rune-kit + OpenCode theme (light/dark): split shell with collapsible sidebar (Orchestrator, Chats, Subagents, busy spinners, connection footer), thread header (model, thinking, usage), Markdown timeline with grouped collapsible tool rows, subagent rows that open the child, turn dividers, streaming answer, auto-growing composer, toasts
-- [x] ADE redesign (2026-11-18): flat theme and `ui/` components; sidebar tree (orchestrator, pinned, projects → chats → subagents, status, unread, filter, archive, rename/move); header without the model; composer with model/effort/mode selects, `/` commands, `@` files, attachments, stop, queue rows; plan checklist; ACP tool rows with diffs; Ctrl/Cmd+K palette with full-text search; desktop notifications and window-title status.
-- [x] Delete a chat from its row menu or the command palette, with confirmation.
-- [x] Configurable dark and light base16 schemes, with Home Manager Stylix integration
-- [x] Monochrome harness marks (Claude, Codex, omp, pi; a terminal otherwise) on sidebar chats, the palette, the header and the new-chat harness picker, matched by harness name
-- [x] Full model, provider and effort names, with model-specific effort buttons in one row and animated model filtering; borderless menus; grouped timeline activity and a persistent subagent panel with harness, model and effort.
-- [x] Use ACP titles and context-window reports when the runner sends them; stream reasoning and running commands before their results.
+- [x] Environment picker, project sidebar, paged transcript, and import flow.
+- [x] Configurable dark and light base16 schemes and Home Manager Stylix integration.
+- [x] Harness icons and full model and thinking labels; inline thinking buttons and animated model search.
+- [x] Grouped timeline activity and persistent task panel; stream reasoning and running commands.
+- [x] Use ACP titles and context-window reports when the runner sends them.
 - [ ] Settings UI for desktop preferences in `desktop.toml`
 - [ ] Tray, global shortcut to summon
 
 ## iOS
 
-- [x] Delete chats via a destructive swipe with confirmation; no pin, archive, or delete on the orchestrator.
+- [x] Project-grouped threads, search, live activity, and importing ACP sessions.
 - [ ] `xtool setup` (Apple ID or App Store Connect key, Xcode 27.1 .xip) → `swift sdk list` shows `darwin`; keep `programs.xtool.sdk.enable` off (its link targets `~/.swiftpm`, xtool reads `$XDG_CONFIG_HOME/swiftpm`)
 - [ ] First USB device build: Developer Mode, trust the profile, record the installed bundle id prefix; document in AGENTS.md
-- [ ] `tailscale serve` HTTPS in front of `[backend].listen` (ATS); or an `Info.plist` ATS exception via `xtool.yml: infoPath`
+- [ ] Connect a real device over HTTPS and move the bearer token into the Keychain.
 - [ ] App icon (`xtool.yml: iconPath`, 1024×1024 PNG)
 - [ ] Release path: paid account + GitHub macOS runner or Xcode Cloud (Linux-only upload conflicts with the Xcode license)
 - [ ] Evaluate isim (kolabs-dev/isim) for simulator runs / rendering `#Preview` on Linux
-- [ ] Watch conversations: Chord delta apply in Swift, transcript rendering, sidebar from `conversations.list`
-- [ ] Pairing (QR from desktop/CLI), token in Keychain instead of `@AppStorage`
 - [ ] Push notifications (needs a relay; out of scope until remote auth exists)
 - [ ] Replace the hand-rolled JSON-RPC correlation in `Backend.swift` with `ChimeHQ/JSONRPC` (needs a small custom `DataChannel` to send the `Authorization` header); blocked on a device build to verify
 
 ## Nix / ops
 
-- [ ] Deploy the Home Manager module on a real host (services start, socket reachable, connector connects)
+- [x] Foreground systemd service with readiness notification, optional TCP activation, and graceful shutdown.
+- [ ] Deploy the Home Manager module on a host and exercise connector delivery.
 - [ ] CI: GitHub Actions running `nix flake check`
-- [ ] Drop `nixpkgs-xtool` once NixOS/nixpkgs#548520 merges; drop the bun2nix fork once nix-community/bun2nix#110 merges
+- [ ] Drop `nixpkgs-xtool` once NixOS/nixpkgs#548520 merges.
 - [ ] `cargo deny` config and check
 - [ ] Wire into vidhanix (`programs.viz`, sops secrets, `persist.directories = [ ".local/state/viz" ]`)

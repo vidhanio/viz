@@ -1,10 +1,10 @@
 use rune::El;
 use rune_kit::MenuItem;
 
-use super::settings::{GAP, is_open, marked_picker, picker, picker_width};
+use super::settings::{is_open, marked_picker, picker};
 use crate::{
-    app::{Desktop, NewChat},
-    theme::{ICON, S4, S8, Size, Theme},
+    app::{Desktop, NewThread},
+    theme::{S8, Size, Theme},
     ui,
 };
 
@@ -14,32 +14,29 @@ const HARNESS: &str = "harness";
 /// harness picker when there is a choice, or why there are no settings yet.
 pub(super) fn toolbar(
     s: &Desktop,
-    chat: &NewChat,
+    thread: &NewThread,
     bar: El,
     t: &Theme,
     layer: &mut Vec<El>,
-) -> (El, f32) {
-    if chat.sending {
-        return (
-            bar.gap(S8)
-                .child(ui::lead(ui::spinner(t), Size::Default.height()))
-                .child(ui::section("Opening session…", t)),
-            0.0,
-        );
+) -> El {
+    if thread.sending {
+        return bar
+            .gap(S8)
+            .child(ui::lead(ui::spinner(t), Size::Default.height()))
+            .child(ui::section("Opening session…", t));
     }
     if s.harnesses.is_empty() {
-        return (bar.child(ui::section("No harness configured", t)), 0.0);
+        return bar.child(ui::section("No harness configured", t));
     }
     if s.harnesses.len() > 1 {
-        let (harness, size) = harness(s, chat, t, layer);
-        return (bar.child(harness), size + GAP);
+        return bar.child(harness(s, thread, t, layer));
     }
-    (bar, 0.0)
+    bar
 }
 
-fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, f32) {
+fn harness(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> El {
     let label = "Choose harness";
-    let name = chat
+    let name = thread
         .active_harness(&s.harnesses)
         .map(|runner| runner.name.as_str());
     // The chosen runner's mark leads the value inside its trigger, as in its
@@ -53,7 +50,7 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
             menu,
             s.harnesses.iter().map(|harness| {
                 let name = harness.name.clone();
-                let selected = chat
+                let selected = thread
                     .harness
                     .as_deref()
                     .map_or(harness.default, |picked| picked == name);
@@ -66,15 +63,13 @@ fn harness(s: &Desktop, chat: &NewChat, t: &Theme, layer: &mut Vec<El>) -> (El, 
                 item.on_select_tx(move |s: &mut Desktop, tx| {
                     s.open_picker = None;
                     tx.focus("draft", false);
-                    if !selected && let Some(chat) = &mut s.new_chat {
-                        chat.harness = Some(name.clone());
-                        chat.options.clear();
+                    if !selected && let Some(thread) = &mut s.new_thread {
+                        thread.harness = Some(name.clone());
+                        thread.options.clear();
                     }
                 })
             }),
         );
     }
-    let width =
-        picker_width(name.unwrap_or(label), t) + if name.is_some() { ICON + S4 } else { 0.0 };
-    (menu.build(&t.overlay, layer).min_w(0.0).shrink(), width)
+    menu.build(&t.overlay, layer).min_w(0.0).shrink()
 }

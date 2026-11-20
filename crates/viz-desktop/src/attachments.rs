@@ -9,7 +9,7 @@ use std::{
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rune::{ClipboardContent, ClipboardImage, El, Tx, icon, row, text};
 use rune_kit::IconButtonVariant;
-use viz_client::protocol::{Attachment, ConversationId};
+use viz_client::protocol::{Attachment, ThreadId};
 
 use crate::{
     app::Desktop,
@@ -36,7 +36,7 @@ pub enum Source {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Target {
     Draft(u64),
-    Conversation(ConversationId),
+    Thread(ThreadId),
 }
 
 #[derive(Debug, Default)]
@@ -146,7 +146,7 @@ pub fn paste(s: &mut Desktop, clip: &ClipboardContent, tx: &mut Tx) -> bool {
 
 pub fn button(s: &Desktop, t: &Theme) -> El {
     let title = if s
-        .conversation
+        .state
         .as_ref()
         .is_some_and(|state| state.attachments.images)
     {

@@ -1,5 +1,5 @@
 //! `desktop.toml`: the backend connection and the theme. The file is optional;
-//! without it the desktop talks to the local socket in the default schemes.
+//! without it the desktop uses the default HTTP origin in the default schemes.
 
 use serde::Deserialize;
 
