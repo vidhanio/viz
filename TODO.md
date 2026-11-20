@@ -57,7 +57,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] Delete a chat from its row menu or the command palette, with confirmation.
 - [x] Configurable dark and light base16 schemes, with Home Manager Stylix integration
 - [x] Monochrome harness marks (Claude, Codex, omp, pi; a terminal otherwise) on sidebar chats, the palette, the header and the new-chat harness picker, matched by harness name
-- [x] Model-specific effort slider and animated model filtering; borderless menus; grouped timeline activity and a persistent subagent panel with harness, model and effort.
+- [x] Model-specific effort buttons in one row and animated model filtering; borderless menus; grouped timeline activity and a persistent subagent panel with harness, model and effort.
 - [x] Use ACP titles and context-window reports when the runner sends them; stream reasoning and running commands before their results.
 - [ ] Settings UI for desktop preferences in `desktop.toml`
 - [ ] Tray, global shortcut to summon

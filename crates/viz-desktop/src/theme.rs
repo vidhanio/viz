@@ -114,9 +114,8 @@ pub const DIALOG_WIDTH: f32 = 400.0;
 /// Floating cards anchored to a control: the Agents card.
 pub const CARD_WIDTH: f32 = 320.0;
 pub const PALETTE_WIDTH: f32 = 560.0;
-/// The model picker: wide enough for a provider's long model names beside
-/// the thinking levels.
-pub const MODEL_MENU_WIDTH: f32 = 320.0;
+/// Minimum model picker width; long thinking tier rows can make it wider.
+pub const MODEL_MENU_WIDTH: f32 = 360.0;
 /// The model list's height before it scrolls: eight rows and a heading.
 pub const MODEL_LIST_HEIGHT: f32 = S32 * 9.0;
 /// Empty states sit this far down the transcript.
