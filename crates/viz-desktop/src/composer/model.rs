@@ -1,11 +1,14 @@
 //! The model picker: one menu for the runner's model and its thinking level.
 //! Everything shows as slugs, as the runner's ids: its trigger names both
 //! (`claude-opus-5-5 · high`); the menu filters the models by a search field,
-//! groups them by provider, and ends in the selected model's thinking levels.
-//! Type to filter, arrows to move, Enter to choose.
+//! groups them by provider, and ends in a slider over the selected model's
+//! thinking levels. Type to filter, arrows to move, Enter to choose.
 
-use rune::{El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, icon, row, text};
-use rune_kit::{Placement, TextInput, popover, scrim};
+use rune::{
+    Align, Drag, Effect, El, Key, KeyEvent, MotionIntent, Phase, ScrollSpec, Side, Spring,
+    SpringPair, TextEdit, Transition, Tx, col, el, icon, row, text,
+};
+use rune_kit::{TextInput, scrim};
 use viz_client::protocol::{
     ConfigOption, DependentOption, Harness, OptionChoice, OptionKind, OptionValue,
 };
@@ -15,7 +18,7 @@ use crate::{
     app::Desktop,
     backend::Command,
     theme::{
-        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, S4, S6, S8, S24, Size, Theme,
+        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, S2, S4, S6, S8, S24, Size, Theme,
     },
     ui,
 };
@@ -25,13 +28,20 @@ const KEY: &str = "model";
 const FIELD: &str = "model-query";
 const LIST: &str = "model-list";
 
-/// The open menu's search and keyboard highlight.
+/// The open menu's search, keyboard highlight and thinking slider.
 #[derive(Debug, Default)]
 pub struct ModelMenu {
     query: TextEdit,
     /// The highlighted model's value; the current model, else the first
     /// match, when unset.
     active: Option<String>,
+    /// The thinking level under the pointer while a press or drag holds the
+    /// slider, by index; it applies on release.
+    drag: Option<usize>,
+    /// The thinking level last chosen here (option id, value), shown until
+    /// the menu closes or the model changes: a session's runner reports a
+    /// level back only once it has applied it.
+    chosen: Option<(String, String)>,
 }
 
 /// A session's or draft's model option and the thinking levels of the model
@@ -175,6 +185,9 @@ pub(super) fn picker(
                 close(s);
                 return;
             }
+            // The menu's own changes animate (see `menu`); its opening lands
+            // at once, so the rows are opaque and pressable on the first frame.
+            tx.instant();
             s.open_picker = Some(KEY.to_owned());
             s.model_menu = ModelMenu::default();
             tx.focus_when_shown(FIELD, false);
@@ -251,8 +264,6 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
     if let Some(model) = picker.model {
         let (field, list) = models(s, picker, model, t);
         body = body
-            // Typing lands at once in the field; the list and the menu around it
-            // spring to their new size (`on_change` below animates the commit).
             .child(row().w_full().px(S4).pt(S4).instant_changes().child(field))
             .child(ui::rule(t))
             .child(list);
@@ -261,19 +272,29 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
         if picker.model.is_some() {
             body = body.child(ui::rule(t));
         }
-        body = body.child(thinking(picker, levels, t));
+        body = body.child(thinking(s, picker, levels, t));
     }
     layer.push(scrim("model-scrim", close));
+    // Mounted above the trigger as `rune_kit::popover::anchored` mounts a
+    // surface, but without its `instant_changes`, which lands every change
+    // inside it: a search edit's commit animates (`animate_edit_layout` on the
+    // field), so the surface and the list's viewport spring to their new
+    // height on one spring, bottom pinned to the trigger, while dropped rows
+    // fade where they stood. Its opening lands at once instead (the trigger).
+    let fade = Transition {
+        insertion: Effect::IDENTITY,
+        removal: Effect::opacity(0.0),
+        springs: SpringPair::new(rune::tok::motion::INSTANT, Spring::new(0.25, 0.0)),
+        ..Transition::identity()
+    };
     let body = k
         .shadow_layers(&k.elevation.floating)
-        .fold(body, El::box_shadow);
-    layer.push(popover::anchored(
-        k,
-        body,
-        &format!("{KEY}-trigger"),
-        Placement::TopStart,
-        S6,
-    ));
+        .fold(body, El::box_shadow)
+        .anchored_fit(format!("{KEY}-trigger"), Side::Top, Align::Start, S6)
+        .transition(fade)
+        .motion_intent(MotionIntent::CUT)
+        .token_motion(k.motion.overlay);
+    layer.push(body);
 }
 
 /// The search field and the matching models, grouped by provider.
@@ -346,12 +367,12 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
         .height(Size::Default.height())
         .active_descendant(active.as_deref().map(row_key))
         .on_edit(|s: &mut Desktop| &mut s.model_menu.query)
+        // Typing commits instantly by default; the filtered list and the menu
+        // around it should grow and shrink smoothly, dropped rows fading out.
+        .animate_edit_layout()
         .on_change(|s: &mut Desktop, tx| {
             s.model_menu.active = None;
             tx.scroll_to_instant(LIST, 0.0, 0.0);
-            // Typing commits instantly by default; the filtered list should
-            // grow and shrink smoothly, its dropped rows fading out.
-            tx.animated();
         })
         .on_key(move |s, ev, tx| on_key(s, ev, tx, &values, active.as_deref(), owner, &id))
         .build(&t.overlay)
@@ -407,64 +428,179 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
     item
 }
 
-/// The selected model's thinking levels as a row of choices.
-fn thinking(picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> El {
-    let selected = levels.value(picker.target);
+/// The selected model's thinking levels as a discrete slider: a track with a
+/// tick per level the runner reported for that model, each labelled under it.
+/// A press or drag holds the knob on the level under the pointer and applies
+/// it on release, so a drag across levels sends one change. The arrow keys
+/// step, Home and End go to the ends.
+fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> El {
+    let values: Vec<String> = levels
+        .choices()
+        .into_iter()
+        .map(|(value, _)| value.to_owned())
+        .collect();
+    let count = values.len();
+    let last = count - 1;
+    let id = levels.id().to_owned();
     let owner = picker.target.owner();
-    let chips = levels.choices().into_iter().map(|(value, _)| {
-        let on = selected == Some(value);
-        let label = value.to_lowercase();
-        let id = levels.id().to_owned();
-        let choice = OptionValue::Select(value.to_owned());
-        row()
-            .key(format!("level-{value}"))
-            .role("radio")
-            .label(&label)
-            .checked(on)
-            .h(Size::Small.height())
-            .px(S8)
-            .center()
-            .radius(Size::Small.radius())
-            .fill(if on {
-                t.selected
-            } else {
-                rune::Color::TRANSPARENT
-            })
-            .hover(if on { t.selected } else { t.hover })
-            .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            // The menu stays open: a model and its level are often picked together.
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                if !on {
-                    settings::apply(s, tx, owner, id.clone(), choice.clone());
-                }
-            })
-            .child(
-                text(label)
-                    .font(if on { t.ui_medium } else { t.ui })
-                    .color(if on { t.text } else { t.muted })
-                    .a11y_hidden(),
-            )
-    });
+    let position = |value: &str| values.iter().position(|choice| choice == value);
+    let current = s
+        .model_menu
+        .chosen
+        .as_ref()
+        .filter(|(option, _)| *option == id)
+        .and_then(|(_, value)| position(value))
+        .or_else(|| levels.value(picker.target).and_then(position));
+    let at = s.model_menu.drag.or(current);
     let name = levels.name().to_lowercase();
+    let mut slider = row()
+        .key("levels")
+        .role("slider")
+        .label(&name)
+        .w_full()
+        .radius(Size::Small.radius())
+        .focus_ring(HAIRLINE, S2, t.accent)
+        .range_value(
+            f64::from(float(at.unwrap_or_default())),
+            0.0,
+            f64::from(float(last)),
+        )
+        .range_step(1.0)
+        // The menu stays open: a model and its level are often picked together.
+        .on_drag({
+            let (id, values) = (id.clone(), values.clone());
+            move |s: &mut Desktop, g: &mut Drag, tx: &mut Tx| {
+                let under = tier(g.x, g.w, values.len());
+                match g.phase {
+                    Phase::Down | Phase::Move => s.model_menu.drag = Some(under),
+                    Phase::Up => {
+                        s.model_menu.drag = None;
+                        if !g.cancelled() && current != Some(under) {
+                            set_level(s, tx, owner, &id, &values[under]);
+                        }
+                    }
+                }
+            }
+        })
+        .on_step({
+            let (id, values) = (id.clone(), values.clone());
+            move |s: &mut Desktop, delta: i32, tx: &mut Tx| {
+                let steps = usize::try_from(delta.unsigned_abs()).unwrap_or(usize::MAX);
+                let from = current.unwrap_or_default();
+                let to = if delta < 0 {
+                    from.saturating_sub(steps)
+                } else {
+                    from.saturating_add(steps).min(last)
+                };
+                if current != Some(to) {
+                    set_level(s, tx, owner, &id, &values[to]);
+                }
+            }
+        })
+        .on_step_limit({
+            let (id, values) = (id, values.clone());
+            move |s: &mut Desktop, max: bool, tx: &mut Tx| {
+                let to = if max { last } else { 0 };
+                if current != Some(to) {
+                    set_level(s, tx, owner, &id, &values[to]);
+                }
+            }
+        })
+        .children(
+            values
+                .iter()
+                .enumerate()
+                .map(|(index, value)| tick(value, index, last, at, t)),
+        );
+    if let Some(at) = at {
+        slider = slider.a11y_value(values[at].to_lowercase());
+    }
     col()
         .key("model-thinking")
         .w_full()
         .px(S8)
         .pt(S6)
         .pb(S8)
-        .gap(S4)
+        .gap(S6)
         .child(ui::section(&name, t))
+        .child(slider)
+}
+
+fn tick(value: &str, index: usize, last: usize, at: Option<usize>, t: &Theme) -> El {
+    let on = at == Some(index);
+    let reached = at.is_some_and(|at| index <= at);
+    // Two half tracks put the tick at the centre of its label.
+    let half = |shown: bool, filled: bool| {
+        el().grow(1.0).h(S2).fill(match (shown, filled) {
+            (false, _) => rune::Color::TRANSPARENT,
+            (true, true) => t.muted,
+            (true, false) => t.hairline,
+        })
+    };
+    let mark = if on {
+        el().key("knob")
+            .size(ICON_SMALL, ICON_SMALL)
+            .radius(ICON_SMALL / 2.0)
+            .fill(t.text)
+            .matched("model-thinking-knob")
+    } else {
+        el().key("tick")
+            .size(S4, S4)
+            .radius(S2)
+            .fill(if reached { t.muted } else { t.faint })
+    };
+    col()
+        .key(format!("level-{value}"))
+        .w_frac(1.0 / float(last + 1))
+        .gap(S4)
+        .items_center()
         .child(
             row()
-                .key("levels")
-                .role("radiogroup")
-                .label(name)
                 .w_full()
-                .gap(S4)
-                .flex_wrap()
-                .children(chips),
+                .h(ICON_SMALL)
+                .center_y()
+                .a11y_hidden()
+                .child(half(index > 0, reached))
+                .child(mark)
+                .child(half(index < last, at.is_some_and(|at| index < at))),
         )
+        .child(
+            text(value.to_lowercase())
+                .font(if on { t.small_medium } else { t.small })
+                .color(if on { t.text } else { t.muted })
+                .a11y_hidden(),
+        )
+}
+
+/// The level under `x` on a slider `width` wide: its `count` levels share
+/// the width equally.
+fn tier(x: f32, width: f32, count: usize) -> usize {
+    let cell = width / float(count);
+    std::iter::successors(Some(cell), |edge| Some(edge + cell))
+        .take(count - 1)
+        .take_while(|edge| x >= *edge)
+        .count()
+}
+
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "a model reports a handful of thinking levels"
+)]
+const fn float(count: usize) -> f32 {
+    count as f32
+}
+
+/// Chooses thinking level `value` for option `id`, and shows it while the
+/// menu stays open on this model (see [`ModelMenu::chosen`]).
+fn set_level(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &str) {
+    s.model_menu.chosen = Some((id.to_owned(), value.to_owned()));
+    settings::apply(
+        s,
+        tx,
+        owner,
+        id.to_owned(),
+        OptionValue::Select(value.to_owned()),
+    );
 }
 
 fn on_key(
@@ -511,6 +647,8 @@ fn on_key(
 /// for a model's levels it hasn't reported.
 fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &str) {
     s.model_menu.active = Some(value.to_owned());
+    // The new model's levels are the runner's to report.
+    s.model_menu.chosen = None;
     let chosen = OptionValue::Select(value.to_owned());
     let draft = match owner {
         Owner::Conversation(_) => {
