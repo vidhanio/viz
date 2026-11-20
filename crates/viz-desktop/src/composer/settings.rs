@@ -279,14 +279,6 @@ fn add_choices(
             ))
         });
     }
-    // Described choices get room to show their descriptions whole.
-    if option
-        .choices
-        .iter()
-        .any(|choice| choice.description.is_some())
-    {
-        menu = menu.min_width(ui::DESCRIBED_MENU_WIDTH);
-    }
     let mut group = None;
     for entry in &option.choices {
         if group != entry.group.as_deref() {
@@ -295,16 +287,14 @@ fn add_choices(
                 menu = menu.group_label(group.to_lowercase());
             }
         }
-        let mut item = choice(
+        // Names only: runners' descriptions (Codex's modes) are long prose that
+        // a compact menu would only truncate.
+        menu = menu.item(choice(
             target,
             option,
             &entry.name.to_lowercase(),
             OptionValue::Select(entry.value.clone()),
-        );
-        if let Some(detail) = entry.description.as_deref() {
-            item = item.description(detail.to_lowercase());
-        }
-        menu = menu.item(item);
+        ));
     }
     if option.choices.is_empty() {
         menu = menu.item(MenuItem::new("no choices").disabled(true));

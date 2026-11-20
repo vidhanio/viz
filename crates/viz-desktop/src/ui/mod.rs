@@ -414,9 +414,6 @@ pub const PICKER_TRIGGER_MAX: f32 = 156.0;
 pub const MODEL_TRIGGER_MAX: f32 = 240.0;
 /// A menu's narrowest width.
 pub const MENU_WIDTH: f32 = 196.0;
-/// A menu whose choices carry descriptions: wide enough that a runner's
-/// one-line descriptions (Codex's modes) show whole.
-pub const DESCRIBED_MENU_WIDTH: f32 = 360.0;
 const COMPLETION_HEIGHT: f32 = 240.0;
 pub const COMPLETION_WIDTH: f32 = 360.0;
 
