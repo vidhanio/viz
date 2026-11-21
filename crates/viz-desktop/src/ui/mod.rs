@@ -320,9 +320,8 @@ pub fn select_trigger(
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
 }
 
-/// An inline select's trigger led by `mark` inside it (a harness's icon),
-/// drawn as rune-kit's inline `Select` draws its own: the value, then a
-/// chevron, at most [`PICKER_TRIGGER_MAX`] wide. The caller handles its press.
+/// An inline select led by a harness icon. Size to the display name and
+/// truncate only if the toolbar runs out of room. The caller handles presses.
 pub fn marked_trigger(
     id: &str,
     name: &str,
@@ -341,7 +340,6 @@ pub fn marked_trigger(
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .h(Size::Default.height())
-        .max_w(PICKER_TRIGGER_MAX)
         .pl(S6)
         .pr(S4)
         .gap(S4)

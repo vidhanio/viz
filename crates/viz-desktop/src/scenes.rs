@@ -253,7 +253,7 @@ fn new_agent(s: &mut Desktop) {
         Harness {
             id: "omp".into(),
             name: "Oh My Pi".into(),
-            default: true,
+            default: false,
             options: options(),
         },
         Harness {
@@ -265,8 +265,14 @@ fn new_agent(s: &mut Desktop) {
         Harness {
             id: "agy".into(),
             name: "Google Antigravity".into(),
-            default: false,
-            options: Vec::new(),
+            default: true,
+            options: vec![option(
+                "model",
+                "Model",
+                "model",
+                "gemini-4-neon",
+                &[("gemini-4-neon", "Gemini 4 Neon")],
+            )],
         },
     ];
 }
