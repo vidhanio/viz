@@ -151,10 +151,9 @@ impl Workspace {
                 } else {
                     outcome(result)
                 };
-                if matches!(
-                    settlement.status,
-                    RunStatus::Failed | RunStatus::Cancelled | RunStatus::Interrupted
-                ) {
+                if settlement.status == RunStatus::Interrupted
+                    || slot.as_ref().is_some_and(|session| !session.is_alive())
+                {
                     slot.take();
                 }
                 drop(slot);

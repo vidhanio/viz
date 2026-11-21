@@ -352,6 +352,7 @@ impl Session {
         let mut publish_at: Option<Instant> = None;
         let mut cancelled = false;
         let mut give_up_at: Option<Instant> = None;
+        let mut abandoned = false;
         let mut failure: Option<anyhow::Error> = None;
         let result = loop {
             tokio::select! {
@@ -376,6 +377,7 @@ impl Session {
                     give_up_at = Some(Instant::now() + CANCEL_GRACE);
                 }
                 () = sleep_until(give_up_at.unwrap_or_else(Instant::now)), if give_up_at.is_some() => {
+                    abandoned = true;
                     break Err(anyhow!("the ACP harness did not end the cancelled turn"));
                 }
             }
@@ -399,7 +401,7 @@ impl Session {
             },
             Err,
         );
-        if outcome.is_err() || give_up_at.is_some_and(|deadline| Instant::now() >= deadline) {
+        if outcome.is_err() || abandoned {
             self.broken = true;
         }
         match (published, outcome) {
