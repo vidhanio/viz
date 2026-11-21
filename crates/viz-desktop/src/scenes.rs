@@ -26,6 +26,7 @@ pub const SCENES: &[Scene] = &[
     ("new-agent", new_agent),
     ("context-menu", context_menu),
     ("palette", palette),
+    ("palette-open", palette_open),
     ("attachments", attachments),
     ("queue", queue),
     ("empty", empty),
@@ -509,6 +510,11 @@ fn palette(s: &mut Desktop) {
     })
     .into();
     palette::preview(s, "newline", hits);
+}
+
+fn palette_open(s: &mut Desktop) {
+    workspace(s);
+    palette::preview(s, "", Vec::new());
 }
 
 fn attachments(s: &mut Desktop) {

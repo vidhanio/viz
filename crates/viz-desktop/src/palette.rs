@@ -80,6 +80,10 @@ pub fn toggle(s: &mut Desktop, tx: &mut Tx) {
     if s.palette.is_open() {
         close(s);
     } else {
+        s.navigation.dismiss_overlays();
+        s.open_picker = None;
+        s.model_menu = crate::composer::ModelMenu::default();
+        s.completion.reset();
         s.palette.open = true;
         tx.focus_when_shown(FIELD, false);
     }
@@ -188,7 +192,7 @@ impl Local {
     const fn glyph(self) -> &'static Icon {
         match self {
             Self::NewThread => &ui::COMPOSE,
-            Self::AddProject => &ui::FOLDER,
+            Self::AddProject => &ui::FOLDER_PLUS,
             Self::Archive => &ui::ARCHIVE,
             Self::Sidebar => &ui::SIDEBAR,
             Self::Pin => &ui::PIN,
@@ -200,6 +204,7 @@ impl Local {
     const fn shortcut(self) -> Option<&'static str> {
         match self {
             Self::NewThread => Some("N"),
+            Self::Sidebar => Some("B"),
             Self::Stop => Some("."),
             _ => None,
         }
@@ -454,6 +459,21 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         )
         .child(labels)
         .on_press_tx(move |s: &mut Desktop, tx| choice.choose(s, tx));
+    if let ResultRow::Thread(thread) = result
+        && let Some(project) = thread
+            .project
+            .as_deref()
+            .and_then(|id| s.projects.iter().find(|p| p.path == id))
+    {
+        item = item.child(
+            text(&project.name)
+                .font(t.small)
+                .color(t.muted)
+                .truncate()
+                .shrink()
+                .a11y_hidden(),
+        );
+    }
     if let ResultRow::Command(command) = result
         && let Some(shortcut) = command.shortcut()
     {
@@ -505,7 +525,7 @@ fn footer(t: &Theme) -> El {
                 row()
                     .gap(S4)
                     .center_y()
-                    .child(Keybind::new(keys).build(&t.k))
+                    .child(Keybind::new(keys).build(&t.overlay))
                     .child(text(name).font(t.small).color(t.faint))
             }),
         )
@@ -528,11 +548,13 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .role("listbox")
         .label("Palette results")
         .w_full()
-        .h(LIST_HEIGHT)
+        .max_h(LIST_HEIGHT)
+        .min_h(0.0)
         .padding(S8)
         .scroll(ScrollSpec {
             stick_bottom: false,
-        });
+        })
+        .scroll_edge_fade(S16);
     let mut choices = Vec::new();
     let mut group = "";
     for result in results {
@@ -566,7 +588,7 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .on_edit(|s: &mut Desktop| &mut s.palette.input)
         .on_change(changed)
         .on_key(move |s, ev, tx| on_key(s, ev, tx, &choices))
-        .build(&t.k)
+        .build(&t.overlay)
         .key(FIELD);
     ui::sheet(
         "palette",
