@@ -40,6 +40,7 @@ const PROTOCOL_VERSION: u16 = 1;
 /// How long a harness has to exit after its stdin closes, before it is killed.
 const EXIT_GRACE: Duration = Duration::from_secs(2);
 const METHOD_NOT_FOUND: i64 = -32601;
+const INVALID_PARAMS: i64 = -32602;
 
 static PROCESSES: LazyLock<TaskTracker> = LazyLock::new(TaskTracker::new);
 
@@ -467,18 +468,23 @@ fn dispatch(connection: &Connection, updates: &UpdateSink, line: &str) {
     let _ = waiter.send(result);
 }
 
-/// The response to an agent's request: permission requests are allowed,
-/// everything else is unsupported.
+/// The response to an agent's request: permission requests are allowed (or
+/// rejected as invalid params when malformed), everything else is unsupported.
 fn answer(method: &str, params: Value, id: &Value) -> Value {
-    if method == "session/request_permission"
-        && let Ok(request) = serde_json::from_value::<RequestPermissionRequest>(params)
-    {
-        return json!({ "jsonrpc": "2.0", "id": id, "result": allow(&request) });
-    }
+    let (code, message) = if method == "session/request_permission" {
+        match serde_json::from_value::<RequestPermissionRequest>(params) {
+            Ok(request) => {
+                return json!({ "jsonrpc": "2.0", "id": id, "result": allow(&request) });
+            }
+            Err(error) => (INVALID_PARAMS, format!("invalid {method} params: {error}")),
+        }
+    } else {
+        (METHOD_NOT_FOUND, format!("viz does not support {method}"))
+    };
     json!({
         "jsonrpc": "2.0",
         "id": id,
-        "error": { "code": METHOD_NOT_FOUND, "message": format!("viz does not support {method}") },
+        "error": { "code": code, "message": message },
     })
 }
 
