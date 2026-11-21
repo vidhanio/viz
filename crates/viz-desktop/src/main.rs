@@ -59,7 +59,7 @@ use viz_config::ClientFile;
 use crate::{
     app::Desktop,
     config::DesktopConfig,
-    theme::{S4, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT, Theme},
+    theme::{ICON, S4, SIDEBAR_INSET, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT, Theme},
 };
 
 /// Longest a headless run waits for the first connection attempt before
@@ -119,7 +119,11 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(&t.shell);
     let split = if s.sidebar.is_open() {
-        let left = titlebar_inset + SIDEBAR_PAD;
+        let left = if titlebar_inset > 0.0 {
+            titlebar_inset + SIDEBAR_PAD
+        } else {
+            SIDEBAR_INSET - (Size::Default.height() - ICON) / 2.0
+        };
         let top = (TOOLBAR_HEIGHT - Size::Default.height()) / 2.0;
         split.child(sidebar::header_buttons(s, t).absolute(left, top))
     } else {
@@ -280,7 +284,8 @@ fn main() {
     })
     .args(rune_args)
     .chrome(Chrome {
-        traffic_lights: Some((
+        full_size_content: cfg!(target_os = "macos"),
+        traffic_lights: cfg!(target_os = "macos").then_some((
             theme::SIDEBAR_INSET,
             (theme::TOOLBAR_HEIGHT - Chrome::TRAFFIC_LIGHT) / 2.0,
         )),
