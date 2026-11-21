@@ -13,8 +13,8 @@ use viz_client::{
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
         HarnessOptions, LaunchThread, ListEnvironments, ListTasks, Notification, OptionValue,
-        RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SendInput, ThreadId, UpdateProject,
-        UpdateThread,
+        RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SendInput, SendMode, ThreadId,
+        UpdateProject, UpdateQueuedInput, UpdateThread,
     },
 };
 
@@ -76,6 +76,21 @@ pub enum Command {
     RemoveQueued {
         thread: ThreadId,
         run: RunId,
+    },
+    EditQueued {
+        thread: ThreadId,
+        run: RunId,
+        text: String,
+    },
+    MoveQueued {
+        thread: ThreadId,
+        run: RunId,
+        before: Option<RunId>,
+    },
+    SteerQueued {
+        thread: ThreadId,
+        run: RunId,
+        text: String,
     },
     Attach {
         scope: u64,
@@ -437,6 +452,17 @@ impl Session<'_> {
                     .remove_queued_input(&RemoveQueuedInput { thread, run })
                     .await
             }
+            Command::EditQueued { thread, run, text } => {
+                self.update_queued(thread, run, Some(&text), None).await
+            }
+            Command::MoveQueued {
+                thread,
+                run,
+                before,
+            } => self.update_queued(thread, run, None, Some(before)).await,
+            Command::SteerQueued { thread, run, text } => {
+                self.steer_queued(thread, run, text).await
+            }
             Command::Notify { title, body } => {
                 requests::notify(&title, body);
                 Ok(())
@@ -497,6 +523,50 @@ impl Session<'_> {
             self.ui.update(move |s, _| s.restore_message(send_input));
         }
         result.map(drop)
+    }
+
+    #[expect(
+        clippy::option_option,
+        reason = "mirrors wire UpdateQueuedInput::before patch semantics"
+    )]
+    async fn update_queued(
+        &self,
+        thread: ThreadId,
+        run: RunId,
+        text: Option<&str>,
+        before: Option<Option<RunId>>,
+    ) -> viz_client::Result<()> {
+        self.client
+            .request(&UpdateQueuedInput {
+                thread,
+                run,
+                text,
+                before,
+            })
+            .await
+            .map(drop)
+    }
+
+    async fn steer_queued(
+        &self,
+        thread: ThreadId,
+        run: RunId,
+        text: String,
+    ) -> viz_client::Result<()> {
+        self.client
+            .remove_queued_input(&RemoveQueuedInput { thread, run })
+            .await?;
+        self.client
+            .send(&SendInput {
+                thread,
+                mode: Some(SendMode::Steer),
+                text,
+                request_id: None,
+                origin: None,
+                attachments: Vec::new(),
+            })
+            .await
+            .map(drop)
     }
 
     fn load_draft(&self, id: u64) {

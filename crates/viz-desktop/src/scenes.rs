@@ -29,6 +29,7 @@ pub const SCENES: &[Scene] = &[
     ("palette-open", palette_open),
     ("attachments", attachments),
     ("queue", queue),
+    ("queue-edit", queue_edit),
     ("empty", empty),
     ("loading", loading),
     ("onboarding", onboarding),
@@ -739,6 +740,11 @@ fn queue(s: &mut Desktop) {
         })
         .into();
     }
+}
+
+fn queue_edit(s: &mut Desktop) {
+    queue(s);
+    s.preview_edit_queued(THREAD, RunId(31), "Also handle CRLF line endings");
 }
 
 fn option(

@@ -81,10 +81,16 @@ pub const RADIUS_DECK: f32 = S12;
 /// Main composer card and user message bubbles.
 pub const RADIUS_COMPOSER: f32 = S16;
 
+/// Left and right inset of tucked drawers inside `READING_WIDTH`.
+pub const DECK_INSET: f32 = S12;
+/// Negative bottom overlap tucking each deck behind the surface below it.
+pub const DECK_OVERLAP: f32 = 14.0;
 /// Height of the bottom horizon scrim under the floating composer stack.
 pub const HORIZON_HEIGHT: f32 = 88.0;
 /// Frosted backdrop blur sigma for the floating composer card.
 pub const GLASS_BLUR: f32 = 14.0;
+/// Frosted backdrop blur sigma for tucked docks and the queue drawer.
+pub const DOCK_BLUR: f32 = 12.0;
 /// Frosted backdrop blur sigma for popovers and completion drawers.
 pub const OVERLAY_BLUR: f32 = 16.0;
 
@@ -189,16 +195,22 @@ pub struct Theme {
     pub chip_fill: Color,
     /// Translucent frosted fill for the floating composer card.
     pub glass: Color,
+    /// Translucent frosted fill for tucked drawers (tasks dock, message queue).
+    pub dock_glass: Color,
     /// Translucent frosted fill for overlays, model picker, and menus.
     pub overlay_glass: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
     /// Top-lit border gradient start on elevated surfaces.
     pub rim_top: Color,
+    /// Subtle top-lit rim on tucked drawers behind the composer.
+    pub rim_top_subtle: Color,
     /// Top-lit border gradient end on elevated surfaces.
     pub rim_bottom: Color,
     /// Focused border rim color.
     pub rim_focus: Color,
+    /// Soft cast seam shadow under the composer card onto tucked decks.
+    pub seam_shadow: Color,
     /// The quiet wash behind my messages.
     pub mine: Color,
     /// Body text.
@@ -235,6 +247,8 @@ pub struct Theme {
     /// Multi-layer elevation for the floating composer card (inset sheen +
     /// ambient drop).
     pub shadow_composer: [Shadow; 3],
+    /// Ambient elevation for tucked decks (tasks dock, message queue).
+    pub shadow_deck: Shadow,
     /// Soft outer focus aura on the focused composer card.
     pub shadow_focus: Shadow,
     /// Vertical gradient stops for the bottom horizon scrim.
@@ -541,11 +555,17 @@ impl Theme {
             lightest
         };
         let glass = glass_base.alpha(if dark { 0.82 } else { 0.86 });
+        let dock_glass = surface.alpha(if dark { 0.78 } else { 0.84 });
         let overlay_glass = overlay.alpha(if dark { 0.88 } else { 0.92 });
         let rim_top = if dark {
             lightest.alpha(0.14)
         } else {
             darkest.alpha(0.08)
+        };
+        let rim_top_subtle = if dark {
+            lightest.alpha(0.09)
+        } else {
+            darkest.alpha(0.06)
         };
         let rim_bottom = if dark {
             lightest.alpha(0.05)
@@ -553,6 +573,22 @@ impl Theme {
             darkest.alpha(0.13)
         };
         let rim_focus = accent.alpha(if dark { 0.40 } else { 0.48 });
+        let seam_shadow = darkest.alpha(if dark { 0.28 } else { 0.08 });
+        let shadow_deck = if dark {
+            Shadow {
+                y: S4,
+                blur: S16,
+                color: Color::BLACK.alpha(0.24),
+                ..Shadow::default()
+            }
+        } else {
+            Shadow {
+                y: S2,
+                blur: 10.0,
+                color: Color::BLACK.alpha(0.05),
+                ..Shadow::default()
+            }
+        };
         let sheen = if dark {
             lightest.alpha(0.06)
         } else {
@@ -814,11 +850,14 @@ impl Theme {
             group,
             chip_fill,
             glass,
+            dock_glass,
             overlay_glass,
             hairline,
             rim_top,
+            rim_top_subtle,
             rim_bottom,
             rim_focus,
+            seam_shadow,
             mine: raised,
             text,
             muted,
@@ -836,6 +875,7 @@ impl Theme {
             added: success.alpha(if dark { 0.12 } else { 0.10 }),
             removed: danger.alpha(if dark { 0.12 } else { 0.10 }),
             shadow_composer,
+            shadow_deck,
             shadow_focus,
             horizon_stops,
             syntax,

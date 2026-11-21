@@ -11,8 +11,8 @@ use rune::{Spring, SpringPair, TextEdit, Transition, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, ConfigOption, Environment, Harness, LaunchThread, OptionValue, Project, SendInput,
-    SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    Attachment, ConfigOption, Environment, Harness, LaunchThread, OptionValue, Project, RunId,
+    SendInput, SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
 };
 
 use crate::{
@@ -88,6 +88,14 @@ impl NewThread {
                 .map_or(runner.default, |id| id == runner.id)
         })
     }
+}
+
+/// A queued input currently loaded into the composer for editing.
+#[derive(Debug, Clone)]
+pub struct EditingQueued {
+    pub thread: ThreadId,
+    pub run: RunId,
+    saved_draft: String,
 }
 
 #[derive(Debug)]
@@ -221,6 +229,8 @@ pub struct Desktop {
     pub draft: TextEdit,
     /// Default delivery mode when sending while a turn is active.
     pub send_mode: SendMode,
+    /// Queued input currently being edited in the composer, if any.
+    pub editing_queued: Option<EditingQueued>,
     pub attachments: Vec<Attachment>,
     attachment_reads: HashSet<AttachmentTarget>,
     environment_epoch: u64,
@@ -274,6 +284,7 @@ impl Desktop {
             expanded: HashSet::new(),
             draft,
             send_mode: SendMode::Queue,
+            editing_queued: None,
             attachments: Vec::new(),
             attachment_reads: HashSet::new(),
             environment_epoch: 0,
@@ -455,6 +466,7 @@ impl Desktop {
         self.history_loading = false;
         self.state = None;
         self.expanded.clear();
+        self.editing_queued = None;
         self.completion.reset();
         self.open_picker = None;
     }
@@ -487,6 +499,11 @@ impl Desktop {
             return;
         }
         let status_changed = self.state.as_ref().map(|prev| prev.status) != Some(state.status);
+        if let Some(editing) = &self.editing_queued
+            && (editing.thread != id || !state.queue.iter().any(|item| item.run == editing.run))
+        {
+            self.editing_queued = None;
+        }
         self.thread.sync_acp(state.live.as_ref());
         self.state = Some(state);
         if status_changed {
@@ -866,8 +883,77 @@ impl Desktop {
         };
     }
 
+    /// Loads a queued input into the composer for inline editing, saving any
+    /// unsent draft text to restore on cancel or save.
+    pub fn start_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str, tx: &mut Tx) {
+        let saved_draft = match self.editing_queued.take() {
+            Some(existing) => existing.saved_draft,
+            None => self.draft.text.clone(),
+        };
+        self.editing_queued = Some(EditingQueued {
+            thread,
+            run,
+            saved_draft,
+        });
+        self.draft = TextEdit::new(body);
+        self.draft.focused = true;
+        self.completion.reset();
+        tx.focus("draft", false);
+    }
+
+    /// Enters queue-edit mode for a preview scene (no `Tx`).
+    pub fn preview_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str) {
+        self.editing_queued = Some(EditingQueued {
+            thread,
+            run,
+            saved_draft: String::new(),
+        });
+        self.draft = TextEdit::new(body);
+        self.draft.focused = true;
+    }
+
+    /// Leaves queue-edit mode and restores the draft saved before editing.
+    pub fn cancel_edit_queued(&mut self, tx: &mut Tx) {
+        if let Some(editing) = self.editing_queued.take() {
+            self.draft = TextEdit::new(&editing.saved_draft);
+            self.draft.focused = true;
+            self.completion.reset();
+            tx.focus("draft", false);
+        }
+    }
+
+    /// Saves the edited queued message via `queue.update` and restores the
+    /// prior draft.
+    pub fn save_edit_queued(&mut self, tx: &mut Tx) {
+        let Some(editing) = self.editing_queued.clone() else {
+            return;
+        };
+        let updated = self.draft.text.clone();
+        if updated.trim().is_empty() {
+            return;
+        }
+        if self.send(
+            Command::EditQueued {
+                thread: editing.thread,
+                run: editing.run,
+                text: updated,
+            },
+            tx,
+        ) {
+            self.editing_queued = None;
+            self.draft = TextEdit::new(&editing.saved_draft);
+            self.draft.focused = true;
+            self.completion.reset();
+            tx.focus("draft", false);
+        }
+    }
+
     /// Creates a draft's session on first send, or sends to an existing thread.
     pub fn send_input(&mut self, tx: &mut Tx) {
+        if self.editing_queued.is_some() {
+            self.save_edit_queued(tx);
+            return;
+        }
         self.send_input_with_mode(None, tx);
     }
 

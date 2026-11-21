@@ -12,10 +12,10 @@ use rune_kit::{
 use viz_client::protocol::ThreadStatus;
 
 use crate::theme::{
-    CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, HORIZON_HEIGHT,
-    ICON, ICON_SMALL, RADIUS_CARD, RADIUS_COMPOSER, RADIUS_INNER, READING_INSET, READING_WIDTH,
-    ROW_INSET, S2, S4, S6, S8, S12, S16, S20, Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP,
-    Theme,
+    CARD_INSET, CARD_WIDTH, DECK_INSET, DECK_OVERLAP, DIALOG_INSET, DIALOG_WIDTH, DOCK_BLUR, DOT,
+    EMPTY_WIDTH, HAIRLINE, HORIZON_HEIGHT, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_COMPOSER,
+    RADIUS_DECK, RADIUS_INNER, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16,
+    S20, Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -428,6 +428,39 @@ pub fn section(label: &str, t: &Theme) -> El {
 /// first line of the text beside it.
 pub fn lead(mark: El, line: f32) -> El {
     el().size(ICON, line).center().child(mark).a11y_hidden()
+}
+
+/// A frosted deck tucked behind the top edge of the surface beneath it, with
+/// inset horizontal width, top-lit rim, and a cast seam gradient along the
+/// tuck edge.
+pub fn tucked_deck(key: impl Into<String>, order: i16, fill: Color, blur: f32, t: &Theme) -> El {
+    let seam = el()
+        .key("deck-seam")
+        .pin(Some(0.0), None, Some(0.0), Some(DECK_OVERLAP - S2))
+        .h(10.0)
+        .linear_gradient(
+            std::f32::consts::PI,
+            [(0.0, Color::TRANSPARENT), (1.0, t.seam_shadow)],
+        )
+        .a11y_hidden();
+    col()
+        .key(key)
+        .paint_order(order)
+        .mx(DECK_INSET)
+        .mb(-DECK_OVERLAP)
+        .pb(DECK_OVERLAP + S4)
+        .corners([RADIUS_DECK, RADIUS_DECK, 0.0, 0.0])
+        .continuous_corners()
+        .backdrop_blur(blur)
+        .fill(fill)
+        .border_gradient(HAIRLINE, t.rim_top_subtle, t.hairline)
+        .box_shadow(t.shadow_deck)
+        .child(seam)
+}
+
+/// Default frosted backdrop blur for tucked docks and the queue drawer.
+pub const fn dock_blur() -> f32 {
+    DOCK_BLUR
 }
 
 /// A pointer-transparent bottom horizon scrim pinned beneath the floating
@@ -1164,10 +1197,16 @@ lucide! {
     COMPOSE = SquarePen;
     /// Send.
     ARROW_UP = ArrowUp;
+    /// Move down / reorder down.
+    ARROW_DOWN = ArrowDown;
     /// Queue a follow-up input.
     LIST_PLUS = ListPlus;
     /// Steer or send immediately into an active turn.
     CORNER_UP_RIGHT = CornerUpRight;
+    /// Queued message clock.
+    CLOCK = Clock;
+    /// Edit queued message.
+    PENCIL = Pencil;
     /// Delegated work.
     AGENT = Workflow;
     BRAIN = Brain;
