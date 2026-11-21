@@ -409,6 +409,20 @@ async fn refresh_watch(
         Err(error) if error.code == wire::NOT_FOUND => return Ok(()),
         Err(error) => return Err(error.into()),
     };
+    if watch.state.history_revision != state.history_revision {
+        let page = server.workspace.entries(thread.0, None, PAGE).await?;
+        watch.last = page.entries.last().map_or(0, |entry| entry.id.0);
+        send_note(
+            outgoing,
+            Notification::ThreadView {
+                thread,
+                reset: true,
+                entries: page.entries,
+                before: page.before,
+            },
+        )
+        .await?;
+    }
     loop {
         let entries = server
             .workspace

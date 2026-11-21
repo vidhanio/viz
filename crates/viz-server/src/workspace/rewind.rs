@@ -2,6 +2,7 @@
 //! session.
 
 use std::{
+    collections::HashMap,
     os::unix::ffi::OsStrExt as _,
     path::{Path, PathBuf},
 };
@@ -19,7 +20,7 @@ use super::{
     sql::{exec, row, rows},
     store::{self, NewThread, SavedSession},
 };
-use crate::wire::{NewEntry, RpcError, ThreadId};
+use crate::wire::{Entry, EntryId, NewEntry, RpcError, ThreadId};
 
 struct Boundary {
     entry: u64,
@@ -121,24 +122,7 @@ New user input:
         .await?;
         let entries = transcript(&mut tx, source, boundary.entry).await?;
         let seed = history_seed(entries.iter().rev());
-        for mut data in entries {
-            match &mut data {
-                NewEntry::Run(end) => end.run = None,
-                NewEntry::Prompt { attachments, .. } => {
-                    for attachment in attachments {
-                        exec(
-                            &mut tx,
-                            "INSERT INTO attachments (thread, id, name, mime, data)
-                            SELECT ?2, id, name, mime, data FROM attachments WHERE thread = ?1 AND id = ?3
-                            ON CONFLICT DO NOTHING",
-                            [source.into(), new.into(), attachment.id.as_str().into()],
-                        ).await?;
-                    }
-                }
-                _ => {}
-            }
-            store::append(&mut tx, new, &data).await?;
-        }
+        copy_transcript(&mut tx, source, new, entries).await?;
         set_history_seed(&mut tx, new, seed).await?;
         tx.commit().await?;
         if let Some(pending) = pending {
@@ -230,6 +214,43 @@ New user input:
     }
 }
 
+async fn copy_transcript(
+    db: &mut dyn Executor,
+    source: u64,
+    new: u64,
+    entries: Vec<Entry>,
+) -> Result<(), RpcError> {
+    let mut tools = HashMap::new();
+    for Entry { id, mut data } in entries {
+        match &mut data {
+            NewEntry::ToolUpdate { entry, .. } => {
+                let Some(forked) = tools.get(entry) else {
+                    continue;
+                };
+                *entry = *forked;
+            }
+            NewEntry::Run(end) => end.run = None,
+            NewEntry::Prompt { attachments, .. } => {
+                for attachment in attachments {
+                    exec(
+                        db,
+                        "INSERT INTO attachments (thread, id, name, mime, data)
+                        SELECT ?2, id, name, mime, data FROM attachments WHERE thread = ?1 AND id = ?3
+                        ON CONFLICT DO NOTHING",
+                        [source.into(), new.into(), attachment.id.as_str().into()],
+                    ).await?;
+                }
+            }
+            _ => {}
+        }
+        let copied = store::append(db, new, &data).await?;
+        if matches!(data, NewEntry::Tool(_)) {
+            tools.insert(id, EntryId(copied));
+        }
+    }
+    Ok(())
+}
+
 fn fresh_session(session: SavedSession) -> SavedSession {
     SavedSession {
         desired: session.desired,
@@ -292,25 +313,30 @@ async fn transcript(
     db: &mut dyn Executor,
     thread: u64,
     before: u64,
-) -> Result<Vec<NewEntry>, RpcError> {
+) -> Result<Vec<Entry>, RpcError> {
     rows(
         db,
-        "SELECT data FROM entries WHERE thread = ?1 AND id < ?2 AND hidden = 0 ORDER BY id",
+        "SELECT id, data FROM entries WHERE thread = ?1 AND id < ?2 AND hidden = 0 ORDER BY id",
         [thread.into(), before.into()],
     )
     .await?
-    .map(|mut row| store::from_json(&row.str(0)?))
+    .map(|mut row| {
+        Ok(Entry {
+            id: EntryId(row.u64(0)?),
+            data: store::from_json(&row.str(1)?)?,
+        })
+    })
     .collect()
 }
 
 /// Like t3code's bounded fork transcript, carry forward only context before
 /// the selected boundary. ACP runners without native rewind receive it with
 /// the first new prompt so historical prompts are never executed again.
-fn history_seed<'a>(entries: impl Iterator<Item = &'a NewEntry>) -> String {
+fn history_seed<'a>(entries: impl Iterator<Item = &'a Entry>) -> String {
     let mut parts = Vec::new();
     let mut remaining = 24_000;
     for entry in entries {
-        let (role, text) = match entry {
+        let (role, text) = match &entry.data {
             NewEntry::Prompt { text, .. } => ("User", text),
             NewEntry::Text { text, .. } => ("Assistant", text),
             NewEntry::TaskResult { text, .. } => ("Task result", text),
