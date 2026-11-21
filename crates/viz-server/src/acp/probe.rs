@@ -25,7 +25,8 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 /// The options a new thread of this harness starts with, from the `stored`
 /// catalog, which is probed from a disposable session when missing or when it
 /// lacks the requested model's thinking levels. Returns the catalog to
-/// store when it changed.
+/// store when it changed. A freshly probed catalog is returned even when the
+/// model probe after it fails, so the next call does not probe it again.
 ///
 /// # Errors
 ///
@@ -48,7 +49,13 @@ pub(crate) async fn catalog(
     let offered = requested.filter(|requested| current.offers(requested));
     match offered {
         Some(requested) if !current.has_profile(requested) => {
-            changed |= probe(config, cwd, Some(requested), &mut catalog).await?;
+            match probe(config, cwd, Some(requested), &mut catalog).await {
+                Ok(probed) => changed |= probed,
+                Err(error) if changed => {
+                    tracing::warn!(model = requested, %error, "ACP model probe failed");
+                }
+                Err(error) => return Err(error),
+            }
         }
         None if model.is_some() => bail!("Model not available"),
         Some(_) | None => {}
