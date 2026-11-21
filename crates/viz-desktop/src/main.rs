@@ -8,9 +8,10 @@
 //! - Layout: sidebar and thread. A thread with delegated tasks keeps their
 //!   panel at the top right. Menus, palette, dialogs and toasts are temporary
 //!   overlays.
-//! - Sidebar: environment picker above the list; _Recent_ (newest first,
-//!   project under each title) and _Projects_ (collapsible) modes. Task status
-//!   belongs in the task panel and timeline.
+//! - Sidebar: pinned threads, _Recent_ (newest first, project under each title)
+//!   and _Projects_ (collapsible) modes, and an environment picker in the
+//!   footer when more than one is configured. Task status belongs in the task
+//!   panel and timeline.
 //! - Activity: reasoning, tools and delegated tasks fold into compact groups;
 //!   running commands stay visible while folded; expand only for readable
 //!   output, changes or the reasoning trace. Context use sits beside the

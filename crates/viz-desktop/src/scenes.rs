@@ -38,6 +38,8 @@ pub const SCENES: &[Scene] = &[
     ("overflow", overflow),
     ("projects", projects),
     ("draft-project", draft_project),
+    ("environments", environments),
+    ("offline", offline),
 ];
 
 const THREAD: ThreadId = ThreadId(11);
@@ -642,6 +644,39 @@ fn projects(s: &mut Desktop) {
 fn draft_project(s: &mut Desktop) {
     new_agent(s);
     s.open_picker = Some(timeline::DRAFT_PROJECT.into());
+}
+
+/// Multiple configured environments with the sidebar footer picker open.
+fn environments(s: &mut Desktop) {
+    workspace(s);
+    s.environments = vec![
+        Environment {
+            id: "local".into(),
+            url: None,
+            status: EnvironmentStatus::Local,
+        },
+        Environment {
+            id: "workstation".into(),
+            url: Some("https://workstation.tailnet.ts.net".into()),
+            status: EnvironmentStatus::Reachable,
+        },
+        Environment {
+            id: "build-box".into(),
+            url: Some("https://build-box.tailnet.ts.net".into()),
+            status: EnvironmentStatus::Unreachable,
+        },
+    ];
+    sidebar::preview_environment_menu(s);
+}
+
+/// Offline state showing the connection error and endpoint without a duplicate
+/// retry button in the sidebar footer.
+fn offline(s: &mut Desktop) {
+    s.status = Status::Error(
+        "connection refused (os error 111): could not reach viz-server at ws://127.0.0.1:7420/ws"
+            .into(),
+    );
+    s.endpoint = Some("http://127.0.0.1:7420".into());
 }
 
 /// The delete confirmation for the open thread.

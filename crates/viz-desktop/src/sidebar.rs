@@ -1,6 +1,6 @@
-//! The sidebar: environments, pinned threads, and other threads
-//! either newest first (Recent) or under their projects (Projects).
-//! Subagents live in their parent thread, not here.
+//! The sidebar: pinned threads, other threads either newest first (Recent) or
+//! under their projects (Projects), and a footer for connection status and
+//! environment switching. Subagents live in their parent thread, not here.
 
 mod actions;
 
@@ -10,13 +10,13 @@ use std::{
 };
 
 use rune::{Color, El, TextEdit, Tx, col, el, icon, row, text};
-use rune_kit::{ButtonVariant, IconButtonVariant, shell::Sidebar};
+use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement, shell::Sidebar};
 use serde_json::{Value, json};
 use viz_client::protocol::{EnvironmentStatus, Project, ThreadId, ThreadSummary};
 
 use crate::{
     app::{Desktop, Status, thread_title},
-    theme::{self, HAIRLINE, ICON, PROJECT_BOX_INSET, ROW_INSET, S8, Size, Theme},
+    theme::{self, HAIRLINE, ICON, ICON_SMALL, PROJECT_BOX_INSET, ROW_INSET, S8, Size, Theme},
     ui::{self, TreeLine},
 };
 
@@ -45,6 +45,7 @@ pub struct Navigation {
     archived: bool,
     mode: Mode,
     collapsed_projects: HashSet<String>,
+    env_menu: bool,
     menu: Option<actions::Context>,
     edit: Option<actions::Edit>,
     value: TextEdit,
@@ -59,6 +60,7 @@ impl Default for Navigation {
             archived: false,
             mode: Mode::default(),
             collapsed_projects: HashSet::new(),
+            env_menu: false,
             menu: None,
             edit: None,
             value: TextEdit::new(""),
@@ -69,6 +71,7 @@ impl Default for Navigation {
 
 impl Navigation {
     pub(crate) fn dismiss_overlays(&mut self) {
+        self.env_menu = false;
         self.menu = None;
         self.edit = None;
     }
@@ -435,12 +438,10 @@ pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .label("Workspace")
         .inset(0.0)
         .header_gap(S8)
-        .header_padding(0.0, 0.0);
-    if !s.environments.is_empty() {
-        bar = bar.header(environments(s, t));
-    }
-    bar = bar.header(filter(s, t)).child(tree);
-    if let Some(footer) = footer(s, t) {
+        .header_padding(0.0, 0.0)
+        .header(filter(s, t))
+        .child(tree);
+    if let Some(footer) = footer(s, t, layer) {
         bar = bar.footer(footer);
     }
     bar.build(&t.k)
@@ -470,6 +471,11 @@ pub fn preview_context_menu(s: &mut Desktop, id: ThreadId, x: f32, y: f32) {
 /// Shows the delete confirmation for `id` in a preview scene.
 pub fn preview_delete(s: &mut Desktop, id: ThreadId) {
     s.navigation.edit = Some(actions::Edit::DeleteThread(id));
+}
+
+/// Opens the environment picker menu in a preview scene.
+pub const fn preview_environment_menu(s: &mut Desktop) {
+    s.navigation.env_menu = true;
 }
 
 /// Lists threads under their projects in a preview scene.
@@ -511,53 +517,6 @@ pub fn new_thread_button(s: &Desktop, t: &Theme) -> El {
     .on_press_tx(Desktop::create_here)
     .build(&t.k)
     .key("new-thread")
-}
-
-fn environments(s: &Desktop, t: &Theme) -> El {
-    col()
-        .key("environments")
-        .w_full()
-        .gap(theme::S4)
-        .child(ui::section("Environments", t).pl(ROW_INSET))
-        .children(s.environments.iter().map(|env| {
-            let id = env.id.clone();
-            let selected = s.environment.as_ref() == Some(&id);
-            let (label, color) = match env.status {
-                EnvironmentStatus::Local => ("Local", t.success),
-                EnvironmentStatus::Reachable => ("Reachable", t.success),
-                EnvironmentStatus::Unreachable => ("Unreachable", t.faint),
-            };
-            row()
-                .key(format!("environment-{id}"))
-                .role("button")
-                .label(id.clone())
-                .description(label)
-                .help(env.url.as_deref().unwrap_or(label))
-                .focusable(true)
-                .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-                .radius(Size::Small.radius())
-                .w_full()
-                .h(Size::Small.height())
-                .px(ROW_INSET)
-                .gap(S8)
-                .center_y()
-                .fill(if selected {
-                    t.selected
-                } else {
-                    Color::TRANSPARENT
-                })
-                .hover_group()
-                .child(ui::dot(color))
-                .child(
-                    text(id.clone())
-                        .font(t.small)
-                        .color(if selected { t.text } else { t.muted })
-                        .group_color(t.text)
-                        .truncate()
-                        .shrink(),
-                )
-                .on_press_tx(move |s: &mut Desktop, tx| s.open_in_environment(id.clone(), None, tx))
-        }))
 }
 
 fn filter(s: &Desktop, t: &Theme) -> El {
@@ -670,55 +629,178 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
         .child(ui::trailing(None, Some(archived), true))
 }
 
-/// The connection while it's down (a dot and one word, the detail in its
-/// tooltip) and a retry while offline. A healthy connection says nothing, so
-/// there's no footer (and no rule above it) then.
-fn footer(s: &Desktop, t: &Theme) -> Option<El> {
+/// The quiet footer row: environment picker when more than one environment is
+/// configured, merged with connection status. A healthy single-environment
+/// connection shows no footer; Retry is omitted when the main pane already
+/// offers it.
+fn footer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
+    let multi = s.environments.len() > 1;
+    let main_has_retry = s.thread.items.is_empty() && s.thread.before.is_none() && !s.busy();
+    let show_retry = matches!(s.status, Status::Error(_)) && !main_has_retry;
+    let content = if multi {
+        environment_footer(s, t, layer)
+    } else {
+        status_footer(s, t)?
+    };
+    let mut row = row()
+        .key("connection")
+        .w_full()
+        .h(Size::Default.height())
+        .gap(S8)
+        .center_y()
+        .child(content);
+    if show_retry {
+        row = row.child(
+            ui::button("Retry", ButtonVariant::GhostMuted, Size::Small)
+                .on_press_tx(Desktop::reconnect)
+                .build(&t.k)
+                .key("retry"),
+        );
+    }
+    Some(col().w_full().gap(S8).child(ui::rule(t)).child(row))
+}
+
+fn status_footer(s: &Desktop, t: &Theme) -> Option<El> {
     let (color, label) = match &s.status {
         Status::Connecting => (t.warning, "Connecting…"),
         Status::Connected { .. } => return None,
-        Status::Error(_) => (t.danger, "Disconnected"),
+        Status::Error(_) => (t.danger, "Offline"),
     };
     let detail = match (&s.status, &s.endpoint) {
         (Status::Error(message), _) => message.clone(),
         (_, Some(endpoint)) => endpoint.clone(),
         _ => String::new(),
     };
-    let quiet = |label: &str| ui::button(label, ButtonVariant::GhostMuted, Size::Small);
-    let mut footer = row()
-        .key("connection")
+    Some(
+        row()
+            .role("status")
+            .label(label)
+            .help(detail)
+            .pl(ROW_INSET)
+            .gap(S8)
+            .center_y()
+            .grow(1.0)
+            .shrink()
+            .min_w(0.0)
+            .child(ui::lead(ui::dot(color), Size::Default.height()))
+            .child(
+                text(label)
+                    .key("label")
+                    .font(t.small)
+                    .color(t.muted)
+                    .truncate()
+                    .shrink(),
+            ),
+    )
+}
+
+fn environment_footer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+    let open = s.navigation.env_menu;
+    let current = s
+        .environment
+        .as_deref()
+        .or_else(|| s.environments.first().map(|env| env.id.as_str()))
+        .unwrap_or("local");
+    let active_env = s.environments.iter().find(|env| env.id == current);
+    let (color, note, help) = match &s.status {
+        Status::Connecting => (
+            t.warning,
+            Some("Connecting…"),
+            s.endpoint.as_deref().unwrap_or("Connecting…"),
+        ),
+        Status::Error(message) => (t.danger, Some("Offline"), message.as_str()),
+        Status::Connected { .. } => match active_env.map(|env| env.status) {
+            Some(EnvironmentStatus::Unreachable) => (
+                t.faint,
+                Some("Unreachable"),
+                active_env
+                    .and_then(|env| env.url.as_deref())
+                    .unwrap_or("Unreachable"),
+            ),
+            Some(EnvironmentStatus::Reachable) => (
+                t.success,
+                None,
+                active_env
+                    .and_then(|env| env.url.as_deref())
+                    .unwrap_or("Reachable"),
+            ),
+            Some(EnvironmentStatus::Local) | None => (t.success, None, "Local"),
+        },
+    };
+    let chevron = if open {
+        &ui::CHEVRON_UP
+    } else {
+        &ui::CHEVRON_OPEN
+    };
+    let trigger = row()
+        .key("environment-picker-trigger")
+        .role("combobox")
+        .label("Environment")
+        .a11y_value(current)
+        .help(help)
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
         .w_full()
         .h(Size::Default.height())
-        .pl(ROW_INSET)
+        .px(ROW_INSET)
         .gap(S8)
         .center_y()
+        .radius(Size::Default.radius())
+        .on_press(|s: &mut Desktop| s.navigation.env_menu = !s.navigation.env_menu)
+        .child(ui::lead(ui::dot(color), Size::Default.height()))
         .child(
-            row()
-                .role("status")
-                .label(label)
-                .help(detail)
-                .gap(S8)
-                .center_y()
+            text(current)
+                .font(t.small_medium)
+                .color(if open { t.text } else { t.muted })
+                .group_color(t.text)
                 .grow(1.0)
                 .shrink()
                 .min_w(0.0)
-                .child(ui::lead(ui::dot(color), Size::Default.height()))
-                .child(
-                    text(label)
-                        .key("label")
-                        .font(t.small)
-                        .color(t.muted)
-                        .truncate()
-                        .shrink(),
-                ),
+                .truncate()
+                .a11y_hidden(),
+        )
+        .children(note.map(|note| text(note).font(t.small).color(t.faint).a11y_hidden()))
+        .child(
+            icon(chevron, ICON_SMALL)
+                .color(if open { t.text } else { t.faint })
+                .group_color(t.text)
+                .a11y_hidden(),
         );
-    if matches!(s.status, Status::Error(_)) {
-        footer = footer.child(
-            quiet("Retry")
-                .on_press_tx(Desktop::reconnect)
-                .build(&t.k)
-                .key("retry"),
-        );
+    let mut menu = Menu::new("environment-picker")
+        .placement(Placement::TopStart)
+        .min_width(ui::MENU_WIDTH)
+        .open(open)
+        .on_close(|s: &mut Desktop| s.navigation.env_menu = false)
+        .trigger(trigger);
+    if open {
+        menu = ui::menu_items(menu, environment_items(s, t));
     }
-    Some(col().w_full().gap(S8).child(ui::rule(t)).child(footer))
+    menu.build(&t.overlay, layer).grow(1.0).shrink().min_w(0.0)
+}
+
+fn environment_items<'a>(s: &'a Desktop, t: &'a Theme) -> impl Iterator<Item = MenuItem> + 'a {
+    s.environments.iter().map(move |env| {
+        let id = env.id.clone();
+        let selected = s.environment.as_deref() == Some(env.id.as_str());
+        let (status_label, dot_color) = match env.status {
+            EnvironmentStatus::Local => ("Local", t.success),
+            EnvironmentStatus::Reachable => ("Reachable", t.success),
+            EnvironmentStatus::Unreachable => ("Unreachable", t.faint),
+        };
+        let mut item = MenuItem::new(&env.id)
+            .lead(ui::dot(dot_color))
+            .checked(selected)
+            .on_select_tx(move |s: &mut Desktop, tx| {
+                s.navigation.env_menu = false;
+                s.open_in_environment(id.clone(), None, tx);
+            });
+        if let Some(url) = &env.url {
+            item = item.description(url);
+        } else {
+            item = item.description(status_label);
+        }
+        item
+    })
 }
