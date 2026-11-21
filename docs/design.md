@@ -32,7 +32,7 @@ Out of scope until a job above needs it: git (diffs, checkpoints, worktrees, com
 Everything visual comes from `crates/viz-desktop/src/theme.rs` (tokens) and `crates/viz-desktop/src/ui/` (components). Views compose components; they never set raw sizes, colors or paddings.
 
 - **Tokens:** one semantic palette derived from a base16 scheme per appearance (`desktop.toml` `[theme]`; any scheme must read well), a 4-pt spacing scale, control heights, radii, a type ramp, icon sizes. A new value is a new token, never a literal at a call site.
-- **Icons:** [Lucide](https://lucide.dev) only, at token sizes and one stroke width. Never draw custom icons.
+- **Icons:** [Lucide](https://lucide.dev) at token sizes and one stroke width. Harnesses may use their official marks, tinted with the theme. Never draw custom icons.
 - **Flat:** surfaces separated by hairlines and fills, never glow. Overlays (menus, popovers, palette, dialogs, toasts) are borderless, one fill step above what they float over, with a soft layered shadow; nothing else gets a shadow. One accent, used for the primary action, focus and selection.
 - **Alignment:** content shares vertical lines: one sidebar inset, one reading column, fixed leading and trailing columns in rows.
 - **Verify visually:** render the affected scenes in light and dark (`cargo run -p viz-desktop -- --snap <png> --scene <name>`) and look at them before calling a UI change done.

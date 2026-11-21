@@ -777,12 +777,14 @@ mark! {
     PI = "pi", 700.0;
     /// oh-my-pi's pi mark (`can1357/oh-my-pi` `packages/collab-web/public/favicon.svg`).
     OMP = "omp", 52.0;
+    /// Google's monochrome product icon (`antigravity.google/press/`).
+    ANTIGRAVITY = "antigravity", 180.0;
 }
 
-/// A harness's mark, recognized from its configured name's first word
-/// (`claude`, `claude-acp`, `codex`, `omp`, `pi`, …); a terminal otherwise.
-pub fn harness_icon(name: &str) -> &'static Icon {
-    let word = name
+/// A harness's mark, recognized from the first word of its config key.
+/// Unknown keys use the terminal icon.
+pub fn harness_icon(id: &str) -> &'static Icon {
+    let word = id
         .split(|c: char| !c.is_ascii_alphanumeric())
         .next()
         .unwrap_or_default();
@@ -795,6 +797,8 @@ pub fn harness_icon(name: &str) -> &'static Icon {
         &OMP
     } else if is(&["pi"]) {
         &PI
+    } else if is(&["agy", "antigravity"]) {
+        &ANTIGRAVITY
     } else {
         &HARNESS
     }

@@ -148,7 +148,7 @@ const fn preview_harness(id: u64) -> (&'static str, &'static str) {
         20 => ("codex", "Codex"),
         9 => ("omp", "Oh My Pi"),
         4 | 10 => ("pi", "Pi"),
-        _ => ("goose", "Goose"),
+        _ => ("agy", "Google Antigravity"),
     }
 }
 
@@ -241,8 +241,7 @@ fn model_search(s: &mut Desktop) {
     composer::preview_model_menu(s, "fl");
 }
 
-/// A fresh thread in a project with two runners: the harness and the model
-/// picker side by side.
+/// A fresh thread in a project with the harness and model picker side by side.
 fn new_agent(s: &mut Desktop) {
     workspace(s);
     let thread = NewThread::new(0, s.project());
@@ -260,6 +259,12 @@ fn new_agent(s: &mut Desktop) {
         Harness {
             id: "codex".into(),
             name: "Codex".into(),
+            default: false,
+            options: Vec::new(),
+        },
+        Harness {
+            id: "agy".into(),
+            name: "Google Antigravity".into(),
             default: false,
             options: Vec::new(),
         },

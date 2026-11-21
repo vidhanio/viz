@@ -33,6 +33,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] CLI and desktop diagnostics on stderr, filtered by `RUST_LOG`.
 - [x] Configurable dark and light base16 schemes and Home Manager Stylix integration.
 - [x] Harness icons and configured harness display names; full model and thinking labels, inline thinking buttons, and animated model search.
+- [x] Show the official Google Antigravity mark for the `agy` harness.
 - [x] Grouped timeline activity and persistent task panel; stream reasoning and running commands.
 - [x] Use ACP titles and context-window reports when the runner sends them.
 - [ ] Settings UI for desktop preferences in `desktop.toml`
