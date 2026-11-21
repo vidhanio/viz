@@ -72,10 +72,21 @@ pub const DOT: f32 = 6.0;
 
 /// Chips, harness medallions, key caps and other marks inside a control.
 pub const RADIUS_INNER: f32 = S6;
+/// Controls, rows, attachment chips, buttons.
+pub const RADIUS_CONTROL: f32 = S8;
 /// Cards, tool output, popovers.
 pub const RADIUS_CARD: f32 = S8;
+/// Popovers, frosted menus, and tucked deck corners.
+pub const RADIUS_DECK: f32 = S12;
 /// Main composer card and user message bubbles.
 pub const RADIUS_COMPOSER: f32 = S16;
+
+/// Height of the bottom horizon scrim under the floating composer stack.
+pub const HORIZON_HEIGHT: f32 = 88.0;
+/// Frosted backdrop blur sigma for the floating composer card.
+pub const GLASS_BLUR: f32 = 14.0;
+/// Frosted backdrop blur sigma for popovers and completion drawers.
+pub const OVERLAY_BLUR: f32 = 16.0;
 
 /// The shell's title band: the toolbar and the sidebar's header row.
 pub const TOOLBAR_HEIGHT: f32 = rune_kit::shell::TOOLBAR_HEIGHT;
@@ -176,8 +187,18 @@ pub struct Theme {
     pub group: Color,
     /// Recessed fill for medallions, chips, and quiet controls.
     pub chip_fill: Color,
+    /// Translucent frosted fill for the floating composer card.
+    pub glass: Color,
+    /// Translucent frosted fill for overlays, model picker, and menus.
+    pub overlay_glass: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
+    /// Top-lit border gradient start on elevated surfaces.
+    pub rim_top: Color,
+    /// Top-lit border gradient end on elevated surfaces.
+    pub rim_bottom: Color,
+    /// Focused border rim color.
+    pub rim_focus: Color,
     /// The quiet wash behind my messages.
     pub mine: Color,
     /// Body text.
@@ -190,12 +211,18 @@ pub struct Theme {
     pub accent: Color,
     /// The accent at text contrast (>= 4.5:1) for links and highlighted copy.
     pub accent_text: Color,
+    /// High-contrast ink on filled accent controls.
+    pub on_accent: Color,
     /// Accent veil behind selected rows and active menu options.
     pub accent_veil: Color,
+    /// Steer / send-now mode and high-effort accent (`base09`).
+    pub steer: Color,
     /// The open thread's row.
     pub selected: Color,
     /// Errors.
     pub danger: Color,
+    /// High-contrast ink on filled danger controls.
+    pub on_danger: Color,
     /// Connected.
     pub success: Color,
     /// Connecting.
@@ -205,6 +232,13 @@ pub struct Theme {
     pub added: Color,
     /// A removed line's wash in a diff.
     pub removed: Color,
+    /// Multi-layer elevation for the floating composer card (inset sheen +
+    /// ambient drop).
+    pub shadow_composer: [Shadow; 3],
+    /// Soft outer focus aura on the focused composer card.
+    pub shadow_focus: Shadow,
+    /// Vertical gradient stops for the bottom horizon scrim.
+    pub horizon_stops: [(f32, Color); 4],
     /// Code colors: Markdown fences.
     pub syntax: SyntaxTheme,
     /// Interface text, 13 on 20.
@@ -223,6 +257,8 @@ pub struct Theme {
     pub mono: TextStyle,
     /// Small mono for durations and counts, 11.5 on 16, tabular numerals.
     pub mono_small: TextStyle,
+    /// Micro mono for attachment sizes, badges, and timestamps, 10.5 on 14.
+    pub mono_micro: TextStyle,
 }
 
 /// `[theme]` in `desktop.toml`: a base16 scheme per appearance, by built-in
@@ -484,16 +520,100 @@ impl Theme {
         let accent = legible(b[0xD], 3.0);
         let accent_text = legible(b[0xD], 4.5);
         let accent_veil = accent.alpha(if dark { 0.11 } else { 0.085 });
-        let on_accent = [bg, b[0x7], lightest, darkest]
-            .into_iter()
-            .max_by(|x, y| contrast(*x, accent).total_cmp(&contrast(*y, accent)))
-            .unwrap_or(bg);
+        let steer = legible(b[0x9], 4.5);
+        let on_fill = |fill: Color| {
+            [bg, b[0x7], lightest, darkest]
+                .into_iter()
+                .max_by(|x, y| contrast(*x, fill).total_cmp(&contrast(*y, fill)))
+                .unwrap_or(bg)
+        };
+        let on_accent = on_fill(accent);
         let (danger, warning, success, info) = (
             legible(b[0x8], 4.5),
             legible(b[0xA], 4.5),
             legible(b[0xB], 4.5),
             legible(b[0xC], 4.5),
         );
+        let on_danger = on_fill(danger);
+        let glass_base = if dark {
+            over(surface, wash, reach(surface, wash, 0.035))
+        } else {
+            lightest
+        };
+        let glass = glass_base.alpha(if dark { 0.82 } else { 0.86 });
+        let overlay_glass = overlay.alpha(if dark { 0.88 } else { 0.92 });
+        let rim_top = if dark {
+            lightest.alpha(0.14)
+        } else {
+            darkest.alpha(0.08)
+        };
+        let rim_bottom = if dark {
+            lightest.alpha(0.05)
+        } else {
+            darkest.alpha(0.13)
+        };
+        let rim_focus = accent.alpha(if dark { 0.40 } else { 0.48 });
+        let sheen = if dark {
+            lightest.alpha(0.06)
+        } else {
+            lightest.alpha(0.70)
+        };
+        let shadow_composer = if dark {
+            [
+                Shadow {
+                    y: 1.0,
+                    blur: 0.0,
+                    color: sheen,
+                    inset: true,
+                    ..Shadow::default()
+                },
+                Shadow {
+                    y: 2.0,
+                    blur: 6.0,
+                    color: Color::BLACK.alpha(0.26),
+                    ..Shadow::default()
+                },
+                Shadow {
+                    y: 12.0,
+                    blur: 32.0,
+                    color: Color::BLACK.alpha(0.40),
+                    ..Shadow::default()
+                },
+            ]
+        } else {
+            [
+                Shadow {
+                    y: 1.0,
+                    blur: 0.0,
+                    color: sheen,
+                    inset: true,
+                    ..Shadow::default()
+                },
+                Shadow {
+                    y: 1.0,
+                    blur: 3.0,
+                    color: Color::BLACK.alpha(0.05),
+                    ..Shadow::default()
+                },
+                Shadow {
+                    y: 8.0,
+                    blur: 24.0,
+                    color: Color::BLACK.alpha(0.07),
+                    ..Shadow::default()
+                },
+            ]
+        };
+        let shadow_focus = Shadow {
+            blur: S12,
+            color: accent.alpha(0.08),
+            ..Shadow::default()
+        };
+        let horizon_stops = [
+            (0.0, bg.alpha(0.0)),
+            (0.35, bg.alpha(0.32)),
+            (0.68, bg.alpha(0.76)),
+            (1.0, bg.alpha(0.95)),
+        ];
         let mut k = Kit::from_palette_focus(
             PaletteSeed {
                 bg,
@@ -632,6 +752,10 @@ impl Theme {
             .mono()
             .lh(16.0)
             .features("'tnum' 1");
+        let mono_micro = TextStyle::new(10.5, 450.0)
+            .mono()
+            .lh(14.0)
+            .features("'tnum' 1");
         k.ty.ui = ui;
         k.ty.ui_medium = medium(ui);
         k.ty.ui_compact = ui.lh(small.line_height);
@@ -689,20 +813,31 @@ impl Theme {
             surface,
             group,
             chip_fill,
+            glass,
+            overlay_glass,
             hairline,
+            rim_top,
+            rim_bottom,
+            rim_focus,
             mine: raised,
             text,
             muted,
             faint,
             accent,
             accent_text,
+            on_accent,
             accent_veil,
+            steer,
             selected,
             danger,
+            on_danger,
             success,
             warning,
             added: success.alpha(if dark { 0.12 } else { 0.10 }),
             removed: danger.alpha(if dark { 0.12 } else { 0.10 }),
+            shadow_composer,
+            shadow_focus,
+            horizon_stops,
             syntax,
             ui,
             ui_medium: medium(ui),
@@ -712,6 +847,7 @@ impl Theme {
             title: TextStyle::new(14.0, 600.0).lh(20.0).tracking(-0.18),
             mono,
             mono_small,
+            mono_micro,
             k,
         }
     }

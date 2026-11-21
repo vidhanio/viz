@@ -19,8 +19,8 @@ use crate::{
     app::Desktop,
     server::Command,
     theme::{
-        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, S2, S4, S6, S8, S16, S24, Size,
-        Theme,
+        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, OVERLAY_BLUR, RADIUS_CONTROL,
+        RADIUS_DECK, S2, S4, S6, S8, S16, S24, Size, Theme,
     },
     ui,
 };
@@ -181,32 +181,92 @@ impl<'a> Picker<'a> {
         })
     }
 
-    /// The trigger shows the model and thinking level's display names.
+    /// The trigger's accessible label.
     fn label(&self) -> Cow<'a, str> {
         let model = self.model_label();
-        let level = self.levels.and_then(|levels| {
-            levels
-                .value(self.target)
-                .map(|value| (levels, levels.label(value)))
-        });
+        let level = self.effort();
         match (model, level) {
-            (Some(model), Some((_, level))) => Cow::Owned(format!("{model} · {level}")),
+            (Some(model), Some((_, level, _, _))) => Cow::Owned(format!("{model} · {level}")),
             (Some(model), None) => Cow::Borrowed(model),
-            (None, Some((levels, level))) => {
+            (None, Some((levels, level, _, _))) => {
                 Cow::Owned(format!("{} · {level}", ui::sentence_label(levels.name())))
             }
             (None, None) => Cow::Borrowed("Model"),
         }
     }
+
+    /// Selected thinking level plus how many of the three effort bars should
+    /// light up (and whether it is the top tier).
+    fn effort(&self) -> Option<(Levels<'a>, Cow<'a, str>, usize, bool)> {
+        let levels = self.levels?;
+        let value = levels.value(self.target)?;
+        let label = levels.label(value);
+        let choices: Vec<_> = levels.choices().collect();
+        let total = choices.len().max(1);
+        let index = choices
+            .iter()
+            .position(|(choice, _)| *choice == value)
+            .unwrap_or(0);
+        let lower = value.to_ascii_lowercase();
+        let bars = if matches!(lower.as_str(), "none" | "off" | "disabled") {
+            0
+        } else if lower.contains("min") || lower.contains("low") {
+            1
+        } else if lower.contains("high") || lower.contains("max") {
+            3
+        } else if lower.contains("med")
+            || lower.contains("default")
+            || lower.contains("auto")
+            || total <= 1
+        {
+            2
+        } else {
+            ((index * 3) / total + 1).min(3)
+        };
+        let high = bars == 3 && total > 2;
+        Some((levels, label, bars, high))
+    }
+}
+
+/// Three vertical signal bars indicating the active thinking/effort level.
+fn effort_glyph(bars: usize, high: bool, t: &Theme) -> El {
+    let lit = if high { t.steer } else { t.text };
+    row().gap(1.5).items_end().h(10.0).a11y_hidden().children(
+        [4.0, 7.0, 10.0].into_iter().enumerate().map(|(i, height)| {
+            el().w(S2)
+                .h(height)
+                .radius(HAIRLINE)
+                .fill(if i < bars { lit } else { t.hairline })
+        }),
+    )
 }
 
 /// The trigger and the menu while it is open.
 pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) -> El {
-    let label = picker.label();
+    let full_label = picker.label();
     let open = settings::is_open(s, KEY);
     let current = picker.model_value().map(row_key);
-    let trigger = ui::select_trigger(KEY, "Model", Some(&label), open, ui::MODEL_TRIGGER_MAX, t)
-        .help(label)
+    let model_text = picker.model_label();
+    let effort = picker.effort();
+    let rest_icon = if open { t.text } else { t.muted };
+    let mut trigger = row()
+        .key(format!("{KEY}-trigger"))
+        .role("combobox")
+        .label("Model")
+        .a11y_value(full_label.as_ref())
+        .help(full_label)
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
+        .h(Size::Default.height())
+        .pl(S8)
+        .pr(S4)
+        .gap(S6)
+        .center_y()
+        .max_w(ui::MODEL_TRIGGER_MAX)
+        .radius(RADIUS_CONTROL)
+        .continuous_corners()
         .on_press_tx(move |s: &mut Desktop, tx| {
             if settings::is_open(s, KEY) {
                 close(s);
@@ -220,6 +280,51 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
                 tx.scroll_center_in_instant(LIST, current.clone());
             }
         });
+    if let Some(model_name) = model_text {
+        trigger = trigger.child(
+            text(model_name)
+                .font(t.ui_medium)
+                .color(t.text)
+                .min_w(0.0)
+                .shrink()
+                .truncate()
+                .a11y_hidden(),
+        );
+    }
+    if let Some((levels, effort_label, bars, high)) = effort {
+        if model_text.is_some() {
+            trigger = trigger.child(text("·").font(t.ui).color(t.faint).a11y_hidden());
+        } else {
+            trigger = trigger.child(
+                text(ui::sentence_label(levels.name()))
+                    .font(t.ui_medium)
+                    .color(t.text)
+                    .a11y_hidden(),
+            );
+        }
+        trigger = trigger.child(effort_glyph(bars, high, t)).child(
+            text(effort_label)
+                .font(t.ui)
+                .color(if open { t.text } else { t.muted })
+                .group_color(t.text)
+                .a11y_hidden(),
+        );
+    } else if model_text.is_none() {
+        trigger = trigger.child(
+            text("Model")
+                .font(t.ui_medium)
+                .color(t.muted)
+                .group_color(t.text)
+                .a11y_hidden(),
+        );
+    }
+    trigger = trigger.child(
+        icon(&ui::CHEVRON_OPEN, ICON_SMALL)
+            .icon_rotation(if open { std::f32::consts::PI } else { 0.0 })
+            .color(rest_icon)
+            .group_color(t.text)
+            .a11y_hidden(),
+    );
     if open {
         menu(s, picker, t, layer);
     }
@@ -308,8 +413,11 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
         .label("Model")
         .w(width.max(MODEL_MENU_WIDTH).min(max_width))
         .min_h(0.0)
-        .radius(Size::Default.radius())
-        .fill(k.c.layer_01)
+        .radius(RADIUS_DECK)
+        .continuous_corners()
+        .backdrop_blur(OVERLAY_BLUR)
+        .fill(t.overlay_glass)
+        .border_gradient(HAIRLINE, t.rim_top, t.rim_bottom)
         .focus_return(format!("{KEY}-trigger"))
         .modal(true, close);
     if let Some((field, list, _)) = model_parts {
@@ -469,7 +577,13 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         .pr(S8)
         .gap(S8)
         .center_y()
-        .radius(Size::Default.radius())
+        .radius(RADIUS_CONTROL)
+        .continuous_corners()
+        .fill(if active {
+            t.accent_veil
+        } else {
+            Color::TRANSPARENT
+        })
         .hover_group()
         .on_press_tx(move |s: &mut Desktop, tx| choose_model(s, tx, owner, &id, &value))
         .child(indicator)
@@ -548,8 +662,15 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
                 .h(Size::Small.height())
                 .center()
                 .radius(Size::Small.radius())
-                .fill(if on { t.selected } else { Color::TRANSPARENT })
+                .continuous_corners()
+                .fill(if on {
+                    t.accent_veil
+                } else {
+                    Color::TRANSPARENT
+                })
+                .border(HAIRLINE, if on { t.accent } else { Color::TRANSPARENT })
                 .hover_group()
+                .press_scale(0.97)
                 .focusable(true)
                 .focus_selected(on)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
@@ -561,7 +682,7 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
                 .child(
                     text(label)
                         .font(t.ui_medium)
-                        .color(if on { t.text } else { t.muted })
+                        .color(if on { t.accent_text } else { t.muted })
                         .group_color(t.text)
                         .a11y_hidden(),
                 ),

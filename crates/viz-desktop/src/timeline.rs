@@ -13,7 +13,9 @@
 //! stays visible under it while folded. Details are only offered when there is
 //! something to read.
 
-use rune::{El, Icon, ScrollSpec, Span, Transition, Tx, col, el, icon, rich, row, text};
+use rune::{
+    El, Icon, ScrollFade, ScrollSpec, Span, Transition, Tx, col, el, icon, rich, row, text,
+};
 use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
     diff::{FileDiff, LineKind},
@@ -22,7 +24,7 @@ use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSumma
 
 use crate::{
     app::{Desktop, NewThread, PANE_TRAVEL, Status},
-    attachments, header, sidebar,
+    attachments, composer, header, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, S2, S4, S8, S12, S16,
         S20, S24, S32, Size, Theme,
@@ -119,7 +121,7 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .key("timeline-body")
         .min_h(0.0)
         .pt(S24)
-        .pb(S24);
+        .pb(composer::clearance(s));
     let page = match (s.selected, &s.new_thread) {
         (Some(id), _) => format!("page-{id}"),
         (None, Some(draft)) => format!("page-draft-{}", draft.id),
@@ -140,6 +142,7 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .min_h(0.0)
                 .transition(s.switch.enter(PANE_TRAVEL))
                 .scroll(ScrollSpec { stick_bottom: true })
+                .scroll_fade(ScrollFade::strength(S24).linear())
                 .scroll_anchor()
                 .child(body),
         )

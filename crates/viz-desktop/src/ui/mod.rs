@@ -12,8 +12,8 @@ use rune_kit::{
 use viz_client::protocol::ThreadStatus;
 
 use crate::theme::{
-    CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON,
-    ICON_SMALL, RADIUS_CARD, RADIUS_COMPOSER, RADIUS_INNER, READING_INSET, READING_WIDTH,
+    CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, HORIZON_HEIGHT,
+    ICON, ICON_SMALL, RADIUS_CARD, RADIUS_COMPOSER, RADIUS_INNER, READING_INSET, READING_WIDTH,
     ROW_INSET, S2, S4, S6, S8, S12, S16, S20, Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP,
     Theme,
 };
@@ -139,21 +139,11 @@ fn button_style(variant: ButtonVariant, disabled: bool, k: &Kit) -> ButtonStyle 
 
 fn icon_button_style(
     variant: IconButtonVariant,
-    outline: bool,
     disabled: bool,
     active: bool,
     k: &Kit,
 ) -> ButtonStyle {
     let c = &k.c;
-    if outline {
-        return ButtonStyle {
-            fill: Color::TRANSPARENT,
-            border: Some(c.border_strong),
-            rest: c.icon_base,
-            hover: c.std_icon_strong,
-            press: c.pressed,
-        };
-    }
     match variant {
         IconButtonVariant::Submit | IconButtonVariant::Contrast if disabled => ButtonStyle {
             fill: c.bg_button_neutral,
@@ -298,7 +288,6 @@ pub struct IconButton {
     glyph: &'static Icon,
     label: String,
     variant: IconButtonVariant,
-    outline: bool,
     size: Size,
     disabled: bool,
     expanded: Option<bool>,
@@ -307,11 +296,6 @@ pub struct IconButton {
 }
 
 impl IconButton {
-    pub const fn outline(mut self) -> Self {
-        self.outline = true;
-        self
-    }
-
     pub const fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -340,7 +324,7 @@ impl IconButton {
     pub fn build(self, k: &Kit) -> El {
         let side = self.size.height();
         let active = self.expanded == Some(true) && !self.disabled;
-        let style = icon_button_style(self.variant, self.outline, self.disabled, active, k);
+        let style = icon_button_style(self.variant, self.disabled, active, k);
         let tip = match &self.shortcut {
             Some(shortcut) if !shortcut.is_empty() => format!("{}  {shortcut}", self.label),
             _ => self.label.clone(),
@@ -418,7 +402,6 @@ pub fn icon_button(
         glyph,
         label: label.into(),
         variant,
-        outline: false,
         size,
         disabled: false,
         expanded: None,
@@ -445,6 +428,16 @@ pub fn section(label: &str, t: &Theme) -> El {
 /// first line of the text beside it.
 pub fn lead(mark: El, line: f32) -> El {
     el().size(ICON, line).center().child(mark).a11y_hidden()
+}
+
+/// A pointer-transparent bottom horizon scrim pinned beneath the floating
+/// composer stack so scrolling transcript content fades gently into the canvas.
+pub fn horizon_scrim(t: &Theme) -> El {
+    el().key("horizon-scrim")
+        .w_full()
+        .h(HORIZON_HEIGHT)
+        .linear_gradient(std::f32::consts::PI, t.horizon_stops)
+        .a11y_hidden()
 }
 
 /// The centered reading column's frame; its parent owns the vertical spacing.
@@ -1171,6 +1164,10 @@ lucide! {
     COMPOSE = SquarePen;
     /// Send.
     ARROW_UP = ArrowUp;
+    /// Queue a follow-up input.
+    LIST_PLUS = ListPlus;
+    /// Steer or send immediately into an active turn.
+    CORNER_UP_RIGHT = CornerUpRight;
     /// Delegated work.
     AGENT = Workflow;
     BRAIN = Brain;

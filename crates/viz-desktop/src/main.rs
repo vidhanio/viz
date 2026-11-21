@@ -47,7 +47,7 @@ mod ui;
 use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
-use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col};
+use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col, el};
 use rune_kit::{
     ToastRegion,
     shell::{SidebarToggle, SplitView},
@@ -70,14 +70,24 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let t = Theme::get(cx.system_dark());
     let mut overlays = Vec::new();
     let (agents, reserve) = header::agents(s, t);
-    let reading = col()
+    let dock = composer::composer(s, t, &mut overlays);
+    let mut reading = el()
         .key("reading-pane")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
         .pr(reserve)
-        .child(timeline::timeline(s, t, &mut overlays))
-        .children(composer::composer(s, t, &mut overlays));
+        .child(timeline::timeline(s, t, &mut overlays).pin(
+            Some(0.0),
+            Some(0.0),
+            Some(0.0),
+            Some(0.0),
+        ));
+    if let Some(dock) = dock {
+        reading = reading
+            .child(ui::horizon_scrim(t).pin(Some(0.0), None, Some(0.0), Some(0.0)))
+            .child(dock.pin(Some(0.0), None, Some(0.0), Some(0.0)));
+    }
     let main = col()
         .key("main")
         .w_full()

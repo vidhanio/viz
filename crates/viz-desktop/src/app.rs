@@ -12,7 +12,7 @@ use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
     Attachment, ConfigOption, Environment, Harness, LaunchThread, OptionValue, Project, SendInput,
-    Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
 };
 
 use crate::{
@@ -219,6 +219,8 @@ pub struct Desktop {
     pub expanded: HashSet<String>,
     /// The composer's text.
     pub draft: TextEdit,
+    /// Default delivery mode when sending while a turn is active.
+    pub send_mode: SendMode,
     pub attachments: Vec<Attachment>,
     attachment_reads: HashSet<AttachmentTarget>,
     environment_epoch: u64,
@@ -271,6 +273,7 @@ impl Desktop {
             next_draft: 0,
             expanded: HashSet::new(),
             draft,
+            send_mode: SendMode::Queue,
             attachments: Vec::new(),
             attachment_reads: HashSet::new(),
             environment_epoch: 0,
@@ -855,8 +858,22 @@ impl Desktop {
             && (!self.draft.text.trim().is_empty() || !self.attachments.is_empty())
     }
 
+    /// Toggles the default busy-turn delivery mode between Queue and Steer.
+    pub const fn toggle_send_mode(&mut self) {
+        self.send_mode = match self.send_mode {
+            SendMode::Queue => SendMode::Steer,
+            SendMode::Steer => SendMode::Queue,
+        };
+    }
+
     /// Creates a draft's session on first send, or sends to an existing thread.
     pub fn send_input(&mut self, tx: &mut Tx) {
+        self.send_input_with_mode(None, tx);
+    }
+
+    /// Like [`Desktop::send_input`], optionally overriding the busy-turn
+    /// delivery mode (e.g. `Cmd/Ctrl+Enter` flipping Queue and Steer).
+    pub fn send_input_with_mode(&mut self, override_mode: Option<SendMode>, tx: &mut Tx) {
         if !self.can_send() {
             return;
         }
@@ -874,13 +891,14 @@ impl Desktop {
                 },
             }
         } else if let Some(thread) = self.selected {
+            let mode = self.busy().then(|| override_mode.unwrap_or(self.send_mode));
             Command::SendInput(SendInput {
                 thread,
                 text: self.draft.text.clone(),
                 attachments: mem::take(&mut self.attachments),
                 request_id: None,
                 origin: None,
-                mode: None,
+                mode,
             })
         } else {
             return;

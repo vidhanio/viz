@@ -13,11 +13,15 @@ use viz_client::protocol::{Attachment, ThreadId};
 
 use crate::{
     app::Desktop,
-    theme::{CARD_INSET, HAIRLINE, ICON_SMALL, S4, S8, Size, Theme},
+    theme::{CARD_INSET, HAIRLINE, ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, Size, Theme},
     ui,
 };
 
-/// The widest an attachment chip gets before its name truncates.
+/// Height of an attachment chip in the composer strip.
+const CHIP_HEIGHT: f32 = 26.0;
+/// The widest an attachment chip's name gets before truncating.
+const CHIP_NAME_MAX: f32 = 160.0;
+/// The widest a read-only attachment chip gets in the timeline.
 const CHIP_MAX: f32 = 180.0;
 
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
@@ -174,13 +178,42 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
             .key("draft-attachments")
             .w_full()
             .px(CARD_INSET)
-            .pt(CARD_INSET)
-            .gap(S4)
+            .pt(10.0)
+            .gap(S6)
             .flex_wrap()
             .children(s.attachments.iter().enumerate().map(|(index, attachment)| {
-                chip(&attachment.name, t)
+                let bytes = decoded_size(&attachment.data);
+                let size_label = (bytes > 0).then(|| compact_bytes(bytes));
+                row()
                     .key(format!("attachment-{index}"))
-                    .pr(0.0)
+                    .h(CHIP_HEIGHT)
+                    .pl(S8)
+                    .pr(S4)
+                    .gap(S6)
+                    .center_y()
+                    .radius(RADIUS_CONTROL)
+                    .continuous_corners()
+                    .fill(t.chip_fill)
+                    .border(HAIRLINE, t.hairline)
+                    .help(&attachment.name)
+                    .child(
+                        icon(&ui::FILE_READ, ICON_SMALL)
+                            .color(t.muted)
+                            .a11y_hidden(),
+                    )
+                    .child(
+                        text(&attachment.name)
+                            .font(t.small_medium)
+                            .color(t.text)
+                            .max_w(CHIP_NAME_MAX)
+                            .shrink()
+                            .truncate(),
+                    )
+                    .children(
+                        size_label.map(|label| {
+                            text(label).font(t.mono_micro).color(t.faint).a11y_hidden()
+                        }),
+                    )
                     .child(
                         ui::icon_button(
                             &ui::CLOSE,
@@ -200,7 +233,26 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
     )
 }
 
-/// An attachment's name with a paperclip, one small control tall.
+/// Approximate decoded byte count of a base64 payload.
+fn decoded_size(encoded: &str) -> usize {
+    let trimmed = encoded.trim_end_matches('=');
+    trimmed.len() * 3 / 4
+}
+
+fn compact_bytes(bytes: usize) -> String {
+    const KIB: usize = 1024;
+    const MIB: usize = KIB * KIB;
+    if bytes < KIB {
+        format!("{bytes}B")
+    } else if bytes < MIB {
+        format!("{}KB", (bytes + KIB / 2) / KIB)
+    } else {
+        let tenths = (bytes * 10 + MIB / 2) / MIB;
+        format!("{}.{}MB", tenths / 10, tenths % 10)
+    }
+}
+
+/// An attachment's name with a file mark, one small control tall.
 pub fn chip(name: &str, t: &Theme) -> El {
     row()
         .h(Size::Small.height())
@@ -210,9 +262,11 @@ pub fn chip(name: &str, t: &Theme) -> El {
         .max_w(CHIP_MAX)
         .min_w(0.0)
         .shrink()
-        .radius(Size::Small.radius())
+        .radius(RADIUS_CONTROL)
+        .continuous_corners()
+        .fill(t.chip_fill)
         .border(HAIRLINE, t.hairline)
         .help(name)
-        .child(icon(&ui::PAPERCLIP, ICON_SMALL).color(t.muted))
+        .child(icon(&ui::FILE_READ, ICON_SMALL).color(t.muted))
         .child(text(name).font(t.small).color(t.text).shrink().truncate())
 }

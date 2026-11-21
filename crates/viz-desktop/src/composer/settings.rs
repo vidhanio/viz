@@ -86,19 +86,15 @@ fn context_usage(s: &Desktop, usage: &ContextUsage, t: &Theme) -> Option<El> {
     );
     let used = u128::from(usage.used.min(usage.size));
     let size = u128::from(usage.size.max(1));
-    let tint = if used * 100 >= size * 95 {
-        Some(t.danger)
-    } else if used * 100 >= size * 80 {
-        Some(t.warning)
+    let ink = if used * 100 >= size * 85 {
+        t.danger
+    } else if used * 100 >= size * 65 {
+        t.warning
     } else {
-        None
+        t.muted
     };
-    let tinted = tint.map(|color| {
-        let mut k = t.k.clone();
-        k.c.icon_muted = color;
-        k
-    });
-    let ring_kit = tinted.as_ref().unwrap_or(&t.k);
+    let mut ring_kit = t.k.clone();
+    ring_kit.c.icon_muted = ink;
     let composer_width = READING_INSET
         .mul_add(-2.0, s.window_width - s.sidebar.shown_width())
         .min(READING_WIDTH);
@@ -116,15 +112,16 @@ fn context_usage(s: &Desktop, usage: &ContextUsage, t: &Theme) -> Option<El> {
             .help(label)
             .child(
                 ProgressCircle::new(theme::fraction(usage.used, usage.size))
-                    .size(ICON_SMALL)
-                    .build(ring_kit)
+                    .size(ICON_SMALL + S2)
+                    .build(&ring_kit)
                     .a11y_hidden(),
             )
             .children(show_text.then(|| {
-                text(format!("{percent}/{total}"))
-                    .font(t.mono_small)
-                    .color(t.muted)
+                row()
+                    .center_y()
                     .a11y_hidden()
+                    .child(text(percent).font(t.mono_small).color(ink))
+                    .child(text(format!("/{total}")).font(t.mono_small).color(t.faint))
             })),
     )
 }
