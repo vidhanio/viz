@@ -58,12 +58,14 @@ enum Kind {
     Mine,
     Prose,
     Activity,
+    TurnEnd,
     Notice,
 }
 
 /// Points above a row of kind `next` that follows one of kind `prev`.
 const fn space(prev: Kind, next: Kind) -> f32 {
     match (prev, next) {
+        (_, Kind::TurnEnd) => 0.0,
         (Kind::Activity, Kind::Activity) => S4,
         (Kind::Mine, _) => S24,
         (_, Kind::Mine) => S32,
@@ -262,7 +264,7 @@ fn items<'a>(
             Item::Notice { key, text } => rows.push(Kind::Notice, notice(key, text, t)),
             Item::TurnEnd(end) => {
                 if let Some(el) = turn_end(s, end, t) {
-                    rows.push(Kind::Activity, el);
+                    rows.push(Kind::TurnEnd, el);
                 }
             }
         }
@@ -1304,6 +1306,7 @@ fn turn_end(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
         col()
             .key(end.key.clone())
             .w_full()
+            .pt(S8)
             .gap(S4)
             .hover_group_shared(end.key.as_str())
             .children(chip)
