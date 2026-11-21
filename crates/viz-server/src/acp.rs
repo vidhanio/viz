@@ -25,7 +25,7 @@ pub(crate) mod probe;
 pub(crate) mod process;
 pub(crate) mod session;
 pub(crate) mod tool_record;
-mod transcript;
+pub(crate) mod transcript;
 
 pub(crate) use agent_client_protocol::v1::schema::StopReason;
 pub(crate) use mcp::Mcp;

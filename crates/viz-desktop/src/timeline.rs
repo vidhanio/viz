@@ -232,6 +232,11 @@ fn items<'a>(
                 }
             }
             Item::Plan { key, steps } => rows.push(Kind::Prose, plan(key, steps, t)),
+            Item::Continued { key } => rows.push(
+                Kind::Activity,
+                line(key, mark(&ui::AGENT, t))
+                    .child(text("Continued on its own").font(t.ui).color(t.muted)),
+            ),
             Item::TurnStatus { key, text: words } => rows.push(
                 Kind::Activity,
                 line(key, mark(&ui::CIRCLE_STOP, t))
@@ -1458,6 +1463,7 @@ fn task_result(s: &Desktop, result: &TaskResult, t: &Theme) -> El {
         .unwrap_or("Delegated task");
     let (word, ink) = match result.status.as_str() {
         "completed" => ("finished", t.muted),
+        "continued" => ("continued", t.muted),
         "failed" => ("failed", t.danger),
         "cancelled" => ("was stopped", t.muted),
         _ => ("ended", t.muted),

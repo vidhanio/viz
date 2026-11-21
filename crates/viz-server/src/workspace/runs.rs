@@ -8,7 +8,7 @@ use super::{
     store,
 };
 use crate::wire::{
-    NewEntry, Origin, PromptAttachment, RpcError, Run, RunEnd, RunId, RunStatus, ThreadId,
+    NewEntry, Origin, PromptAttachment, RpcError, Run, RunEnd, RunId, RunKind, RunStatus, ThreadId,
 };
 
 pub(super) const INTERRUPTED: &str =
@@ -103,7 +103,7 @@ pub(crate) async fn run_from(
 ) -> Result<Option<Run>, RpcError> {
     row(
         db,
-        "SELECT id, status, answer, error FROM runs WHERE thread = ?1 AND id = ?2",
+        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1 AND id = ?2",
         [thread.into(), run.into()],
     )
     .await?
@@ -115,7 +115,7 @@ pub(super) async fn latest(db: &mut dyn Executor, thread: u64) -> Result<Option<
     store::require(db, thread).await?;
     row(
         db,
-        "SELECT id, status, answer, error FROM runs WHERE thread = ?1 ORDER BY id DESC LIMIT 1",
+        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1 ORDER BY id DESC LIMIT 1",
         [thread.into()],
     )
     .await?
@@ -146,6 +146,11 @@ fn decode_run(thread: u64, mut row: Row) -> Result<Run, RpcError> {
     Ok(Run {
         id: RunId(row.u64(0)?),
         thread: ThreadId(thread),
+        kind: if row.str(4)? == "unprompted" {
+            RunKind::Unprompted
+        } else {
+            RunKind::Prompt
+        },
         status: decode_status(&row.str(1)?)?,
         answer: row.opt_str(2)?,
         error: row.opt_str(3)?,
@@ -248,6 +253,44 @@ pub(super) async fn claim(db: &mut dyn Executor, thread: u64) -> Result<Option<C
     }))
 }
 
+/// Starts an unprompted run: the agent sent transcript content with no turn
+/// open. It is created `running`, with a `continued` entry in place of a
+/// prompt, and returns the run and that entry. Its caller holds the worker's
+/// slot, so the `runs_active` index cannot conflict.
+pub(super) async fn begin_unprompted(
+    db: &mut dyn Executor,
+    thread: u64,
+) -> Result<(u64, u64), RpcError> {
+    let entry = store::append(db, thread, &NewEntry::Continued).await?;
+    let run = row(
+        db,
+        "INSERT INTO runs (thread, kind, status, position, text, prompt_entry)
+        VALUES (?1, 'unprompted', 'running', 0, '', ?2) RETURNING id",
+        [thread.into(), entry.into()],
+    )
+    .await?
+    .expect("run INSERT RETURNING yielded one row")
+    .u64(0)?;
+    exec(
+        db,
+        "UPDATE threads SET updated_at = ?2 WHERE id = ?1",
+        [thread.into(), store::now().into()],
+    )
+    .await?;
+    Ok((run, entry))
+}
+
+/// Whether inputs are waiting on the thread.
+pub(super) async fn queued(db: &mut dyn Executor, thread: u64) -> Result<bool, RpcError> {
+    Ok(row(
+        db,
+        "SELECT 1 FROM runs WHERE thread = ?1 AND status = 'queued' LIMIT 1",
+        [thread.into()],
+    )
+    .await?
+    .is_some())
+}
+
 pub(super) struct Settlement {
     pub(super) status: RunStatus,
     pub(super) end: RunEnd,
@@ -310,6 +353,36 @@ pub(super) async fn settle(
     .await?;
     exec(db, "UPDATE threads SET updated_at = ?2, unread = CASE WHEN ?3 THEN 1 ELSE unread END, setup_failed = 0 WHERE id = ?1",
         [thread.into(), store::now().into(), unread.into()]).await?;
+    follow_up(db, thread, run).await
+}
+
+/// Queue the answer only when the preceding prompt belongs to a task receipt
+/// or a wake in that task's run family. Manual inputs break this association.
+/// The outbox row commits with the run, and the parent deduplicates retries
+/// using the continuation run ID.
+async fn follow_up(db: &mut dyn Executor, thread: u64, run: u64) -> Result<(), RpcError> {
+    exec(
+        db,
+        "WITH RECURSIVE lineage(id) AS (
+            SELECT r.id FROM runs u JOIN runs r ON r.id = (
+                SELECT id FROM runs WHERE thread = u.thread AND kind = 'prompt'
+                    AND end_entry < u.prompt_entry ORDER BY end_entry DESC LIMIT 1
+            ) WHERE u.id = ?2 AND u.thread = ?1 AND u.kind = 'unprompted'
+                AND u.status = 'completed' AND r.status = 'completed'
+                AND trim(coalesce(u.answer, '')) <> ''
+            UNION
+            SELECT a.parent_run FROM lineage l JOIN task_wakes w ON w.run = l.id AND w.thread = ?1
+                JOIN agent_tasks a ON a.id = w.task AND a.parent = w.thread
+                WHERE a.parent_run IS NOT NULL
+        )
+        INSERT OR IGNORE INTO task_follow_ups (environment, task, run, thread, text)
+        SELECT tr.environment, tr.task, u.id, u.thread, u.answer
+        FROM runs u JOIN task_receipts tr ON tr.thread = u.thread
+        WHERE u.id = ?2 AND tr.run IN (SELECT id FROM lineage)
+            AND NOT EXISTS (SELECT 1 FROM stopped_task_runs s WHERE s.thread = tr.thread AND s.run = tr.run)",
+        [thread.into(), run.into()],
+    )
+    .await?;
     Ok(())
 }
 

@@ -35,13 +35,11 @@ use super::{
     },
     process::{Agent, UpdateSink},
     tool_record::Receipts,
-    transcript::Transcript,
+    transcript::{Output, Transcript},
 };
 use crate::{
     config::HarnessConfig,
-    wire::{
-        Command, ConfigOption, LiveTurn, NewEntry, OptionValue, RunId, StoredAttachment, Usage,
-    },
+    wire::{Command, ConfigOption, LiveTurn, OptionValue, RunId, StoredAttachment, Usage},
 };
 
 /// How long a turn's updates are batched before they are published.
@@ -101,9 +99,9 @@ struct State {
     title: Option<String>,
     /// Session-level state changed since the running turn last published.
     dirty: bool,
-    /// Only a live turn receives content. In particular, `session/load`
-    /// replays a transcript that viz already stores.
     turn: Option<mpsc::UnboundedSender<SessionUpdate>>,
+    /// Installed after opening so session/load replay is discarded.
+    idle: Option<mpsc::UnboundedSender<SessionUpdate>>,
 }
 
 /// A thread's open ACP session. Dropping it stops the harness.
@@ -111,6 +109,7 @@ pub(crate) struct Session {
     agent: Agent,
     state: Arc<Mutex<State>>,
     changes: Arc<watch::Sender<()>>,
+    idle: mpsc::UnboundedReceiver<SessionUpdate>,
     id: String,
     config: HarnessConfig,
     /// Opened with `session/new`, so it takes the configured defaults.
@@ -157,6 +156,8 @@ impl Session {
         };
         let mut current = lock(&state);
         current.session_id = Some(session_id.clone());
+        let (sender, idle) = mpsc::unbounded_channel();
+        current.idle = Some(sender);
         if let Some(options) = options {
             set_options(&mut current, options);
         }
@@ -165,6 +166,7 @@ impl Session {
             agent,
             state,
             changes,
+            idle,
             id: session_id,
             config: config.clone(),
             fresh: saved_id.is_none(),
@@ -192,10 +194,20 @@ impl Session {
         }
     }
 
-    /// Marked changed on every session-level update (options, commands, title,
-    /// usage), including while idle.
+    /// Signals session-level changes and queued idle transcript content.
     pub(crate) fn watch(&self) -> watch::Receiver<()> {
         self.changes.subscribe()
+    }
+
+    pub(crate) fn idle_updates(&mut self) -> Vec<SessionUpdate> {
+        std::iter::from_fn(|| self.idle.try_recv().ok()).collect()
+    }
+
+    pub(crate) async fn next_idle_update(&mut self) -> Option<SessionUpdate> {
+        tokio::select! {
+            update = self.idle.recv() => update,
+            _ = self.agent.closed() => None,
+        }
     }
 
     /// Whether the session can take another turn; drop it and reopen otherwise.
@@ -315,7 +327,7 @@ impl Session {
         mut updates: F,
     ) -> Result<Outcome>
     where
-        F: FnMut(Vec<NewEntry>, Option<LiveTurn>, Option<SessionSnapshot>) -> Fut + Send,
+        F: FnMut(Vec<Output>, Option<LiveTurn>, Option<SessionSnapshot>) -> Fut + Send,
         Fut: Future<Output = Result<()>> + Send,
     {
         ensure!(self.is_alive(), "the ACP session is closed");
@@ -331,11 +343,7 @@ impl Session {
         let receipts = Arc::new(Receipts::default());
         let mut transcript = Transcript::new(input.turn, Arc::clone(&receipts));
         let (sender, mut receiver) = mpsc::unbounded_channel();
-        {
-            let mut state = lock(&self.state);
-            state.turn = Some(sender);
-            state.dirty = false;
-        }
+        let mut pending = self.begin_prompt(sender);
         let tools = self.mcp.as_ref().map(|endpoint| {
             endpoint.activate(
                 input.run.0,
@@ -343,13 +351,15 @@ impl Session {
                 Arc::clone(&receipts),
             )
         });
-        let response = self.agent.prompt(&self.id, &blocks);
+        let state = Arc::clone(&self.state);
+        let response = self.agent.prompt(&self.id, &blocks, move || {
+            lock(&state).turn = None;
+        });
         tokio::pin!(response);
         let closed = self.agent.closed();
         tokio::pin!(closed);
 
-        let mut pending = Vec::new();
-        let mut publish_at: Option<Instant> = None;
+        let mut publish_at = (!pending.is_empty()).then(|| Instant::now() + BATCH);
         let mut cancelled = false;
         let mut give_up_at: Option<Instant> = None;
         let mut abandoned = false;
@@ -417,9 +427,17 @@ impl Session {
         }
     }
 
+    fn begin_prompt(&mut self, sender: mpsc::UnboundedSender<SessionUpdate>) -> Vec<SessionUpdate> {
+        let mut state = lock(&self.state);
+        state.turn = Some(sender);
+        state.dirty = false;
+        drop(state);
+        self.idle_updates()
+    }
+
     /// The snapshot for a publish: `Some` when session state changed since the
     /// last one.
-    fn take_snapshot(&self) -> Option<SessionSnapshot> {
+    pub(crate) fn take_snapshot(&self) -> Option<SessionSnapshot> {
         let dirty = mem::take(&mut lock(&self.state).dirty);
         dirty.then(|| self.snapshot())
     }
@@ -572,6 +590,17 @@ fn update_sink(state: &Arc<Mutex<State>>, changes: &Arc<watch::Sender<()>>) -> U
             update => {
                 if let Some(turn) = &state.turn {
                     let _ = turn.send(update);
+                } else if matches!(
+                    update,
+                    SessionUpdate::AgentMessageChunk(_)
+                        | SessionUpdate::AgentThoughtChunk(_)
+                        | SessionUpdate::ToolCall(_)
+                        | SessionUpdate::ToolCallUpdate(_)
+                        | SessionUpdate::Plan(_)
+                ) && let Some(idle) = &state.idle
+                {
+                    let _ = idle.send(update);
+                    changes.send_replace(());
                 }
                 false
             }

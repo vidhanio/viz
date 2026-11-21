@@ -794,9 +794,23 @@ pub struct WaitResult {
 pub struct Run {
     pub id: RunId,
     pub thread: ThreadId,
+    /// What started the run.
+    pub kind: RunKind,
     pub status: RunStatus,
     pub answer: Option<String>,
     pub error: Option<String>,
+}
+
+/// What started a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RunKind {
+    /// An input: a prompt entry starts it and the ACP prompt response ends it.
+    Prompt,
+    /// The agent continued on its own after its turn ended, such as when a
+    /// backgrounded command finished. A `continued` entry starts it; the
+    /// server ends it when the agent goes quiet or an input is waiting.
+    Unprompted,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

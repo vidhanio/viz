@@ -1,10 +1,15 @@
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{Arc, Mutex as SyncMutex},
+    time::Duration,
 };
 
 use toasty::Executor;
-use tokio::sync::{Mutex, watch};
+use tokio::{
+    sync::{Mutex, Notify, watch},
+    time::{Instant, sleep_until},
+};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -17,14 +22,20 @@ use super::{
 use crate::{
     acp::{
         Catalog, Desired, Outcome, Prompt, Session, SessionSnapshot, StopReason, stop_reason_name,
+        transcript::{Output, Transcript},
     },
-    wire::{LiveTurn, NewEntry, OptionValue, RpcError, RunEnd, RunId, RunStatus},
+    wire::{LiveTurn, OptionValue, RpcError, RunEnd, RunId, RunStatus, ToolCallStatus},
 };
+
+/// ACP sends no stop signal for idle output. Allow four seconds between
+/// updates once the continuation has no live tools.
+const CONTINUATION_QUIET: Duration = Duration::from_secs(4);
 
 pub(super) struct Driver {
     pub(super) session: Mutex<Option<Session>>,
     pub(super) lifetime: CancellationToken,
     phase: SyncMutex<Worker>,
+    queued: Notify,
 }
 
 #[derive(Default)]
@@ -44,6 +55,7 @@ impl Driver {
             session: Mutex::default(),
             lifetime,
             phase: SyncMutex::default(),
+            queued: Notify::new(),
         }
     }
 
@@ -95,6 +107,7 @@ impl Workspace {
         );
         let mut slot = driver.phase.lock().expect("worker phase mutex poisoned");
         if !matches!(*slot, Worker::Idle) {
+            driver.queued.notify_one();
             return;
         }
         *slot = Worker::Scheduled;
@@ -117,6 +130,12 @@ impl Workspace {
     ) -> Result<(), RpcError> {
         loop {
             let cancel = driver.lifetime.child_token();
+            {
+                let mut slot = driver.session.lock().await;
+                if let Some(session) = slot.as_mut() {
+                    self.continue_idle(thread, driver, session, &cancel).await?;
+                }
+            }
             let claim = {
                 let mut db = self.db.lock().await;
                 if driver.lifetime.is_cancelled() {
@@ -151,9 +170,7 @@ impl Workspace {
                 } else {
                     outcome(result)
                 };
-                if settlement.status == RunStatus::Interrupted
-                    || slot.as_ref().is_some_and(|session| !session.is_alive())
-                {
+                if settlement.status == RunStatus::Interrupted {
                     slot.take();
                 }
                 drop(slot);
@@ -183,6 +200,108 @@ impl Workspace {
             }
             prepare = false;
         }
+    }
+
+    /// Persist buffered autonomous output before claiming queued input. While
+    /// a continuation is running, queued input takes priority over its timer
+    /// and tools. Content racing the next prompt is folded into that prompt's
+    /// transcript, with patches still applied to the original tool entries.
+    async fn continue_idle(
+        &self,
+        thread: u64,
+        driver: &Driver,
+        session: &mut Session,
+        cancel: &CancellationToken,
+    ) -> Result<(), RpcError> {
+        let pending = session.idle_updates();
+        if pending.is_empty() || cancel.is_cancelled() {
+            return Ok(());
+        }
+        let (run, entry) = {
+            let mut db = self.db.lock().await;
+            if cancel.is_cancelled() {
+                return Ok(());
+            }
+            let mut tx = db.transaction().await?;
+            let (run, entry) = runs::begin_unprompted(&mut tx, thread).await?;
+            tx.commit().await?;
+            *driver.phase.lock().expect("worker phase mutex poisoned") = Worker::Running {
+                run,
+                cancel: cancel.clone(),
+            };
+            drop(db);
+            (run, entry)
+        };
+        let mut transcript = Transcript::new(entry.to_string(), Arc::default());
+        let result = async {
+            let mut pending = pending;
+            let mut open_patches = HashSet::new();
+            loop {
+                let entries = transcript.apply(std::mem::take(&mut pending));
+                let patches = self.publish(
+                    thread,
+                    run,
+                    session.id(),
+                    entries,
+                    Some(transcript.live()),
+                    session.take_snapshot(),
+                )
+                .await?;
+                for (id, status) in patches {
+                    if matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress) {
+                        open_patches.insert(id);
+                    } else {
+                        open_patches.remove(&id);
+                    }
+                }
+                let deadline = Instant::now() + CONTINUATION_QUIET;
+                loop {
+                    if !session.is_alive()
+                        || runs::queued(&mut *self.db.lock().await, thread).await?
+                    {
+                        break;
+                    }
+                    tokio::select! {
+                        biased;
+                        () = cancel.cancelled() => break,
+                        () = driver.queued.notified() => {},
+                        update = session.next_idle_update() => {
+                            if let Some(update) = update {
+                                pending = vec![update];
+                                pending.extend(session.idle_updates());
+                                break;
+                            }
+                            break;
+                        }
+                        () = sleep_until(deadline), if !transcript.has_open_tools() && open_patches.is_empty() => break,
+                    }
+                }
+                if pending.is_empty() {
+                    break;
+                }
+            }
+            self.publish(thread, run, session.id(), transcript.finish(), None, None)
+                .await?;
+            self.finish(
+                thread,
+                run,
+                Settlement {
+                    status: RunStatus::Completed,
+                    end: RunEnd {
+                        stop_reason: None,
+                        answer: Some(transcript.answer().to_owned()),
+                        error: None,
+                    },
+                },
+                cancel,
+            )
+            .await
+        }
+        .await;
+        if let Err(error) = &result {
+            self.abandon(thread, run, error).await;
+        }
+        result
     }
 
     async fn finish(
@@ -259,6 +378,8 @@ impl Workspace {
         } else {
             std::borrow::Cow::Borrowed(claim.text.as_str())
         };
+        let id = session.id().to_owned();
+        let id = id.as_str();
         session
             .prompt(
                 Prompt {
@@ -269,8 +390,9 @@ impl Workspace {
                     cancel: cancel.clone(),
                 },
                 |entries, live, snapshot| async move {
-                    self.publish(thread, claim.id, entries, live, snapshot)
+                    self.publish(thread, claim.id, id, entries, live, snapshot)
                         .await
+                        .map(drop)
                         .map_err(anyhow::Error::from)
                 },
             )
@@ -281,10 +403,11 @@ impl Workspace {
         &self,
         thread: u64,
         run: u64,
-        entries: Vec<NewEntry>,
+        session: &str,
+        entries: Vec<Output>,
         live: Option<LiveTurn>,
         snapshot: Option<SessionSnapshot>,
-    ) -> Result<(), RpcError> {
+    ) -> Result<Vec<(String, ToolCallStatus)>, RpcError> {
         let mut db = self.db.lock().await;
         let current = self
             .transient
@@ -293,8 +416,9 @@ impl Workspace {
             .threads
             .get(&thread)
             .is_some_and(|driver| driver.is_current(run));
+        let mut patches = Vec::new();
         if !current {
-            return Ok(());
+            return Ok(patches);
         }
         let mut relist = false;
         if !entries.is_empty() || snapshot.is_some() {
@@ -302,8 +426,10 @@ impl Workspace {
             if let Some(snapshot) = snapshot {
                 relist = persist_snapshot(&mut tx, thread, snapshot, None).await?;
             }
-            for entry in &entries {
-                store::append(&mut tx, thread, entry).await?;
+            for entry in entries {
+                if let Some(patch) = store::publish(&mut tx, thread, session, entry).await? {
+                    patches.push(patch);
+                }
             }
             tx.commit().await?;
         }
@@ -323,7 +449,7 @@ impl Workspace {
         } else {
             self.changed(Some(thread));
         }
-        Ok(())
+        Ok(patches)
     }
 
     async fn session<'slot>(
@@ -383,6 +509,7 @@ impl Workspace {
         };
         let session_ref = slot.insert(running);
         self.observe(thread, driver, updates);
+        self.kick(thread, false);
         if relist {
             self.relist(thread);
         } else {
@@ -468,6 +595,7 @@ impl Workspace {
                 let persisted =
                     persist_snapshot(&mut *workspace.db.lock().await, thread, snapshot, None).await;
                 drop(slot);
+                workspace.kick(thread, false);
                 match persisted {
                     Ok(true) => workspace.relist(thread),
                     Ok(false) => workspace.changed(Some(thread)),

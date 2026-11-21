@@ -122,7 +122,14 @@ enum VizProtocol {
       let text: String
     }
 
+    struct ToolUpdate: Decodable {
+      let entry: Int
+      let record: ToolRecord
+    }
+
     enum Content {
+      case continued
+      case toolUpdate(ToolUpdate)
       case prompt(Prompt)
       case text(Message)
       case thought(Message)
@@ -140,6 +147,11 @@ enum VizProtocol {
       case id, kind, data
     }
 
+    init(id: Int, content: Content) {
+      self.id = id
+      self.content = content
+    }
+
     init(from decoder: Decoder) throws {
       let container = try decoder.container(keyedBy: CodingKeys.self)
       id = try container.decode(Int.self, forKey: .id)
@@ -148,6 +160,9 @@ enum VizProtocol {
       case "prompt": content = .prompt(try container.decode(Prompt.self, forKey: .data))
       case "text": content = .text(try container.decode(Message.self, forKey: .data))
       case "thought": content = .thought(try container.decode(Message.self, forKey: .data))
+      case "continued": content = .continued
+      case "tool_update":
+        content = .toolUpdate(try container.decode(ToolUpdate.self, forKey: .data))
       case "tool": content = .tool(try container.decode(ToolRecord.self, forKey: .data))
       case "plan": content = .plan(try container.decode(Plan.self, forKey: .data))
       case "run": content = .run(try container.decode(RunEnd.self, forKey: .data))
@@ -461,7 +476,19 @@ final class Server {
       earlier[view.thread] = view.before
     } else {
       let last = entries[view.thread]?.last?.id ?? 0
-      entries[view.thread, default: []].append(contentsOf: view.entries.filter { $0.id > last })
+      let added = view.entries.filter { $0.id > last }
+      applyToolUpdates(added, thread: view.thread)
+      entries[view.thread, default: []].append(contentsOf: added)
+    }
+  }
+
+  private func applyToolUpdates(_ updates: [VizProtocol.Entry], thread: Int) {
+    for entry in updates {
+      if case .toolUpdate(let update) = entry.content,
+        let index = entries[thread]?.firstIndex(where: { $0.id == update.entry })
+      {
+        entries[thread]?[index] = .init(id: update.entry, content: .tool(update.record))
+      }
     }
   }
 

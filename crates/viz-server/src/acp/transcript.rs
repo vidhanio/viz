@@ -16,12 +16,28 @@ use crate::wire::{
 /// new run.
 const TEXT_RUN: usize = 4096;
 
+/// A transcript entry or a patch to a tool already committed by a turn.
+pub(crate) enum Output {
+    Entry(Box<NewEntry>),
+    ToolPatch {
+        id: String,
+        fields: Box<ToolFields>,
+        receipts: Arc<Receipts>,
+    },
+}
+
+impl From<NewEntry> for Output {
+    fn from(entry: NewEntry) -> Self {
+        Self::Entry(Box::new(entry))
+    }
+}
+
 /// One turn's agent output. Finished text runs, finished tools, and plans
 /// become entries in arrival order; the current text run and unfinished tools
 /// stay live until a later update or [`Transcript::finish`] commits them. Text
 /// runs are keyed `<turn>:<n>`, so a client can match a live run to the entry
 /// that commits it.
-pub(super) struct Transcript {
+pub(crate) struct Transcript {
     turn: String,
     receipts: Arc<Receipts>,
     tools: Vec<ToolContent>,
@@ -33,7 +49,7 @@ pub(super) struct Transcript {
 impl Transcript {
     /// `turn` is the live turn's identity; `receipts` link tool calls to viz's
     /// MCP tools.
-    pub(super) const fn new(turn: String, receipts: Arc<Receipts>) -> Self {
+    pub(crate) const fn new(turn: String, receipts: Arc<Receipts>) -> Self {
         Self {
             turn,
             receipts,
@@ -45,13 +61,13 @@ impl Transcript {
     }
 
     /// The agent's message text so far.
-    pub(super) fn answer(&self) -> &str {
+    pub(crate) fn answer(&self) -> &str {
         &self.answer
     }
 
     /// Applies content updates, returning the entries they commit;
     /// session-level updates are ignored.
-    pub(super) fn apply(&mut self, updates: Vec<SessionUpdate>) -> Vec<NewEntry> {
+    pub(crate) fn apply(&mut self, updates: Vec<SessionUpdate>) -> Vec<Output> {
         let mut entries = Vec::new();
         for update in updates {
             match update {
@@ -67,11 +83,19 @@ impl Transcript {
                 }
                 SessionUpdate::ToolCallUpdate(update) => {
                     let id = update.tool_call_id.0.to_string();
-                    self.tool(id, update.fields.into(), &mut entries);
+                    if self.tools.iter().any(|tool| tool.record().id == id) {
+                        self.tool(id, update.fields.into(), &mut entries);
+                    } else {
+                        entries.push(Output::ToolPatch {
+                            id,
+                            fields: Box::new(update.fields.into()),
+                            receipts: Arc::clone(&self.receipts),
+                        });
+                    }
                 }
                 SessionUpdate::Plan(plan) => {
                     self.commit_text(&mut entries);
-                    entries.push(plan_entry(plan));
+                    entries.push(plan_entry(plan).into());
                 }
                 _ => {}
             }
@@ -81,7 +105,7 @@ impl Transcript {
 
     /// The uncommitted tail: live text before unfinished tools, the order
     /// [`Transcript::finish`] commits them in.
-    pub(super) fn live(&self) -> LiveTurn {
+    pub(crate) fn live(&self) -> LiveTurn {
         LiveTurn {
             turn: self.turn.clone(),
             text: self.text.clone(),
@@ -93,19 +117,23 @@ impl Transcript {
         }
     }
 
+    pub(crate) const fn has_open_tools(&self) -> bool {
+        !self.tools.is_empty()
+    }
+
     /// Commits the live text and unfinished tools as they stand.
-    pub(super) fn finish(&mut self) -> Vec<NewEntry> {
+    pub(crate) fn finish(&mut self) -> Vec<Output> {
         let mut entries = Vec::new();
         self.commit_text(&mut entries);
         entries.extend(
             self.tools
                 .drain(..)
-                .map(|tool| NewEntry::Tool(tool.record().clone())),
+                .map(|tool| NewEntry::Tool(tool.record().clone()).into()),
         );
         entries
     }
 
-    fn chunk(&mut self, kind: LiveTextKind, content: ContentBlock, entries: &mut Vec<NewEntry>) {
+    fn chunk(&mut self, kind: LiveTextKind, content: ContentBlock, entries: &mut Vec<Output>) {
         let ContentBlock::Text(content) = content else {
             return;
         };
@@ -134,7 +162,7 @@ impl Transcript {
         }
     }
 
-    fn tool(&mut self, id: String, fields: ToolFields, entries: &mut Vec<NewEntry>) {
+    fn tool(&mut self, id: String, fields: ToolFields, entries: &mut Vec<Output>) {
         let index = if let Some(index) = self.tools.iter().position(|tool| tool.record().id == id) {
             index
         } else {
@@ -145,22 +173,25 @@ impl Transcript {
         if matches!(status, ToolCallStatus::Completed | ToolCallStatus::Failed) {
             self.commit_text(entries);
             let tool = self.tools.remove(index);
-            entries.push(NewEntry::Tool(tool.record().clone()));
+            entries.push(NewEntry::Tool(tool.record().clone()).into());
         }
     }
 
-    fn commit_text(&mut self, entries: &mut Vec<NewEntry>) {
+    fn commit_text(&mut self, entries: &mut Vec<Output>) {
         let Some(run) = self.text.take() else { return };
-        entries.push(match run.kind {
-            LiveTextKind::Text => NewEntry::Text {
-                text: run.text,
-                key: run.key,
-            },
-            LiveTextKind::Thought => NewEntry::Thought {
-                text: run.text,
-                key: run.key,
-            },
-        });
+        entries.push(
+            (match run.kind {
+                LiveTextKind::Text => NewEntry::Text {
+                    text: run.text,
+                    key: run.key,
+                },
+                LiveTextKind::Thought => NewEntry::Thought {
+                    text: run.text,
+                    key: run.key,
+                },
+            })
+            .into(),
+        );
     }
 }
 

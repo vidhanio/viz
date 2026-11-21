@@ -818,6 +818,10 @@
               "thread": {
                 "$ref": "#/$defs/ThreadId"
               },
+              "kind": {
+                "description": "What started the run.",
+                "$ref": "#/$defs/RunKind"
+              },
               "status": {
                 "$ref": "#/$defs/RunStatus"
               },
@@ -837,6 +841,7 @@
             "required": [
               "id",
               "thread",
+              "kind",
               "status"
             ]
           },
@@ -851,6 +856,21 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "RunKind": {
+            "description": "What started a run.",
+            "oneOf": [
+              {
+                "description": "An input: a prompt entry starts it and the ACP prompt response ends it.",
+                "type": "string",
+                "const": "prompt"
+              },
+              {
+                "description": "The agent continued on its own after its turn ended, such as when a\nbackgrounded command finished. A `continued` entry starts it; the\nserver ends it when the agent goes quiet or an input is waiting.",
+                "type": "string",
+                "const": "unprompted"
+              }
+            ]
           },
           "RunStatus": {
             "type": "string",
@@ -3321,6 +3341,35 @@
                 ]
               },
               {
+                "description": "Replaces a tool record at its original transcript position.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "tool_update"
+                  },
+                  "data": {
+                    "type": "object",
+                    "properties": {
+                      "entry": {
+                        "$ref": "#/$defs/EntryId"
+                      },
+                      "record": {
+                        "$ref": "#/$defs/ToolRecord"
+                      }
+                    },
+                    "required": [
+                      "entry",
+                      "record"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
                 "type": "object",
                 "properties": {
                   "kind": {
@@ -3361,6 +3410,19 @@
                 "required": [
                   "kind",
                   "data"
+                ]
+              },
+              {
+                "description": "The agent continued on its own after its turn ended: the start of an\nunprompted run, in place of a prompt.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "continued"
+                  }
+                },
+                "required": [
+                  "kind"
                 ]
               },
               {
@@ -4046,6 +4108,35 @@
             ]
           },
           {
+            "description": "Replaces a tool record at its original transcript position.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "tool_update"
+              },
+              "data": {
+                "type": "object",
+                "properties": {
+                  "entry": {
+                    "$ref": "#/$defs/EntryId"
+                  },
+                  "record": {
+                    "$ref": "#/$defs/ToolRecord"
+                  }
+                },
+                "required": [
+                  "entry",
+                  "record"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "data"
+            ]
+          },
+          {
             "type": "object",
             "properties": {
               "kind": {
@@ -4086,6 +4177,19 @@
             "required": [
               "kind",
               "data"
+            ]
+          },
+          {
+            "description": "The agent continued on its own after its turn ended: the start of an\nunprompted run, in place of a prompt.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "continued"
+              }
+            },
+            "required": [
+              "kind"
             ]
           },
           {

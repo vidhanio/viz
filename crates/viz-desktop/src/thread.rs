@@ -54,6 +54,8 @@ pub enum Item {
     Tool(Box<Tool>),
     /// The latest checklist reported in this ACP turn.
     Plan { key: String, steps: Vec<PlanStep> },
+    /// The agent resumed work on its own.
+    Continued { key: String },
     /// A non-default ACP stop reason shown in the activity timeline.
     TurnStatus { key: String, text: String },
     /// A delegated task's outcome, delivered back to the thread that
@@ -125,6 +127,7 @@ impl Item {
             Self::Text { key, .. }
             | Self::Thinking { key, .. }
             | Self::Plan { key, .. }
+            | Self::Continued { key }
             | Self::TurnStatus { key, .. }
             | Self::Notice { key, .. } => key,
         }
@@ -152,6 +155,7 @@ pub struct Tool {
     pub key: String,
     /// The call's id, pairing it with its result.
     pub call_id: String,
+    entry: Option<EntryId>,
     /// Tool name.
     pub name: String,
     /// One-line summary of the arguments.
@@ -273,6 +277,12 @@ impl Thread {
                 }
                 self.start(*id);
             }
+            EntryData::Continued => {
+                self.items.push(Item::Continued {
+                    key: format!("e{id}"),
+                });
+                self.start(*id);
+            }
             EntryData::TaskResult { task, text } => {
                 self.items.push(Item::TaskResult(TaskResult::parse(
                     format!("e{id}"),
@@ -284,11 +294,11 @@ impl Thread {
             EntryData::Text { text, key } => self.commit_text(key, text, false),
             EntryData::Thought { text, key } => self.commit_text(key, text, true),
             EntryData::Tool(record) => {
-                self.items.push(Item::Tool(Box::new(Tool::from_acp(
-                    self.acp_turn.as_deref(),
-                    record,
-                ))));
+                let mut tool = Tool::from_acp(self.acp_turn.as_deref(), record);
+                tool.entry = Some(*id);
+                self.items.push(Item::Tool(Box::new(tool)));
             }
+            EntryData::ToolUpdate { entry, record } => self.update_tool(*entry, record),
             EntryData::Plan { entries } => {
                 let steps = entries
                     .iter()
@@ -348,6 +358,18 @@ impl Thread {
                     });
                 }
             }
+        }
+    }
+
+    fn update_tool(&mut self, entry: EntryId, record: &ToolRecord) {
+        if let Some(tool) = self.items.iter_mut().find_map(|item| match item {
+            Item::Tool(tool) if tool.entry == Some(entry) => Some(tool),
+            _ => None,
+        }) {
+            let mut updated = Tool::from_acp(None, record);
+            updated.key.clone_from(&tool.key);
+            updated.entry = Some(entry);
+            **tool = updated;
         }
     }
 
@@ -455,6 +477,7 @@ impl Tool {
         Self {
             key: format!("acp-{}-{}", turn.unwrap_or_default(), record.id),
             call_id: record.id.clone(),
+            entry: None,
             name: name.to_owned(),
             summary,
             input,

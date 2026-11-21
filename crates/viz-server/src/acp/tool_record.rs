@@ -38,7 +38,7 @@ const OUTPUT_FIELDS: [&str; 6] = [
 
 /// One tool call's fields, from its first `tool_call` or a later
 /// `tool_call_update`.
-pub(super) struct ToolFields {
+pub(crate) struct ToolFields {
     title: Option<String>,
     name: Option<String>,
     kind: Option<ToolKind>,
@@ -186,14 +186,14 @@ impl Receipts {
 }
 
 /// One tool call's record, built from its updates in order.
-pub(super) struct ToolContent {
+pub(crate) struct ToolContent {
     record: ToolRecord,
     raw_output: String,
     content_text: String,
 }
 
 impl ToolContent {
-    pub(super) fn new(id: String) -> Self {
+    pub(crate) fn new(id: String) -> Self {
         let record = ToolRecord {
             title: id.clone(),
             id,
@@ -216,11 +216,20 @@ impl ToolContent {
         }
     }
 
+    pub(crate) fn from_record(record: ToolRecord) -> Self {
+        let raw_output = record.output.clone().unwrap_or_default();
+        Self {
+            record,
+            raw_output,
+            content_text: String::new(),
+        }
+    }
+
     pub(super) const fn record(&self) -> &ToolRecord {
         &self.record
     }
 
-    pub(super) fn update(&mut self, fields: ToolFields, receipts: &Receipts) -> &ToolRecord {
+    pub(crate) fn update(&mut self, fields: ToolFields, receipts: &Receipts) -> &ToolRecord {
         let record = &mut self.record;
         if let Some(title) = fields.title {
             record.title = title;

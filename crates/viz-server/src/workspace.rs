@@ -352,6 +352,7 @@ impl Workspace {
         self: &Arc<Self>,
         thread: u64,
         task: &str,
+        sequence: u64,
         text: &str,
         mode: WakeMode,
     ) -> Result<Option<u64>, RpcError> {
@@ -359,8 +360,8 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         if let Some(previous) = row(
             &mut tx,
-            "SELECT run FROM task_wakes WHERE thread = ?1 AND task = ?2",
-            [thread.into(), task.into()],
+            "SELECT run FROM task_wakes WHERE thread = ?1 AND task = ?2 AND sequence = ?3",
+            [thread.into(), task.into(), sequence.into()],
         )
         .await?
         {
@@ -400,8 +401,8 @@ impl Workspace {
         };
         exec(
             &mut tx,
-            "INSERT INTO task_wakes (thread, task, run) VALUES (?1, ?2, ?3)",
-            [thread.into(), task.into(), run.into()],
+            "INSERT INTO task_wakes (thread, task, sequence, run) VALUES (?1, ?2, ?3, ?4)",
+            [thread.into(), task.into(), sequence.into(), run.into()],
         )
         .await?;
         tx.commit().await?;

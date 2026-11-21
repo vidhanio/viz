@@ -27,8 +27,8 @@ use self::model::{StoppedTaskRun, TaskRow};
 use crate::{
     environments::Peers,
     wire::{
-        Attachment, INVALID_PARAMS, NOT_FOUND, RpcError, Run, RunId, RunStatus, Task, TaskStatus,
-        ThreadId, decode, encode,
+        Attachment, INVALID_PARAMS, NOT_FOUND, RpcError, Run, RunId, RunKind, RunStatus, Task,
+        TaskStatus, ThreadId, decode, encode,
     },
     workspace::{WakeMode, Workspace, active_run_from, run_from, sql},
 };
@@ -96,7 +96,10 @@ macro_rules! family_sql {
         concat!(
             "WITH RECURSIVE lineage(id) AS (SELECT ?2 UNION SELECT a.wake_run ",
             "FROM agent_tasks a JOIN lineage p ON a.parent_run = p.id ",
-            "WHERE a.parent = ?1 AND a.wake_run IS NOT NULL) ",
+            "WHERE a.parent = ?1 AND a.wake_run IS NOT NULL UNION SELECT w.run ",
+            "FROM agent_tasks a JOIN lineage p ON a.parent_run = p.id ",
+            "JOIN task_wakes w ON w.thread = a.parent AND w.task = a.id ",
+            "WHERE a.parent = ?1 AND w.sequence > 0 AND w.run IS NOT NULL) ",
             $query,
         )
     };
@@ -165,6 +168,17 @@ struct CancelRequest {
     task: String,
 }
 
+/// A settled continuation, identified by its run in the child environment.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct FollowUp {
+    source: String,
+    task: String,
+    thread: NonZeroU64,
+    run: NonZeroU64,
+    text: String,
+}
+
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ProgressRequest {
@@ -214,7 +228,15 @@ struct Receipt {
 #[derive(Debug, Eq, Hash, PartialEq)]
 enum Job {
     Task(String),
-    Stop { thread: u64, run: u64 },
+    FollowUp {
+        environment: String,
+        task: String,
+        run: u64,
+    },
+    Stop {
+        thread: u64,
+        run: u64,
+    },
 }
 
 struct Family {
@@ -304,6 +326,7 @@ impl Tasks {
                 encode(TaskResult { task })
             }
             "task.progress" => encode(self.progress(decode(params)?).await?),
+            "task.follow_up" => encode(self.follow_up(decode(params)?).await?),
             _ => Err(RpcError::new(
                 -32601,
                 format!("unknown task method {method}"),
@@ -574,6 +597,20 @@ impl Tasks {
                 run: row.u64(1)?,
             });
         }
+        for row in sql::rows(
+            &mut *db,
+            "SELECT environment, task, min(run) FROM task_follow_ups GROUP BY environment, task",
+            [],
+        )
+        .await?
+        {
+            let mut row = row;
+            jobs.push(Job::FollowUp {
+                environment: row.str(0)?,
+                task: row.str(1)?,
+                run: row.u64(2)?,
+            });
+        }
         drop(db);
         Ok(jobs)
     }
@@ -587,6 +624,23 @@ impl Tasks {
                     tokio::select! {
                         () = tasks.shutdown.cancelled() => {},
                         () = tasks.drive_task(&id) => {},
+                    }
+                })
+            }
+            Job::FollowUp {
+                environment,
+                task,
+                run,
+            } => {
+                let (environment, task, run) = (environment.clone(), task.clone(), *run);
+                tokio::spawn(async move {
+                    tokio::select! {
+                        () = tasks.shutdown.cancelled() => {},
+                        result = tasks.send_follow_up(&environment, &task, run) => {
+                            if let Err(error) = result {
+                                tracing::debug!(%task, run, %error, "delivering task follow-up");
+                            }
+                        }
                     }
                 })
             }
@@ -878,7 +932,7 @@ impl Tasks {
                 )));
             }
         };
-        let wake = self.workspace.wake(row.u64(0)?, id, &text, mode).await?;
+        let wake = self.workspace.wake(row.u64(0)?, id, 0, &text, mode).await?;
         sql::exec(
             &mut *self.workspace.db.lock().await,
             "UPDATE agent_tasks SET delivery = 'delivered', wake_run = ?2 WHERE id = ?1",
@@ -887,6 +941,96 @@ impl Tasks {
         .await?;
         self.signal();
         Ok(())
+    }
+
+    /// The child retains the outbox row until the parent acknowledges its
+    /// durable wake. Retrying uses the same (task, continuation run) key.
+    async fn send_follow_up(
+        &self,
+        environment: &str,
+        task: &str,
+        run: u64,
+    ) -> Result<(), RpcError> {
+        let Some(mut row) = sql::row(
+            &mut *self.workspace.db.lock().await,
+            "SELECT thread, text FROM task_follow_ups WHERE environment = ?1 AND task = ?2 AND run = ?3",
+            [environment.into(), task.into(), run.into()],
+        ).await? else { return Ok(()) };
+        let request = FollowUp {
+            source: self.peers.local.clone(),
+            task: task.to_owned(),
+            thread: NonZeroU64::new(row.u64(0)?)
+                .ok_or_else(|| RpcError::internal("missing child thread"))?,
+            run: NonZeroU64::new(run)
+                .ok_or_else(|| RpcError::internal("missing continuation run"))?,
+            text: row.str(1)?,
+        };
+        let acknowledged = if environment == self.peers.local {
+            self.follow_up(request).await?
+        } else {
+            self.peer(environment, "task.follow_up", encode(request)?)
+                .await?
+        };
+        if acknowledged {
+            sql::exec(
+                &mut *self.workspace.db.lock().await,
+                "DELETE FROM task_follow_ups WHERE environment = ?1 AND task = ?2 AND run = ?3",
+                [environment.into(), task.into(), run.into()],
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// Deliver the original result first. A stopped parent run can receive
+    /// transcript entries, but cannot be woken by a follow-up.
+    async fn follow_up(&self, request: FollowUp) -> Result<bool, RpcError> {
+        let _delivery = self.delivery.lock().await;
+        let (parent, mode, title) = {
+            let mut db = self.workspace.db.lock().await;
+            let Some(mut row) = sql::row(
+                &mut *db,
+                "SELECT parent, status, delivery, wake_run, title, parent_run, thread FROM agent_tasks
+                 WHERE id = ?1 AND environment = ?2",
+                [request.task.as_str().into(), request.source.as_str().into()],
+            )
+            .await?
+            else {
+                return Ok(true);
+            };
+            let parent = row.u64(0)?;
+            if row.str(2)? != "delivered" {
+                return Ok(false);
+            }
+            if row.str(1)? != "completed" {
+                return Ok(true);
+            }
+            if row.opt_u64(6)? != Some(request.thread.get()) {
+                return Err(RpcError::invalid(
+                    "task follow-up child does not match its receipt",
+                ));
+            }
+            let stopped = if let Some(run) = row.opt_u64(5)? {
+                stop_exists(&mut *db, parent, run).await?
+            } else {
+                false
+            };
+            let mode = if row.opt_u64(3)?.is_some() && !stopped {
+                WakeMode::Prompt
+            } else {
+                WakeMode::EntryOnly
+            };
+            (parent, mode, row.str(4)?)
+        };
+        let text = format!(
+            "Task {} ({title}) on {} thread {} continued.\n\n{}",
+            request.task, request.source, request.thread, request.text,
+        );
+        self.workspace
+            .wake(parent, &request.task, request.run.get(), &text, mode)
+            .await?;
+        self.signal();
+        Ok(true)
     }
 
     async fn progress(&self, request: ProgressRequest) -> Result<ProgressResult, RpcError> {
@@ -924,6 +1068,7 @@ impl Tasks {
                 .or(Some(Run {
                     id: RunId(run),
                     thread: ThreadId(thread),
+                    kind: RunKind::Prompt,
                     status: RunStatus::Running,
                     answer: None,
                     error: None,
@@ -1043,7 +1188,10 @@ async fn snapshot(db: &mut dyn Executor, thread: u64, run: u64) -> Result<Family
         family_sql!(
             "SELECT a.delivery = 'delivered', r.id, r.status FROM agent_tasks a \
          LEFT JOIN runs r ON r.id = a.wake_run AND r.thread = a.parent \
-         WHERE a.parent = ?1 AND a.parent_run IN (SELECT id FROM lineage) ORDER BY r.id DESC"
+         WHERE a.parent = ?1 AND a.parent_run IN (SELECT id FROM lineage) \
+         UNION ALL SELECT 1, r.id, r.status FROM task_wakes w \
+         JOIN runs r ON r.id = w.run WHERE w.thread = ?1 AND w.sequence > 0 \
+         AND r.id IN (SELECT id FROM lineage) ORDER BY 2 DESC"
         ),
         [thread.into(), run.into()],
     )

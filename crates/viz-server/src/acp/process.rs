@@ -89,7 +89,12 @@ const RUNTIME_ENV: &[&str] = &[
 /// reader task; it must not block.
 pub(super) type UpdateSink = Arc<dyn Fn(SessionNotification) + Send + Sync>;
 
-type Waiter = oneshot::Sender<Result<Value, String>>;
+type ResponseHook = Box<dyn FnOnce() + Send>;
+
+struct Waiter {
+    response: oneshot::Sender<Result<Value, String>>,
+    on_response: Option<ResponseHook>,
+}
 
 struct Connection {
     outgoing: mpsc::UnboundedSender<String>,
@@ -119,7 +124,7 @@ impl Connection {
             .collect();
         let reason = self.reason();
         for waiter in waiters {
-            let _ = waiter.send(Err(reason.clone()));
+            let _ = waiter.response.send(Err(reason.clone()));
         }
     }
 
@@ -132,12 +137,27 @@ impl Connection {
     }
 
     async fn request<T: DeserializeOwned>(&self, method: &str, params: Value) -> Result<T> {
+        self.request_with_hook(method, params, None).await
+    }
+
+    async fn request_with_hook<T: DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Value,
+        on_response: Option<ResponseHook>,
+    ) -> Result<T> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (waiter, response) = oneshot::channel();
         self.pending
             .lock()
             .expect("ACP pending lock poisoned")
-            .insert(id, waiter);
+            .insert(
+                id,
+                Waiter {
+                    response: waiter,
+                    on_response,
+                },
+            );
         if self.closed.is_cancelled() {
             self.pending
                 .lock()
@@ -340,10 +360,15 @@ impl Agent {
         &self,
         session: &str,
         prompt: &[Value],
+        on_response: impl FnOnce() + Send + 'static,
     ) -> impl Future<Output = Result<PromptResponse>> + Send + 'static {
         let connection = Arc::clone(&self.connection);
         let params = json!({ "sessionId": session, "prompt": prompt });
-        async move { connection.request("session/prompt", params).await }
+        async move {
+            connection
+                .request_with_hook("session/prompt", params, Some(Box::new(on_response)))
+                .await
+        }
     }
 
     /// Asks the agent to end its current turn; the prompt then stops with
@@ -465,7 +490,10 @@ fn dispatch(connection: &Connection, updates: &UpdateSink, line: &str) {
                 .to_owned())
         },
     );
-    let _ = waiter.send(result);
+    if let Some(on_response) = waiter.on_response {
+        on_response();
+    }
+    let _ = waiter.response.send(result);
 }
 
 /// The response to an agent's request: permission requests are allowed (or

@@ -137,10 +137,18 @@ pub enum EntryData {
         key: String,
     },
     Tool(ToolRecord),
+    /// Replaces a tool record at its original transcript position.
+    ToolUpdate {
+        entry: EntryId,
+        record: ToolRecord,
+    },
     Plan {
         entries: Vec<PlanEntry>,
     },
     Run(RunEnd),
+    /// The agent continued on its own after its turn ended: the start of an
+    /// unprompted run, in place of a prompt.
+    Continued,
     TaskResult {
         task: String,
         text: String,

@@ -12,11 +12,11 @@ use super::{
     sql::{exec, row, rows},
 };
 use crate::{
-    acp::{Desired, Selection},
+    acp::{Desired, Selection, tool_record::ToolContent, transcript::Output},
     wire::{
         AttachmentCapabilities, Command, ConfigOption, Entry, EntryId, EntryPage, NewEntry,
         Project, QueuedInput, RpcError, RunId, SearchHit, ThreadId, ThreadState, ThreadStatus,
-        ThreadSummary, Usage,
+        ThreadSummary, ToolCallStatus, Usage,
     },
 };
 
@@ -253,6 +253,73 @@ fn status(value: &str) -> Result<ThreadStatus, RpcError> {
     })
 }
 
+pub(super) async fn publish(
+    db: &mut dyn Executor,
+    thread: u64,
+    session: &str,
+    output: Output,
+) -> Result<Option<(String, ToolCallStatus)>, RpcError> {
+    let (entry, tool_session, patch) = match output {
+        Output::Entry(entry) => (*entry, Some(session), None),
+        Output::ToolPatch {
+            id,
+            fields,
+            receipts,
+        } => {
+            let previous = row(
+                db,
+                "SELECT id, data FROM entries WHERE thread = ?1 AND tool_session = ?2
+                 AND json_extract(data, '$.data.id') = ?3 ORDER BY id DESC LIMIT 1",
+                [thread.into(), session.into(), id.as_str().into()],
+            )
+            .await?
+            .map(decode_entry)
+            .transpose()?;
+            if let Some(Entry {
+                id,
+                data: NewEntry::Tool(record),
+            }) = previous
+            {
+                let updated = ToolContent::from_record(record.clone())
+                    .update(*fields, &receipts)
+                    .clone();
+                let patch = Some((updated.id.clone(), updated.status));
+                if updated == record {
+                    return Ok(patch);
+                }
+                exec(
+                    db,
+                    "UPDATE entries SET data = ?2 WHERE id = ?1",
+                    [id.0.into(), json(&NewEntry::Tool(updated.clone()))?.into()],
+                )
+                .await?;
+                (
+                    NewEntry::ToolUpdate {
+                        entry: id,
+                        record: updated,
+                    },
+                    None,
+                    patch,
+                )
+            } else {
+                let record = ToolContent::new(id).update(*fields, &receipts).clone();
+                let patch = Some((record.id.clone(), record.status));
+                (NewEntry::Tool(record), Some(session), patch)
+            }
+        }
+    };
+    let id = append(db, thread, &entry).await?;
+    if let (NewEntry::Tool(_), Some(session)) = (entry, tool_session) {
+        exec(
+            db,
+            "UPDATE entries SET tool_session = ?2 WHERE id = ?1",
+            [id.into(), session.into()],
+        )
+        .await?;
+    }
+    Ok(patch)
+}
+
 pub(super) async fn append(
     db: &mut dyn Executor,
     thread: u64,
@@ -272,7 +339,10 @@ pub(super) async fn append(
         | NewEntry::Thought { text, .. }
         | NewEntry::TaskResult { text, .. } => text.as_str(),
         NewEntry::Tool(tool) => &tool.title,
-        NewEntry::Run(_) | NewEntry::Plan { .. } => return Ok(id),
+        NewEntry::Run(_)
+        | NewEntry::Plan { .. }
+        | NewEntry::Continued
+        | NewEntry::ToolUpdate { .. } => return Ok(id),
     };
     if !text.trim().is_empty() {
         let text = if text.contains(['\0', '\u{1}', '\u{2}']) {

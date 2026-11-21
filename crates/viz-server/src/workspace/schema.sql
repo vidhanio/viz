@@ -28,6 +28,7 @@ CREATE INDEX IF NOT EXISTS threads_project ON threads(project);
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     thread INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    tool_session TEXT,
     data TEXT NOT NULL
 ) STRICT;
 
@@ -42,6 +43,7 @@ END;
 CREATE TABLE IF NOT EXISTS runs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     thread INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL DEFAULT 'prompt' CHECK (kind IN ('prompt', 'unprompted')),
     status TEXT NOT NULL CHECK (status IN ('queued', 'running', 'completed', 'failed', 'cancelled', 'interrupted')),
     position INTEGER NOT NULL,
     request_id TEXT,
@@ -92,11 +94,24 @@ CREATE TABLE IF NOT EXISTS task_retractions (
     PRIMARY KEY (environment, task)
 ) STRICT;
 
+CREATE INDEX IF NOT EXISTS entries_tool ON entries(thread, tool_session, json_extract(data, '$.data.id'))
+    WHERE tool_session IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS task_follow_ups (
+    environment TEXT NOT NULL,
+    task TEXT NOT NULL,
+    run INTEGER NOT NULL,
+    thread INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    PRIMARY KEY (environment, task, run)
+) STRICT;
+
 CREATE TABLE IF NOT EXISTS task_wakes (
     thread INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
     task TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
     run INTEGER,
-    PRIMARY KEY (thread, task)
+    PRIMARY KEY (thread, task, sequence)
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS harness_catalogs (

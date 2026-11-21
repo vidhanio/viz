@@ -571,6 +571,12 @@ private struct ThreadDetail: View {
         .textSelection(.enabled)
     case .thought(let message):
       thoughtRow(message.text)
+    case .continued:
+      Text("Continued on its own")
+        .font(.footnote)
+        .foregroundStyle(.secondary)
+    case .toolUpdate:
+      EmptyView()
     case .tool(let tool):
       toolRow(tool)
     case .plan(let plan):

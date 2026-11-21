@@ -128,9 +128,8 @@ impl Server {
             "environments.list" => encode(viz_client::protocol::EnvironmentList {
                 environments: self.peers.list().await,
             }),
-            "tasks.list" | "task.delegate" | "task.status" | "task.cancel" | "task.progress" => {
-                self.tasks.call(method, params).await
-            }
+            "tasks.list" | "task.delegate" | "task.status" | "task.cancel" | "task.progress"
+            | "task.follow_up" => self.tasks.call(method, params).await,
             _ => self.workspace.call(method, params).await,
         }
     }
@@ -231,6 +230,11 @@ async fn peer_rpc(
         {
             return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
         }
+        if request.method == "task.follow_up"
+            && args.get("source").and_then(Value::as_str) != source
+        {
+            return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
+        }
         http_call(&listener.server, request.method_name(), args).await
     } else if matches!(request.method_name(), Watch::NAME | Unwatch::NAME) {
         Err(RpcError::new(-32601, "watch requires a WebSocket"))
@@ -251,7 +255,10 @@ async fn http_call(server: &Server, method: &str, args: Value) -> Result<Value, 
 }
 
 fn internal(method: &str) -> bool {
-    matches!(method, "task.receive" | "task.progress" | "task.retract")
+    matches!(
+        method,
+        "task.receive" | "task.progress" | "task.retract" | "task.follow_up"
+    )
 }
 
 fn parse_request(data: &[u8]) -> Result<Request<'_>, RpcError> {
