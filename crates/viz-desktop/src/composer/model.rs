@@ -171,15 +171,19 @@ impl<'a> Picker<'a> {
         }
     }
 
-    /// The trigger shows the model and thinking level's display names.
-    fn label(&self) -> Cow<'a, str> {
-        let model = self.model.zip(self.model_value()).map(|(model, value)| {
+    fn model_label(&self) -> Option<&'a str> {
+        self.model.zip(self.model_value()).map(|(model, value)| {
             model
                 .choices
                 .iter()
                 .find(|choice| choice.value == value)
                 .map_or(value, model_name)
-        });
+        })
+    }
+
+    /// The trigger shows the model and thinking level's display names.
+    fn label(&self) -> Cow<'a, str> {
+        let model = self.model_label();
         let level = self.levels.and_then(|levels| {
             levels
                 .value(self.target)
@@ -287,7 +291,14 @@ fn groups<'a>(model: &'a ConfigOption, query: &str) -> Vec<(Option<&'a str>, Vec
 fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
     let k = &t.overlay;
     let max_width = s.window_width - S16;
-    let thinking = picker.levels.map(|levels| thinking(s, picker, levels, t));
+    let model_parts = picker.model.map(|model| models(s, picker, model, t));
+    let show_thinking = model_parts
+        .as_ref()
+        .is_none_or(|(_, _, current_visible)| *current_visible);
+    let thinking = picker
+        .levels
+        .filter(|_| show_thinking)
+        .map(|levels| thinking(s, picker, levels, t));
     let width = thinking
         .as_ref()
         .map_or(MODEL_MENU_WIDTH, |(_, width)| *width);
@@ -301,8 +312,7 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
         .fill(k.c.layer_01)
         .focus_return(format!("{KEY}-trigger"))
         .modal(true, close);
-    if let Some(model) = picker.model {
-        let (field, list) = models(s, picker, model, t);
+    if let Some((field, list, _)) = model_parts {
         body = body
             .child(row().w_full().px(S4).pt(S4).instant_changes().child(field))
             .child(ui::rule(t))
@@ -331,20 +341,23 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
     layer.push(body);
 }
 
-/// The search field and the matching models, grouped by provider.
-fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> (El, El) {
+/// The search field, matching models grouped by provider, and whether the
+/// committed model is among the visible matches.
+fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> (El, El, bool) {
     let current = picker.model_value();
     let groups = groups(model, &s.model_menu.query.text);
     let values: Vec<String> = groups
         .iter()
         .flat_map(|(_, entries)| entries.iter().map(|entry| entry.value.to_owned()))
         .collect();
+    let current_visible =
+        current.is_some_and(|current| values.iter().any(|value| value == current));
     let active = s
         .model_menu
         .active
         .as_deref()
         .filter(|active| values.iter().any(|value| value == active))
-        .or_else(|| current.filter(|current| values.iter().any(|value| value == current)))
+        .or_else(|| current.filter(|_| current_visible))
         .or_else(|| values.first().map(String::as_str))
         .map(str::to_owned);
     let mut list = col()
@@ -358,7 +371,9 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
         .padding(S4)
         .scroll(ScrollSpec {
             stick_bottom: false,
-        });
+        })
+        .scroll_edge_fade(S16)
+        .scroll_margin(S16);
     for (heading, entries) in &groups {
         if let Some(heading) = heading {
             list = list.child(
@@ -392,6 +407,7 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
     }
     let owner = picker.target.owner();
     let id = model.id.clone();
+    let committed = current.map(str::to_owned);
     let field = TextInput::new(&s.model_menu.query)
         .label("Search models")
         .placeholder("Search models")
@@ -406,10 +422,21 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
             s.model_menu.active = None;
             tx.scroll_to_instant(LIST, 0.0, 0.0);
         })
-        .on_key(move |s, ev, tx| on_key(s, ev, tx, &values, active.as_deref(), owner, &id))
+        .on_key(move |s, ev, tx| {
+            on_key(
+                s,
+                ev,
+                tx,
+                &values,
+                active.as_deref(),
+                committed.as_deref(),
+                owner,
+                &id,
+            )
+        })
         .build(&t.overlay)
         .key(FIELD);
-    (field, list)
+    (field, list, current_visible)
 }
 
 fn row_key(value: &str) -> String {
@@ -540,6 +567,20 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
                 ),
         );
     }
+    let header = row()
+        .w_full()
+        .gap(S8)
+        .center_y()
+        .child(ui::section(&name, t))
+        .child(rune::spacer())
+        .children(picker.model_label().map(|model| {
+            text(model)
+                .font(t.small)
+                .color(t.faint)
+                .min_w(0.0)
+                .shrink()
+                .truncate()
+        }));
     let section = col()
         .key("model-thinking")
         .w_full()
@@ -547,7 +588,7 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
         .pt(S6)
         .pb(S8)
         .gap(S4)
-        .child(ui::section(&name, t))
+        .child(header)
         .child(chips);
     (section, width)
 }
@@ -565,12 +606,17 @@ fn set_level(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &str) 
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "keyboard navigation needs the filtered list, highlight, committed value, and owner"
+)]
 fn on_key(
     s: &mut Desktop,
     ev: &KeyEvent,
     tx: &mut Tx,
     values: &[String],
     active: Option<&str>,
+    committed: Option<&str>,
     owner: Owner,
     id: &str,
 ) -> bool {
@@ -589,7 +635,13 @@ fn on_key(
         .unwrap_or_default();
     if ev.key == Key::Enter {
         if !tx.key_repeat() {
-            choose_model(s, tx, owner, id, &values[index]);
+            let chosen = &values[index];
+            if committed == Some(chosen.as_str()) {
+                close(s);
+                tx.focus("draft", false);
+            } else {
+                choose_model(s, tx, owner, id, chosen);
+            }
         }
     } else {
         let next = if ev.key == Key::Down {
