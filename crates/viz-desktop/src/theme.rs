@@ -174,8 +174,6 @@ pub struct Theme {
     pub group: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
-    /// Hover wash on rows (transparent: hover feedback is ink only).
-    pub hover: Color,
     /// The quiet wash behind my messages.
     pub mine: Color,
     /// Body text.
@@ -673,7 +671,6 @@ impl Theme {
             surface,
             group,
             hairline,
-            hover: Color::TRANSPARENT,
             mine: raised,
             text,
             muted,

@@ -824,7 +824,7 @@ impl Desktop {
             }
         }
         if !errors.is_empty() {
-            self.toast(tx, "Couldn't attach files", Some(errors.join("\n")));
+            self.toast(tx, "Couldn’t attach files", Some(errors.join("\n")));
         }
     }
 

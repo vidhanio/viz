@@ -868,20 +868,22 @@ impl<'a> Dialog<'a> {
         if let Some(subject) = self.subject {
             head = head.child(
                 text(subject)
-                    .font(t.ui)
-                    .color(t.muted)
+                    .font(t.ui_medium)
+                    .color(t.text)
                     .truncate_middle()
                     .w_full(),
             );
         }
         if let Some(detail) = self.detail {
-            head = head.child(
-                text(detail)
-                    .font(t.ui)
-                    .color(t.muted)
-                    .wrap_anywhere()
-                    .w_full(),
-            );
+            let mut detail_el = text(detail)
+                .font(t.ui)
+                .color(t.muted)
+                .wrap_anywhere()
+                .w_full();
+            if self.subject.is_some() {
+                detail_el = detail_el.mt(S4);
+            }
+            head = head.child(detail_el);
         }
         let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::Ghost, Size::Small)
             .on_press(close.clone())
@@ -1024,7 +1026,7 @@ pub fn toast<S: 'static>(
         .child(
             row()
                 .w_full()
-                .gap(S12)
+                .gap(S8)
                 .items_start()
                 .child(mark.a11y_hidden())
                 .child(content)
@@ -1116,7 +1118,6 @@ macro_rules! lucide {
 lucide! {
     /// New thread.
     COMPOSE = SquarePen;
-    PLUS = Plus;
     /// Send.
     ARROW_UP = ArrowUp;
     /// Delegated work.
@@ -1146,6 +1147,7 @@ lucide! {
     EYE_OFF = EyeOff;
     MINUS = Minus;
     TERMINAL = Terminal;
+    FILE = File;
     FILE_READ = FileText;
     FILE_WRITE = FilePlus;
     FILE_EDIT = FilePenLine;

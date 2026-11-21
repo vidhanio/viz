@@ -523,7 +523,7 @@ pub fn new_thread_button(s: &Desktop, t: &Theme) -> El {
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
-    .shortcut(format!("{}+N", ui::COMMAND_KEY))
+    .shortcut(ui::shortcut("N"))
     .disabled(!s.connected() || s.new_thread.is_some())
     .on_press_tx(Desktop::create_here)
     .build(&t.k)

@@ -725,43 +725,66 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
 
 /// What to show when the timeline has no messages.
 fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
-    match s.status {
-        Status::Error(_) => {
-            return ui::empty(
-                None,
-                "Offline",
-                "Start viz-server to reconnect.",
-                Some(
-                    ui::button("Retry", ButtonVariant::Outline, Size::Default)
-                        .on_press_tx(Desktop::reconnect)
-                        .build(&t.k)
-                        .key("retry"),
-                ),
-                t,
-            );
+    match &s.status {
+        Status::Error(message) => {
+            let detail = if message.trim().is_empty() {
+                "Start viz-server to reconnect."
+            } else {
+                message.as_str()
+            };
+            let retry = ui::button("Retry", ButtonVariant::Outline, Size::Default)
+                .on_press_tx(Desktop::reconnect)
+                .build(&t.k)
+                .key("retry");
+            let mut body = col()
+                .key("empty")
+                .w_full()
+                .max_w(EMPTY_WIDTH)
+                .gap(S8)
+                .items_center()
+                .child(text("Offline").font(t.title).color(t.text))
+                .child(
+                    text(detail)
+                        .font(t.ui)
+                        .color(t.muted)
+                        .wrap_anywhere()
+                        .max_lines(3)
+                        .align(rune::Align::Center)
+                        .w_full(),
+                );
+            if let Some(endpoint) = &s.endpoint {
+                body = body.child(
+                    text(endpoint)
+                        .font(t.mono_small)
+                        .color(t.faint)
+                        .truncate_middle()
+                        .w_full()
+                        .align(rune::Align::Center),
+                );
+            }
+            return body.child(retry.mt(S8));
         }
         Status::Connecting => return ui::empty(None, "Connecting…", "", None, t),
         Status::Connected { .. } => {}
     }
     if s.selected.is_none() && s.new_thread.is_none() {
-        let (title, detail, action) = if s.projects.is_empty() {
+        let new_thread = ui::button("New thread", ButtonVariant::Submit, Size::Large)
+            .icon(&ui::COMPOSE)
+            .on_press_tx(Desktop::create_here)
+            .build(&t.k);
+        let (detail, actions) = if s.projects.is_empty() {
+            let add_project = ui::button("Add project", ButtonVariant::Outline, Size::Large)
+                .icon(&ui::FOLDER_PLUS)
+                .on_press_tx(sidebar::open_add_project)
+                .build(&t.k);
             (
-                "No thread selected",
-                "Threads can run in a project’s folder.",
-                ui::button("Add project", ButtonVariant::Outline, Size::Large)
-                    .icon(&ui::PLUS)
-                    .on_press_tx(sidebar::open_add_project),
+                "Start a thread or add a project folder.",
+                row().gap(S8).child(new_thread).child(add_project),
             )
         } else {
-            (
-                "No thread selected",
-                "Select a thread or start a new one.",
-                ui::button("New thread", ButtonVariant::Outline, Size::Large)
-                    .icon(&ui::COMPOSE)
-                    .on_press_tx(Desktop::create_here),
-            )
+            ("Select a thread or start a new one.", new_thread)
         };
-        return ui::empty(None, title, detail, Some(action.build(&t.k)), t);
+        return ui::empty(None, "No thread selected", detail, Some(actions), t);
     }
     thread_hint(s, t, layer)
 }
@@ -808,23 +831,17 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
     let current = s
         .project()
         .map_or("No project", |project| project.name.as_str());
-    let trigger = ui::select_trigger(
-        DRAFT_PROJECT,
-        "Project",
-        Some(current),
-        open,
-        ui::MODEL_TRIGGER_MAX,
-        t,
-    )
-    .on_press(|s: &mut Desktop| {
-        s.open_picker = if s.open_picker.as_deref() == Some(DRAFT_PROJECT)
-            || s.new_thread.as_ref().is_none_or(|thread| thread.sending)
-        {
-            None
-        } else {
-            Some(DRAFT_PROJECT.to_owned())
-        };
-    });
+    let trigger = ui::marked_trigger(DRAFT_PROJECT, "Project", current, &ui::FOLDER, open, t)
+        .max_w(ui::MODEL_TRIGGER_MAX)
+        .on_press(|s: &mut Desktop| {
+            s.open_picker = if s.open_picker.as_deref() == Some(DRAFT_PROJECT)
+                || s.new_thread.as_ref().is_none_or(|thread| thread.sending)
+            {
+                None
+            } else {
+                Some(DRAFT_PROJECT.to_owned())
+            };
+        });
     let mut menu = Menu::new(format!("{DRAFT_PROJECT}-picker"))
         .placement(Placement::Bottom)
         .min_width(ui::MENU_WIDTH)

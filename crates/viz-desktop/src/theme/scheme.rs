@@ -84,7 +84,7 @@ impl Scheme {
             _ => PathBuf::from(path),
         };
         let yaml = std::fs::read_to_string(&path)
-            .map_err(|e| format!("can't read {}: {e}", path.display()))?;
+            .map_err(|e| format!("can’t read {}: {e}", path.display()))?;
         Self::from_yaml(&yaml).map_err(|e| format!("{}: {e}", path.display()))
     }
 

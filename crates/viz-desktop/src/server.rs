@@ -127,7 +127,7 @@ pub fn spawn(
                 tracing::error!(error = %e, "could not start the connection runtime");
                 set_status(
                     &ui,
-                    Status::Error(format!("Couldn't start the connection thread: {e}")),
+                    Status::Error(format!("Couldn’t start the connection thread: {e}")),
                 );
                 _ = first.send(());
             }
@@ -510,7 +510,7 @@ impl Session<'_> {
                 }
                 match harnesses {
                     Ok(harnesses) => s.harnesses = harnesses,
-                    Err(error) => s.toast(tx, "Couldn't load harnesses", Some(error.to_string())),
+                    Err(error) => s.toast(tx, "Couldn’t load harnesses", Some(error.to_string())),
                 }
                 s.draft_loaded(id);
             });
@@ -587,7 +587,7 @@ impl Session<'_> {
             if matches!(error, Error::Closed) {
                 return Err(error);
             }
-            toast(self.ui, "Couldn't release thread watch", error.to_string());
+            toast(self.ui, "Couldn’t release thread watch", error.to_string());
         }
         Ok(())
     }
@@ -690,7 +690,7 @@ impl Session<'_> {
                 match result {
                     Ok(result) => s.set_harness_options(&harness, result.options),
                     Err(error) => {
-                        s.toast(tx, "Couldn't load model options", Some(error.to_string()));
+                        s.toast(tx, "Couldn’t load model options", Some(error.to_string()));
                     }
                 }
             });

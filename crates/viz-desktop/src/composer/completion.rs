@@ -192,12 +192,12 @@ pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         Kind::File => popup
             .label("Files")
             .empty_message(match &s.completion.files {
-                None => "Searching files",
+                None => "Searching files…",
                 Some(Err(_)) => "File search failed",
                 Some(Ok(_)) => "No files",
             })
             .items(files(s).iter().map(|path| {
-                PopupItem::new(path, path).leading(icon(&ui::SEARCH, ICON_SMALL).color(t.muted))
+                PopupItem::new(path, path).leading(icon(&ui::FILE, ICON_SMALL).color(t.muted))
             })),
     };
     popup.build(&t.overlay, layer);
