@@ -457,10 +457,17 @@ impl Session<'_> {
     async fn select(&mut self, thread: ThreadId) -> viz_client::Result<()> {
         if let Err(error) = self.switch(Some(thread)).await {
             let previous = self.watched;
+            let entries: Vec<Entry> = self
+                .entries
+                .iter()
+                .flat_map(|page| page.iter().cloned())
+                .collect();
+            let before = self.before;
             self.ui.update(move |s, tx| {
                 if s.selected == Some(thread) {
                     if let Some(previous) = previous {
                         s.show(previous);
+                        s.apply_view(previous, &entries, true, before, tx);
                     } else {
                         s.clear_selection();
                     }

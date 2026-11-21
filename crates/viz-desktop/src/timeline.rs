@@ -45,6 +45,10 @@ const DIFF_LINES: usize = 400;
 const SHORTCUT_LABEL: f32 = S32 + S32 + S8;
 /// The widest a user bubble gets, as a share of the reading column.
 const BUBBLE_FRAC: f32 = 0.8;
+/// How long a thread may take to arrive before the timeline says it's
+/// loading, in seconds: most arrive sooner, and a spinner that flashes for a
+/// frame reads as a glitch.
+const LOADING_DELAY: f32 = 0.4;
 
 /// What a row is, for the space above it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,7 +87,9 @@ impl Rows {
 pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let thread = &s.thread;
     let empty = thread.items.is_empty() && thread.before.is_none() && !s.busy();
-    let body = if empty {
+    let body = if s.loading && s.connected() {
+        loading(t)
+    } else if empty {
         empty_state(s, t, layer).pt(EMPTY_TOP)
     } else {
         let mut rows = Rows {
@@ -131,6 +137,21 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .scroll(ScrollSpec { stick_bottom: true })
         .scroll_anchor()
         .child(body)
+}
+
+/// A thread whose transcript hasn't arrived: nothing, then a quiet spinner if
+/// it takes a while.
+fn loading(t: &Theme) -> El {
+    row()
+        .key("loading")
+        .w_full()
+        .pt(EMPTY_TOP)
+        .justify_center()
+        .role("status")
+        .label("Loading")
+        .child(ui::spinner(t))
+        .transition(Transition::opacity())
+        .enter_delay(LOADING_DELAY)
 }
 
 /// Older history, between two rules.

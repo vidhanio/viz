@@ -29,6 +29,7 @@ pub const SCENES: &[Scene] = &[
     ("attachments", attachments),
     ("queue", queue),
     ("empty", empty),
+    ("loading", loading),
     ("onboarding", onboarding),
     ("subagents", subagents),
     ("agents", agents),
@@ -67,6 +68,7 @@ fn workspace(s: &mut Desktop) {
     s.draft.focused = true;
     s.state = Some(thread());
     s.thread = transcript(&[]);
+    s.loading = false;
     s.toggle("acp-1-write-1-activity");
     s.toggle("acp-1-write-1");
 }
@@ -524,6 +526,12 @@ fn empty(s: &mut Desktop) {
     s.thread = Thread::default();
 }
 
+/// A thread just selected whose transcript hasn't arrived.
+fn loading(s: &mut Desktop) {
+    workspace(s);
+    s.show(ThreadId(10));
+}
+
 fn onboarding(s: &mut Desktop) {
     workspace(s);
     s.projects.clear();
@@ -588,6 +596,7 @@ fn subagent(s: &mut Desktop) {
     workspace(s);
     s.threads = list();
     s.show(ThreadId(20));
+    s.loading = false;
     let mut state = thread();
     state.status = ThreadStatus::Working;
     state.usage = Some(viz_client::protocol::ContextUsage {

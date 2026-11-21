@@ -124,6 +124,8 @@ pub struct Desktop {
     pub selected: Option<ThreadId>,
     /// Its transcript and live state, once its view arrives.
     pub thread: Thread,
+    /// The selected thread's transcript hasn't arrived since it was shown.
+    pub loading: bool,
     pub history_loading: bool,
     pub state: Option<ThreadState>,
     pub new_thread: Option<NewThread>,
@@ -176,6 +178,7 @@ impl Desktop {
             harnesses: Vec::new(),
             selected: None,
             thread: Thread::default(),
+            loading: false,
             history_loading: false,
             state: None,
             new_thread: None,
@@ -284,7 +287,7 @@ impl Desktop {
         }
     }
 
-    /// Shows `thread`, empty until its view arrives.
+    /// Shows `thread`, loading until its view arrives.
     pub fn show(&mut self, thread: ThreadId) {
         if self.selected != Some(thread) || self.new_thread.is_some() {
             self.save_draft();
@@ -294,6 +297,7 @@ impl Desktop {
             self.draft = draft.edit;
             self.attachments = draft.attachments;
             self.reset_thread();
+            self.loading = true;
             self.navigation
                 .reveal(thread, &self.threads, self.environment.as_deref());
         }
@@ -316,6 +320,7 @@ impl Desktop {
 
     fn reset_thread(&mut self) {
         self.thread = Thread::default();
+        self.loading = false;
         self.history_loading = false;
         self.state = None;
         self.expanded.clear();
@@ -345,6 +350,7 @@ impl Desktop {
                 tx.animated();
             }
             self.thread = Thread::from_entries(entries, before);
+            self.loading = false;
             self.history_loading = false;
         } else {
             self.thread.append(entries);
