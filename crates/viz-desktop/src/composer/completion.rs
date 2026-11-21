@@ -1,18 +1,29 @@
 use std::{ops::Range, time::Duration};
 
-use rune::{El, Key, KeyEvent, TextEdit, Tx, icon, text};
-use rune_kit::PopupItem;
+use rune::{
+    Color, El, Key, KeyEvent, ScrollSpec, Spring, SpringPair, TextEdit, Transition, Tx, col, el,
+    icon, row, text,
+};
 use viz_client::protocol::SlashCommand;
 
 use crate::{
     app::Desktop,
     server::Command,
-    theme::{ICON_SMALL, Theme},
+    theme::{
+        HAIRLINE, ICON_SMALL, OVERLAY_BLUR, RADIUS_CONTROL, S2, S4, S6, S8, S12, S16, S32, Theme,
+    },
     ui,
 };
 
 const FILE_DELAY: Duration = Duration::from_millis(110);
 const POPUP: &str = "composer-completion";
+const LIST: &str = "completion-list";
+/// Maximum scrollable height of the completion drawer before scrolling.
+const DRAWER_MAX_HEIGHT: f32 = 248.0;
+/// Micro-header height at the top of the completion drawer.
+const HEADER_HEIGHT: f32 = 26.0;
+/// Maximum width of a slash command's argument hint.
+const HINT_MAX_WIDTH: f32 = 140.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Kind {
@@ -74,6 +85,29 @@ impl Completion {
         if request == self.request {
             self.files = Some(result);
         }
+    }
+
+    /// Seeds a slash-command completion state for preview scenes.
+    pub fn preview_slash(&mut self, query: &str, highlighted: usize) {
+        self.reset();
+        self.token = Some(Token {
+            kind: Kind::Slash,
+            range: 0..query.len() + 1,
+            query: query.to_owned(),
+        });
+        self.highlighted = highlighted;
+    }
+
+    /// Seeds a file-mention completion state for preview scenes.
+    pub fn preview_files(&mut self, query: &str, paths: Vec<String>, highlighted: usize) {
+        self.reset();
+        self.token = Some(Token {
+            kind: Kind::File,
+            range: 0..query.len() + 1,
+            query: query.to_owned(),
+        });
+        self.files = Some(Ok(paths));
+        self.highlighted = highlighted;
     }
 
     fn matches(&self, token: &Token<&str>) -> bool {
@@ -151,56 +185,232 @@ fn files(s: &Desktop) -> &[String] {
         .map_or(&[], Vec::as_slice)
 }
 
-pub(super) fn popup(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
-    let Some(token) = s
+/// Attached completion drawer tucked flush behind the composer's top edge when
+/// typing a leading `/` command or `@` file reference.
+pub(super) fn drawer(s: &Desktop, t: &Theme) -> Option<El> {
+    let token = s
         .completion
         .token
         .as_ref()
-        .filter(|_| !s.completion.dismissed && s.draft.focused)
-    else {
-        return;
-    };
-    let popup = ui::popup_list::<Desktop>(POPUP, "composer-card")
-        .width(ui::COMPLETION_WIDTH)
-        .active(Some(s.completion.highlighted))
-        .on_active(|s, i| s.completion.highlighted = i)
-        .on_choose(choose);
-    let popup = match token.kind {
-        Kind::Slash
+        .filter(|_| !s.completion.dismissed && s.draft.focused)?;
+    let (heading, rows, empty_message) = match token.kind {
+        Kind::Slash => {
             if s.state
                 .as_ref()
-                .is_some_and(|state| !state.commands.is_empty()) =>
-        {
-            popup.label("Commands").empty_message("No commands").items(
-                commands(s, &token.query).map(|command| {
-                    let mut item = PopupItem::new(&command.name, format!("/{}", command.name))
-                        .description(&command.description);
-                    if let Some(hint) = &command.hint {
-                        item = item.trailing(
-                            text(hint)
-                                .font(t.mono_small)
-                                .color(t.faint)
-                                .max_w(ui::COMPLETION_WIDTH / 3.0)
-                                .truncate(),
-                        );
-                    }
-                    item
-                }),
-            )
+                .is_none_or(|state| state.commands.is_empty())
+            {
+                return None;
+            }
+            let matched: Vec<_> = commands(s, &token.query).collect();
+            let active = s
+                .completion
+                .highlighted
+                .min(matched.len().saturating_sub(1));
+            let rows: Vec<_> = matched
+                .into_iter()
+                .enumerate()
+                .map(|(index, cmd)| slash_row(cmd, index, index == active, t))
+                .collect();
+            ("Commands", rows, "No matching commands")
         }
-        Kind::Slash => return,
-        Kind::File => popup
-            .label("Files")
-            .empty_message(match &s.completion.files {
+        Kind::File => {
+            let matched = files(s);
+            let active = s
+                .completion
+                .highlighted
+                .min(matched.len().saturating_sub(1));
+            let rows: Vec<_> = matched
+                .iter()
+                .enumerate()
+                .map(|(index, path)| file_row(path, index, index == active, t))
+                .collect();
+            let empty = match &s.completion.files {
                 None => "Searching files…",
                 Some(Err(_)) => "File search failed",
-                Some(Ok(_)) => "No files",
-            })
-            .items(files(s).iter().map(|path| {
-                PopupItem::new(path, path).leading(icon(&ui::FILE, ICON_SMALL).color(t.muted))
-            })),
+                Some(Ok(_)) => "No matching files",
+            };
+            ("Files", rows, empty)
+        }
     };
-    popup.build(&t.overlay, layer);
+    let header = row()
+        .key("completion-header")
+        .w_full()
+        .h(HEADER_HEIGHT)
+        .px(S12)
+        .center_y()
+        .child(text(heading).font(t.small_medium).color(t.faint))
+        .child(rune::spacer())
+        .child(
+            text("↑↓  ↵  Esc")
+                .font(t.mono_micro)
+                .color(t.faint)
+                .a11y_hidden(),
+        );
+    let mut list = col()
+        .key(LIST)
+        .role("listbox")
+        .label(heading)
+        .w_full()
+        .max_h(DRAWER_MAX_HEIGHT)
+        .min_h(0.0)
+        .padding(S4)
+        .instant_changes()
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .scroll_edge_fade(S16);
+    if rows.is_empty() {
+        list = list.child(
+            text(empty_message)
+                .role("status")
+                .font(t.small)
+                .color(t.faint)
+                .px(S8)
+                .py(S8),
+        );
+    } else {
+        list = list.children(rows);
+    }
+    let motion = Transition::offset(0.0, S6)
+        .combined(Transition::opacity())
+        .springs(SpringPair::new(
+            Spring::new(0.14, 0.0),
+            Spring::new(0.10, 0.0),
+        ));
+    Some(
+        ui::tucked_deck(POPUP, 25, t.overlay_glass, OVERLAY_BLUR, t)
+            .role("group")
+            .label(heading)
+            .transition(motion)
+            .child(header)
+            .child(ui::rule(t))
+            .child(list),
+    )
+}
+
+fn slash_row(command: &SlashCommand, index: usize, highlighted: bool, t: &Theme) -> El {
+    let id = command.name.clone();
+    let label = format!("/{}", command.name);
+    let indicator = el()
+        .w(S2)
+        .h(S16)
+        .radius(HAIRLINE)
+        .fill(if highlighted {
+            t.accent
+        } else {
+            Color::TRANSPARENT
+        })
+        .a11y_hidden();
+    row()
+        .key(format!("slash-{}", command.name))
+        .role("option")
+        .label(&label)
+        .description(&command.description)
+        .focus_selected(highlighted)
+        .preserve_focus_on_press(true)
+        .w_full()
+        .h(S32)
+        .pl(S4)
+        .pr(S8)
+        .gap(S8)
+        .center_y()
+        .radius(RADIUS_CONTROL)
+        .continuous_corners()
+        .fill(if highlighted {
+            t.accent_veil
+        } else {
+            Color::TRANSPARENT
+        })
+        .on_hover(move |s: &mut Desktop| s.completion.highlighted = index)
+        .on_press_tx(move |s: &mut Desktop, tx| choose(s, &id, tx))
+        .child(indicator)
+        .child(
+            text(&label)
+                .font(t.mono)
+                .color(if highlighted { t.accent_text } else { t.text })
+                .a11y_hidden(),
+        )
+        .child(
+            text(&command.description)
+                .font(t.ui)
+                .color(t.muted)
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .truncate()
+                .a11y_hidden(),
+        )
+        .children(command.hint.as_deref().map(|hint| {
+            text(hint)
+                .font(t.mono_small)
+                .color(t.faint)
+                .max_w(HINT_MAX_WIDTH)
+                .truncate()
+                .a11y_hidden()
+        }))
+}
+
+fn file_row(path: &str, index: usize, highlighted: bool, t: &Theme) -> El {
+    let chosen = path.to_owned();
+    let (dir, name) = match path.rsplit_once('/') {
+        Some((dir, name)) if !name.is_empty() => (Some(dir), name),
+        _ => (None, path),
+    };
+    let indicator = el()
+        .w(S2)
+        .h(S16)
+        .radius(HAIRLINE)
+        .fill(if highlighted {
+            t.accent
+        } else {
+            Color::TRANSPARENT
+        })
+        .a11y_hidden();
+    row()
+        .key(format!("file-{path}"))
+        .role("option")
+        .label(path)
+        .focus_selected(highlighted)
+        .preserve_focus_on_press(true)
+        .w_full()
+        .h(S32)
+        .pl(S4)
+        .pr(S8)
+        .gap(S6)
+        .center_y()
+        .radius(RADIUS_CONTROL)
+        .continuous_corners()
+        .fill(if highlighted {
+            t.accent_veil
+        } else {
+            Color::TRANSPARENT
+        })
+        .on_hover(move |s: &mut Desktop| s.completion.highlighted = index)
+        .on_press_tx(move |s: &mut Desktop, tx| choose(s, &chosen, tx))
+        .child(indicator)
+        .child(
+            icon(&ui::FILE, ICON_SMALL + 1.0)
+                .color(if highlighted { t.accent_text } else { t.muted })
+                .a11y_hidden(),
+        )
+        .child(
+            text(name)
+                .font(t.ui_medium)
+                .color(t.text)
+                .shrink()
+                .truncate()
+                .a11y_hidden(),
+        )
+        .children(dir.map(|dir| {
+            text(dir)
+                .font(t.mono_small)
+                .color(t.faint)
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .truncate_middle()
+                .a11y_hidden()
+        }))
 }
 
 pub(super) fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {

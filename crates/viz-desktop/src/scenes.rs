@@ -30,6 +30,8 @@ pub const SCENES: &[Scene] = &[
     ("attachments", attachments),
     ("queue", queue),
     ("queue-edit", queue_edit),
+    ("slash", slash),
+    ("mentions", mentions),
     ("empty", empty),
     ("loading", loading),
     ("onboarding", onboarding),
@@ -745,6 +747,47 @@ fn queue(s: &mut Desktop) {
 fn queue_edit(s: &mut Desktop) {
     queue(s);
     s.preview_edit_queued(THREAD, RunId(31), "Also handle CRLF line endings");
+}
+
+fn slash(s: &mut Desktop) {
+    workspace(s);
+    if let Some(state) = &mut s.state {
+        state.commands = vec![
+            SlashCommand {
+                name: "compact".into(),
+                description: "Summarize the conversation to free context window".into(),
+                hint: Some("[focus]".into()),
+            },
+            SlashCommand {
+                name: "review".into(),
+                description: "Review unstaged changes in the working tree".into(),
+                hint: Some("[path]".into()),
+            },
+            SlashCommand {
+                name: "plan".into(),
+                description: "Draft a step-by-step plan before making edits".into(),
+                hint: None,
+            },
+        ];
+    }
+    s.draft = rune::TextEdit::new("/");
+    s.draft.focused = true;
+    s.completion.preview_slash("", 0);
+}
+
+fn mentions(s: &mut Desktop) {
+    workspace(s);
+    s.draft = rune::TextEdit::new("@export");
+    s.draft.focused = true;
+    s.completion.preview_files(
+        "export",
+        vec![
+            "src/export/markdown.rs".into(),
+            "src/export/line_ending.rs".into(),
+            "crates/workbench/src/export/mod.rs".into(),
+        ],
+        1,
+    );
 }
 
 fn option(

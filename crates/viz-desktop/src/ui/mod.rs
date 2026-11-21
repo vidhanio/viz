@@ -6,8 +6,7 @@ use std::borrow::Cow;
 
 use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
 use rune_kit::{
-    ButtonVariant, IconButtonVariant, Keybind, Kit, Menu, MenuItem, Placement, PopupList, Spinner,
-    TextInput,
+    ButtonVariant, IconButtonVariant, Keybind, Kit, Menu, MenuItem, Placement, Spinner, TextInput,
 };
 use viz_client::protocol::ThreadStatus;
 
@@ -880,20 +879,9 @@ pub const PICKER_TRIGGER_MAX: f32 = 156.0;
 pub const MODEL_TRIGGER_MAX: f32 = 240.0;
 /// A menu's narrowest width.
 pub const MENU_WIDTH: f32 = 196.0;
-const COMPLETION_HEIGHT: f32 = 240.0;
-pub const COMPLETION_WIDTH: f32 = 360.0;
 
 pub fn menu_items(menu: Menu, items: impl IntoIterator<Item = MenuItem>) -> Menu {
     items.into_iter().fold(menu, Menu::item)
-}
-
-pub fn popup_list<S: 'static>(key: &str, anchor: &str) -> PopupList<S> {
-    PopupList::new(key, anchor)
-        .placement(Placement::TopStart)
-        .offset(S4)
-        .max_height(COMPLETION_HEIGHT)
-        .animate_filtering(false)
-        .open(true)
 }
 
 /// The most lines a dialog's or toast's title wraps to before "…".

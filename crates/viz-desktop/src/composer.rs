@@ -78,7 +78,9 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     {
         column = column.child(queue(s, id, &state.queue, t));
     }
-    completion::popup(s, t, layer);
+    if let Some(drawer) = completion::drawer(s, t) {
+        column = column.child(drawer);
+    }
     let editor = editor(s, t, layer);
     Some(ui::reading(column.child(editor)).key("composer").pb(S16))
 }
