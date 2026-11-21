@@ -85,6 +85,20 @@ impl NewThread {
         }
     }
 
+    fn set_project(&mut self, project: Option<&Project>) {
+        if self.project.as_deref() == project.map(|project| project.path.as_str()) {
+            return;
+        }
+        self.project = project.map(|project| project.path.clone());
+        if project.is_some_and(|project| project.git.is_some()) {
+            if let Some(worktree) = &mut self.worktree {
+                worktree.base_ref = None;
+            }
+        } else {
+            self.worktree = None;
+        }
+    }
+
     pub fn active_harness<'a>(&self, runners: &'a [Harness]) -> Option<&'a Harness> {
         runners.iter().find(|runner| {
             self.harness
@@ -713,6 +727,20 @@ impl Desktop {
         }
     }
 
+    /// Sets the draft project and refreshes branch choices for a worktree
+    /// draft.
+    pub fn choose_draft_project(&mut self, path: Option<&str>, tx: &mut Tx) {
+        let project = path.and_then(|path| self.projects.iter().find(|p| p.path == path));
+        if let Some(thread) = self.new_thread.as_mut().filter(|thread| !thread.sending) {
+            thread.set_project(project);
+            if thread.worktree.is_some()
+                && let Some(path) = path
+            {
+                self.load_branches(path, tx);
+            }
+        }
+    }
+
     /// The server added `project`. Listed at once (the list refresh may come
     /// later), and an open draft takes it: a folder added while drafting is
     /// the one the thread is meant for, whether it came from the draft's own
@@ -721,7 +749,7 @@ impl Desktop {
         if let Some(thread) = &mut self.new_thread
             && !thread.sending
         {
-            thread.project = Some(project.path.clone());
+            thread.set_project(Some(&project));
         }
         if !self.projects.iter().any(|known| known.path == project.path) {
             let at = self.projects.partition_point(|known| {

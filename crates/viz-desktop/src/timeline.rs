@@ -14,7 +14,8 @@
 //! something to read.
 
 use rune::{
-    El, Icon, ScrollFade, ScrollSpec, Span, Transition, Tx, col, el, icon, rich, row, text,
+    Color, El, Icon, ScrollFade, ScrollSpec, Shape, Span, TextEdit, Transition, Tx, col, el, icon,
+    rich, row, text,
 };
 use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
@@ -45,8 +46,8 @@ const INDENT: f32 = ICON + S8;
 /// The most diff lines an expanded edit draws; the copy action still copies
 /// the whole patch.
 const DIFF_LINES: usize = 400;
-/// The empty state's shortcut labels' column.
-const SHORTCUT_LABEL: f32 = S32 + S32 + S8;
+/// Widest measure for the empty-state editorial hero.
+const HERO_WIDTH: f32 = 460.0;
 /// The widest a user bubble gets, as a share of the reading column.
 const BUBBLE_FRAC: f32 = 0.8;
 /// How long a thread may take to arrive before the timeline says it's
@@ -150,17 +151,19 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         )
 }
 
-/// A thread whose transcript hasn't arrived: nothing, then a quiet spinner if
-/// it takes a while.
+/// A thread whose transcript hasn't arrived: nothing, then a quiet radar
+/// spinner and caption if it takes a while.
 fn loading(t: &Theme) -> El {
-    row()
+    col()
         .key("loading")
         .w_full()
         .pt(EMPTY_TOP)
-        .justify_center()
+        .items_center()
+        .gap(S8)
         .role("status")
-        .label("Loading")
-        .child(ui::spinner(t))
+        .label("Opening transcript")
+        .child(ui::radar(ICON, t.accent, t))
+        .child(text("Opening transcript…").font(t.small).color(t.faint))
         .transition(Transition::opacity())
         .enter_delay(LOADING_DELAY)
 }
@@ -787,53 +790,319 @@ fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             .icon(&ui::COMPOSE)
             .on_press_tx(Desktop::create_here)
             .build(&t.k);
-        let (detail, actions) = if s.projects.is_empty() {
+        let (headline, detail, actions) = if s.projects.is_empty() {
             let add_project = ui::button("Add project", ButtonVariant::Outline, Size::Large)
                 .icon(&ui::FOLDER_PLUS)
                 .on_press_tx(sidebar::open_add_project)
                 .build(&t.k);
             (
-                "Start a thread or add a project folder.",
+                "Begin a workspace",
+                "Start a thread or add a project folder to work in.",
                 row().gap(S8).child(new_thread).child(add_project),
             )
         } else {
-            ("Select a thread or start a new one.", new_thread)
+            (
+                "Ready when you are",
+                "Select a thread from the sidebar or start a new one.",
+                new_thread,
+            )
         };
-        return ui::empty(None, "No thread selected", detail, Some(actions), t);
+        return ambient_hero(
+            col()
+                .key("empty")
+                .w_full()
+                .max_w(HERO_WIDTH)
+                .gap(S12)
+                .items_center()
+                .child(prism_mark(t))
+                .child(
+                    text(headline)
+                        .font(t.display)
+                        .color(t.text)
+                        .align(rune::Align::Center),
+                )
+                .child(
+                    text(detail)
+                        .font(t.ui)
+                        .color(t.muted)
+                        .wrap()
+                        .align(rune::Align::Center),
+                )
+                .child(actions.mt(S4))
+                .child(shortcut_footer(
+                    &[(&ui::shortcut("N"), "new"), (&ui::shortcut("K"), "search")],
+                    t,
+                )),
+            t,
+        );
     }
     thread_hint(s, t, layer)
 }
 
-/// An empty thread: where it runs, and the few keys that work from here. A
-/// draft's place is still a choice, so it shows the project picker instead.
+/// An empty thread or fresh draft: editorial serif headline over a warm
+/// ambient glow, project & worktree controls, single-click micro-suggestions,
+/// and whisper-faint shortcut hints.
 fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let Some(thread) = &s.new_thread else {
-        let title = s
-            .project()
-            .map_or("New thread", |project| project.name.as_str());
-        return ui::empty(None, title, "", None, t)
-            .child(shortcuts(&[("N", "New thread"), ("K", "Commands")], t));
+        return existing_thread_hint(s, t);
     };
     let choose_harness = !thread.sending
         && thread.harness.is_none()
         && s.harnesses.len() > 1
         && s.harnesses.iter().all(|harness| !harness.default);
+    let mark = thread.active_harness(&s.harnesses).map_or_else(
+        || prism_mark(t),
+        |runner| ui::medallion(Some((runner.id.as_str(), runner.name.as_str())), false, t),
+    );
+    let heading = row()
+        .key("draft-hero-heading")
+        .gap(S4)
+        .center_y()
+        .min_w(0.0)
+        .children(
+            thread
+                .project
+                .is_some()
+                .then(|| text("Ready in").font(t.display_italic).color(t.muted)),
+        )
+        .child(draft_project(s, thread, t, layer).shrink());
+    ambient_hero(
+        col()
+            .key("empty")
+            .w_full()
+            .max_w(HERO_WIDTH)
+            .gap(S12)
+            .items_center()
+            .child(mark)
+            .children(
+                thread
+                    .project
+                    .is_none()
+                    .then(|| text("Ready to start").font(t.display).color(t.text)),
+            )
+            .child(heading)
+            .children(draft_worktree_controls(s, thread, t, layer))
+            .children(choose_harness.then(|| {
+                text("Choose a harness below.")
+                    .font(t.ui)
+                    .color(t.muted)
+                    .wrap()
+                    .align(rune::Align::Center)
+            }))
+            .children((s.draft.text.is_empty() && !thread.sending).then(|| hero_suggestions(t)))
+            .child(shortcut_footer(
+                &[
+                    (&ui::shortcut("K"), "search"),
+                    ("/", "commands"),
+                    ("@", "files"),
+                ],
+                t,
+            )),
+        t,
+    )
+}
+
+fn existing_thread_hint(s: &Desktop, t: &Theme) -> El {
+    let mark = s.selected.and_then(|id| s.summary(id)).map_or_else(
+        || prism_mark(t),
+        |summary| {
+            ui::medallion(
+                Some((summary.harness.as_str(), summary.harness_name.as_str())),
+                false,
+                t,
+            )
+        },
+    );
+    let heading = s.project().map_or_else(
+        || {
+            row()
+                .key("hero-heading")
+                .center()
+                .child(text("Ready to start").font(t.display).color(t.text))
+        },
+        |project| {
+            row()
+                .key("hero-heading")
+                .gap(S6)
+                .center_y()
+                .child(text("Ready in").font(t.display_italic).color(t.muted))
+                .child(
+                    text(&project.name)
+                        .font(t.display)
+                        .color(t.text)
+                        .truncate()
+                        .shrink(),
+                )
+        },
+    );
+    ambient_hero(
+        col()
+            .key("empty")
+            .w_full()
+            .max_w(HERO_WIDTH)
+            .gap(S12)
+            .items_center()
+            .child(mark)
+            .child(heading)
+            .children(s.draft.text.is_empty().then(|| hero_suggestions(t)))
+            .child(shortcut_footer(
+                &[
+                    (&ui::shortcut("N"), "new"),
+                    (&ui::shortcut("K"), "search"),
+                    ("/", "commands"),
+                    ("@", "files"),
+                ],
+                t,
+            )),
+        t,
+    )
+}
+
+/// Ambient warm radial wash behind the empty-state editorial hero.
+fn ambient_hero(content: El, t: &Theme) -> El {
     col()
-        .key("empty")
+        .key("hero-canvas")
         .w_full()
-        .max_w(EMPTY_WIDTH)
-        .gap(S8)
+        .py(S24)
         .items_center()
-        .child(draft_project(s, thread, t, layer))
-        .children(draft_worktree_controls(s, thread, t, layer))
-        .children(choose_harness.then(|| {
-            text("Choose a harness below.")
-                .font(t.ui)
-                .color(t.muted)
-                .wrap()
-                .align(rune::Align::Center)
-        }))
-        .child(shortcuts(&[("K", "Commands")], t))
+        .radial_gradient(
+            [0.5, 0.3],
+            [260.0, 140.0],
+            [
+                (0.0, t.accent.alpha(if t.k.dark { 0.085 } else { 0.065 })),
+                (
+                    0.55,
+                    t.delegated.alpha(if t.k.dark { 0.035 } else { 0.025 }),
+                ),
+                (1.0, Color::TRANSPARENT),
+            ],
+        )
+        .child(content)
+}
+
+/// Geometric viz prism mark: two nested diamonds and a centered accent point.
+fn prism_mark(t: &Theme) -> El {
+    let shape = Shape::new()
+        .stroke(
+            vec![
+                [12.0, 2.0],
+                [22.0, 12.0],
+                [12.0, 22.0],
+                [2.0, 12.0],
+                [12.0, 2.0],
+            ],
+            1.25,
+            t.muted,
+        )
+        .stroke(
+            vec![
+                [12.0, 6.5],
+                [17.5, 12.0],
+                [12.0, 17.5],
+                [6.5, 12.0],
+                [12.0, 6.5],
+            ],
+            HAIRLINE,
+            t.faint,
+        );
+    el().key("viz-prism")
+        .size(S24, S24)
+        .center()
+        .a11y_hidden()
+        .child(el().size(S24, S24).shape(shape))
+        .child(el().size(3.0, 3.0).radius(1.5).fill(t.accent).pin(
+            Some(10.5),
+            Some(10.5),
+            None,
+            None,
+        ))
+}
+
+const SUGGESTIONS: &[(&str, &str)] = &[
+    (
+        "Summarize changes",
+        "Summarize the recent changes in this repository and highlight any risky areas.",
+    ),
+    (
+        "Trace the architecture",
+        "Walk me through the main architecture and entry points of this project.",
+    ),
+    (
+        "Review edge cases",
+        "Review the current branch for subtle bugs, edge cases, or missing error handling.",
+    ),
+];
+
+/// Three borderless ink-only micro-suggestions that prefill and focus the
+/// composer on click.
+fn hero_suggestions(t: &Theme) -> El {
+    row()
+        .key("hero-suggestions")
+        .mt(S4)
+        .gap(S12)
+        .flex_wrap()
+        .justify_center()
+        .children(
+            SUGGESTIONS
+                .iter()
+                .enumerate()
+                .map(|(index, (label, prompt))| {
+                    let prompt = *prompt;
+                    row()
+                        .key(format!("hero-suggestion-{index}"))
+                        .role("button")
+                        .label(*label)
+                        .h(Size::Small.height())
+                        .px(S8)
+                        .center_y()
+                        .radius(RADIUS_CONTROL)
+                        .focusable(true)
+                        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+                        .hover_group()
+                        .press_scale(0.97)
+                        .on_press_tx(move |s: &mut Desktop, tx| {
+                            if !s.draft.text.is_empty() {
+                                return;
+                            }
+                            s.draft = TextEdit::new(prompt);
+                            s.completion.reset();
+                            s.draft.focused = true;
+                            tx.focus("draft", false);
+                        })
+                        .child(
+                            text(*label)
+                                .font(t.small)
+                                .color(t.muted)
+                                .group_color(t.text)
+                                .a11y_hidden(),
+                        )
+                }),
+        )
+}
+
+/// Whisper-faint single-line shortcut footer (`⌘N new · ⌘K search · /
+/// commands`).
+fn shortcut_footer(items: &[(&str, &str)], t: &Theme) -> El {
+    let mut strip = row()
+        .key("shortcuts")
+        .mt(S8)
+        .gap(S8)
+        .center_y()
+        .flex_wrap()
+        .justify_center();
+    for (index, (key, label)) in items.iter().enumerate() {
+        if index > 0 {
+            strip = strip.child(text("·").font(t.small).color(t.faint).a11y_hidden());
+        }
+        strip = strip.child(
+            row()
+                .gap(S4)
+                .center_y()
+                .child(text((*key).to_owned()).font(t.mono_micro).color(t.muted))
+                .child(text(*label).font(t.small).color(t.faint)),
+        );
+    }
+    strip
 }
 
 const DRAFT_BASE_BRANCH: &str = "draft-base-branch";
@@ -1029,8 +1298,7 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
     let current = s
         .project()
         .map_or("No project", |project| project.name.as_str());
-    let trigger = ui::marked_trigger(DRAFT_PROJECT, "Project", current, &ui::FOLDER, open, t)
-        .max_w(ui::MODEL_TRIGGER_MAX)
+    let trigger = draft_project_trigger(current, thread.project.is_some(), open, thread.sending, t)
         .on_press(|s: &mut Desktop| {
             s.open_picker = if s.open_picker.as_deref() == Some(DRAFT_PROJECT)
                 || s.new_thread.as_ref().is_none_or(|thread| thread.sending)
@@ -1056,19 +1324,7 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
                 .on_select_tx(move |s: &mut Desktop, tx| {
                     s.open_picker = None;
                     tx.focus("draft", false);
-                    if let Some(thread) = &mut s.new_thread {
-                        thread.project.clone_from(&id);
-                        if id.as_deref().is_none_or(|path| {
-                            !s.projects.iter().any(|p| p.path == path && p.git.is_some())
-                        }) {
-                            thread.worktree = None;
-                        } else if thread.worktree.is_some()
-                            && let Some(path) = &id
-                        {
-                            let path = path.clone();
-                            s.load_branches(&path, tx);
-                        }
-                    }
+                    s.choose_draft_project(id.as_deref(), tx);
                 })
         };
         menu = menu
@@ -1100,24 +1356,49 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
         .child(add)
 }
 
-fn shortcuts(keys: &[(&str, &str)], t: &Theme) -> El {
-    col()
-        .key("shortcuts")
-        .mt(S16)
-        .gap(S8)
-        .children(keys.iter().map(|(key, label)| {
-            row()
-                .gap(S12)
-                .center_y()
-                .child(
-                    text(*label)
-                        .font(t.small)
-                        .color(t.faint)
-                        .w(SHORTCUT_LABEL)
-                        .align(rune::Align::End),
-                )
-                .child(ui::kbd(key, t))
-        }))
+fn draft_project_trigger(
+    current: &str,
+    has_project: bool,
+    open: bool,
+    disabled: bool,
+    t: &Theme,
+) -> El {
+    row()
+        .key(format!("{DRAFT_PROJECT}-trigger"))
+        .role("combobox")
+        .label(format!("Project: {current}"))
+        .expanded(open)
+        .focusable(!disabled)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
+        .h(Size::Large.height())
+        .px(S4)
+        .gap(S4)
+        .center_y()
+        .radius(RADIUS_CONTROL)
+        .min_w(0.0)
+        .max_w(ui::MODEL_TRIGGER_MAX)
+        .child(
+            text(current)
+                .font(if has_project { t.display } else { t.ui_medium })
+                .color(t.text)
+                .group_color(t.accent_text)
+                .min_w(0.0)
+                .shrink()
+                .truncate()
+                .a11y_hidden(),
+        )
+        .child(
+            icon(&ui::CHEVRON, ICON_SMALL)
+                .icon_rotation(if open {
+                    -std::f32::consts::FRAC_PI_2
+                } else {
+                    std::f32::consts::FRAC_PI_2
+                })
+                .color(t.muted)
+                .group_color(t.text)
+                .a11y_hidden(),
+        )
 }
 
 /// A user message: a bubble on a neutral surface at the right of the column,

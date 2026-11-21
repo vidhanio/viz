@@ -47,6 +47,7 @@ pub const SCENES: &[Scene] = &[
     ("overflow", overflow),
     ("projects", projects),
     ("draft-project", draft_project),
+    ("draft-worktree", draft_worktree),
     ("environments", environments),
     ("offline", offline),
 ];
@@ -834,6 +835,11 @@ fn draft_project(s: &mut Desktop) {
         ],
     );
     s.open_picker = Some(timeline::DRAFT_PROJECT.into());
+}
+
+fn draft_worktree(s: &mut Desktop) {
+    draft_project(s);
+    s.open_picker = None;
 }
 
 /// Multiple configured environments with the sidebar footer picker open.

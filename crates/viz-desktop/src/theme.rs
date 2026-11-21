@@ -25,7 +25,7 @@ mod scheme;
 
 use std::sync::OnceLock;
 
-use rune::{Color, Shadow, TextStyle};
+use rune::{Color, Family, Shadow, TextStyle};
 use rune_kit::{
     Kit, MarkdownStyle, Palette, PaletteFocus, PaletteSeed, StateColors,
     syntax::{Syntax, SyntaxTheme},
@@ -265,6 +265,10 @@ pub struct Theme {
     pub body: TextStyle,
     /// Titles: the toolbar, empty states, dialogs, 14 semibold on 20.
     pub title: TextStyle,
+    /// Editorial serif display headline for empty states, 24 on 30.
+    pub display: TextStyle,
+    /// Italic editorial serif display accent, 24 on 30.
+    pub display_italic: TextStyle,
     /// Tool rows and code, 12 on 18, tabular numerals.
     pub mono: TextStyle,
     /// Small mono for durations and counts, 11.5 on 16, tabular numerals.
@@ -784,6 +788,13 @@ impl Theme {
             .mono()
             .lh(14.0)
             .features("'tnum' 1");
+        let display = TextStyle::new(24.0, 400.0)
+            .family(Family::Named(
+                "\"New York\", \"Iowan Old Style\", \"Charter\", \"Georgia\", \"DejaVu Serif\", serif",
+            ))
+            .lh(30.0)
+            .tracking(-0.35);
+        let display_italic = display.italic().tracking(-0.25);
         k.ty.ui = ui;
         k.ty.ui_medium = medium(ui);
         k.ty.ui_compact = ui.lh(small.line_height);
@@ -877,6 +888,8 @@ impl Theme {
             small_medium: medium(small),
             body,
             title: TextStyle::new(14.0, 600.0).lh(20.0).tracking(-0.18),
+            display,
+            display_italic,
             mono,
             mono_small,
             mono_micro,
