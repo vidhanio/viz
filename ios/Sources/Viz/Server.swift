@@ -67,6 +67,24 @@ enum VizProtocol {
     var id: String { path }
   }
 
+  struct GitBranch: Decodable {
+    let reference: String
+    let head: String
+  }
+
+  struct GitBranches: Decodable {
+    let branches: [GitBranch]
+  }
+
+  struct GitCommit: Decodable {
+    let head: String
+  }
+
+  struct GitPush: Decodable {
+    let remote: String
+    let reference: String
+  }
+
   struct GitWorktree: Decodable {
     let path: String
     let branch: String
@@ -75,6 +93,13 @@ enum VizProtocol {
   struct WorktreeRequest {
     var baseRef: String?
     var branch: String?
+
+    var params: [String: String] {
+      var params: [String: String] = [:]
+      if let baseRef { params["baseRef"] = baseRef }
+      if let branch { params["branch"] = branch }
+      return params
+    }
   }
 
   struct ThreadSummary: Decodable, Identifiable {
@@ -405,12 +430,7 @@ final class Server {
     if let project { params["project"] = project }
     if let harness { params["harness"] = harness }
     if let text { params["text"] = text }
-    if let worktree {
-      var request: [String: String] = [:]
-      if let baseRef = worktree.baseRef { request["baseRef"] = baseRef }
-      if let branch = worktree.branch { request["branch"] = branch }
-      params["worktree"] = request
-    }
+    if let worktree { params["worktree"] = worktree.params }
     let data = try await call("thread.launch", params: params)
     return try JSONDecoder().decode(VizProtocol.Launched.self, from: data).thread
   }
@@ -433,6 +453,47 @@ final class Server {
   func delete(thread: Int, removeWorktree: Bool = false) async throws {
     _ = try await call(
       "thread.delete", params: ["thread": thread, "removeWorktree": removeWorktree])
+  }
+
+  func gitBranches(project: String) async throws -> [VizProtocol.GitBranch] {
+    let data = try await call("git.branches", params: ["project": project])
+    return try JSONDecoder().decode(VizProtocol.GitBranches.self, from: data).branches
+  }
+
+  func createWorktree(
+    project: String, worktree: VizProtocol.WorktreeRequest
+  ) async throws -> VizProtocol.GitWorktree {
+    let data = try await call(
+      "git.worktree.create", params: ["project": project, "worktree": worktree.params])
+    return try JSONDecoder().decode(VizProtocol.GitWorktree.self, from: data)
+  }
+
+  func removeWorktree(path: String) async throws {
+    _ = try await call("git.worktree.remove", params: ["path": path])
+  }
+
+  func gitCommit(thread: Int, message: String, all: Bool = false) async throws
+    -> VizProtocol.GitCommit
+  {
+    let data = try await call(
+      "git.commit", params: ["thread": thread, "message": message, "all": all])
+    return try JSONDecoder().decode(VizProtocol.GitCommit.self, from: data)
+  }
+
+  func gitPush(thread: Int, remote: String? = nil) async throws -> VizProtocol.GitPush {
+    var params: [String: Any] = ["thread": thread]
+    if let remote { params["remote"] = remote }
+    let data = try await call("git.push", params: params)
+    return try JSONDecoder().decode(VizProtocol.GitPush.self, from: data)
+  }
+
+  func createGitBranch(
+    thread: Int, branch: String, baseRef: String? = nil
+  ) async throws -> VizProtocol.GitBranch {
+    var params: [String: Any] = ["thread": thread, "branch": branch]
+    if let baseRef { params["baseRef"] = baseRef }
+    let data = try await call("git.branch.create", params: params)
+    return try JSONDecoder().decode(VizProtocol.GitBranch.self, from: data)
   }
 
   func restore(thread: Int, run: Int, rewind: Bool = false) async throws {

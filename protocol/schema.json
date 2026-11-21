@@ -3555,6 +3555,156 @@
         }
       }
     },
+    "git.commit": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CommitGit",
+        "description": "Commit in the checkout bound to a thread.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "message": {
+            "type": "string"
+          },
+          "all": {
+            "description": "Stage all tracked and unignored files before committing. Otherwise\ncommit the staged index.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "thread",
+          "message"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitCommit",
+        "type": "object",
+        "properties": {
+          "head": {
+            "description": "Full Git object ID of the new commit.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "head"
+        ]
+      }
+    },
+    "git.push": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "PushGit",
+        "description": "Push the current local branch to a configured remote without force.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "remote": {
+            "description": "Defaults to the branch's upstream remote, or origin.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitPush",
+        "type": "object",
+        "properties": {
+          "remote": {
+            "type": "string"
+          },
+          "reference": {
+            "description": "Full ref name updated on the remote.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "remote",
+          "reference"
+        ]
+      }
+    },
+    "git.branch.create": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CreateGitBranch",
+        "description": "Create a local branch without changing the checkout.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "baseRef": {
+            "description": "Defaults to the current HEAD.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "thread",
+          "branch"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitBranch",
+        "type": "object",
+        "properties": {
+          "reference": {
+            "description": "Full ref name, suitable for use as a worktree base.",
+            "type": "string"
+          },
+          "head": {
+            "description": "Full Git object ID at this ref.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reference",
+          "head"
+        ]
+      }
+    },
     "git.branches": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

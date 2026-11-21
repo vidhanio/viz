@@ -70,12 +70,12 @@ macro_rules! methods {
         /// Input and output schemas for every public wire method.
         #[must_use]
         pub fn method_schemas() -> serde_json::Value {
-            serde_json::json!({
-                $($name: {
+            serde_json::Value::Object([
+                $(($name.to_owned(), serde_json::json!({
                     "params": schemars::schema_for!($params),
                     "result": schemars::schema_for!($response),
-                },)*
-            })
+                })),)*
+            ].into_iter().collect())
         }
     };
 }
@@ -109,6 +109,9 @@ methods! {
     ForkThread => "thread.fork", Launched;
     RunDiff => "run.diff", GitDiff;
     ThreadDiff => "thread.diff", GitDiff;
+    CommitGit => "git.commit", GitCommit;
+    PushGit => "git.push", GitPush;
+    CreateGitBranch => "git.branch.create", GitBranch;
     ListGitBranches => "git.branches", GitBranches;
     CreateGitWorktree => "git.worktree.create", GitWorktree;
     RemoveGitWorktree => "git.worktree.remove", Empty;
@@ -366,6 +369,48 @@ pub enum GitChange {
     Deleted,
     Modified,
     TypeChanged,
+}
+
+/// Commit in the checkout bound to a thread.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CommitGit {
+    pub thread: ThreadId,
+    pub message: String,
+    /// Stage all tracked and unignored files before committing. Otherwise
+    /// commit the staged index.
+    #[serde(default)]
+    pub all: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GitCommit {
+    /// Full Git object ID of the new commit.
+    pub head: String,
+}
+
+/// Push the current local branch to a configured remote without force.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct PushGit {
+    pub thread: ThreadId,
+    /// Defaults to the branch's upstream remote, or origin.
+    pub remote: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GitPush {
+    pub remote: String,
+    /// Full ref name updated on the remote.
+    pub reference: String,
+}
+
+/// Create a local branch without changing the checkout.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateGitBranch {
+    pub thread: ThreadId,
+    pub branch: String,
+    /// Defaults to the current HEAD.
+    pub base_ref: Option<String>,
 }
 
 /// List local and remote-tracking branches for a registered project.

@@ -5,6 +5,7 @@ mod attachments;
 mod checkpoints;
 mod files;
 mod git;
+mod git_actions;
 mod rewind;
 mod rpc;
 pub(crate) mod runs;

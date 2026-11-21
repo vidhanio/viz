@@ -4,9 +4,10 @@ use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use viz_client::protocol::{
-    CreateGitWorktree, DeleteThread, ForkThread, HarnessOptions, LaunchThread, Launched,
-    ListGitBranches, Method, RemoveGitWorktree, RemoveProject, RestoreRun, RewindThread, RunDiff,
-    RunId, SendInput, SendMode, Sent, ThreadDiff, ThreadId, WorktreeRequest,
+    CommitGit, CreateGitBranch, CreateGitWorktree, DeleteThread, ForkThread, HarnessOptions,
+    LaunchThread, Launched, ListGitBranches, Method, PushGit, RemoveGitWorktree, RemoveProject,
+    RestoreRun, RewindThread, RunDiff, RunId, SendInput, SendMode, Sent, ThreadDiff, ThreadId,
+    WorktreeRequest,
 };
 
 use super::{
@@ -46,6 +47,9 @@ impl Workspace {
             | RestoreRun::NAME
             | RewindThread::NAME
             | ForkThread::NAME => self.git_call(method, params).await,
+            CommitGit::NAME | PushGit::NAME | CreateGitBranch::NAME => {
+                self.git_action(method, params).await
+            }
             SendInput::NAME => {
                 let input: SendInput = decode(params)?;
                 if input.origin.is_some() {
