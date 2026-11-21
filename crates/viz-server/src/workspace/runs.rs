@@ -310,14 +310,14 @@ impl Settlement {
         }
     }
 
-    pub(super) fn stopped(status: RunStatus, reason: &str, error: &str) -> Self {
+    pub(super) fn stopped(status: RunStatus, reason: &str, error: Option<&str>) -> Self {
         Self {
             status,
             end: RunEnd {
                 run: None,
                 changed_files: None,
                 stop_reason: Some(reason.into()),
-                error: Some(error.into()),
+                error: error.map(str::to_owned),
                 answer: None,
             },
         }
@@ -403,7 +403,7 @@ pub(super) async fn recover(db: &mut dyn Executor) -> Result<(), RpcError> {
             db,
             row.u64(1)?,
             row.u64(0)?,
-            Settlement::stopped(RunStatus::Interrupted, "interrupted", INTERRUPTED),
+            Settlement::stopped(RunStatus::Interrupted, "interrupted", Some(INTERRUPTED)),
             true,
         )
         .await?;

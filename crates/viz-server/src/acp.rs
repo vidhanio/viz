@@ -6,8 +6,9 @@
 //!
 //! - Prompts carry no idempotency key, so a turn interrupted by a crash or
 //!   restart is never replayed.
-//! - There is no steering: steering a running turn cancels it
-//!   (`session/cancel`) and queues the new prompt.
+//! - Steering waits for any open tool calls to finish before cancelling the
+//!   active turn and starting the next run. (`session/cancel`) and queues the
+//!   new prompt.
 //! - Reopening a saved session needs `session/resume` or `session/load`;
 //!   `session/load`'s history replay is discarded. A session stays bound to the
 //!   directory it was created in.

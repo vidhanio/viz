@@ -73,8 +73,13 @@ pub(crate) struct Prompt<'a> {
     /// The run the turn belongs to: the scope of the MCP tools it calls.
     pub(crate) run: RunId,
     pub(crate) attachments: &'a [StoredAttachment],
-    /// Cancelling sends `session/cancel`; the turn then ends `cancelled`.
+    /// Cancelling sends `session/cancel` at once; the turn then ends
+    /// `cancelled`.
     pub(crate) cancel: CancellationToken,
+    /// Steering waits until no tool calls are open before sending
+    /// `session/cancel`, so tool execution finishes cleanly before
+    /// interjecting.
+    pub(crate) steer: CancellationToken,
 }
 
 /// How a turn ended.
@@ -317,10 +322,17 @@ impl Session {
     /// the end of the turn even after an earlier call failed. ACP prompts have
     /// no idempotency key, so a turn is never retried.
     ///
+    /// Sends a prompt and streams its updates until the turn settles, fails, or
+    /// is cancelled/steered.
+    ///
     /// # Errors
     ///
     /// When the turn fails, the harness closes, or `updates` fails; the session
     /// is then no longer alive.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the select loop coordinates response, streaming updates, safe-step steering, and cancellation"
+    )]
     pub(crate) async fn prompt<F, Fut>(
         &mut self,
         input: Prompt<'_>,
@@ -360,35 +372,56 @@ impl Session {
         tokio::pin!(closed);
 
         let mut publish_at = (!pending.is_empty()).then(|| Instant::now() + BATCH);
+        let mut steering = false;
         let mut cancelled = false;
         let mut give_up_at: Option<Instant> = None;
         let mut abandoned = false;
         let mut failure: Option<anyhow::Error> = None;
         let result = loop {
-            tokio::select! {
+            let flush = tokio::select! {
                 result = &mut response => break result.map(|response| response.stop_reason),
                 reason = &mut closed => break Err(anyhow!("ACP harness closed: {reason}")),
                 Some(update) = receiver.recv() => {
                     pending.push(update);
-                    publish_at.get_or_insert_with(|| Instant::now() + BATCH);
-                }
-                () = sleep_until(publish_at.unwrap_or_else(Instant::now)), if publish_at.is_some() => {
-                    publish_at = None;
-                    let entries = transcript.apply(mem::take(&mut pending));
-                    if let Err(error) = updates(entries, Some(transcript.live()), self.take_snapshot()).await {
-                        failure = Some(error);
-                        self.agent.cancel(&self.id);
-                        break Err(anyhow!("publishing the turn failed"));
+                    if steering && !cancelled {
+                        true
+                    } else {
+                        publish_at.get_or_insert_with(|| Instant::now() + BATCH);
+                        false
                     }
+                }
+                () = sleep_until(publish_at.unwrap_or_else(Instant::now)), if publish_at.is_some() => true,
+                () = input.steer.cancelled(), if !steering && !cancelled => {
+                    steering = true;
+                    true
                 }
                 () = input.cancel.cancelled(), if !cancelled => {
                     cancelled = true;
                     self.agent.cancel(&self.id);
                     give_up_at = Some(Instant::now() + CANCEL_GRACE);
+                    false
                 }
                 () = sleep_until(give_up_at.unwrap_or_else(Instant::now)), if give_up_at.is_some() => {
                     abandoned = true;
                     break Err(anyhow!("the ACP harness did not end the cancelled turn"));
+                }
+            };
+            if flush {
+                publish_at = None;
+                if !pending.is_empty() {
+                    let entries = transcript.apply(mem::take(&mut pending));
+                    if let Err(error) =
+                        updates(entries, Some(transcript.live()), self.take_snapshot()).await
+                    {
+                        failure = Some(error);
+                        self.agent.cancel(&self.id);
+                        break Err(anyhow!("publishing the turn failed"));
+                    }
+                }
+                if steering && !cancelled && !transcript.has_open_tools() {
+                    cancelled = true;
+                    self.agent.cancel(&self.id);
+                    give_up_at = Some(Instant::now() + CANCEL_GRACE);
                 }
             }
         };

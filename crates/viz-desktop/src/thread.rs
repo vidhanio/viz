@@ -392,7 +392,7 @@ impl Thread {
         } else if let Some(reason) = end
             .stop_reason
             .as_deref()
-            .filter(|reason| *reason != "end_turn")
+            .filter(|reason| !matches!(*reason, "end_turn" | "steered"))
         {
             let text = match reason {
                 "cancelled" => "Stopped".to_owned(),

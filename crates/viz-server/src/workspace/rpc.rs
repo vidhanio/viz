@@ -147,7 +147,7 @@ impl Workspace {
         runs::promote_queued(&mut tx, thread, input.run.0).await?;
         tx.commit().await?;
         if let Some(active) = active {
-            self.cancel_active(thread, active);
+            self.steer_active(thread, active);
         }
         self.kick(thread, false);
         drop(db);
@@ -416,7 +416,7 @@ impl Workspace {
         .await?;
         tx.commit().await?;
         if let Some(active) = active {
-            self.cancel_active(thread, active);
+            self.steer_active(thread, active);
         }
         self.kick(thread, false);
         drop(db);
@@ -431,6 +431,16 @@ impl Workspace {
             .expect("workspace runtime mutex poisoned");
         if let Some(driver) = state.threads.get(&thread) {
             driver.cancel(active);
+        }
+    }
+
+    fn steer_active(&self, thread: u64, active: u64) {
+        let state = self
+            .transient
+            .lock()
+            .expect("workspace runtime mutex poisoned");
+        if let Some(driver) = state.threads.get(&thread) {
+            driver.steer(active);
         }
     }
 

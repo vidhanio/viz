@@ -46,6 +46,7 @@ enum Worker {
     Running {
         run: u64,
         cancel: CancellationToken,
+        steer: CancellationToken,
     },
 }
 
@@ -63,10 +64,21 @@ impl Driver {
         if let Worker::Running {
             run: active,
             cancel,
+            ..
         } = &*self.phase.lock().expect("worker phase mutex poisoned")
             && *active == run
         {
             cancel.cancel();
+        }
+    }
+
+    pub(super) fn steer(&self, run: u64) {
+        if let Worker::Running {
+            run: active, steer, ..
+        } = &*self.phase.lock().expect("worker phase mutex poisoned")
+            && *active == run
+        {
+            steer.cancel();
         }
     }
 
@@ -130,10 +142,12 @@ impl Workspace {
     ) -> Result<(), RpcError> {
         loop {
             let cancel = driver.lifetime.child_token();
+            let steer = CancellationToken::new();
             {
                 let mut slot = driver.session.lock().await;
                 if let Some(session) = slot.as_mut() {
-                    self.continue_idle(thread, driver, session, &cancel).await?;
+                    self.continue_idle(thread, driver, session, &cancel, &steer)
+                        .await?;
                 }
             }
             let claim = {
@@ -149,6 +163,7 @@ impl Workspace {
                     *phase = Worker::Running {
                         run: claim.id,
                         cancel: cancel.clone(),
+                        steer: steer.clone(),
                     };
                 } else if !prepare {
                     *phase = Worker::Idle;
@@ -163,14 +178,10 @@ impl Workspace {
                 let run = claim.id;
                 let checkpoint = self.start_checkpoint(thread, run).await;
                 let mut slot = driver.session.lock().await;
-                let result = self.prompt(thread, driver, &mut slot, claim, &cancel).await;
-                let settlement = if self.closing.is_cancelled() {
-                    Settlement::stopped(RunStatus::Interrupted, "interrupted", runs::INTERRUPTED)
-                } else if cancel.is_cancelled() {
-                    Settlement::stopped(RunStatus::Cancelled, "cancelled", "ACP turn cancelled")
-                } else {
-                    outcome(result)
-                };
+                let result = self
+                    .prompt(thread, driver, &mut slot, claim, &cancel, &steer)
+                    .await;
+                let settlement = settle_outcome(result, &self.closing, &cancel, &steer);
                 if settlement.status == RunStatus::Interrupted {
                     slot.take();
                 }
@@ -212,15 +223,20 @@ impl Workspace {
     }
 
     /// Persist buffered autonomous output before claiming queued input. While
-    /// a continuation is running, queued input takes priority over its timer
-    /// and tools. Content racing the next prompt is folded into that prompt's
+    /// a continuation is running, queued input takes priority once open tools
+    /// finish. Content racing the next prompt is folded into that prompt's
     /// transcript, with patches still applied to the original tool entries.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "autonomous continuation coordinates persistence, open-tool tracking, and shutdown"
+    )]
     async fn continue_idle(
         &self,
         thread: u64,
         driver: &Driver,
         session: &mut Session,
         cancel: &CancellationToken,
+        steer: &CancellationToken,
     ) -> Result<(), RpcError> {
         let pending = session.idle_updates();
         if pending.is_empty() || cancel.is_cancelled() {
@@ -237,6 +253,7 @@ impl Workspace {
             *driver.phase.lock().expect("worker phase mutex poisoned") = Worker::Running {
                 run,
                 cancel: cancel.clone(),
+                steer: steer.clone(),
             };
             drop(db);
             (run, entry)
@@ -248,15 +265,16 @@ impl Workspace {
             let mut open_patches = HashSet::new();
             loop {
                 let entries = transcript.apply(std::mem::take(&mut pending));
-                let patches = self.publish(
-                    thread,
-                    run,
-                    session.id(),
-                    entries,
-                    Some(transcript.live()),
-                    session.take_snapshot(),
-                )
-                .await?;
+                let patches = self
+                    .publish(
+                        thread,
+                        run,
+                        session.id(),
+                        entries,
+                        Some(transcript.live()),
+                        session.take_snapshot(),
+                    )
+                    .await?;
                 for (id, status) in patches {
                     if matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress) {
                         open_patches.insert(id);
@@ -266,8 +284,9 @@ impl Workspace {
                 }
                 let deadline = Instant::now() + CONTINUATION_QUIET;
                 loop {
+                    let idle = !transcript.has_open_tools() && open_patches.is_empty();
                     if !session.is_alive()
-                        || runs::queued(&mut *self.db.lock().await, thread).await?
+                        || (idle && runs::queued(&mut *self.db.lock().await, thread).await?)
                     {
                         break;
                     }
@@ -283,7 +302,7 @@ impl Workspace {
                             }
                             break;
                         }
-                        () = sleep_until(deadline), if !transcript.has_open_tools() && open_patches.is_empty() => break,
+                        () = sleep_until(deadline), if idle => break,
                     }
                 }
                 if pending.is_empty() {
@@ -335,11 +354,13 @@ impl Workspace {
             return Ok(());
         }
         if self.closing.is_cancelled() {
-            settlement =
-                Settlement::stopped(RunStatus::Interrupted, "interrupted", runs::INTERRUPTED);
+            settlement = Settlement::stopped(
+                RunStatus::Interrupted,
+                "interrupted",
+                Some(runs::INTERRUPTED),
+            );
         } else if cancel.is_cancelled() {
-            settlement =
-                Settlement::stopped(RunStatus::Cancelled, "cancelled", "ACP turn cancelled");
+            settlement = Settlement::stopped(RunStatus::Cancelled, "cancelled", None);
         }
         let mut tx = db.transaction().await?;
         settlement.end.changed_files = changed_files;
@@ -386,6 +407,7 @@ impl Workspace {
         slot: &mut Option<Session>,
         claim: Claimed,
         cancel: &CancellationToken,
+        steer: &CancellationToken,
     ) -> anyhow::Result<Outcome> {
         let Bound { session, .. } = self.session(thread, driver, slot, cancel).await?;
         let files = attachments::materialize(self, thread, claim.id, claim.attachments).await?;
@@ -409,6 +431,7 @@ impl Workspace {
                     run: RunId(claim.id),
                     attachments: &files,
                     cancel: cancel.clone(),
+                    steer: steer.clone(),
                 },
                 |entries, live, snapshot| async move {
                     self.publish(thread, claim.id, id, entries, live, snapshot)
@@ -640,6 +663,37 @@ struct Bound<'slot> {
     desired: Desired,
 }
 
+fn settle_outcome(
+    result: anyhow::Result<Outcome>,
+    closing: &CancellationToken,
+    cancel: &CancellationToken,
+    steer: &CancellationToken,
+) -> Settlement {
+    if closing.is_cancelled() {
+        return Settlement::stopped(
+            RunStatus::Interrupted,
+            "interrupted",
+            Some(runs::INTERRUPTED),
+        );
+    }
+    if cancel.is_cancelled() {
+        return Settlement::stopped(RunStatus::Cancelled, "cancelled", None);
+    }
+    if steer.is_cancelled()
+        && let Ok(Outcome {
+            answer,
+            stop_reason: StopReason::Cancelled,
+        }) = result
+    {
+        let mut settlement = Settlement::stopped(RunStatus::Cancelled, "steered", None);
+        if !answer.is_empty() {
+            settlement.end.answer = Some(answer);
+        }
+        return settlement;
+    }
+    outcome(result)
+}
+
 fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
     match outcome {
         Err(error) => Settlement::failed(error.to_string()),
@@ -648,7 +702,7 @@ fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
             stop_reason,
         }) => {
             let (status, error) = match stop_reason {
-                StopReason::Cancelled => (RunStatus::Cancelled, Some("ACP turn cancelled".into())),
+                StopReason::Cancelled => (RunStatus::Cancelled, None),
                 StopReason::Refusal => (
                     RunStatus::Failed,
                     Some("ACP runner refused the prompt".into()),
