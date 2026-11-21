@@ -72,8 +72,11 @@ fn context_usage(usage: &ContextUsage, t: &Theme) -> Option<El> {
     if usage.size == 0 {
         return None;
     }
-    let label = format!("Context: {} of {} tokens", usage.used, usage.size);
-    let used = compact_tokens(usage.used);
+    let percent = used_percent(usage.used, usage.size);
+    let label = format!(
+        "Context: {percent} used, {} of {} tokens",
+        usage.used, usage.size
+    );
     let total = compact_tokens(usage.size);
     Some(
         row()
@@ -91,12 +94,23 @@ fn context_usage(usage: &ContextUsage, t: &Theme) -> Option<El> {
                     .a11y_hidden(),
             )
             .child(
-                text(format!("{used}/{total}"))
-                    .font(t.small)
+                text(format!("{percent}/{total}"))
+                    .font(t.mono_small)
                     .color(t.muted)
                     .a11y_hidden(),
             ),
     )
+}
+
+/// Whole percent of the window used, rounded half up; any use below half a
+/// percent reads `<1%` rather than an empty-looking `0%`.
+fn used_percent(used: u64, size: u64) -> String {
+    let used = u128::from(used.min(size));
+    let size = u128::from(size.max(1));
+    match (used * 200 + size) / (size * 2) {
+        0 if used > 0 => "<1%".to_owned(),
+        whole => format!("{whole}%"),
+    }
 }
 
 /// Round to one decimal, promoting a rounded 1000k to 1m.
