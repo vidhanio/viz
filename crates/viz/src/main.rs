@@ -54,6 +54,15 @@ struct CliConfig {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    // Keep command results and agent replies on stdout, separate from
+    // diagnostics.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "viz_client=warn".into()),
+        )
+        .with_writer(io::stderr)
+        .init();
     let file = cli.config.map_or_else(ClientFile::cli, ClientFile::path);
     let config: CliConfig = viz_config::load(&file)?;
     let endpoint = || Endpoint::from_connection(&config.server);

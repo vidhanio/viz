@@ -31,3 +31,13 @@ The server runs in the foreground, supports `Type=notify`, and shuts down on SIG
 Use **Import thread** to bring sessions available in an ACP harness into viz.
 
 With Home Manager, import `inputs.viz.homeModules.default`. Set `programs.viz.enable = true` and translate the server example into `programs.viz.settings`. See [`nix/home-module.nix`](nix/home-module.nix) for the module's options and examples.
+
+## Client diagnostics
+
+The CLI and desktop write warnings to stderr by default. Use `RUST_LOG` to
+enable connection diagnostics without changing command output:
+
+```sh
+RUST_LOG=viz_client=debug nix run .#viz -- status
+RUST_LOG=viz_desktop=debug,viz_client=debug nix run .#desktop
+```

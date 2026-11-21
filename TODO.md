@@ -30,6 +30,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 ## Desktop (Rune)
 
 - [x] Environment picker, project sidebar, paged transcript, and import flow.
+- [x] CLI and desktop diagnostics on stderr, filtered by `RUST_LOG`.
 - [x] Configurable dark and light base16 schemes and Home Manager Stylix integration.
 - [x] Harness icons and configured harness display names; full model and thinking labels, inline thinking buttons, and animated model search.
 - [x] Grouped timeline activity and persistent task panel; stream reasoning and running commands.

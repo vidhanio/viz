@@ -135,6 +135,7 @@ pub fn spawn(
         {
             Ok(runtime) => runtime.block_on(run(&ui, commands, first, endpoint)),
             Err(e) => {
+                tracing::error!(error = %e, "could not start the connection runtime");
                 set_status(
                     &ui,
                     Status::Error(format!("Couldn't start the connection thread: {e}")),
@@ -210,6 +211,7 @@ async fn run(
             }
             Err(e) => e.to_string(),
         };
+        tracing::debug!(%endpoint, "server connection unavailable; retrying");
         set_status(ui, Status::Error(lost));
         signal(&mut first);
         let retry = tokio::time::sleep(RETRY);

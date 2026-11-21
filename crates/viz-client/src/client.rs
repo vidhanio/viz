@@ -114,6 +114,7 @@ impl Client {
                 server: hello.protocol,
             });
         }
+        tracing::debug!(%endpoint, environment = %hello.environment, "connected to viz server");
         Ok(Connection {
             client,
             notifications,

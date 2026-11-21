@@ -6040,6 +6040,7 @@ dependencies = [
  "clap",
  "serde",
  "tokio",
+ "tracing-subscriber",
  "viz-client",
  "viz-config",
 ]
@@ -6087,6 +6088,8 @@ dependencies = [
  "serde_json",
  "tokio",
  "toml 0.9.12+spec-1.1.0",
+ "tracing",
+ "tracing-subscriber",
  "viz-client",
  "viz-config",
 ]

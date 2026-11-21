@@ -216,6 +216,13 @@ fn args() -> (ClientFile, Vec<String>) {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "viz_desktop=warn,viz_client=warn".into()),
+        )
+        .with_writer(std::io::stderr)
+        .init();
     let (file, rune_args) = args();
     let tooling = rune::tooling::Args::parse_from(rune_args.clone());
     let headless = tooling.headless();
