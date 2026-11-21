@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use rune::{El, ScrollSpec, Transition, col, el, icon, row, text};
+use rune::{El, ScrollSpec, Transition, col, icon, row, text};
 use rune_kit::shell::Toolbar;
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadSummary};
 
@@ -11,8 +11,8 @@ use crate::{
     server::Command,
     sidebar,
     theme::{
-        CARD_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, READING_INSET, S2, S4, S8, S12, S16,
-        S32, S40, Size, TOOLBAR_PAD, Theme,
+        CARD_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, READING_INSET, S2, S4, S6, S8, S12,
+        S16, S32, S40, Size, TOOLBAR_PAD, Theme,
     },
     ui,
 };
@@ -23,8 +23,11 @@ const BREADCRUMB_MAX: f32 = 272.0;
 const MIN_THREAD_WIDTH: f32 = 560.0;
 const PANEL_GAP: f32 = S16;
 const PREVIOUS: &str = "agents-previous";
-const COMPACT_ROWS: f32 = 2.0;
-const WIDE_ROWS: f32 = 6.0;
+/// Tallest the task list gets in narrow windows (fits two multi-line rows
+/// without clipping).
+const COMPACT_HEIGHT: f32 = S40 * 4.0;
+/// Tallest the task list gets beside the transcript in wide windows.
+const WIDE_HEIGHT: f32 = S40 * 7.0;
 
 /// The toolbar. Its title is keyed per thread inside its own clip, so it
 /// moves with the transcript when the thread changes (`app::Switch`).
@@ -98,11 +101,12 @@ pub fn agents(s: &Desktop, t: &Theme) -> (Option<El>, f32) {
         .w_full()
         .px(S4)
         .pb(S4)
-        .max_h(if wide { WIDE_ROWS } else { COMPACT_ROWS } * S40)
+        .max_h(if wide { WIDE_HEIGHT } else { COMPACT_HEIGHT })
         .min_h(0.0)
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
+        .scroll_edge_fade(S16)
         .children(running.into_iter().map(|thread| task_row(thread, s, t)));
     if previous.len() == 1 {
         list = list.child(task_row(previous[0], s, t));
@@ -113,33 +117,24 @@ pub fn agents(s: &Desktop, t: &Theme) -> (Option<El>, f32) {
             list = list.children(previous.into_iter().map(|thread| task_row(thread, s, t)));
         }
     }
-    let k = &t.overlay;
-    let panel = k.shadow_layers(&k.elevation.floating).fold(
-        col()
-            .key(format!("agents-card-{parent}"))
-            .role("group")
-            .label("Tasks")
-            .w(CARD_WIDTH)
-            .radius(RADIUS_CARD)
-            .fill(k.c.layer_01)
-            .transition(Transition::opacity())
-            .child(header)
-            .child(list),
-        El::box_shadow,
-    );
+    let mut panel = col()
+        .key(format!("agents-card-{parent}"))
+        .role("group")
+        .label("Tasks")
+        .radius(RADIUS_CARD)
+        .fill(t.surface)
+        .border(HAIRLINE, t.hairline)
+        .transition(Transition::opacity())
+        .child(header)
+        .child(list);
     if wide {
+        panel = panel.w(CARD_WIDTH);
         (
             Some(panel.pin(None, Some(S12), Some(READING_INSET), None)),
             CARD_WIDTH + PANEL_GAP,
         )
     } else {
-        let band = row()
-            .key("agents-band")
-            .w_full()
-            .pt(S8)
-            .pr(READING_INSET)
-            .child(el().grow(1.0).a11y_hidden())
-            .child(panel);
+        let band = ui::reading(panel.w_full()).key("agents-band").pt(S12);
         (Some(band), 0.0)
     }
 }
@@ -203,7 +198,10 @@ pub fn task_identity(task: &Task, child: Option<&ThreadSummary>, t: &Theme) -> E
         identity(
             &task.title,
             &task.environment,
-            icon(&ui::AGENT, ICON).color(t.muted).a11y_hidden(),
+            icon(&ui::AGENT, ICON)
+                .color(t.muted)
+                .group_color(t.text)
+                .a11y_hidden(),
             preview,
             t,
         )
@@ -228,6 +226,7 @@ fn thread_identity(thread: &ThreadSummary, preview: Option<El>, t: &Theme) -> El
         &detail,
         icon(ui::harness_icon(&thread.harness), ICON)
             .color(t.muted)
+            .group_color(t.text)
             .help(&thread.harness_name)
             .a11y_hidden(),
         preview,
@@ -259,6 +258,7 @@ fn identity(label: &str, detail: &str, avatar: El, preview: Option<El>, t: &Them
                     text(detail)
                         .font(t.small)
                         .color(t.muted)
+                        .group_color(t.text)
                         .truncate()
                         .help_when_truncated(detail),
                 )
@@ -275,7 +275,7 @@ fn task_row(task: &Task, desktop: &Desktop, t: &Theme) -> El {
             TaskStatus::Running => (ui::spinner(t), "Running"),
             TaskStatus::Completed => (ui::dot(t.success), "Done"),
             TaskStatus::Failed => (ui::dot(t.danger), "Failed"),
-            TaskStatus::Cancelled => (ui::dot(t.faint), "Cancelled"),
+            TaskStatus::Cancelled => (ui::dot(t.faint), "Stopped"),
         }
     } else {
         (ui::dot(t.faint), "Unreachable")
@@ -284,20 +284,7 @@ fn task_row(task: &Task, desktop: &Desktop, t: &Theme) -> El {
         .thread
         .filter(|_| desktop.environment.as_deref() == Some(task.environment.as_str()))
         .and_then(|thread| desktop.summary(thread));
-    let mut detail = task_identity(task, child, t);
-    if task.reachable
-        && let Some(thread) = task.thread
-    {
-        let environment = task.environment.clone();
-        detail = detail
-            .role("link")
-            .label(task.title.clone())
-            .focusable(true)
-            .hover_group()
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                s.open_in_environment(environment.clone(), Some(thread), tx);
-            });
-    }
+    let detail = task_identity(task, child, t);
     let mut row = row()
         .key(format!("task-{}", task.id))
         .description(state)
@@ -307,26 +294,44 @@ fn task_row(task: &Task, desktop: &Desktop, t: &Theme) -> El {
                 .or(task.result.as_deref())
                 .unwrap_or(state),
         )
+        .w_full()
         .min_h(S40)
-        .py(S2)
+        .py(S6)
         .px(S8)
         .gap(S8)
         .center_y()
+        .radius(Size::Default.radius())
         .child(detail)
         .child(mark);
+    if task.reachable
+        && let Some(thread) = task.thread
+    {
+        let environment = task.environment.clone();
+        row = row
+            .role("link")
+            .label(task.title.clone())
+            .focusable(true)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            .hover_group()
+            .press(t.k.c.pressed)
+            .on_press_tx(move |s: &mut Desktop, tx| {
+                s.open_in_environment(environment.clone(), Some(thread), tx);
+            });
+    }
     if desktop.connected() && matches!(task.status, TaskStatus::Queued | TaskStatus::Running) {
         let id = task.id.clone();
         row = row.child(
             ui::icon_button(
                 &ui::STOP,
-                "Cancel task",
+                "Stop task",
                 IconButtonVariant::GhostMuted,
                 Size::Small,
             )
             .on_press_tx(move |s: &mut Desktop, tx| {
                 s.send(Command::CancelTask(id.clone()), tx);
             })
-            .build(&t.k),
+            .build(&t.k)
+            .hover_alone(),
         );
     }
     row
