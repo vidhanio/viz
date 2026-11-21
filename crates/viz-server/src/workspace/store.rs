@@ -142,6 +142,7 @@ pub(super) fn missing(thread: u64) -> RpcError {
 }
 
 pub(super) struct NewThread<'a> {
+    pub(super) worktree_branch: Option<&'a str>,
     pub(super) harness: &'a str,
     pub(super) cwd: &'a str,
     pub(super) project: Option<&'a str>,
@@ -155,10 +156,10 @@ pub(super) async fn create_thread(
     db: &mut dyn Executor,
     new: &NewThread<'_>,
 ) -> Result<u64, RpcError> {
-    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id", [
+    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree_branch)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
         new.harness.into(), new.cwd.into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
-        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(),
+        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(), new.worktree_branch.into(),
     ]).await?.expect("thread INSERT RETURNING yielded one row");
     row.u64(0)
 }
@@ -177,7 +178,7 @@ pub(super) async fn list_threads(
 ) -> Result<Vec<(String, ThreadSummary)>, RpcError> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
-            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.cwd
+            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.cwd, t.worktree_branch
         FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
         ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC"
     );
@@ -185,10 +186,14 @@ pub(super) async fn list_threads(
         .await?
         .map(|mut row| {
             let harness = row.str(5)?;
+            let cwd = row.str(13)?;
             Ok((
-                row.str(13)?,
+                cwd.clone(),
                 ThreadSummary {
                     git: None,
+                    worktree: row
+                        .opt_str(14)?
+                        .map(|branch| viz_client::protocol::GitWorktree { path: cwd, branch }),
                     id: ThreadId(row.u64(0)?),
                     title: row.str(1)?,
                     parent: row.opt_u64(2)?.map(ThreadId),

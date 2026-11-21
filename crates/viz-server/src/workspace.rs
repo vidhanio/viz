@@ -76,6 +76,8 @@ pub(crate) struct Workspace {
     pub(crate) environment: String,
     cwd: PathBuf,
     dir: PathBuf,
+    worktree_dir: PathBuf,
+    worktree_branch_prefix: String,
     default_harness: Option<String>,
     harnesses: BTreeMap<String, HarnessConfig>,
     changes: broadcast::Sender<Change>,
@@ -124,6 +126,11 @@ impl Workspace {
             db: Mutex::new(db),
             environment: config.environment.clone(),
             cwd: config.cwd.clone(),
+            worktree_dir: config
+                .worktree_dir
+                .clone()
+                .unwrap_or_else(|| dir.join("worktrees")),
+            worktree_branch_prefix: config.worktree_branch_prefix.clone(),
             dir,
             default_harness: config.default_harness.clone(),
             harnesses: config.harnesses.clone(),

@@ -61,6 +61,7 @@ pub struct Toast {
 /// A local draft. No ACP session is open until its first send.
 #[derive(Debug)]
 pub struct NewThread {
+    pub worktree: Option<viz_client::protocol::WorktreeRequest>,
     pub id: u64,
     pub project: Option<String>,
     pub harness: Option<String>,
@@ -74,6 +75,7 @@ impl NewThread {
         Self {
             id,
             project: project.map(|project| project.path.clone()),
+            worktree: None,
             harness: None,
             options: BTreeMap::new(),
             sending: false,
@@ -969,6 +971,7 @@ impl Desktop {
                 draft: thread.id,
                 params: LaunchThread {
                     project: thread.project.clone(),
+                    worktree: thread.worktree.clone(),
                     harness: thread.harness.clone(),
                     options: thread.options.clone(),
                     text: Some(self.draft.text.clone()),

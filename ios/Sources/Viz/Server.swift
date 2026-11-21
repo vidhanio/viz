@@ -53,6 +53,16 @@ enum VizProtocol {
     var id: String { path }
   }
 
+  struct GitWorktree: Decodable {
+    let path: String
+    let branch: String
+  }
+
+  struct WorktreeRequest {
+    var baseRef: String?
+    var branch: String?
+  }
+
   struct ThreadSummary: Decodable, Identifiable {
     enum Status: String, Decodable {
       case idle, working, failed
@@ -73,6 +83,7 @@ enum VizProtocol {
     let model: String?
     let thinking: String?
     let git: GitSummary?
+    let worktree: GitWorktree?
   }
 
   struct ToolRecord: Decodable {
@@ -369,13 +380,20 @@ final class Server {
     await refreshLists(on: task)
   }
 
-  func launch(project: String? = nil, harness: String? = nil, text: String? = nil) async throws
-    -> Int
-  {
+  func launch(
+    project: String? = nil, harness: String? = nil, text: String? = nil,
+    worktree: VizProtocol.WorktreeRequest? = nil
+  ) async throws -> Int {
     var params: [String: Any] = ["requestId": UUID().uuidString]
     if let project { params["project"] = project }
     if let harness { params["harness"] = harness }
     if let text { params["text"] = text }
+    if let worktree {
+      var request: [String: String] = [:]
+      if let baseRef = worktree.baseRef { request["baseRef"] = baseRef }
+      if let branch = worktree.branch { request["branch"] = branch }
+      params["worktree"] = request
+    }
     let data = try await call("thread.launch", params: params)
     return try JSONDecoder().decode(VizProtocol.Launched.self, from: data).thread
   }
@@ -395,8 +413,9 @@ final class Server {
     _ = try await call("thread.update", params: params)
   }
 
-  func delete(thread: Int) async throws {
-    _ = try await call("thread.delete", params: ["thread": thread])
+  func delete(thread: Int, removeWorktree: Bool = false) async throws {
+    _ = try await call(
+      "thread.delete", params: ["thread": thread, "removeWorktree": removeWorktree])
   }
 
   func search(query: String, limit: Int? = nil) async throws -> [VizProtocol.SearchHit] {

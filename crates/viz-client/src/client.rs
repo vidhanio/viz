@@ -180,7 +180,12 @@ impl Client {
     ///
     /// See [`Client::send`].
     pub async fn delete_thread(&self, thread: ThreadId) -> Result<()> {
-        self.request(&DeleteThread { thread }).await.map(drop)
+        self.request(&DeleteThread {
+            thread,
+            remove_worktree: false,
+        })
+        .await
+        .map(drop)
     }
 
     /// Lists available project directories.

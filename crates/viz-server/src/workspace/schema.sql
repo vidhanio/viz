@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS threads (
     user_title INTEGER NOT NULL,
     harness TEXT NOT NULL,
     cwd TEXT NOT NULL,
+    worktree_branch TEXT,
     project TEXT REFERENCES projects(path) ON DELETE SET NULL,
     parent INTEGER,
     parent_environment TEXT,
@@ -21,6 +22,11 @@ CREATE TABLE IF NOT EXISTS threads (
     model TEXT,
     thinking TEXT,
     setup_failed INTEGER NOT NULL DEFAULT 0
+) STRICT;
+
+CREATE TABLE IF NOT EXISTS git_worktrees (
+    path TEXT PRIMARY KEY,
+    branch TEXT NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS threads_project ON threads(project);

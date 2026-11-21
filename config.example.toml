@@ -16,6 +16,9 @@
 # State storage: $STATE_DIRECTORY under systemd, otherwise $XDG_STATE_HOME/viz
 # (default ~/.local/state/viz).
 # state_dir = "/var/lib/viz"
+# Defaults to the environment's state directory under worktrees/.
+# worktree_dir = "/home/me/viz-worktrees"
+# worktree_branch_prefix = "viz/"
 # Stable identity; required to differ from every linked environment's ID.
 # environment = "workstation"
 # Working directory of threads without a project (default $HOME).

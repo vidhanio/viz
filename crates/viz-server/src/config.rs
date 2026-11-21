@@ -17,6 +17,8 @@ pub(crate) struct Config {
     pub(crate) environment: String,
     pub(crate) cwd: PathBuf,
     pub(crate) state_dir: PathBuf,
+    pub(crate) worktree_dir: Option<PathBuf>,
+    pub(crate) worktree_branch_prefix: String,
     pub(crate) listen: SocketAddr,
     pub(crate) token: Option<Secret>,
     pub(crate) default_harness: Option<String>,
@@ -64,6 +66,12 @@ struct Server {
     environment: Option<String>,
     cwd: Option<PathBuf>,
     state_dir: Option<PathBuf>,
+    /// Parent directory for generated checkout paths. Defaults to the
+    /// environment state directory's worktrees subdirectory.
+    worktree_dir: Option<PathBuf>,
+    /// Prefix for branch names generated from thread titles. Defaults to
+    /// "viz/".
+    worktree_branch_prefix: Option<String>,
     listen: Option<SocketAddr>,
     token: Option<Secret>,
     default_harness: Option<String>,
@@ -153,22 +161,15 @@ impl Config {
                 },
             );
         }
-        let cwd = server.cwd.map_or_else(
-            || {
-                env::var_os("HOME")
-                    .map(PathBuf::from)
-                    .context("HOME is unset")
-            },
-            Ok,
-        )?;
-        let cwd = cwd
-            .canonicalize()
-            .with_context(|| format!("resolving working directory {}", cwd.display()))?;
-        ensure!(cwd.is_dir(), "server working directory is not a directory");
+        let cwd = working_directory(server.cwd)?;
         Ok(Self {
             environment,
             cwd,
             state_dir: server.state_dir.unwrap_or(paths.state_dir),
+            worktree_dir: server.worktree_dir,
+            worktree_branch_prefix: server
+                .worktree_branch_prefix
+                .unwrap_or_else(|| "viz/".into()),
             listen,
             token: server.token,
             default_harness,
@@ -212,4 +213,20 @@ fn layers(directory: &Path, explicit: Option<&Path>) -> Result<Vec<PathBuf>> {
     files.sort_unstable();
     paths.extend(files);
     Ok(paths)
+}
+
+fn working_directory(configured: Option<PathBuf>) -> Result<PathBuf> {
+    let cwd = configured.map_or_else(
+        || {
+            env::var_os("HOME")
+                .map(PathBuf::from)
+                .context("HOME is unset")
+        },
+        Ok,
+    )?;
+    let cwd = cwd
+        .canonicalize()
+        .with_context(|| format!("resolving working directory {}", cwd.display()))?;
+    ensure!(cwd.is_dir(), "server working directory is not a directory");
+    Ok(cwd)
 }

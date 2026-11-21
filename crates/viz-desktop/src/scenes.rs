@@ -131,6 +131,7 @@ fn list() -> Vec<ThreadSummary> {
     ]
     .map(|(id, title, parent, project, status)| ThreadSummary {
         git: None,
+        worktree: None,
         id: ThreadId(id),
         title: title.into(),
         parent: parent.map(ThreadId),

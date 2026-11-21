@@ -536,6 +536,17 @@
         "title": "DelegateTask",
         "type": "object",
         "properties": {
+          "worktree": {
+            "description": "Place a new child thread in a new linked worktree in the receiving\nenvironment.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WorktreeRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "parent": {
             "$ref": "#/$defs/ThreadId"
           },
@@ -608,6 +619,26 @@
           "attachmentIds"
         ],
         "$defs": {
+          "WorktreeRequest": {
+            "description": "How to provision a new linked worktree on the environment running the\nthread.",
+            "type": "object",
+            "properties": {
+              "baseRef": {
+                "description": "Local ref, remote-tracking ref or commit ID. Defaults to the source\ncheckout's HEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "branch": {
+                "description": "New local branch name. Defaults to a unique name derived from the thread\ntitle.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
           "ThreadId": {
             "description": "A thread id.",
             "type": "integer",
@@ -1734,6 +1765,17 @@
             "description": "A `threads.list` item.",
             "type": "object",
             "properties": {
+              "worktree": {
+                "description": "The worktree provisioned for this thread, if any.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitWorktree"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "git": {
                 "description": "Git status for the thread's working directory.",
                 "anyOf": [
@@ -1831,6 +1873,24 @@
               "updatedAt",
               "unread",
               "pinned"
+            ]
+          },
+          "GitWorktree": {
+            "description": "A linked worktree provisioned by viz.",
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Absolute checkout path and identifier for removal.",
+                "type": "string"
+              },
+              "branch": {
+                "description": "Local branch at creation.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "branch"
             ]
           },
           "GitSummary": {
@@ -2088,6 +2148,11 @@
         "description": "Delete a thread.",
         "type": "object",
         "properties": {
+          "removeWorktree": {
+            "description": "Also remove the thread's worktree, if clean and unused by other threads.",
+            "type": "boolean",
+            "default": false
+          },
           "thread": {
             "description": "The thread to delete.",
             "$ref": "#/$defs/ThreadId"
@@ -2942,6 +3007,17 @@
         "description": "`thread.launch` params.",
         "type": "object",
         "properties": {
+          "worktree": {
+            "description": "Place the thread in a new linked worktree.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WorktreeRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "title": {
             "type": [
               "string",
@@ -3001,6 +3077,26 @@
           }
         },
         "$defs": {
+          "WorktreeRequest": {
+            "description": "How to provision a new linked worktree on the environment running the\nthread.",
+            "type": "object",
+            "properties": {
+              "baseRef": {
+                "description": "Local ref, remote-tracking ref or commit ID. Defaults to the source\ncheckout's HEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "branch": {
+                "description": "New local branch name. Defaults to a unique name derived from the thread\ntitle.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
           "Attachment": {
             "description": "A file attached to an input.",
             "type": "object",
@@ -3077,6 +3173,142 @@
             "minimum": 0
           }
         }
+      }
+    },
+    "git.branches": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListGitBranches",
+        "description": "List local and remote-tracking branches for a registered project.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitBranches",
+        "description": "Branches available as worktree bases.",
+        "type": "object",
+        "properties": {
+          "branches": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GitBranch"
+            }
+          }
+        },
+        "required": [
+          "branches"
+        ],
+        "$defs": {
+          "GitBranch": {
+            "type": "object",
+            "properties": {
+              "reference": {
+                "description": "Full ref name, suitable for use as a worktree base.",
+                "type": "string"
+              },
+              "head": {
+                "description": "Full Git object ID at this ref.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "reference",
+              "head"
+            ]
+          }
+        }
+      }
+    },
+    "git.worktree.create": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CreateGitWorktree",
+        "description": "Provision a linked checkout from a registered project.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "worktree": {
+            "$ref": "#/$defs/WorktreeRequest"
+          }
+        },
+        "required": [
+          "project",
+          "worktree"
+        ],
+        "$defs": {
+          "WorktreeRequest": {
+            "description": "How to provision a new linked worktree on the environment running the\nthread.",
+            "type": "object",
+            "properties": {
+              "baseRef": {
+                "description": "Local ref, remote-tracking ref or commit ID. Defaults to the source\ncheckout's HEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "branch": {
+                "description": "New local branch name. Defaults to a unique name derived from the thread\ntitle.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitWorktree",
+        "description": "A linked worktree provisioned by viz.",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Absolute checkout path and identifier for removal.",
+            "type": "string"
+          },
+          "branch": {
+            "description": "Local branch at creation.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "branch"
+        ]
+      }
+    },
+    "git.worktree.remove": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RemoveGitWorktree",
+        "description": "Remove an unused, clean worktree created by viz. Its branch is kept.",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
       }
     },
     "thread.send": {

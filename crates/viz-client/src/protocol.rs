@@ -104,6 +104,9 @@ methods! {
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
     LaunchThread => "thread.launch", Launched;
+    ListGitBranches => "git.branches", GitBranches;
+    CreateGitWorktree => "git.worktree.create", GitWorktree;
+    RemoveGitWorktree => "git.worktree.remove", Empty;
     SendInput => "thread.send", Sent;
     Watch => "thread.watch", Watching;
     Unwatch => "thread.unwatch", Watching;
@@ -212,6 +215,8 @@ pub struct GitSummary {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
+    /// The worktree provisioned for this thread, if any.
+    pub worktree: Option<GitWorktree>,
     /// Git status for the thread's working directory.
     pub git: Option<GitSummary>,
     /// Its id.
@@ -245,10 +250,70 @@ pub struct ThreadSummary {
     pub thinking: Option<String>,
 }
 
+/// How to provision a new linked worktree on the environment running the
+/// thread.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct WorktreeRequest {
+    /// Local ref, remote-tracking ref or commit ID. Defaults to the source
+    /// checkout's HEAD.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_ref: Option<String>,
+    /// New local branch name. Defaults to a unique name derived from the thread
+    /// title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+}
+
+/// A linked worktree provisioned by viz.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct GitWorktree {
+    /// Absolute checkout path and identifier for removal.
+    pub path: String,
+    /// Local branch at creation.
+    pub branch: String,
+}
+
+/// List local and remote-tracking branches for a registered project.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ListGitBranches {
+    pub project: String,
+}
+
+/// Branches available as worktree bases.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GitBranches {
+    pub branches: Vec<GitBranch>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GitBranch {
+    /// Full ref name, suitable for use as a worktree base.
+    pub reference: String,
+    /// Full Git object ID at this ref.
+    pub head: String,
+}
+
+/// Provision a linked checkout from a registered project.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct CreateGitWorktree {
+    pub project: String,
+    pub worktree: WorktreeRequest,
+}
+
+/// Remove an unused, clean worktree created by viz. Its branch is kept.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RemoveGitWorktree {
+    pub path: String,
+}
+
 /// `thread.launch` params.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchThread {
+    /// Place the thread in a new linked worktree.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -587,7 +652,11 @@ pub struct StopThread {
 
 /// Delete a thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteThread {
+    /// Also remove the thread's worktree, if clean and unused by other threads.
+    #[serde(default)]
+    pub remove_worktree: bool,
     /// The thread to delete.
     pub thread: ThreadId,
 }
@@ -926,6 +995,10 @@ pub struct TaskResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DelegateTask<'a> {
+    /// Place a new child thread in a new linked worktree in the receiving
+    /// environment.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<&'a WorktreeRequest>,
     pub parent: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<&'a str>,
