@@ -20,9 +20,9 @@ use std::{
 };
 
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, InitializeResponse, ListSessionsResponse, LoadSessionResponse,
-    NewSessionResponse, PermissionOptionKind, PromptResponse, RequestPermissionRequest,
-    SessionNotification, SetSessionConfigOptionResponse,
+    AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
+    PermissionOptionKind, PromptResponse, RequestPermissionRequest, SessionNotification,
+    SetSessionConfigOptionResponse,
 };
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use serde::de::DeserializeOwned;
@@ -255,17 +255,6 @@ impl Agent {
         self.capabilities.prompt_capabilities.image
     }
 
-    /// Importing needs both `session/list` and `session/load`, which replays
-    /// the session's history.
-    pub(super) fn require_import(&self) -> Result<()> {
-        ensure!(
-            self.capabilities.session_capabilities.list.is_some() && self.capabilities.load_session,
-            "ACP harness {} cannot import sessions: it must support session/list and session/load",
-            self.label
-        );
-        Ok(())
-    }
-
     pub(super) fn is_closed(&self) -> bool {
         self.connection.closed.is_cancelled()
     }
@@ -290,23 +279,6 @@ impl Agent {
             .await
     }
 
-    /// `session/load`: the agent replays the session's history as
-    /// `session/update`s, all delivered before it replies.
-    pub(super) async fn load_session(
-        &self,
-        id: &str,
-        cwd: &Path,
-        mcp: Vec<Value>,
-    ) -> Result<LoadSessionResponse> {
-        let cwd = utf8(cwd)?;
-        self.connection
-            .request(
-                "session/load",
-                json!({ "sessionId": id, "cwd": cwd, "mcpServers": mcp }),
-            )
-            .await
-    }
-
     /// Reopens a session: `session/resume` when offered (no history), else
     /// `session/load`, whose replay the caller discards.
     pub(super) async fn restore_session(
@@ -326,18 +298,6 @@ impl Agent {
             self.label
         );
         self.connection.request("session/load", params).await
-    }
-
-    pub(super) async fn list_sessions(
-        &self,
-        cwd: &Path,
-        cursor: Option<&str>,
-    ) -> Result<ListSessionsResponse> {
-        let mut params = json!({ "cwd": utf8(cwd)? });
-        if let Some(cursor) = cursor {
-            params["cursor"] = json!(cursor);
-        }
-        self.connection.request("session/list", params).await
     }
 
     /// Deletes a disposable session where the agent can, else closes it.

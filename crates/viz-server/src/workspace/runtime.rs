@@ -16,8 +16,7 @@ use super::{
 };
 use crate::{
     acp::{
-        Catalog, Desired, Outcome, Prompt, Replay, Session, SessionSnapshot, StopReason,
-        stop_reason_name,
+        Catalog, Desired, Outcome, Prompt, Session, SessionSnapshot, StopReason, stop_reason_name,
     },
     wire::{LiveTurn, NewEntry, OptionValue, RpcError, RunEnd, RunId, RunStatus},
 };
@@ -334,7 +333,7 @@ impl Workspace {
         let running = tokio::select! {
             biased;
             () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
-            result = Session::open(config, Path::new(&cwd), session.session_id.as_deref(), Some(&endpoint), Replay::Discard) => result?,
+            result = Session::open(config, Path::new(&cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
         };
         // Once a native session exists, store its id before subsequent runner
         // calls.
@@ -416,7 +415,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub(super) fn observe(
+    fn observe(
         self: &Arc<Self>,
         thread: u64,
         driver: &Arc<Driver>,
@@ -519,7 +518,7 @@ pub(super) async fn save_catalog(
     Ok(())
 }
 
-pub(super) async fn update_catalog(
+async fn update_catalog(
     db: &mut dyn Executor,
     name: &str,
     snapshot: &SessionSnapshot,
@@ -531,7 +530,7 @@ pub(super) async fn update_catalog(
     Ok(())
 }
 
-pub(super) async fn persist_snapshot(
+async fn persist_snapshot(
     db: &mut dyn Executor,
     thread: u64,
     snapshot: SessionSnapshot,

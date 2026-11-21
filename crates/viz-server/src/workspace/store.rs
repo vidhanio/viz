@@ -116,7 +116,7 @@ pub(super) struct Binding {
 }
 
 pub(super) async fn binding(db: &mut dyn Executor, thread: u64) -> Result<Binding, RpcError> {
-    let mut row = row(db, "SELECT harness, cwd, project, parent, parent_environment, session FROM threads WHERE id = ?1 AND importing = 0", [thread.into()]).await?
+    let mut row = row(db, "SELECT harness, cwd, project, parent, parent_environment, session FROM threads WHERE id = ?1", [thread.into()]).await?
         .ok_or_else(|| missing(thread))?;
     Ok(Binding {
         harness: row.str(0)?,
@@ -129,14 +129,10 @@ pub(super) async fn binding(db: &mut dyn Executor, thread: u64) -> Result<Bindin
 }
 
 pub(super) async fn require(db: &mut dyn Executor, thread: u64) -> Result<(), RpcError> {
-    row(
-        db,
-        "SELECT id FROM threads WHERE id = ?1 AND importing = 0",
-        [thread.into()],
-    )
-    .await?
-    .map(|_| ())
-    .ok_or_else(|| missing(thread))
+    row(db, "SELECT id FROM threads WHERE id = ?1", [thread.into()])
+        .await?
+        .map(|_| ())
+        .ok_or_else(|| missing(thread))
 }
 
 pub(super) fn missing(thread: u64) -> RpcError {
@@ -150,7 +146,6 @@ pub(super) struct NewThread<'a> {
     pub(super) parent: Option<u64>,
     pub(super) parent_environment: Option<&'a str>,
     pub(super) title: Option<&'a str>,
-    pub(super) importing: bool,
     pub(super) session: SavedSession,
 }
 
@@ -158,10 +153,10 @@ pub(super) async fn create_thread(
     db: &mut dyn Executor,
     new: &NewThread<'_>,
 ) -> Result<u64, RpcError> {
-    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, importing, session, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
+    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id", [
         new.harness.into(), new.cwd.into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
-        new.title.unwrap_or_default().into(), new.title.is_some().into(), new.importing.into(), json(&new.session)?.into(), now().into(),
+        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(),
     ]).await?.expect("thread INSERT RETURNING yielded one row");
     row.u64(0)
 }
@@ -178,10 +173,12 @@ pub(super) async fn list_threads(
     project: Option<&str>,
     workspace: &Workspace,
 ) -> Result<Vec<ThreadSummary>, RpcError> {
-    let query = format!("SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
+    let query = format!(
+        "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
             t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking
-        FROM threads AS t WHERE t.importing = 0 AND (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
-        ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC");
+        FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
+        ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC"
+    );
     rows(db, &query, [archived.into(), project.into()])
         .await?
         .map(|mut row| {
@@ -208,7 +205,7 @@ pub(super) async fn list_threads(
 
 pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadState, RpcError> {
     let query = format!(
-        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS} FROM threads AS t WHERE t.id = ?1 AND t.importing = 0"
+        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS} FROM threads AS t WHERE t.id = ?1"
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
@@ -375,10 +372,20 @@ pub(super) async fn search(
     if terms.is_empty() {
         return Ok(Vec::new());
     }
-    rows(db, "SELECT s.thread, s.rowid, snippet(search_entries, 0, char(1), char(2), '…', 32)
-        FROM search_entries AS s JOIN threads AS t ON t.id = s.thread
-        WHERE search_entries MATCH ?1 AND t.importing = 0 ORDER BY bm25(search_entries), s.rowid DESC LIMIT ?2",
-        [terms.into(), limit.into()]).await?.map(|mut row| Ok(SearchHit {
-            thread: ThreadId(row.u64(0)?), entry: EntryId(row.u64(1)?), snippet: row.str(2)?,
-        })).collect()
+    rows(
+        db,
+        "SELECT s.thread, s.rowid, snippet(search_entries, 0, char(1), char(2), '…', 32)
+        FROM search_entries AS s
+        WHERE search_entries MATCH ?1 ORDER BY bm25(search_entries), s.rowid DESC LIMIT ?2",
+        [terms.into(), limit.into()],
+    )
+    .await?
+    .map(|mut row| {
+        Ok(SearchHit {
+            thread: ThreadId(row.u64(0)?),
+            entry: EntryId(row.u64(1)?),
+            snippet: row.str(2)?,
+        })
+    })
+    .collect()
 }

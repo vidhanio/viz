@@ -16,7 +16,7 @@ use super::{
     store::{self, NewThread, SavedSession},
 };
 use crate::{
-    acp::{self, Desired, Replay, Selection, Session},
+    acp::{self, Selection},
     wire::{Attachment, Harness, OptionValue, Project, RpcError, decode, encode},
 };
 
@@ -101,20 +101,6 @@ impl Workspace {
                 let HarnessOptions { harness, model } = decode(params)?;
                 Ok(json!({"options": self.harness_options(&harness, Some(&model)).await?}))
             }
-            "harness.threads" => {
-                let ListNative {
-                    harness,
-                    project,
-                    cursor,
-                } = decode(params)?;
-                let (_, config) = self.harness(Some(&harness))?;
-                let cwd = {
-                    let mut db = self.db.lock().await;
-                    self.cwd_for(&mut *db, project.as_deref()).await?
-                };
-                encode(acp::list(config, &cwd, cursor.as_deref()).await?)
-            }
-            "thread.import" => Ok(json!({"thread": self.import(decode(params)?).await?})),
             "task.receive" => encode(self.receive(decode(params)?).await?),
             "task.retract" => encode(self.retract(decode(params)?).await?),
             _ => Err(RpcError::new(-32601, format!("unknown method {method}"))),
@@ -181,7 +167,7 @@ impl Workspace {
                 } = decode(params)?;
                 let cwd = row(
                     &mut *self.db.lock().await,
-                    "SELECT cwd FROM threads WHERE id = ?1 AND importing = 0",
+                    "SELECT cwd FROM threads WHERE id = ?1",
                     [thread.get().into()],
                 )
                 .await?
@@ -278,7 +264,6 @@ impl Workspace {
                 parent: None,
                 parent_environment: None,
                 title: args.title.as_deref(),
-                importing: false,
                 session,
             },
         )
@@ -441,7 +426,7 @@ impl Workspace {
             let mut db = self.db.lock().await;
             let count = exec(
                 &mut *db,
-                "DELETE FROM threads WHERE id = ?1 AND importing = 0",
+                "DELETE FROM threads WHERE id = ?1",
                 [thread.into()],
             )
             .await?;
@@ -508,7 +493,7 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         let threads = rows(
             &mut tx,
-            "SELECT id FROM threads WHERE project = ?1 AND importing = 0",
+            "SELECT id FROM threads WHERE project = ?1",
             [project.into()],
         )
         .await?;
@@ -575,122 +560,6 @@ impl Workspace {
             runtime::save_catalog(&mut *self.db.lock().await, name, &updated).await?;
         }
         Ok(options)
-    }
-
-    async fn import(self: &Arc<Self>, args: ImportThread) -> Result<u64, RpcError> {
-        let job = {
-            let _state = self
-                .transient
-                .lock()
-                .expect("workspace runtime mutex poisoned");
-            if self.closing.is_cancelled() {
-                return Err(RpcError::unavailable("workspace is shutting down"));
-            }
-            let workspace = Arc::clone(self);
-            self.jobs
-                .spawn(async move { workspace.import_job(args).await })
-        };
-        job.await.map_err(RpcError::internal)?
-    }
-
-    async fn import_job(self: &Arc<Self>, args: ImportThread) -> Result<u64, RpcError> {
-        if args.cwd.is_empty() || args.session_id.is_empty() {
-            return Err(RpcError::invalid("cwd and sessionId must not be empty"));
-        }
-        let (harness, config) = self.harness(Some(&args.harness))?;
-        let cwd = store::directory(Path::new(&args.cwd)).await?;
-        let cwd_text = store::path_text(&cwd)?;
-        let thread = {
-            let mut db = self.db.lock().await;
-            if let Some(found) = row(&mut *db, "SELECT id, importing FROM threads
-                WHERE harness = ?1 AND cwd = ?2 AND json_extract(session, '$.session_id') = ?3 ORDER BY id LIMIT 1",
-                [harness.into(), cwd_text.into(), args.session_id.as_str().into()]).await? {
-                return if found.flag(1)? { Err(RpcError::unavailable("ACP session import already in progress")) } else { found.u64(0) };
-            }
-            if let Some(project) = &args.project {
-                store::project(&mut *db, project).await?;
-            }
-            store::create_thread(
-                &mut *db,
-                &NewThread {
-                    harness,
-                    cwd: cwd_text,
-                    project: args.project.as_deref(),
-                    parent: None,
-                    parent_environment: None,
-                    title: None,
-                    importing: true,
-                    session: SavedSession {
-                        session_id: Some(args.session_id.clone()),
-                        ..SavedSession::default()
-                    },
-                },
-            )
-            .await?
-        };
-        let endpoint = self.mcp.endpoint(thread);
-        let opened = tokio::select! {
-            biased;
-            () = self.closing.cancelled() => Err(RpcError::unavailable("ACP import cancelled")),
-            result = async {
-                let session = Session::open(config, &cwd, Some(&args.session_id), Some(&endpoint), Replay::Import).await?;
-                let desired = session.restore(&Desired::new(), None).await?;
-                Ok::<_, anyhow::Error>((session, desired))
-            } => result.map_err(RpcError::from),
-        };
-        let result = match opened {
-            Ok((session, desired)) => self.finish_import(thread, harness, session, desired).await,
-            Err(error) => Err(error),
-        };
-        if let Err(error) = result {
-            exec(
-                &mut *self.db.lock().await,
-                "DELETE FROM threads WHERE id = ?1 AND importing = 1",
-                [thread.into()],
-            )
-            .await?;
-            return Err(error);
-        }
-        Ok(thread)
-    }
-
-    async fn finish_import(
-        self: &Arc<Self>,
-        thread: u64,
-        harness: &str,
-        mut session: Session,
-        desired: Desired,
-    ) -> Result<(), RpcError> {
-        let updates = session.watch();
-        let entries = session.take_history();
-        let mut db = self.db.lock().await;
-        // This row is still hidden. Its binding, replay, catalog and visibility
-        // commit together.
-        let mut tx = db.transaction().await?;
-        let snapshot = session.snapshot();
-        runtime::update_catalog(&mut tx, harness, &snapshot).await?;
-        runtime::persist_snapshot(&mut tx, thread, snapshot, Some(&desired)).await?;
-        for entry in &entries {
-            store::append(&mut tx, thread, entry).await?;
-        }
-        exec(
-            &mut tx,
-            "UPDATE threads SET importing = 0 WHERE id = ?1",
-            [thread.into()],
-        )
-        .await?;
-        let driver = self.driver(thread);
-        // No consumer can see an importing thread or lock this fresh session
-        // yet.
-        *driver
-            .session
-            .try_lock()
-            .expect("newly imported thread has no consumer") = Some(session);
-        tx.commit().await?;
-        drop(db);
-        self.observe(thread, &driver, updates);
-        self.relist(thread);
-        Ok(())
     }
 
     async fn receive(self: &Arc<Self>, args: ReceiveTask) -> Result<Received, RpcError> {
@@ -814,7 +683,6 @@ impl Workspace {
                 parent: Some(args.parent.get()),
                 parent_environment: Some(&args.origin_environment),
                 title: None,
-                importing: false,
                 session,
             },
         )
@@ -955,22 +823,6 @@ struct CreateProject {
 struct UpdateProject {
     project: String,
     name: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ListNative {
-    harness: String,
-    project: Option<String>,
-    cursor: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ImportThread {
-    harness: String,
-    cwd: String,
-    session_id: String,
-    project: Option<String>,
 }
 
 #[derive(Deserialize)]

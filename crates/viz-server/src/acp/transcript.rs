@@ -9,8 +9,7 @@ use agent_client_protocol::v1::schema::{
 
 use super::tool_record::{Receipts, ToolContent, ToolFields};
 use crate::wire::{
-    LiveText, LiveTextKind, LiveTurn, NewEntry, PlanEntry, PlanPriority, PlanStatus, RunEnd,
-    ToolCallStatus,
+    LiveText, LiveTextKind, LiveTurn, NewEntry, PlanEntry, PlanPriority, PlanStatus, ToolCallStatus,
 };
 
 /// A text run this long (in bytes) is committed, and the next chunk starts a
@@ -184,80 +183,4 @@ fn plan_entry(plan: Plan) -> NewEntry {
         })
         .collect();
     NewEntry::Plan { entries }
-}
-
-/// Rebuilds a native session's history from its `session/load` replay. ACP
-/// replays each user message as `user_message_chunk`s followed by the agent's
-/// output; a user message after agent output starts a new turn. Replayed turns
-/// carry no stop reason, so each is recorded as `end_turn`. Only text prompt
-/// content is kept.
-#[derive(Default)]
-pub(super) struct History {
-    entries: Vec<NewEntry>,
-    /// Replayed calls never match a receipt; stale receipt markers stay in
-    /// their output.
-    receipts: Arc<Receipts>,
-    prompt: Option<String>,
-    turn: Option<Transcript>,
-}
-
-impl History {
-    pub(super) fn apply(&mut self, update: SessionUpdate) {
-        match update {
-            SessionUpdate::UserMessageChunk(chunk) => {
-                if self.prompt.is_none() {
-                    self.end_turn();
-                }
-                let prompt = self.prompt.get_or_insert_default();
-                if let ContentBlock::Text(text) = chunk.content {
-                    prompt.push_str(&text.text);
-                }
-            }
-            update @ (SessionUpdate::AgentMessageChunk(_)
-            | SessionUpdate::AgentThoughtChunk(_)
-            | SessionUpdate::ToolCall(_)
-            | SessionUpdate::ToolCallUpdate(_)
-            | SessionUpdate::Plan(_)) => {
-                let entries = self.start_turn().apply(vec![update]);
-                self.entries.extend(entries);
-            }
-            _ => {}
-        }
-    }
-
-    /// Every replayed entry, ending the last turn.
-    pub(super) fn finish(mut self) -> Vec<NewEntry> {
-        if self.prompt.is_some() {
-            self.start_turn();
-        }
-        self.end_turn();
-        self.entries
-    }
-
-    fn start_turn(&mut self) -> &mut Transcript {
-        if let Some(text) = self.prompt.take() {
-            self.entries.push(NewEntry::Prompt {
-                text,
-                attachments: Vec::new(),
-                origin: None,
-            });
-        }
-        let key = format!("replay-{}", self.entries.len());
-        let receipts = &self.receipts;
-        self.turn
-            .get_or_insert_with(|| Transcript::new(key, Arc::clone(receipts)))
-    }
-
-    fn end_turn(&mut self) {
-        let Some(mut turn) = self.turn.take() else {
-            return;
-        };
-        self.entries.extend(turn.finish());
-        let answer = turn.answer;
-        self.entries.push(NewEntry::Run(RunEnd {
-            stop_reason: Some("end_turn".to_owned()),
-            error: None,
-            answer: Some(answer),
-        }));
-    }
 }

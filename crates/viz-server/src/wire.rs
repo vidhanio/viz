@@ -9,8 +9,7 @@ use serde_json::Value;
 pub(crate) use viz_client::protocol::{
     Attachment, AttachmentCapabilities, ClientKind, ConfigOption, ContextUsage as Usage,
     DependentChoice, DependentOption, Entry, EntryData as NewEntry, EntryId, EntryPage,
-    Environment, EnvironmentStatus, Harness, HarnessThread as NativeThread,
-    HarnessThreadList as NativeThreads, Hello, HelloParams, LiveText, LiveTextKind, LiveTurn,
+    Environment, EnvironmentStatus, Harness, Hello, HelloParams, LiveText, LiveTextKind, LiveTurn,
     Notification, OptionChoice, OptionKind, OptionValue, Origin, PROTOCOL_VERSION, PlanEntry,
     PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, Run, RunEnd, RunId,
     RunStatus, SearchHit, SlashCommand as Command, Task, TaskStatus, ThreadId, ThreadState,

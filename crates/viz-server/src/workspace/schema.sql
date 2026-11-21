@@ -21,13 +21,10 @@ CREATE TABLE IF NOT EXISTS threads (
     session TEXT NOT NULL,
     model TEXT,
     thinking TEXT,
-    importing INTEGER NOT NULL DEFAULT 0,
     setup_failed INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS threads_project ON threads(project);
-
-CREATE INDEX IF NOT EXISTS thread_session ON threads(harness, cwd, json_extract(session, '$.session_id'));
 
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

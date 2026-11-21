@@ -1,5 +1,4 @@
-//! A thread's ACP session: one harness process, its options, its turns, and
-//! native session import.
+//! A thread's ACP session: one harness process, its options, and its turns.
 
 use std::{
     fmt::Write as _,
@@ -36,7 +35,7 @@ use super::{
     },
     process::{Agent, UpdateSink},
     tool_record::Receipts,
-    transcript::{History, Transcript},
+    transcript::Transcript,
 };
 use crate::{
     config::HarnessConfig,
@@ -50,16 +49,6 @@ const BATCH: Duration = Duration::from_millis(75);
 /// How long the agent has to end a cancelled turn before viz gives up on the
 /// session.
 const CANCEL_GRACE: Duration = Duration::from_secs(2);
-
-/// What [`Session::open`] does with the history `session/load` replays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Replay {
-    /// Restoring a session viz already holds the transcript of.
-    Discard,
-    /// Importing a native session: its history becomes
-    /// [`Session::take_history`].
-    Import,
-}
 
 /// The session state viz persists and shows, as last reported by the runner.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -112,16 +101,9 @@ struct State {
     title: Option<String>,
     /// Session-level state changed since the running turn last published.
     dirty: bool,
-    sink: Sink,
-}
-
-/// Where content updates go.
-#[derive(Default)]
-enum Sink {
-    #[default]
-    Discard,
-    History(History),
-    Turn(mpsc::UnboundedSender<SessionUpdate>),
+    /// Only a live turn receives content. In particular, `session/load`
+    /// replays a transcript that viz already stores.
+    turn: Option<mpsc::UnboundedSender<SessionUpdate>>,
 }
 
 /// A thread's open ACP session. Dropping it stops the harness.
@@ -133,7 +115,6 @@ pub(crate) struct Session {
     config: HarnessConfig,
     /// Opened with `session/new`, so it takes the configured defaults.
     fresh: bool,
-    history: Vec<NewEntry>,
     mcp: Option<McpEndpoint>,
     /// A failed or abandoned turn left the session in an unknown state.
     broken: bool,
@@ -141,25 +122,18 @@ pub(crate) struct Session {
 
 impl Session {
     /// Starts the harness in `cwd` and opens the thread's session:
-    /// `session/new` without a `native` session ID, else that session restored
-    /// (`Replay::Discard`) or imported (`Replay::Import`, which needs
-    /// `session/list` and `session/load`). `mcp` gives the agent viz's tools.
+    /// `session/new` without a `saved_id`, else `session/resume` or
+    /// `session/load`. `mcp` gives the agent viz's tools.
     ///
     /// Dropping the future stops the harness.
     pub(crate) async fn open(
         config: &HarnessConfig,
         cwd: &Path,
-        native: Option<&str>,
+        saved_id: Option<&str>,
         mcp: Option<&McpEndpoint>,
-        replay: Replay,
     ) -> Result<Self> {
         let state = Arc::new(Mutex::new(State {
-            session_id: native.map(str::to_owned),
-            sink: if native.is_some() && replay == Replay::Import {
-                Sink::History(History::default())
-            } else {
-                Sink::Discard
-            },
+            session_id: saved_id.map(str::to_owned),
             ..State::default()
         }));
         let changes = Arc::new(watch::channel(()).0);
@@ -168,17 +142,10 @@ impl Session {
             Some(endpoint) => vec![declaration(&agent, endpoint)?],
             None => Vec::new(),
         };
-        let (session_id, options) = match native {
+        let (session_id, options) = match saved_id {
             None => {
                 let response = agent.new_session(cwd, servers).await?;
                 (response.session_id.0.to_string(), response.config_options)
-            }
-            Some(id) if replay == Replay::Import => {
-                agent.require_import()?;
-                (
-                    id.to_owned(),
-                    agent.load_session(id, cwd, servers).await?.config_options,
-                )
             }
             Some(id) => (
                 id.to_owned(),
@@ -188,25 +155,19 @@ impl Session {
                     .config_options,
             ),
         };
-        let history = {
-            let mut state = lock(&state);
-            state.session_id = Some(session_id.clone());
-            if let Some(options) = options {
-                set_options(&mut state, options);
-            }
-            match mem::take(&mut state.sink) {
-                Sink::History(history) => history.finish(),
-                Sink::Discard | Sink::Turn(_) => Vec::new(),
-            }
-        };
+        let mut current = lock(&state);
+        current.session_id = Some(session_id.clone());
+        if let Some(options) = options {
+            set_options(&mut current, options);
+        }
+        drop(current);
         Ok(Self {
             agent,
             state,
             changes,
             id: session_id,
             config: config.clone(),
-            fresh: native.is_none(),
-            history,
+            fresh: saved_id.is_none(),
             mcp: mcp.cloned(),
             broken: false,
         })
@@ -235,12 +196,6 @@ impl Session {
     /// usage), including while idle.
     pub(crate) fn watch(&self) -> watch::Receiver<()> {
         self.changes.subscribe()
-    }
-
-    /// The imported session's replayed history; empty after the first call and
-    /// for other sessions.
-    pub(crate) fn take_history(&mut self) -> Vec<NewEntry> {
-        mem::take(&mut self.history)
     }
 
     /// Whether the session can take another turn; drop it and reopen otherwise.
@@ -380,7 +335,7 @@ impl Session {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         {
             let mut state = lock(&self.state);
-            state.sink = Sink::Turn(sender);
+            state.turn = Some(sender);
             state.dirty = false;
         }
         let tools = self.mcp.as_ref().map(|endpoint| {
@@ -429,7 +384,7 @@ impl Session {
             }
         };
         drop(tools);
-        lock(&self.state).sink = Sink::Discard;
+        lock(&self.state).turn = None;
         while let Ok(update) = receiver.try_recv() {
             pending.push(update);
         }
@@ -620,12 +575,8 @@ fn update_sink(state: &Arc<Mutex<State>>, changes: &Arc<watch::Sender<()>>) -> U
                 true
             }
             update => {
-                match &mut state.sink {
-                    Sink::Discard => {}
-                    Sink::History(history) => history.apply(update),
-                    Sink::Turn(turn) => {
-                        let _ = turn.send(update);
-                    }
+                if let Some(turn) = &state.turn {
+                    let _ = turn.send(update);
                 }
                 false
             }

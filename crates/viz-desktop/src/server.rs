@@ -12,9 +12,9 @@ use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
-        HarnessOptions, ImportThread, LaunchThread, ListEnvironments, ListHarnessThreads,
-        ListTasks, Notification, OptionValue, RemoveProject, RemoveQueuedInput, RunId, SearchFiles,
-        SendInput, ThreadId, UpdateProject, UpdateThread,
+        HarnessOptions, LaunchThread, ListEnvironments, ListTasks, Notification, OptionValue,
+        RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SendInput, ThreadId, UpdateProject,
+        UpdateThread,
     },
 };
 
@@ -36,17 +36,6 @@ pub enum Command {
     Environment {
         environment: String,
         thread: Option<ThreadId>,
-    },
-    BrowseImports {
-        harness: String,
-        project: Option<String>,
-        cursor: Option<String>,
-    },
-    Import {
-        harness: String,
-        project: Option<String>,
-        session_id: String,
-        cwd: String,
     },
     CancelTask(String),
     /// Bind and send the first input of the fresh composer.
@@ -401,25 +390,6 @@ impl Session<'_> {
                 Ok(())
             }
             Command::Create { draft, params } => self.launch(draft, params).await,
-            Command::BrowseImports {
-                harness,
-                project,
-                cursor,
-            } => {
-                self.browse_imports(&harness, project.as_deref(), cursor.as_deref())
-                    .await;
-                Ok(())
-            }
-            Command::Import {
-                harness,
-                project,
-                session_id,
-                cwd,
-            } => {
-                self.import_thread(&harness, project.as_deref(), &session_id, &cwd)
-                    .await;
-                Ok(())
-            }
             Command::CancelTask(task) => {
                 self.client.request(&CancelTask { task: &task }).await?;
                 self.refresh_tasks().await
@@ -514,40 +484,6 @@ impl Session<'_> {
             }
         }
         Ok(())
-    }
-
-    async fn browse_imports(&self, harness: &str, project: Option<&str>, cursor: Option<&str>) {
-        let result = self
-            .client
-            .request(&ListHarnessThreads {
-                harness,
-                project,
-                cursor,
-            })
-            .await
-            .map_err(|error| error.to_string());
-        self.ui.update(move |s, _| s.import_page_loaded(result));
-    }
-
-    async fn import_thread(
-        &self,
-        harness: &str,
-        project: Option<&str>,
-        session_id: &str,
-        cwd: &str,
-    ) {
-        let result = self
-            .client
-            .request(&ImportThread {
-                harness,
-                project,
-                session_id,
-                cwd,
-            })
-            .await
-            .map(|imported| imported.thread)
-            .map_err(|error| error.to_string());
-        self.ui.update(move |s, tx| s.import_result(result, tx));
     }
 
     async fn send_input(&self, send_input: SendInput) -> viz_client::Result<()> {

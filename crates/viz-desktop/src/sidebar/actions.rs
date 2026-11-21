@@ -1,11 +1,11 @@
-use rune::{El, FileDialogOptions, PointerPress, ScrollSpec, Tx, col, text};
+use rune::{El, FileDialogOptions, PointerPress, Tx};
 use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuEntry, MenuItem, Placement};
 use viz_client::protocol::{Project, ThreadId, ThreadSummary};
 
 use crate::{
     app::Desktop,
     server::{Command, ProjectChange, ThreadChange},
-    theme::{S8, S12, S32, Size, Theme},
+    theme::{Size, Theme},
     ui::{self, DialogForm},
 };
 
@@ -342,73 +342,4 @@ pub(super) fn project_menu(
             ));
     }
     menu.build(&t.overlay, layer)
-}
-
-pub(super) fn imports(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
-    let Some(browser) = &s.imports else {
-        return;
-    };
-    let mut list = col().gap(S8).px(S12).pb(S12);
-    if browser.importing {
-        list = list.child(text("Importing thread…").font(t.ui).color(t.muted));
-    } else if browser.loading {
-        list = list.child(text("Loading threads…").font(t.ui).color(t.muted));
-    } else if let Some(error) = &browser.error {
-        list = list.child(text(error).font(t.ui).color(t.danger).wrap());
-    } else if browser.threads.is_empty() {
-        list = list.child(text("No threads found").font(t.ui).color(t.muted));
-    }
-    let rows = col()
-        .max_h(S32 * 8.0)
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-        .children(browser.threads.iter().map(|item| {
-            let session = item.session_id.clone();
-            let cwd = item.cwd.clone();
-            let title = item
-                .title
-                .as_deref()
-                .filter(|title| !title.is_empty())
-                .unwrap_or(&item.session_id);
-            col()
-                .key(format!("import-{}", item.session_id))
-                .label(title)
-                .role("button")
-                .focusable(!browser.importing)
-                .px(S8)
-                .py(S8)
-                .hover(t.hover)
-                .child(text(title).font(t.ui_medium).color(t.text).truncate())
-                .child(
-                    text(&item.cwd)
-                        .font(t.small)
-                        .color(t.muted)
-                        .truncate_middle(),
-                )
-                .on_press_tx(move |s: &mut Desktop, tx| {
-                    s.import_thread(session.clone(), cwd.clone(), tx);
-                })
-        }));
-    list = list.child(rows);
-    if !browser.importing && !browser.loading && (browser.error.is_some() || browser.next.is_some())
-    {
-        let label = if browser.error.is_some() {
-            "Retry"
-        } else {
-            "Load more"
-        };
-        list = list.child(
-            ui::button(label, ButtonVariant::GhostMuted, Size::Small)
-                .on_press_tx(Desktop::import_page)
-                .build(&t.k),
-        );
-    }
-    ui::dialog(
-        "import-threads",
-        "Import a thread",
-        browser.project.as_deref(),
-    )
-    .subject(&browser.harness_name)
-    .build(|s: &mut Desktop| s.imports = None, list, t, layer);
 }

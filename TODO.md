@@ -8,7 +8,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] Configured environments over ordinary HTTP(S), independent stores, and a URL-only client connection.
 - [x] Reusable ACP threads, per-input runs, and durable delegated tasks. Deliver the task result to its parent once, without making later runs part of that task.
 - [x] Project metadata keyed by absolute directory, searchable transcripts, paged entries, queue editing, and attachments.
-- [x] Discover ACP model and thinking options. Import existing ACP sessions when the harness supports listing and loading.
+- [x] Discover ACP model and thinking options.
 - [x] Session-scoped MCP tools for delegation, threads, projects, and environment discovery.
 - [ ] Durable connector outbox: persist replies when a connector disconnects, and deduplicate on reconnect.
 - [ ] Scheduled tasks, editing or forking a thread at a past message, and in-thread find.
@@ -29,7 +29,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 
 ## Desktop (Rune)
 
-- [x] Environment picker, project sidebar, paged transcript, and import flow.
+- [x] Environment picker, project sidebar, and paged transcript.
 - [x] CLI and desktop diagnostics on stderr, filtered by `RUST_LOG`.
 - [x] Configurable dark and light base16 schemes and Home Manager Stylix integration.
 - [x] Harness icons and configured harness display names; full model and thinking labels, inline thinking buttons, and animated model search.

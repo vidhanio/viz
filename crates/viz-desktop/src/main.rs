@@ -72,14 +72,12 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
             )
             .h(TOOLBAR_HEIGHT),
     );
-    // The kit's shell, flat: no inset frame, the main pane square against
-    // the sidebar, which sits on the deeper backdrop. The sidebar toggle ends
-    // the sidebar's header row, centered on the toolbar's line and over the
-    // rows' trailing slots.
+    // The kit places the sidebar toggle at the trailing end of its title band.
+    let titlebar_inset = cx.titlebar_inset();
     let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
     let split = split
         .toolbar(header::toolbar(s, t))
-        .titlebar_inset(cx.titlebar_inset())
+        .titlebar_inset(titlebar_inset)
         .frame_inset(0.0)
         .toolbar_in_panel()
         .sidebar_padding(SIDEBAR_PAD, SIDEBAR_PAD)
@@ -98,8 +96,9 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .reduced_motion(cx.is_reduced_motion())
         .build(&t.shell);
     let split = if s.sidebar.is_open() {
-        let (x, y) = sidebar::header_origin(s);
-        split.child(sidebar::header_buttons(s, t).absolute(x, y))
+        let left = titlebar_inset + SIDEBAR_PAD;
+        let top = (TOOLBAR_HEIGHT - Size::Default.height()) / 2.0;
+        split.child(sidebar::header_buttons(s, t).absolute(left, top))
     } else {
         split
     };

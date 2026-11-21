@@ -11,8 +11,8 @@ use rune::{TextEdit, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, ConfigOption, Environment, Harness, HarnessThread, HarnessThreadList, LaunchThread,
-    OptionValue, Project, SendInput, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    Attachment, ConfigOption, Environment, Harness, LaunchThread, OptionValue, Project, SendInput,
+    Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
 };
 
 use crate::{
@@ -105,18 +105,6 @@ impl Default for Draft {
     }
 }
 
-#[derive(Debug)]
-pub struct ImportBrowser {
-    pub harness: String,
-    pub harness_name: String,
-    pub project: Option<String>,
-    pub threads: Vec<HarnessThread>,
-    pub next: Option<String>,
-    pub loading: bool,
-    pub importing: bool,
-    pub error: Option<String>,
-}
-
 /// The window's state.
 #[derive(Debug)]
 pub struct Desktop {
@@ -128,7 +116,6 @@ pub struct Desktop {
     pub environment: Option<String>,
     pub environments: Vec<Environment>,
     pub tasks: Vec<Task>,
-    pub imports: Option<ImportBrowser>,
     /// Every thread as the server lists it, titles included.
     pub threads: Vec<ThreadSummary>,
     pub projects: Vec<Project>,
@@ -184,7 +171,6 @@ impl Desktop {
             environment: None,
             environments: Vec::new(),
             tasks: Vec::new(),
-            imports: None,
             threads: Vec::new(),
             projects: Vec::new(),
             harnesses: Vec::new(),
@@ -643,133 +629,10 @@ impl Desktop {
         self.projects.clear();
         self.harnesses.clear();
         self.tasks.clear();
-        self.imports = None;
         self.navigation.dismiss_overlays();
         self.palette = Palette::default();
         self.reset_thread();
         self.update_title(tx);
-    }
-
-    pub fn import_scope(&self) -> Option<(&str, Option<&str>)> {
-        let harness = self.new_thread.as_ref().map_or_else(
-            || {
-                self.state
-                    .as_ref()
-                    .map(|state| state.harness.as_str())
-                    .or_else(|| {
-                        self.selected
-                            .and_then(|id| self.summary(id))
-                            .map(|thread| thread.harness.as_str())
-                    })
-                    .or_else(|| {
-                        self.harnesses
-                            .iter()
-                            .find(|harness| harness.default)
-                            .map(|harness| harness.id.as_str())
-                    })
-            },
-            |draft| {
-                draft
-                    .active_harness(&self.harnesses)
-                    .map(|harness| harness.id.as_str())
-            },
-        )?;
-        Some((harness, self.project_path()))
-    }
-
-    pub fn browse_imports(&mut self, tx: &mut Tx) {
-        let Some((harness, project)) = self.import_scope() else {
-            return;
-        };
-        self.imports = Some(ImportBrowser {
-            harness: harness.to_owned(),
-            harness_name: self
-                .harnesses
-                .iter()
-                .find(|runner| runner.id == harness)
-                .map(|runner| runner.name.as_str())
-                .or_else(|| {
-                    self.selected
-                        .and_then(|thread| self.summary(thread))
-                        .filter(|thread| thread.harness == harness)
-                        .map(|thread| thread.harness_name.as_str())
-                })
-                .unwrap_or(harness)
-                .to_owned(),
-            project: project.map(str::to_owned),
-            threads: Vec::new(),
-            next: None,
-            loading: false,
-            importing: false,
-            error: None,
-        });
-        self.import_page(tx);
-    }
-
-    pub fn import_page(&mut self, tx: &mut Tx) {
-        let Some(browser) = self.imports.as_mut().filter(|browser| !browser.loading) else {
-            return;
-        };
-        browser.loading = true;
-        browser.error = None;
-        let command = Command::BrowseImports {
-            harness: browser.harness.clone(),
-            project: browser.project.clone(),
-            cursor: browser.next.clone(),
-        };
-        if !self.send(command, tx)
-            && let Some(browser) = &mut self.imports
-        {
-            browser.loading = false;
-        }
-    }
-
-    pub fn import_thread(&mut self, session_id: String, cwd: String, tx: &mut Tx) {
-        let Some(browser) = self.imports.as_mut().filter(|browser| !browser.importing) else {
-            return;
-        };
-        browser.importing = true;
-        let command = Command::Import {
-            harness: browser.harness.clone(),
-            project: browser.project.clone(),
-            session_id,
-            cwd,
-        };
-        if !self.send(command, tx)
-            && let Some(browser) = &mut self.imports
-        {
-            browser.importing = false;
-        }
-    }
-
-    pub fn import_result(&mut self, result: Result<ThreadId, String>, tx: &mut Tx) {
-        let Some(browser) = &mut self.imports else {
-            return;
-        };
-        match result {
-            Ok(thread) => {
-                self.imports = None;
-                self.select(thread, tx);
-            }
-            Err(error) => {
-                browser.importing = false;
-                self.toast(tx, "Couldn't import thread", Some(error));
-            }
-        }
-    }
-
-    pub fn import_page_loaded(&mut self, result: Result<HarnessThreadList, String>) {
-        let Some(browser) = &mut self.imports else {
-            return;
-        };
-        browser.loading = false;
-        match result {
-            Ok(page) => {
-                browser.threads.extend(page.threads);
-                browser.next = page.next_cursor;
-            }
-            Err(error) => browser.error = Some(error),
-        }
     }
 
     /// Tries to connect now instead of waiting for the next attempt.

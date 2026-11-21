@@ -87,8 +87,6 @@ methods! {
     TaskStatusRequest<'_> => "task.status", TaskStatusResult;
     CancelTask<'_> => "task.cancel", TaskResult;
     DelegateTask<'_> => "task.delegate", TaskResult;
-    ListHarnessThreads<'_> => "harness.threads", HarnessThreadList;
-    ImportThread<'_> => "thread.import", Imported;
     WaitThread => "thread.wait", WaitResult;
     ReadThreadState => "thread.state", ThreadStateResult;
     ReadProject<'_> => "project.read", ProjectResult;
@@ -826,46 +824,6 @@ pub struct ThreadStateResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct ReadProject<'a> {
     pub project: &'a str,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct ListHarnessThreads<'a> {
-    pub harness: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<&'a str>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HarnessThreadList {
-    pub threads: Vec<HarnessThread>,
-    pub next_cursor: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct HarnessThread {
-    pub session_id: String,
-    pub cwd: String,
-    pub title: Option<String>,
-    pub updated_at: Option<i64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ImportThread<'a> {
-    pub harness: &'a str,
-    pub session_id: &'a str,
-    pub cwd: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<&'a str>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-pub struct Imported {
-    pub thread: ThreadId,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]

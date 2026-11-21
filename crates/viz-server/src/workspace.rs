@@ -373,7 +373,7 @@ impl Workspace {
         }
         if row(
             &mut tx,
-            "SELECT 1 FROM threads WHERE id = ?1 AND importing = 0",
+            "SELECT 1 FROM threads WHERE id = ?1",
             [thread.into()],
         )
         .await?

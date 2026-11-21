@@ -34,7 +34,6 @@ struct ContentView: View {
   @State private var searchResults: SearchResults?
   @State private var pendingDelete: VizProtocol.ThreadSummary?
   @State private var notice: (title: String, detail: String)?
-  @State private var importing = false
 
   var body: some View {
     NavigationSplitView {
@@ -85,13 +84,6 @@ struct ContentView: View {
       } message: {
         Text(notice?.detail ?? "")
       }
-      .sheet(isPresented: $importing) {
-        ImportSheet { id in
-          importing = false
-          selection = .thread(id)
-        }
-        .environment(server)
-      }
     } detail: {
       if let thread = selectedThread {
         ThreadDetail(
@@ -126,11 +118,6 @@ struct ContentView: View {
         ForEach(server.projects) { project in
           Button(project.name) { launch(project: project.path) }
         }
-      }
-      Button {
-        importing = true
-      } label: {
-        Label("Import…", systemImage: "square.and.arrow.down")
       }
     } label: {
       Label("New", systemImage: "square.and.pencil")
@@ -744,138 +731,6 @@ private struct ThreadDetail: View {
       } catch {
         failure = error.localizedDescription
       }
-    }
-  }
-}
-
-/// Lists a harness's own sessions and imports one as a thread.
-private struct ImportSheet: View {
-  @Environment(Server.self) private var server
-  @Environment(\.dismiss) private var dismiss
-  let imported: (Int) -> Void
-  @State private var harnesses: [VizProtocol.HarnessCatalog.Harness] = []
-  @State private var harness: String?
-  @State private var project: String?
-  @State private var sessions: [VizProtocol.NativeThread] = []
-  @State private var cursor: String?
-  @State private var loading = false
-  @State private var importingSession: String?
-  @State private var failure: String?
-
-  init(imported: @escaping (Int) -> Void) {
-    self.imported = imported
-  }
-
-  var body: some View {
-    NavigationStack {
-      List {
-        Section {
-          Picker("Harness", selection: $harness) {
-            ForEach(harnesses) { harness in
-              Text(harness.name).tag(Optional(harness.id))
-            }
-          }
-          Picker("Project", selection: $project) {
-            Text("None").tag(String?.none)
-            ForEach(server.projects) { project in
-              Text(project.name).tag(Optional(project.path))
-            }
-          }
-        }
-        Section("Sessions") {
-          ForEach(sessions) { session in
-            Button {
-              importSession(session)
-            } label: {
-              VStack(alignment: .leading, spacing: 2) {
-                Text(session.title ?? session.sessionId)
-                  .lineLimit(1)
-                HStack {
-                  Text(session.cwd)
-                    .lineLimit(1)
-                  if let updatedAt = session.updatedAt {
-                    Spacer()
-                    Text(
-                      Date(timeIntervalSince1970: Double(updatedAt) / 1000), style: .relative)
-                  }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-              }
-            }
-            .disabled(importingSession != nil)
-          }
-          if loading {
-            ProgressView()
-          } else if cursor != nil {
-            Button("Load more") {
-              Task { await load(reset: false) }
-            }
-          } else if sessions.isEmpty, failure == nil, harness != nil {
-            Text("No sessions")
-              .foregroundStyle(.secondary)
-          }
-          if let failure {
-            Text(failure)
-              .foregroundStyle(.secondary)
-          }
-        }
-      }
-      .navigationTitle("Import thread")
-      .toolbar {
-        ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel") { dismiss() }
-        }
-      }
-      .task {
-        do {
-          harnesses = try await server.listHarnesses()
-          harness = harnesses.first(where: \.default)?.id ?? harnesses.first?.id
-        } catch {
-          failure = error.localizedDescription
-        }
-      }
-      .task(id: [harness ?? "", project ?? ""]) {
-        await load(reset: true)
-      }
-    }
-  }
-
-  private func load(reset: Bool) async {
-    guard let harness else { return }
-    let project = project
-    if reset {
-      sessions = []
-      cursor = nil
-    }
-    loading = true
-    failure = nil
-    defer { loading = false }
-    do {
-      let page = try await server.nativeThreads(
-        harness: harness, project: project, cursor: reset ? nil : cursor)
-      guard !Task.isCancelled, self.harness == harness, self.project == project else { return }
-      sessions.append(contentsOf: page.threads)
-      cursor = page.nextCursor
-    } catch {
-      guard !Task.isCancelled else { return }
-      failure = error.localizedDescription
-    }
-  }
-
-  private func importSession(_ session: VizProtocol.NativeThread) {
-    guard let harness else { return }
-    importingSession = session.sessionId
-    Task {
-      do {
-        let id = try await server.importThread(
-          harness: harness, sessionId: session.sessionId, cwd: session.cwd, project: project)
-        await server.refresh()
-        imported(id)
-      } catch {
-        failure = error.localizedDescription
-      }
-      importingSession = nil
     }
   }
 }

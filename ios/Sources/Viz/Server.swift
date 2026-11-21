@@ -65,31 +65,6 @@ enum VizProtocol {
     let thinking: String?
   }
 
-  struct HarnessCatalog: Decodable {
-    struct Harness: Decodable, Identifiable {
-      let id: String
-      let name: String
-      let `default`: Bool
-    }
-
-    let harnesses: [Harness]
-  }
-
-  /// A runner's own session that `thread.import` can turn into a thread.
-  struct NativeThread: Decodable, Identifiable {
-    let sessionId: String
-    let cwd: String
-    let title: String?
-    let updatedAt: Int64?
-
-    var id: String { sessionId }
-  }
-
-  struct NativeThreads: Decodable {
-    let threads: [NativeThread]
-    let nextCursor: String?
-  }
-
   struct ToolRecord: Decodable {
     enum Status: String, Decodable {
       case pending, in_progress, completed, failed
@@ -377,36 +352,6 @@ final class Server {
     if let harness { params["harness"] = harness }
     if let text { params["text"] = text }
     let data = try await call("thread.launch", params: params)
-    return try JSONDecoder().decode(VizProtocol.Launched.self, from: data).thread
-  }
-
-  func listHarnesses() async throws -> [VizProtocol.HarnessCatalog.Harness] {
-    let data = try await call("harnesses.list", params: [:])
-    return try JSONDecoder().decode(VizProtocol.HarnessCatalog.self, from: data).harnesses
-  }
-
-  /// One page of a harness's own sessions, for `importThread`.
-  func nativeThreads(
-    harness: String,
-    project: String? = nil,
-    cursor: String? = nil
-  ) async throws -> VizProtocol.NativeThreads {
-    var params: [String: Any] = ["harness": harness]
-    if let project { params["project"] = project }
-    if let cursor { params["cursor"] = cursor }
-    let data = try await call("harness.threads", params: params)
-    return try JSONDecoder().decode(VizProtocol.NativeThreads.self, from: data)
-  }
-
-  func importThread(
-    harness: String,
-    sessionId: String,
-    cwd: String,
-    project: String? = nil
-  ) async throws -> Int {
-    var params: [String: Any] = ["harness": harness, "sessionId": sessionId, "cwd": cwd]
-    if let project { params["project"] = project }
-    let data = try await call("thread.import", params: params)
     return try JSONDecoder().decode(VizProtocol.Launched.self, from: data).thread
   }
 

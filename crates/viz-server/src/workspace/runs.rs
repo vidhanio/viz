@@ -314,7 +314,6 @@ pub(super) async fn settle(
 }
 
 pub(super) async fn recover(db: &mut dyn Executor) -> Result<(), RpcError> {
-    exec(db, "DELETE FROM threads WHERE importing = 1", []).await?;
     for row in rows(
         db,
         "SELECT id, thread FROM runs WHERE status = 'running'",

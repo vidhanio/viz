@@ -16,10 +16,7 @@ use viz_client::protocol::{EnvironmentStatus, Project, ThreadId, ThreadSummary};
 
 use crate::{
     app::{Desktop, Status, thread_title},
-    theme::{
-        self, HAIRLINE, ICON, PROJECT_BOX_INSET, ROW_INSET, S8, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT,
-        Theme,
-    },
+    theme::{self, HAIRLINE, ICON, PROJECT_BOX_INSET, ROW_INSET, S8, Size, Theme},
     ui::{self, TreeLine},
 };
 
@@ -435,7 +432,6 @@ pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// Mounts sidebar dialogs independently of whether the sidebar is visible.
 pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     actions::dialog(s, t, layer);
-    actions::imports(s, t, layer);
 }
 
 /// Opens the add-project dialog from the sidebar or palette.
@@ -464,8 +460,8 @@ pub const fn preview_projects(s: &mut Desktop) {
     s.navigation.mode = Mode::Projects;
 }
 
-/// The sidebar header's buttons while it's open: add project, then new thread,
-/// before the sidebar toggle rune-kit places.
+/// The leading sidebar actions. Rune-kit puts the sidebar toggle at the other
+/// end.
 pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
     let add = ui::icon_button(
         &ui::FOLDER_PLUS,
@@ -477,22 +473,11 @@ pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
     .on_press_tx(open_add_project)
     .build(&t.k)
     .key("add-project");
-    let import = ui::icon_button(
-        &ui::SEARCH,
-        "Import thread",
-        IconButtonVariant::GhostMuted,
-        Size::Default,
-    )
-    .disabled(!s.connected() || s.import_scope().is_none())
-    .on_press_tx(Desktop::browse_imports)
-    .build(&t.k)
-    .key("import-thread");
     row()
         .key("sidebar-header-buttons")
         .gap(theme::S4)
-        .child(add)
-        .child(import)
         .child(new_thread_button(s, t))
+        .child(add)
 }
 
 /// New thread, as an icon button: in the sidebar's header row while the sidebar
@@ -511,22 +496,12 @@ pub fn new_thread_button(s: &Desktop, t: &Theme) -> El {
     .key("new-thread")
 }
 
-/// Where [`header_buttons`] sit, from the window's top left: one gap before
-/// the sidebar toggle, which rune-kit pins to the header's trailing end.
-pub fn header_origin(s: &Desktop) -> (f32, f32) {
-    let side = Size::Default.height();
-    (
-        s.sidebar.width() - SIDEBAR_PAD - 3.0f32.mul_add(side, 2.0 * theme::S4),
-        (TOOLBAR_HEIGHT - side) / 2.0,
-    )
-}
-
 fn environments(s: &Desktop, t: &Theme) -> El {
     col()
         .key("environments")
-        .px(ROW_INSET)
+        .w_full()
         .gap(theme::S4)
-        .child(ui::section("Environments", t))
+        .child(ui::section("Environments", t).pl(ROW_INSET))
         .children(s.environments.iter().map(|env| {
             let id = env.id.clone();
             let selected = s.environment.as_ref() == Some(&id);
@@ -544,8 +519,9 @@ fn environments(s: &Desktop, t: &Theme) -> El {
                 .focusable(true)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
                 .radius(Size::Small.radius())
+                .w_full()
                 .h(Size::Small.height())
-                .px(theme::S4)
+                .px(ROW_INSET)
                 .gap(S8)
                 .center_y()
                 .fill(if selected {
