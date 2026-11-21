@@ -157,7 +157,10 @@ impl Workspace {
                     slot.take();
                 }
                 drop(slot);
-                self.finish(thread, run, settlement, &cancel).await?;
+                if let Err(error) = self.finish(thread, run, settlement, &cancel).await {
+                    self.abandon(thread, run, &error).await;
+                    return Err(error);
+                }
             } else {
                 let mut slot = driver.session.lock().await;
                 let result = self
@@ -211,6 +214,30 @@ impl Workspace {
         drop(db);
         self.settled(thread);
         Ok(())
+    }
+
+    /// Best-effort fallback when [`Self::finish`] fails: a run left `running`
+    /// would make every later `claim` on the thread violate the `runs_active`
+    /// index, so mark it failed with a bare update that appends no entry.
+    async fn abandon(&self, thread: u64, run: u64, error: &RpcError) {
+        let failed = exec(
+            &mut *self.db.lock().await,
+            "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
+            [
+                run.into(),
+                format!("settling the run failed: {error}").into(),
+            ],
+        )
+        .await;
+        if let Err(error) = failed {
+            tracing::error!(thread, run, %error, "could not fail an unsettled run");
+        }
+        self.transient
+            .lock()
+            .expect("workspace runtime mutex poisoned")
+            .live
+            .remove(&thread);
+        self.settled(thread);
     }
 
     async fn prompt(
