@@ -7,7 +7,7 @@ use rune_kit::shell::Toolbar;
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadSummary};
 
 use crate::{
-    app::{Desktop, thread_title},
+    app::{Desktop, TITLE_TRAVEL, thread_title},
     server::Command,
     sidebar,
     theme::{
@@ -26,6 +26,8 @@ const PREVIOUS: &str = "agents-previous";
 const COMPACT_ROWS: f32 = 2.0;
 const WIDE_ROWS: f32 = 6.0;
 
+/// The toolbar. Its title is keyed per thread inside its own clip, so it
+/// moves with the transcript when the thread changes (`app::Switch`).
 pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
     let mut toolbar = Toolbar::new().center(ui::drag_guard("toolbar-drag-guard").pin(
         Some(0.0),
@@ -33,11 +35,27 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         Some(0.0),
         Some(0.0),
     ));
+    let page = match (s.selected, &s.new_thread) {
+        (Some(id), _) => format!("title-{id}"),
+        (None, Some(draft)) => format!("title-draft-{}", draft.id),
+        (None, None) => "title-none".to_owned(),
+    };
+    let title = row()
+        .key("title-pane")
+        .min_w(0.0)
+        .shrink()
+        .clip_rounded(0.0)
+        .child_exit(s.switch.exit(TITLE_TRAVEL))
+        .child(
+            title(s, t)
+                .key(page)
+                .transition(s.switch.enter(TITLE_TRAVEL)),
+        );
     let title = if s.sidebar.is_open() {
-        title(s, t).ml(READING_INSET - TOOLBAR_PAD)
+        title.ml(READING_INSET - TOOLBAR_PAD)
     } else {
         toolbar = toolbar.leading(sidebar::new_thread_button(s, t));
-        title(s, t)
+        title
     };
     toolbar.leading(title)
 }

@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use rune::{TextEdit, Tx};
+use rune::{Spring, SpringPair, TextEdit, Transition, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
@@ -105,6 +105,70 @@ impl Default for Draft {
     }
 }
 
+/// How far the transcript travels when the open thread changes.
+pub const PANE_TRAVEL: f32 = crate::theme::S40;
+/// How far the toolbar title travels with it, inside its own clip.
+pub const TITLE_TRAVEL: f32 = crate::theme::S16;
+/// The switch's springs: short and calm, without bounce.
+const SWITCH_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.24, 0.0), Spring::new(0.2, 0.0));
+
+/// Which way the main pane moves when the open thread changes, decided by
+/// [`Desktop::show`] from where the two threads sit. Threads further down
+/// the sidebar are below: going down moves the content up. A delegated
+/// task's thread is to the right of the thread that delegated it. The
+/// composer and task panel stay put; Reduce Motion turns travel into a fade.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Switch {
+    /// No motion: a draft becoming its thread, another environment.
+    #[default]
+    Cut,
+    /// A move with no direction: a draft, a thread the filter hides.
+    Fade,
+    /// To a thread listed further down: content moves up.
+    Down,
+    /// To a thread listed further up: content moves down.
+    Up,
+    /// Into a delegated task's thread: content moves left.
+    Into,
+    /// Back out to the thread that delegated it: content moves right.
+    Out,
+}
+
+impl Switch {
+    /// Where the new pane enters from, as a unit vector.
+    const fn from(self) -> (f32, f32) {
+        match self {
+            Self::Cut | Self::Fade => (0.0, 0.0),
+            Self::Down => (0.0, 1.0),
+            Self::Up => (0.0, -1.0),
+            Self::Into => (1.0, 0.0),
+            Self::Out => (-1.0, 0.0),
+        }
+    }
+
+    /// The new pane's entrance, travelling `travel` points.
+    pub fn enter(self, travel: f32) -> Transition {
+        let (x, y) = self.from();
+        self.motion(x * travel, y * travel)
+    }
+
+    /// The old pane's exit, for `El::child_exit`: away the way the new one
+    /// came.
+    pub fn exit(self, travel: f32) -> Transition {
+        let (x, y) = self.from();
+        self.motion(-x * travel, -y * travel)
+    }
+
+    fn motion(self, x: f32, y: f32) -> Transition {
+        if self == Self::Cut {
+            return Transition::none();
+        }
+        Transition::offset(x, y)
+            .combined(Transition::opacity())
+            .springs(SWITCH_SPRINGS)
+    }
+}
+
 /// The window's state.
 #[derive(Debug)]
 pub struct Desktop {
@@ -129,6 +193,8 @@ pub struct Desktop {
     pub history_loading: bool,
     pub state: Option<ThreadState>,
     pub new_thread: Option<NewThread>,
+    /// How the last change of thread moves the main pane.
+    pub switch: Switch,
     next_draft: u64,
     /// Timeline rows the user opened (tool calls, thinking), by key.
     pub expanded: HashSet<String>,
@@ -182,6 +248,7 @@ impl Desktop {
             history_loading: false,
             state: None,
             new_thread: None,
+            switch: Switch::Cut,
             next_draft: 0,
             expanded: HashSet::new(),
             draft,
@@ -290,6 +357,12 @@ impl Desktop {
     /// Shows `thread`, loading until its view arrives.
     pub fn show(&mut self, thread: ThreadId) {
         if self.selected != Some(thread) || self.new_thread.is_some() {
+            self.switch = if self.new_thread.is_some() {
+                Switch::Fade
+            } else {
+                self.selected
+                    .map_or(Switch::Cut, |from| self.direction(from, thread))
+            };
             self.save_draft();
             self.new_thread = None;
             self.selected = Some(thread);
@@ -301,6 +374,42 @@ impl Desktop {
             self.navigation
                 .reveal(thread, &self.threads, self.environment.as_deref());
         }
+    }
+
+    /// Which way the pane moves from `from` to `to`.
+    fn direction(&self, from: ThreadId, to: ThreadId) -> Switch {
+        if self.descends(to, from) {
+            return Switch::Into;
+        }
+        if self.descends(from, to) {
+            return Switch::Out;
+        }
+        match (
+            crate::sidebar::position(self, from),
+            crate::sidebar::position(self, to),
+        ) {
+            (Some(a), Some(b)) if b > a => Switch::Down,
+            (Some(a), Some(b)) if b < a => Switch::Up,
+            _ => Switch::Fade,
+        }
+    }
+
+    /// `thread` was delegated, directly or through other tasks, by
+    /// `ancestor`.
+    fn descends(&self, thread: ThreadId, ancestor: ThreadId) -> bool {
+        let mut seen = 0;
+        let mut at = self.summary(thread).and_then(|summary| summary.parent);
+        while let Some(parent) = at {
+            if parent == ancestor {
+                return true;
+            }
+            seen += 1;
+            if seen > self.threads.len() {
+                return false;
+            }
+            at = self.summary(parent).and_then(|summary| summary.parent);
+        }
+        false
     }
 
     fn save_draft(&mut self) {
@@ -336,19 +445,11 @@ impl Desktop {
         entries: &[viz_client::protocol::Entry],
         reset: bool,
         before: Option<viz_client::protocol::EntryId>,
-        tx: &mut Tx,
     ) {
         if self.selected != Some(id) {
             return;
         }
         if reset {
-            if !entries.is_empty()
-                && self
-                    .summary(id)
-                    .is_some_and(|thread| thread.parent.is_some())
-            {
-                tx.animated();
-            }
             self.thread = Thread::from_entries(entries, before);
             self.loading = false;
             self.history_loading = false;
@@ -501,6 +602,7 @@ impl Desktop {
         }
         self.next_draft += 1;
         thread.loading_choices = self.send(Command::LoadDraft(thread.id), tx);
+        self.switch = Switch::Fade;
         self.clear_selection();
         self.send(Command::ClearSelection, tx);
         self.new_thread = Some(thread);
@@ -537,6 +639,8 @@ impl Desktop {
         }
         self.new_thread = None;
         self.selected = Some(id);
+        self.switch = Switch::Cut;
+        self.loading = true;
         tx.focus("draft", false);
         self.send(Command::Select(id), tx);
     }
@@ -621,6 +725,7 @@ impl Desktop {
         self.status = Status::Connecting;
         self.environment = Some(environment);
         self.new_thread = None;
+        self.switch = Switch::Cut;
         self.draft.clear();
         self.attachments.clear();
         self.attachment_reads.clear();

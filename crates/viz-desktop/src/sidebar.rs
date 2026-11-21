@@ -383,6 +383,30 @@ impl<'a> Outline<'a> {
     }
 }
 
+/// Where `id`'s top-level thread is listed in the sidebar, counting from the
+/// top, for which way a switch between two threads moves; `None` while the
+/// filter hides it.
+pub fn position(s: &Desktop, id: ThreadId) -> Option<usize> {
+    let top = top_level(&s.threads, id, s.environment.as_deref());
+    let outline = Outline::new(s);
+    let listed: Vec<&ThreadSummary> = match s.navigation.mode {
+        Mode::Recent => outline.recent.clone(),
+        Mode::Projects => s
+            .projects
+            .iter()
+            .filter_map(|project| outline.projects.get(project.path.as_str()))
+            .flatten()
+            .chain(&outline.loose)
+            .copied()
+            .collect(),
+    };
+    outline
+        .pinned
+        .iter()
+        .chain(&listed)
+        .position(|thread| thread.id == top)
+}
+
 fn open_match(s: &mut Desktop, tx: &mut Tx) {
     let outline = Outline::new(s);
     let id = outline

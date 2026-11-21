@@ -467,7 +467,7 @@ impl Session<'_> {
                 if s.selected == Some(thread) {
                     if let Some(previous) = previous {
                         s.show(previous);
-                        s.apply_view(previous, &entries, true, before, tx);
+                        s.apply_view(previous, &entries, true, before);
                     } else {
                         s.clear_selection();
                     }
@@ -562,7 +562,7 @@ impl Session<'_> {
                     let entries = Arc::new(entries);
                     self.entries.push(Arc::clone(&entries));
                     self.ui
-                        .update(move |s, tx| s.apply_view(thread, &entries, reset, before, tx));
+                        .update(move |s, _| s.apply_view(thread, &entries, reset, before));
                 }
                 Ok(())
             }

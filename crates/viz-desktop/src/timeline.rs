@@ -21,7 +21,7 @@ use rune_kit::{
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use crate::{
-    app::{Desktop, NewThread, Status},
+    app::{Desktop, NewThread, PANE_TRAVEL, Status},
     attachments, header, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, S2, S4, S8, S12, S16,
@@ -83,7 +83,10 @@ impl Rows {
     }
 }
 
-/// The scrolling timeline, or what to show in its place.
+/// The scrolling timeline, or what to show in its place. Each thread (and
+/// draft) is its own keyed page with its own scroll, so changing threads
+/// slides the old page out and the new one in the way [`crate::app::Switch`]
+/// says.
 pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let thread = &s.thread;
     let empty = thread.items.is_empty() && thread.before.is_none() && !s.busy();
@@ -112,31 +115,34 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         live(s, &mut rows, t);
         col().key("items").children(rows.rows)
     };
-    let mut body = ui::reading(body)
+    let body = ui::reading(body)
         .key("timeline-body")
         .min_h(0.0)
         .pt(S24)
         .pb(S24);
-    if !thread.items.is_empty()
-        && let Some(id) = s
-            .selected
-            .filter(|&id| s.summary(id).is_some_and(|thread| thread.parent.is_some()))
-    {
-        body = body
-            .key(format!("subagent-timeline-{id}"))
-            .transition(Transition::asymmetric(
-                Transition::opacity().combined(Transition::offset(S12, 0.0)),
-                Transition::none(),
-            ));
-    }
+    let page = match (s.selected, &s.new_thread) {
+        (Some(id), _) => format!("page-{id}"),
+        (None, Some(draft)) => format!("page-draft-{}", draft.id),
+        (None, None) => "page-none".to_owned(),
+    };
     col()
         .key("timeline")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .scroll(ScrollSpec { stick_bottom: true })
-        .scroll_anchor()
-        .child(body)
+        .clip_rounded(0.0)
+        .child_exit(s.switch.exit(PANE_TRAVEL))
+        .child(
+            col()
+                .key(page)
+                .w_full()
+                .grow(1.0)
+                .min_h(0.0)
+                .transition(s.switch.enter(PANE_TRAVEL))
+                .scroll(ScrollSpec { stick_bottom: true })
+                .scroll_anchor()
+                .child(body),
+        )
 }
 
 /// A thread whose transcript hasn't arrived: nothing, then a quiet spinner if

@@ -23,6 +23,9 @@
 //!   official marks); never draw custom ones. Surfaces are flat, separated by
 //!   hairlines and fills; only overlays get a shadow. One accent, for the
 //!   primary action, focus and selection.
+//! - Motion: changing threads moves the transcript and toolbar title, never the
+//!   composer: vertically by sidebar order, horizontally into a delegated task
+//!   (left) and back out (right); short springs without bounce.
 //! - One obvious place per action, plus the palette and a shortcut where it is
 //!   frequent.
 
