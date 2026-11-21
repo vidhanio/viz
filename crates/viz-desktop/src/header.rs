@@ -10,7 +10,7 @@ use crate::{
     app::{Desktop, Switch, TITLE_ENTER_DELAY, TITLE_TRAVEL, thread_title},
     sidebar,
     theme::{
-        HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
+        HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
     },
     ui,
 };
@@ -50,7 +50,7 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
     let title = if s.sidebar.is_open() {
         title.ml(READING_INSET - TOOLBAR_PAD)
     } else {
-        toolbar = toolbar.leading(sidebar::new_thread_button(s, t));
+        toolbar = toolbar.leading(sidebar::new_thread_button(s, Size::Default, t));
         title
     };
     toolbar.leading(title)

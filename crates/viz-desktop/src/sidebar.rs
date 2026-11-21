@@ -47,7 +47,6 @@ impl Mode {
 #[derive(Debug)]
 pub struct Navigation {
     filter: TextEdit,
-    archived: bool,
     mode: Mode,
     collapsed_projects: HashSet<String>,
     collapsed_parents: HashSet<ThreadId>,
@@ -63,7 +62,6 @@ impl Default for Navigation {
     fn default() -> Self {
         Self {
             filter: TextEdit::new(""),
-            archived: false,
             mode: Mode::default(),
             collapsed_projects: HashSet::new(),
             collapsed_parents: HashSet::new(),
@@ -225,7 +223,7 @@ impl<'a> Outline<'a> {
             .collect();
         let mut child_ids = HashSet::new();
         for thread in &state.threads {
-            if thread.archived && !state.navigation.archived {
+            if thread.archived {
                 continue;
             }
             if let Some(parent) = thread.parent.filter(|&parent| {
@@ -249,7 +247,7 @@ impl<'a> Outline<'a> {
             });
         }
         for thread in &state.threads {
-            if child_ids.contains(&thread.id) || (thread.archived && !state.navigation.archived) {
+            if child_ids.contains(&thread.id) || thread.archived {
                 continue;
             }
             let project = thread
@@ -747,34 +745,27 @@ pub fn preview_projects(s: &mut Desktop, collapsed: &[&str]) {
     }
 }
 
-/// The leading sidebar actions. Rune-kit puts the sidebar toggle at the other
-/// end.
-pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
-    let add = ui::icon_button(
+fn add_project_button(s: &Desktop, t: &Theme) -> El {
+    ui::icon_button(
         &ui::FOLDER_PLUS,
         "Add project",
         IconButtonVariant::GhostMuted,
-        Size::Default,
+        Size::Small,
     )
     .disabled(!s.connected())
     .on_press_tx(open_add_project)
     .build(&t.k)
-    .key("add-project");
-    row()
-        .key("sidebar-header-buttons")
-        .gap(theme::S4)
-        .child(new_thread_button(s, t))
-        .child(add)
+    .key("add-project")
 }
 
-/// New thread, as an icon button: in the sidebar's header row while the sidebar
+/// New thread, as an icon button: in the sidebar's mode row while the sidebar
 /// is open, after the sidebar toggle in the toolbar while it's closed.
-pub fn new_thread_button(s: &Desktop, t: &Theme) -> El {
+pub fn new_thread_button(s: &Desktop, size: Size, t: &Theme) -> El {
     ui::icon_button(
         &ui::COMPOSE,
         "New thread",
         IconButtonVariant::GhostMuted,
-        Size::Default,
+        size,
     )
     .shortcut(ui::shortcut("N"))
     .disabled(!s.connected() || s.new_thread.is_some())
@@ -815,22 +806,7 @@ fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                     .map(|thread| outline.thread(thread, t.muted, recent, t, layer)),
             );
     }
-    let archived = s.navigation.archived;
-    let show_archived = ui::icon_button(
-        &ui::ARCHIVE,
-        if archived {
-            "Hide archived threads"
-        } else {
-            "Show archived threads"
-        },
-        IconButtonVariant::GhostMuted,
-        Size::Small,
-    )
-    .expanded(archived)
-    .on_press(|s: &mut Desktop| s.navigation.archived = !s.navigation.archived)
-    .build(&t.k)
-    .key("archived");
-    tree = tree.child(mode_switch(s.navigation.mode, show_archived, t));
+    tree = tree.child(mode_switch(s, t));
     if recent {
         if outline.pinned.is_empty() && outline.recent.is_empty() {
             return tree.children(empty_note(s, &outline.query, t));
@@ -891,9 +867,11 @@ fn empty_note(s: &Desktop, query: &str, t: &Theme) -> Option<El> {
     )
 }
 
-/// The section row that picks how threads are listed, with the archived toggle
-/// in its trailing slot.
-fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
+/// The section row that picks how threads are listed, with the new thread and
+/// add project actions at its end. Archived threads stay out of the sidebar;
+/// the palette still finds them.
+fn mode_switch(s: &Desktop, t: &Theme) -> El {
+    let current = s.navigation.mode;
     let tab = |mode: Mode, label: &'static str| {
         let active = mode == current;
         row()
@@ -934,7 +912,8 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
         .child(tab(Mode::Recent, "Recent"))
         .child(tab(Mode::Projects, "Projects"))
         .child(el().grow(1.0).a11y_hidden())
-        .child(ui::trailing(None, Some(archived), true))
+        .child(new_thread_button(s, Size::Small, t))
+        .child(add_project_button(s, t))
 }
 
 /// The quiet footer row: environment picker when more than one environment is

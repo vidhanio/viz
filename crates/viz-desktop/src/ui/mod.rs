@@ -136,12 +136,7 @@ fn button_style(variant: ButtonVariant, disabled: bool, k: &Kit) -> ButtonStyle 
     }
 }
 
-fn icon_button_style(
-    variant: IconButtonVariant,
-    disabled: bool,
-    active: bool,
-    k: &Kit,
-) -> ButtonStyle {
+fn icon_button_style(variant: IconButtonVariant, disabled: bool, k: &Kit) -> ButtonStyle {
     let c = &k.c;
     match variant {
         IconButtonVariant::Submit | IconButtonVariant::Contrast if disabled => ButtonStyle {
@@ -164,20 +159,6 @@ fn icon_button_style(
             rest: c.icon_base,
             hover: c.std_icon_strong,
             press: c.pressed,
-        },
-        IconButtonVariant::Ghost if active => ButtonStyle {
-            fill: c.bg_button_neutral,
-            border: None,
-            rest: c.icon_base,
-            hover: c.std_icon_strong,
-            press: c.pressed,
-        },
-        IconButtonVariant::GhostMuted if active => ButtonStyle {
-            fill: c.bg_accent,
-            border: None,
-            rest: c.submit_icon,
-            hover: c.submit_icon,
-            press: k.on(c.contrast_pressed, c.bg_accent),
         },
         IconButtonVariant::Ghost => ButtonStyle {
             fill: Color::TRANSPARENT,
@@ -281,14 +262,13 @@ impl Button {
 }
 
 /// A square icon button whose hover feedback is ink only, with neutral
-/// disabled submit styling and a distinct active state when expanded.
+/// disabled submit styling.
 pub struct IconButton {
     glyph: &'static Icon,
     label: String,
     variant: IconButtonVariant,
     size: Size,
     disabled: bool,
-    expanded: Option<bool>,
     shortcut: Option<String>,
     press: Option<PressHandler>,
 }
@@ -296,11 +276,6 @@ pub struct IconButton {
 impl IconButton {
     pub const fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    pub const fn expanded(mut self, on: bool) -> Self {
-        self.expanded = Some(on);
         self
     }
 
@@ -321,8 +296,7 @@ impl IconButton {
 
     pub fn build(self, k: &Kit) -> El {
         let side = self.size.height();
-        let active = self.expanded == Some(true) && !self.disabled;
-        let style = icon_button_style(self.variant, self.disabled, active, k);
+        let style = icon_button_style(self.variant, self.disabled, k);
         let tip = match &self.shortcut {
             Some(shortcut) if !shortcut.is_empty() => format!("{}  {shortcut}", self.label),
             _ => self.label.clone(),
@@ -340,9 +314,6 @@ impl IconButton {
             .focus_ring(HAIRLINE, -HAIRLINE, k.c.border_focus);
         if let Some(shortcut) = self.shortcut.filter(|s| !s.is_empty()) {
             el = el.shortcut_hint(shortcut);
-        }
-        if let Some(open) = self.expanded {
-            el = el.expanded(open);
         }
         if let Some(border) = style.border {
             el = el.border(HAIRLINE, border);
@@ -401,7 +372,6 @@ pub fn icon_button(
         variant,
         size,
         disabled: false,
-        expanded: None,
         shortcut: None,
         press: None,
     }
