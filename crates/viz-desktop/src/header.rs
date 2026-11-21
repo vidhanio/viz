@@ -199,9 +199,19 @@ fn title(s: &Desktop, t: &Theme) -> El {
         .child(title)
 }
 
+/// The link back to a subagent's parent: its harness mark and title, or the
+/// parent's environment name when it runs elsewhere.
 fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Theme) -> El {
     let remote = environment.filter(|env| Some(*env) != s.environment.as_deref());
     let label = remote.unwrap_or_else(|| s.title(parent)).to_owned();
+    let mark = remote.is_none().then(|| {
+        ui::harness_mark(
+            s.summary(parent)
+                .map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
+            false,
+            t,
+        )
+    });
     let target = remote.map(str::to_owned);
     row()
         .key("header-parent")
@@ -210,6 +220,8 @@ fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Them
         .min_w(0.0)
         .max_w(BREADCRUMB_MAX)
         .shrink()
+        .gap(S8)
+        .center_y()
         .hover_group()
         .focusable(true)
         .focus_ring(HAIRLINE, S2, t.accent)
@@ -220,6 +232,7 @@ fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Them
                 s.select(parent, tx);
             }
         })
+        .children(mark)
         .child(
             text(&label)
                 .font(t.title)
