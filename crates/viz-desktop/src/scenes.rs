@@ -634,10 +634,16 @@ fn subagent(s: &mut Desktop) {
     s.state = Some(state);
 }
 
-/// The workspace with threads listed under their projects.
+/// The workspace with threads listed under their projects (including a
+/// collapsed project).
 fn projects(s: &mut Desktop) {
     workspace(s);
-    sidebar::preview_projects(s);
+    s.projects.push(Project {
+        name: "Release scripts".into(),
+        path: "/work/release-scripts".into(),
+        created_at: 0,
+    });
+    sidebar::preview_projects(s, &["/work/release-scripts"]);
 }
 
 /// A fresh thread with its project picker open.

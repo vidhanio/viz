@@ -335,21 +335,21 @@ impl<'a> Outline<'a> {
         let id = project.path.clone();
         let key = format!("project-{id}");
         let menu_open = actions::menu_open(s, &key);
-        let layer_of = |glyph: &'static rune::Icon, rest: f32, hovered: f32| {
-            el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-                .center()
-                .group_opacity(rest, hovered)
-                .child(icon(glyph, ICON).color(t.text))
-        };
-        let disclosure = if open {
-            &ui::CHEVRON_OPEN
+        let leading = if open {
+            let layer_of = |glyph: &'static rune::Icon, rest: f32, hovered: f32| {
+                el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                    .center()
+                    .group_opacity(rest, hovered)
+                    .child(icon(glyph, ICON).color(t.text))
+            };
+            el().size(ICON, ICON)
+                .child(layer_of(&ui::FOLDER, 1.0, 0.0))
+                .child(layer_of(&ui::CHEVRON_OPEN, 0.0, 1.0))
         } else {
-            &ui::CHEVRON
+            el().size(ICON, ICON)
+                .center()
+                .child(icon(&ui::CHEVRON, ICON).color(t.muted).group_color(t.text))
         };
-        let leading = el()
-            .size(ICON, ICON)
-            .child(layer_of(&ui::FOLDER, 1.0, 0.0))
-            .child(layer_of(disclosure, 0.0, 1.0));
         let menu = actions::project_menu(s, project, &key, t, layer);
         let mut node = TreeLine {
             key: &key,
@@ -414,18 +414,26 @@ pub fn position(s: &Desktop, id: ThreadId) -> Option<usize> {
 
 fn open_match(s: &mut Desktop, tx: &mut Tx) {
     let outline = Outline::new(s);
-    let id = outline
-        .pinned
-        .iter()
-        .chain(s.projects.iter().filter_map(|project| {
-            outline
-                .projects
-                .get(project.path.as_str())
-                .and_then(|threads| threads.first())
-        }))
-        .chain(&outline.loose)
-        .next()
-        .map(|thread| thread.id);
+    let id = match s.navigation.mode {
+        Mode::Recent => outline
+            .pinned
+            .iter()
+            .chain(&outline.recent)
+            .next()
+            .map(|thread| thread.id),
+        Mode::Projects => outline
+            .pinned
+            .iter()
+            .chain(s.projects.iter().filter_map(|project| {
+                outline
+                    .projects
+                    .get(project.path.as_str())
+                    .and_then(|threads| threads.first())
+            }))
+            .chain(&outline.loose)
+            .next()
+            .map(|thread| thread.id),
+    };
     if let Some(id) = id.filter(|_| !outline.query.is_empty()) {
         s.navigation.filter.clear();
         s.select(id, tx);
@@ -479,8 +487,11 @@ pub const fn preview_environment_menu(s: &mut Desktop) {
 }
 
 /// Lists threads under their projects in a preview scene.
-pub const fn preview_projects(s: &mut Desktop) {
+pub fn preview_projects(s: &mut Desktop, collapsed: &[&str]) {
     s.navigation.mode = Mode::Projects;
+    for path in collapsed {
+        s.navigation.collapsed_projects.insert((*path).to_owned());
+    }
 }
 
 /// The leading sidebar actions. Rune-kit puts the sidebar toggle at the other
@@ -568,6 +579,9 @@ fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     .key("archived");
     tree = tree.child(mode_switch(s.navigation.mode, show_archived, t));
     if recent {
+        if outline.pinned.is_empty() && outline.recent.is_empty() {
+            return tree.children(empty_note(s, &outline.query, t));
+        }
         return tree.children(
             outline
                 .recent
@@ -575,14 +589,20 @@ fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .map(|thread| outline.thread(thread, t.muted, true, t, layer)),
         );
     }
-    tree = tree.child(
-        col().key("project-boxes").w_full().gap(theme::S4).children(
-            s.projects
-                .iter()
-                .filter(|p| outline.visible_project(p))
-                .map(|p| outline.project(p, t, layer)),
-        ),
-    );
+    let projects: Vec<_> = s
+        .projects
+        .iter()
+        .filter(|p| outline.visible_project(p))
+        .collect();
+    if !projects.is_empty() {
+        tree = tree.child(
+            col()
+                .key("project-boxes")
+                .w_full()
+                .gap(theme::S4)
+                .children(projects.iter().map(|p| outline.project(p, t, layer))),
+        );
+    }
     if !outline.loose.is_empty() {
         tree = tree
             .child(ui::section_row("threads-heading", "No project", None, t))
@@ -593,7 +613,29 @@ fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                     .map(|thread| outline.thread(thread, t.muted, false, t, layer)),
             );
     }
+    if outline.pinned.is_empty() && projects.is_empty() && outline.loose.is_empty() {
+        tree = tree.children(empty_note(s, &outline.query, t));
+    }
     tree
+}
+
+fn empty_note(s: &Desktop, query: &str, t: &Theme) -> Option<El> {
+    let label = if !query.is_empty() {
+        "No matching threads"
+    } else if s.connected() {
+        "No threads yet"
+    } else {
+        return None;
+    };
+    Some(
+        text(label)
+            .key("sidebar-empty")
+            .role("status")
+            .font(t.small)
+            .color(t.faint)
+            .px(ROW_INSET)
+            .py(S8),
+    )
 }
 
 /// The section row that picks how threads are listed, with the archived toggle
@@ -601,17 +643,32 @@ fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
     let tab = |mode: Mode, label: &'static str| {
         let active = mode == current;
-        ui::section(label, t)
+        col()
             .key(mode.name())
             .role("radio")
             .label(label)
             .checked(active)
-            .color(if active { t.text } else { t.faint })
+            .h(theme::TREE_ROW)
+            .px(S8)
+            .center()
+            .radius(Size::Small.radius())
             .hover_group()
-            .group_color(if active { t.text } else { t.muted })
             .focusable(true)
-            .focus_ring(HAIRLINE, theme::S2, t.accent)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .on_press(move |s: &mut Desktop| s.navigation.set_mode(mode))
+            .child(
+                ui::section(label, t)
+                    .color(if active { t.text } else { t.muted })
+                    .group_color(t.text)
+                    .a11y_hidden(),
+            )
+            .child(
+                el().pin(Some(S8), None, Some(S8), Some(0.0))
+                    .h(theme::S2)
+                    .radius(HAIRLINE)
+                    .fill(if active { t.accent } else { Color::TRANSPARENT })
+                    .a11y_hidden(),
+            )
     };
     row()
         .key("sidebar-mode")
@@ -620,8 +677,8 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
         .w_full()
         .h(theme::TREE_ROW)
         .mt(theme::S12)
-        .pl(ROW_INSET)
-        .gap(theme::S12)
+        .mb(theme::S4)
+        .gap(theme::S2)
         .center_y()
         .child(tab(Mode::Recent, "Recent"))
         .child(tab(Mode::Projects, "Projects"))
