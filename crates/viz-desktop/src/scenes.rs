@@ -715,8 +715,14 @@ fn overflow(s: &mut Desktop) {
 
 fn queue(s: &mut Desktop) {
     workspace(s);
+    s.draft = rune::TextEdit::new("Also preserve trailing blank lines");
+    s.draft.focused = true;
     if let Some(state) = &mut s.state {
         state.status = ThreadStatus::Working;
+        state.usage = Some(viz_client::protocol::ContextUsage {
+            used: 840_000,
+            size: 1_000_000,
+        });
         state.queue = [
             (31, "Also handle CRLF line endings"),
             (32, "Then add a note to the changelog about the export fix"),

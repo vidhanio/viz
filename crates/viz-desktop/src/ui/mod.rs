@@ -29,6 +29,16 @@ pub const SIDEBAR_SHORTCUT: &str = if cfg!(target_os = "macos") {
     "Ctrl+B"
 };
 
+/// Formats a command-key shortcut for tooltips (`⌘N` on macOS, `Ctrl+N`
+/// elsewhere).
+pub fn shortcut(key: &str) -> String {
+    if cfg!(target_os = "macos") {
+        format!("{COMMAND_KEY}{key}")
+    } else {
+        format!("{COMMAND_KEY}+{key}")
+    }
+}
+
 type PressHandler = Box<dyn FnOnce(El) -> El>;
 
 /// A text button whose hover feedback is ink only, with neutral disabled
@@ -128,11 +138,21 @@ fn button_style(variant: ButtonVariant, disabled: bool, k: &Kit) -> ButtonStyle 
 
 fn icon_button_style(
     variant: IconButtonVariant,
+    outline: bool,
     disabled: bool,
     active: bool,
     k: &Kit,
 ) -> ButtonStyle {
     let c = &k.c;
+    if outline {
+        return ButtonStyle {
+            fill: Color::TRANSPARENT,
+            border: Some(c.border_strong),
+            rest: c.icon_base,
+            hover: c.std_icon_strong,
+            press: c.pressed,
+        };
+    }
     match variant {
         IconButtonVariant::Submit | IconButtonVariant::Contrast if disabled => ButtonStyle {
             fill: c.bg_button_neutral,
@@ -276,6 +296,7 @@ pub struct IconButton {
     glyph: &'static Icon,
     label: String,
     variant: IconButtonVariant,
+    outline: bool,
     size: Size,
     disabled: bool,
     expanded: Option<bool>,
@@ -284,6 +305,11 @@ pub struct IconButton {
 }
 
 impl IconButton {
+    pub const fn outline(mut self) -> Self {
+        self.outline = true;
+        self
+    }
+
     pub const fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
         self
@@ -312,7 +338,7 @@ impl IconButton {
     pub fn build(self, k: &Kit) -> El {
         let side = self.size.height();
         let active = self.expanded == Some(true) && !self.disabled;
-        let style = icon_button_style(self.variant, self.disabled, active, k);
+        let style = icon_button_style(self.variant, self.outline, self.disabled, active, k);
         let tip = match &self.shortcut {
             Some(shortcut) if !shortcut.is_empty() => format!("{}  {shortcut}", self.label),
             _ => self.label.clone(),
@@ -389,6 +415,7 @@ pub fn icon_button(
         glyph,
         label: label.into(),
         variant,
+        outline: false,
         size,
         disabled: false,
         expanded: None,

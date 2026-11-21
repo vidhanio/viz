@@ -14,8 +14,8 @@
 //!   panel and timeline.
 //! - Activity: reasoning, tools and delegated tasks fold into compact groups;
 //!   running commands stay visible while folded; expand only for readable
-//!   output, changes or the reasoning trace. Context use sits beside the
-//!   composer options.
+//!   output, changes or the reasoning trace. Context use sits at the trailing
+//!   end of the composer toolbar.
 //! - Copy: short, plain, sentence case; labels name the thing, buttons name the
 //!   action. Show display names, never wire IDs.
 //! - Visuals come from `theme.rs` tokens and `ui` components. Shared scales and

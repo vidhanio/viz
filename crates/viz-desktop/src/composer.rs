@@ -157,16 +157,36 @@ fn queue(s: &Desktop, id: ThreadId, inputs: &[QueuedInput], t: &Theme) -> El {
         }))
 }
 
-/// The composer's one primary action: send, or stop while the agent works
-/// (Enter queues then).
+/// The composer's trailing action(s): Send when idle, or an outline Stop button
+/// while busy (with Queue beside it when the draft has something to send).
 fn send_button(s: &Desktop, t: &Theme) -> El {
     if s.busy() {
-        ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Submit, Size::Default)
-            .shortcut(format!("{}+.", ui::COMMAND_KEY))
+        let stop = ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Neutral, Size::Default)
+            .outline()
+            .shortcut(ui::shortcut("."))
             .disabled(!s.connected())
             .on_press_tx(Desktop::abort)
             .build(&t.k)
-            .key("stop")
+            .key("stop");
+        if s.can_send() {
+            let queue = ui::icon_button(
+                &ui::ARROW_UP,
+                "Queue",
+                IconButtonVariant::Submit,
+                Size::Default,
+            )
+            .on_press_tx(Desktop::send_input)
+            .build(&t.k)
+            .key("send");
+            row()
+                .key("composer-actions")
+                .gap(TOOLBAR_GAP)
+                .center_y()
+                .child(stop)
+                .child(queue)
+        } else {
+            stop
+        }
     } else {
         ui::icon_button(
             &ui::ARROW_UP,

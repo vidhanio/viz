@@ -6,9 +6,13 @@ use super::{draft, model};
 use crate::{
     app::{Desktop, NewThread},
     server::Command,
-    theme::{self, ICON_SMALL, S2, S4, S8, Size, Theme},
+    theme::{self, ICON_SMALL, READING_INSET, READING_WIDTH, S2, S4, S8, Size, Theme},
     ui,
 };
+
+/// Drop the numeric context label below this composer width, keeping the ring
+/// and tooltip.
+const CONTEXT_TEXT_MIN_WIDTH: f32 = 520.0;
 
 /// What a runner's option is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -64,11 +68,14 @@ pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     } else {
         return bar;
     };
-    session_options(s, t, layer, bar, target, options)
-        .children(usage.and_then(|usage| context_usage(usage, t)))
+    let bar = session_options(s, t, layer, bar, target, options);
+    let Some(usage) = usage.and_then(|usage| context_usage(s, usage, t)) else {
+        return bar;
+    };
+    bar.child(rune::spacer()).child(usage)
 }
 
-fn context_usage(usage: &ContextUsage, t: &Theme) -> Option<El> {
+fn context_usage(s: &Desktop, usage: &ContextUsage, t: &Theme) -> Option<El> {
     if usage.size == 0 {
         return None;
     }
@@ -77,6 +84,25 @@ fn context_usage(usage: &ContextUsage, t: &Theme) -> Option<El> {
         "Context: {percent} used, {} of {} tokens",
         usage.used, usage.size
     );
+    let used = u128::from(usage.used.min(usage.size));
+    let size = u128::from(usage.size.max(1));
+    let tint = if used * 100 >= size * 95 {
+        Some(t.danger)
+    } else if used * 100 >= size * 80 {
+        Some(t.warning)
+    } else {
+        None
+    };
+    let tinted = tint.map(|color| {
+        let mut k = t.k.clone();
+        k.c.icon_muted = color;
+        k
+    });
+    let ring_kit = tinted.as_ref().unwrap_or(&t.k);
+    let composer_width = READING_INSET
+        .mul_add(-2.0, s.window_width - s.sidebar.shown_width())
+        .min(READING_WIDTH);
+    let show_text = composer_width >= CONTEXT_TEXT_MIN_WIDTH;
     let total = compact_tokens(usage.size);
     Some(
         row()
@@ -84,21 +110,22 @@ fn context_usage(usage: &ContextUsage, t: &Theme) -> Option<El> {
             .center_y()
             .gap(S4)
             .ml(S8)
+            .mr(S4)
             .role("group")
             .label(&label)
             .help(label)
             .child(
                 ProgressCircle::new(theme::fraction(usage.used, usage.size))
                     .size(ICON_SMALL)
-                    .build(&t.k)
+                    .build(ring_kit)
                     .a11y_hidden(),
             )
-            .child(
+            .children(show_text.then(|| {
                 text(format!("{percent}/{total}"))
                     .font(t.mono_small)
                     .color(t.muted)
-                    .a11y_hidden(),
-            ),
+                    .a11y_hidden()
+            })),
     )
 }
 
