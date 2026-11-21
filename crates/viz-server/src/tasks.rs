@@ -47,9 +47,9 @@ const READ_TASK_SQL: &str = concat!(
     "FROM agent_tasks WHERE id = ?1 AND (?2 IS NULL OR parent = ?2)"
 );
 
-// Offered may already be admitted at the recipient, even if no receipt reached
-// us. Cancelling after an ambiguous offer must retract before it can stop any
-// admitted run.
+/// Offered may already be admitted at the recipient, even if no receipt reached
+/// us. Cancelling after an ambiguous offer must retract before it can stop any
+/// admitted run.
 #[derive(Clone, Copy, Eq, PartialEq)]
 enum Phase {
     Pending,
@@ -89,8 +89,8 @@ macro_rules! cancel_task_sql {
     };
 }
 
-// A delegated run includes only the descendants created in that run and the
-// runs woken by those descendants, never manually queued follow-ups.
+/// A delegated run includes only the descendants created in that run and the
+/// runs woken by those descendants, never manually queued follow-ups.
 macro_rules! family_sql {
     ($query:expr) => {
         concat!(
@@ -109,8 +109,8 @@ pub(crate) struct Tasks {
     scan: Notify,
     shutdown: CancellationToken,
     supervisor: Mutex<Option<JoinHandle<()>>>,
-    // Serialize a cancellation's entry-only decision against delivery of its
-    // descendants.
+    /// Serializes a cancellation's entry-only decision against delivery of its
+    /// descendants.
     delivery: AsyncMutex<()>,
 }
 
@@ -878,9 +878,6 @@ impl Tasks {
                 )));
             }
         };
-        // The workspace commits the entry and its wake receipt together. If we
-        // crash before recording delivered=1, the same durable wake run is
-        // returned on retry.
         let wake = self.workspace.wake(row.u64(0)?, id, &text, mode).await?;
         sql::exec(
             &mut *self.workspace.db.lock().await,

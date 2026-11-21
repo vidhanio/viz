@@ -364,7 +364,6 @@ fn activity_group<'a>(
     if can_open && open {
         group = group.child(activity_details(s, burst, t));
     } else if let Some(tool) = active_tool {
-        // Keep the current command visible even when the burst is folded.
         group = group.child(single_tool(s, tool, t).ml(S8));
     }
     group
@@ -547,7 +546,6 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         && thread.harness.is_none()
         && s.harnesses.len() > 1
         && s.harnesses.iter().all(|harness| !harness.default);
-    // `ui::empty`'s column, with the picker row where its title goes.
     col()
         .key("empty")
         .w_full()
@@ -562,7 +560,6 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .wrap()
                 .align(rune::Align::Center)
         }))
-        // A draft is already the new thread.
         .child(shortcuts(&[("K", "Commands")], t))
 }
 
@@ -696,9 +693,6 @@ fn mine(user: &User, t: &Theme) -> El {
                 })),
         );
     }
-    // The spacer holds the column's other share (it never shrinks); the
-    // bubble's wrapper shrinks into the rest, so the card's own `w_full`
-    // fills only its content's width.
     row()
         .key(format!("{}-row", user.key))
         .w_full()

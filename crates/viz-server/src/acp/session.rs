@@ -225,8 +225,6 @@ impl Session {
         let model = selection.and_then(|selection| selection.model.as_deref());
         let thinking = selection.and_then(|selection| selection.thinking.as_deref());
         let mut preferred = base.clone();
-        // Model changes can change or reset the runner's effort choices, so the
-        // model goes first.
         let mut model_id = model_option(&self.options()).map(|option| option.id.clone());
         if let Some(model) = model {
             let id = self.set_exact(model_option, "Model", model).await?;
@@ -367,7 +365,6 @@ impl Session {
                     publish_at = None;
                     let entries = transcript.apply(mem::take(&mut pending));
                     if let Err(error) = updates(entries, Some(transcript.live()), self.take_snapshot()).await {
-                        // A failed transcript write invalidates the turn.
                         failure = Some(error);
                         self.agent.cancel(&self.id);
                         break Err(anyhow!("publishing the turn failed"));
@@ -402,8 +399,6 @@ impl Session {
             },
             Err,
         );
-        // An abandoned cancellation leaves the agent's turn in an unknown
-        // state.
         if outcome.is_err() || give_up_at.is_some_and(|deadline| Instant::now() >= deadline) {
             self.broken = true;
         }
@@ -559,8 +554,6 @@ fn update_sink(state: &Arc<Mutex<State>>, changes: &Arc<watch::Sender<()>>) -> U
                 true
             }
             SessionUpdate::SessionInfoUpdate(update) => match update.title {
-                // A cleared title keeps the one shown rather than blank the
-                // thread.
                 MaybeUndefined::Value(title) => {
                     state.title = Some(title);
                     true

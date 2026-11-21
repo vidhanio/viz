@@ -109,13 +109,9 @@ impl Workspace {
             .build(Sqlite::open(dir.join("workspace.sqlite3")))
             .await?;
         let mut db = pool.connection().await?;
-        // SQLite holds this lock after the initial write; two servers must
-        // never drive the same queue.
         row(&mut db, "PRAGMA locking_mode = EXCLUSIVE", []).await?;
         row(&mut db, "PRAGMA journal_mode = WAL", []).await?;
         exec(&mut db, "PRAGMA foreign_keys = ON", []).await?;
-        // The versioned workspace owns all DDL. Toasty's model registry
-        // supplies typed queries and inserts, not a create-on-restart schema.
         let mut tx = db.transaction().await?;
         for ddl in include_str!("workspace/schema.sql").trim().split("\n\n") {
             exec(&mut tx, ddl, []).await?;
@@ -162,7 +158,6 @@ impl Workspace {
             self.jobs.close();
         }
         self.jobs.wait().await;
-        // Drop sessions outside the runtime mutex.
         let drivers = std::mem::take(
             &mut self
                 .transient

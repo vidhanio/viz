@@ -114,7 +114,6 @@ impl Scheme {
                             format!("{key} = \"{value}\" is not a #rrggbb color")
                         })?);
                 }
-                // Base24's extra colors.
                 Some(16..24) => {}
                 _ => {
                     return Err(format!(

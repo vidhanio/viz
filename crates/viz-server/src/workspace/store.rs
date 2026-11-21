@@ -355,8 +355,6 @@ pub(super) async fn search(
     query: &str,
     limit: usize,
 ) -> Result<Vec<SearchHit>, RpcError> {
-    // Quote literal terms so MATCH never interprets user-supplied operators or
-    // punctuation.
     let mut terms = String::new();
     for term in query
         .split(|ch: char| !ch.is_alphanumeric())

@@ -156,7 +156,6 @@ impl<'a> Picker<'a> {
             },
             _ => thinking,
         }
-        // One level (a model without reasoning) is no choice.
         .filter(|levels| levels.choices().len() > 1);
         (model.is_some() || levels.is_some()).then_some(Self {
             target,
@@ -209,8 +208,6 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
                 close(s);
                 return;
             }
-            // The menu's own changes animate (see `menu`); its opening lands
-            // at once, so the rows are opaque and pressable on the first frame.
             tx.instant();
             s.open_picker = Some(KEY.to_owned());
             s.model_menu = ModelMenu::default();
@@ -250,7 +247,6 @@ struct Entry<'a> {
 /// order.
 fn groups<'a>(model: &'a ConfigOption, query: &str) -> Vec<(Option<&'a str>, Vec<Entry<'a>>)> {
     let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
-    // Disambiguate aliases even when the search hides their namesakes.
     let mut duplicates = HashMap::new();
     for choice in &model.choices {
         duplicates
@@ -319,12 +315,6 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
         body = body.child(section);
     }
     layer.push(scrim("model-scrim", close));
-    // Mounted above the trigger as `rune_kit::popover::anchored` mounts a
-    // surface, but without its `instant_changes`, which lands every change
-    // inside it: a search edit's commit animates (`animate_edit_layout` on the
-    // field), so the surface and the list's viewport spring to their new
-    // height on one spring, bottom pinned to the trigger, while dropped rows
-    // fade where they stood. Its opening lands at once instead (the trigger).
     let fade = Transition {
         insertion: Effect::IDENTITY,
         removal: Effect::opacity(0.0),
@@ -411,8 +401,6 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
         .height(Size::Default.height())
         .active_descendant(active.as_deref().map(row_key))
         .on_edit(|s: &mut Desktop| &mut s.model_menu.query)
-        // Typing commits instantly by default; the filtered list and the menu
-        // around it should grow and shrink smoothly, dropped rows fading out.
         .animate_edit_layout()
         .on_change(|s: &mut Desktop, tx| {
             s.model_menu.active = None;
@@ -617,7 +605,6 @@ fn on_key(
 /// for a model's levels it hasn't reported.
 fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &str) {
     s.model_menu.active = Some(value.to_owned());
-    // The new model's levels are the runner's to report.
     s.model_menu.chosen = None;
     let chosen = OptionValue::Select(value.to_owned());
     let draft = match owner {
@@ -642,9 +629,6 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
     let Some(harness) = thread.active_harness(&s.harnesses) else {
         return;
     };
-    // The draft's level under the new model: kept where it offers it, else
-    // the model's default. Until the runner reports an unseen model's
-    // levels, its default applies.
     let (stale, fetch) = match Picker::new(Options::Draft(thread), &harness.options) {
         Some(Picker {
             levels: Some(levels),

@@ -103,7 +103,6 @@ methods! {
     ListHarnesses => "harnesses.list", HarnessList;
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
-    // `LaunchThread` owns its initial settings for callers that queue creation.
     LaunchThread => "thread.launch", Launched;
     SendInput => "thread.send", Sent;
     Watch => "thread.watch", Watching;

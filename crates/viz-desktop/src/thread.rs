@@ -176,8 +176,6 @@ impl Thread {
             self.acp_partial.push(acp_text(key, text, thinking));
         }
         for record in &live.tools {
-            // The view and state arrive separately; never reintroduce a
-            // live row after the transcript has committed the same call.
             let committed = self.items[self.acp_start..]
                 .iter()
                 .any(|item| matches!(item, Item::Tool(tool) if tool.call_id == record.id));
@@ -526,7 +524,6 @@ fn readable_output(
     } else {
         match parsed {
             Ok(value) => Cow::Owned(json_text(value).unwrap_or_default()),
-            // The server can truncate an otherwise valid JSON result.
             Err(error) if error.is_eof() => Cow::Borrowed(""),
             Err(_) => Cow::Borrowed(output),
         }

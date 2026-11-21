@@ -242,8 +242,6 @@ pub(super) fn normalize(options: Vec<SessionConfigOption>) -> Vec<ConfigOption> 
     let Some(thinking) = thinking_option(&normalized) else {
         return normalized;
     };
-    // Older ACP clients used a legacy mode selector for thinking. Some runners
-    // expose it in both forms.
     let duplicate = |option: &ConfigOption| {
         option.category.as_deref() == Some(MODE)
             && option.kind == OptionKind::Select
@@ -329,8 +327,6 @@ fn choice(
     let mut label = group.map(str::to_owned);
     match category {
         Some(MODEL) => {
-            // The runner's group, else the provider before a `/` in the value;
-            // a model with neither stays ungrouped.
             label = label.or_else(|| {
                 value
                     .split_once('/')

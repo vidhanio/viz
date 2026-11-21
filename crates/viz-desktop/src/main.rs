@@ -1,7 +1,30 @@
 //! viz desktop app: threads in a sidebar, the selected one's timeline,
 //! and a composer, in viz's own theme (`theme.rs`) through rune-kit. `cargo
-//! run -p viz-desktop` opens the window; `-- --snap out.png` renders it
-//! headless.
+//! run -p viz-desktop` opens the window; `-- --snap out.png --scene <name>`
+//! renders a scene headless.
+//!
+//! UI rules:
+//!
+//! - Layout: sidebar and thread. A thread with delegated tasks keeps their
+//!   panel at the top right. Menus, palette, dialogs and toasts are temporary
+//!   overlays.
+//! - Sidebar: environment picker above the list; _Recent_ (newest first,
+//!   project under each title) and _Projects_ (collapsible) modes. Task status
+//!   belongs in the task panel and timeline.
+//! - Activity: reasoning, tools and delegated tasks fold into compact groups;
+//!   running commands stay visible while folded; expand only for readable
+//!   output, changes or the reasoning trace. Context use sits beside the
+//!   composer options.
+//! - Copy: short, plain, sentence case; labels name the thing, buttons name the
+//!   action. Show display names, never wire IDs.
+//! - Visuals come from `theme.rs` tokens and `ui` components. Shared scales and
+//!   columns are tokens; a component-specific cap may be a named module
+//!   constant on the 4-pt grid. Icons are Lucide (harnesses may use their
+//!   official marks); never draw custom ones. Surfaces are flat, separated by
+//!   hairlines and fills; only overlays get a shadow. One accent, for the
+//!   primary action, focus and selection.
+//! - One obvious place per action, plus the palette and a shortcut where it is
+//!   frequent.
 
 mod app;
 mod attachments;
@@ -59,9 +82,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .child(ui::rule(t).key("header-rule"))
         .children(agents)
         .child(reading);
-    // The sidebar's header row is a title band above its content: guard it
-    // from below, under the sidebar toggle and new-thread button that float
-    // over it.
     let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
         ui::drag_guard("sidebar-drag-guard")
             .pin(
@@ -72,7 +92,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
             )
             .h(TOOLBAR_HEIGHT),
     );
-    // The kit places the sidebar toggle at the trailing end of its title band.
     let titlebar_inset = cx.titlebar_inset();
     let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
     let split = split
@@ -256,8 +275,6 @@ fn main() {
         ..AppSpec::new("viz", app::WINDOW_SIZE, Desktop::detached, view)
     })
     .args(rune_args)
-    // macOS: the traffic lights centered on the toolbar's line, at the
-    // sidebar's content inset.
     .chrome(Chrome {
         traffic_lights: Some((
             theme::SIDEBAR_INSET,
@@ -268,8 +285,6 @@ fn main() {
     .init(move || {
         let mut desktop = Desktop::new(commands);
         desktop.window_width = initial_width;
-        // Scenes are deterministic: they neither read nor write the saved
-        // sidebar mode and collapsed projects.
         if !preview {
             desktop.navigation.restore();
         }
@@ -280,8 +295,6 @@ fn main() {
         app.handle()
             .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
     }
-    // Rune has no resize hook; a drawn frame reports the viewport, and a
-    // change re-lays out what depends on it (the composer's selects).
     let ui = app.handle();
     let app = app.on_frame_drawn(move |rt| {
         let width = rt.window_viewport().0 / rt.zoom();
@@ -293,8 +306,6 @@ fn main() {
         let (first, connected) = std::sync::mpsc::channel();
         server::spawn(app.handle(), receiver, first, endpoint);
         if headless {
-            // The default snapshot shows the first connection attempt's
-            // outcome.
             _ = connected.recv_timeout(HEADLESS_CONNECT_WAIT);
         }
     }

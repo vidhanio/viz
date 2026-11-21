@@ -33,8 +33,6 @@ pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, RpcErr
             {
                 return Err(RpcError::invalid("invalid attachment name"));
             }
-            // Bound allocation before decoding. The decoder checks padding and
-            // alphabet.
             let decoded_len = data.len() / 4 * 3
                 - data
                     .bytes()
@@ -149,8 +147,6 @@ pub(super) async fn materialize(
 
 async fn write_file(directory: &Path, path: &Path, data: &[u8]) -> std::io::Result<()> {
     tokio::fs::create_dir_all(directory).await?;
-    // An ACP runner can read (and modify) its local copy, but delegation always
-    // reads the original SQLite bytes.
     let mut file = tokio::fs::OpenOptions::new()
         .create_new(true)
         .write(true)

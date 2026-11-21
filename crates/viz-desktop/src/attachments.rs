@@ -21,8 +21,8 @@ use crate::{
 const CHIP_MAX: f32 = 180.0;
 
 const FILE_LIMIT: usize = 20 * 1024 * 1024;
-// Leave room for JSON metadata and the prompt under the server's 128 MiB frame
-// cap.
+/// Leave room for JSON metadata and the prompt under the server's 128 MiB frame
+/// cap.
 pub const ENCODED_LIMIT: usize = 120 * 1024 * 1024;
 
 #[derive(Debug)]
@@ -48,7 +48,6 @@ pub struct Loaded {
 impl Source {
     pub fn load(self) -> Loaded {
         let paths = match self {
-            // Rune's native file dialog is single-select.
             Self::Picker => rfd::FileDialog::new()
                 .set_title("Attach files")
                 .pick_files()

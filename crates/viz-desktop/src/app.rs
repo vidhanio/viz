@@ -226,7 +226,6 @@ impl Desktop {
             let watched = self.focused && self.selected == Some(thread.id);
             let body = match thread.status {
                 _ if before == thread.status || watched => continue,
-                // A subagent's end reaches its parent, which notifies in turn.
                 _ if thread.parent.is_some() => continue,
                 Idle if ran => "Finished",
                 Failed if ran => "Failed",
@@ -240,8 +239,6 @@ impl Desktop {
                 tx,
             );
         }
-        // The selected thread may have been deleted by any client. Use the old
-        // list to find its nearest surviving parent before discarding it.
         let fallback = self
             .selected
             .and_then(|id| self.summary(id))
@@ -439,7 +436,6 @@ impl Desktop {
         } else {
             (&mut self.forward, &mut self.back)
         };
-        // Deleted threads drop out of the history as it's walked.
         let Some(next) = std::iter::from_fn(|| from.pop())
             .find(|id| self.threads.iter().any(|thread| thread.id == *id))
         else {

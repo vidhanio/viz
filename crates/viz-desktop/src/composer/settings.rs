@@ -269,8 +269,6 @@ fn add_choices(
                 menu = menu.group_label(ui::sentence_label(group));
             }
         }
-        // Names only: runners' descriptions (Codex's modes) are long prose that
-        // a compact menu would only truncate.
         menu = menu.item(choice(
             target,
             option,

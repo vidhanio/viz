@@ -125,7 +125,6 @@ impl Mcp {
             tools,
             inner: Arc::downgrade(&inner),
         };
-        // MCP requires refusing browser origins; agents never send one.
         let config = StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
             .with_json_response(true)
@@ -144,8 +143,6 @@ impl Mcp {
                     Arc::downgrade(&inner),
                     authenticate,
                 ));
-        // A waiting tool call can outlast any request timeout; the ACP turn
-        // owns its cancellation.
         tokio::spawn(async move {
             if let Err(error) = axum::serve(listener, router)
                 .with_graceful_shutdown(shutdown.cancelled_owned())
@@ -279,7 +276,6 @@ async fn authenticate(
         )
             .into_response();
     };
-    // rmcp hands the request's parts, extensions included, to the handler.
     request.extensions_mut().insert(grant);
     next.run(request).await
 }

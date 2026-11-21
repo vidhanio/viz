@@ -2,7 +2,7 @@
 //! catalogs, and the MCP server that gives agents viz's tools.
 //!
 //! What viz can do with a harness is bounded by stable ACP v1
-//! (`docs/findings/acp.md`):
+//!:
 //!
 //! - Prompts carry no idempotency key, so a turn interrupted by a crash or
 //!   restart is never replayed.

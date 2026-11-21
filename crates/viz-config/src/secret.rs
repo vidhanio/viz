@@ -52,8 +52,6 @@ impl Secret {
     pub fn resolve(&self) -> Result<String, ResolveSecretError> {
         let value = match self {
             Self::Inline(value) => value.clone(),
-            // Allow one trailing line ending without trimming the rest of the
-            // secret.
             Self::File { file } => {
                 let mut value =
                     fs::read_to_string(file).map_err(|source| ResolveSecretError::File {

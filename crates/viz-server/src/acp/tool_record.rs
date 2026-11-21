@@ -228,8 +228,6 @@ impl ToolContent {
         if fields.name.is_some() {
             record.name = fields.name;
         }
-        // An unreported kind deserializes as `other`; keep what an earlier
-        // update said.
         if let Some(kind) = fields.kind.filter(|kind| *kind != ToolKind::Other) {
             record.kind = serde_json::to_value(kind)
                 .ok()
@@ -297,15 +295,11 @@ impl ToolContent {
             }
             record.locations = paths;
         }
-        // ACP content is the display text; raw output is runner metadata, shown
-        // only when there is no content.
         let mut output = if self.content_text.is_empty() {
             self.raw_output.trim()
         } else {
             self.content_text.as_str()
         };
-        // omp's execute content starts with an echo of its `$ …` title, even
-        // before stdout exists.
         if record.kind.as_deref() == Some("execute") && record.title.starts_with("$ ") {
             if output == record.title {
                 output = "";

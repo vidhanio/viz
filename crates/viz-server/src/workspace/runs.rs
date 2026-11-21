@@ -389,8 +389,6 @@ pub(super) async fn update_queue(
             queue.len()
         };
         queue.insert(index, run);
-        // json_each supplies ordinal keys; only rows whose queue position
-        // changes need updating.
         exec(db, "UPDATE runs AS r SET position = j.key FROM json_each(?1) AS j WHERE r.id = j.value AND r.position <> j.key",
             [store::json(&queue)?.into()]).await?;
     }

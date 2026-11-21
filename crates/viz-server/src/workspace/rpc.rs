@@ -339,8 +339,6 @@ impl Workspace {
         )
         .await?;
         tx.commit().await?;
-        // Standard ACP has no steer operation. Run the new prompt next, and
-        // cancel the current prompt.
         if let Some(active) = active {
             self.cancel_active(thread, active);
         }
@@ -405,8 +403,6 @@ impl Workspace {
         if let Patch::Set(project) = &args.project {
             store::project(&mut *db, project).await?;
         }
-        // ACP session identity includes the original cwd; project reassignment
-        // changes only organization.
         exec(&mut *db, "UPDATE threads SET title = coalesce(?2, title), user_title = CASE WHEN ?2 IS NULL THEN user_title ELSE 1 END,
             archived = coalesce(?3, archived), pinned = coalesce(?4, pinned), unread = coalesce(?5, unread),
             project = CASE WHEN ?6 THEN ?7 ELSE project END WHERE id = ?1", [
@@ -506,8 +502,6 @@ impl Workspace {
         if count == 0 {
             return Err(RpcError::not_found(format!("no project {project}")));
         }
-        // The project FK clears metadata only. Never remove its directory or
-        // change an ACP session's cwd.
         tx.commit().await?;
         drop(db);
         self.changed(None);

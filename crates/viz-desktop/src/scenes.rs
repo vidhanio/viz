@@ -134,8 +134,6 @@ fn list() -> Vec<ThreadSummary> {
         thinking: parent.is_some().then(|| "high".into()),
         status,
         archived: false,
-        // Minutes ago, newest first by id, so "last activity" reads
-        // like a live session.
         updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
         unread: id == 9,
         pinned: id == 4,

@@ -9,7 +9,6 @@ license = "MIT"
 repository = "https://github.com/vidhanio/viz"
 publish = false
 
-# Name for crane's workspace-wide derivations (dependency artifacts, clippy, tests).
 [workspace.metadata.crane]
 name = "viz"
 
@@ -21,8 +20,6 @@ axum = "0.8"
 base64 = "0.22"
 clap = "4"
 config = { version = "0.15", default-features = false, features = ["toml"] }
-# The platform's UI font families (fontconfig, CoreText, DirectWrite), as Rune itself finds
-# installed fonts; same version and features as Rune's, so nothing new builds.
 fontique = { version = "0.12", default-features = false, features = [
   "std",
   "system",
@@ -32,7 +29,6 @@ futures-util = { version = "0.3", default-features = false }
 futures = "0.3"
 jsonrpsee-types = "0.26"
 listenfd = "1"
-# Lucide's SVGs as `const` strings: the desktop's only icon set (docs/design.md).
 lucide-static-svg = "1.76"
 mime_guess = "2"
 notify-rust = { version = "4", default-features = false }
@@ -43,7 +39,6 @@ rustls = { version = "0.23", default-features = false }
 schemars = "1"
 sd-notify = "0.5"
 serde = "1"
-# Base16 scheme files (tinted-theming YAML) for the desktop's themes.
 serde-saphyr = { version = "2", default-features = false, features = [
   "deserialize",
 ] }
@@ -68,7 +63,6 @@ uuid = "1"
 viz-client = { path = "crates/viz-client" }
 viz-config = { path = "crates/viz-config" }
 
-# Rune is unpublished: pin a `dev` revision and replicate its `[patch.crates-io]` below at the same rev.
 rune = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
 
@@ -84,8 +78,6 @@ undocumented_unsafe_blocks = "warn"
 missing_debug_implementations = "warn"
 unsafe_code = "deny"
 
-# Cargo doesn't inherit `[patch]` from dependencies: mirror Rune's root `Cargo.toml` at the pinned rev.
-# Update every `rev` together with `workspace.dependencies.rune`.
 [patch.crates-io]
 accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }
 accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "0d00d3f2d59df5b764d8d6b2585164fd43c16f48" }

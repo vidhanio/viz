@@ -261,7 +261,6 @@ pub(super) fn thread_menu(
             ),
         );
     if !s.projects.is_empty() || thread.project.is_some() {
-        // Its destinations open beside it; pressing it again closes them.
         let destinations = std::iter::once(destination(thread, None))
             .chain(
                 s.projects

@@ -10,8 +10,6 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # Swift 6.4 + xtool (iOS builds on Linux). Same input as vidhanix.
-    # TODO: drop for `nixpkgs` once https://github.com/NixOS/nixpkgs/pull/548520 is merged.
     nixpkgs-xtool.url = "github:NixOS/nixpkgs/pull/548520/head";
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
@@ -64,12 +62,10 @@
             }
           );
 
-          # Libraries the Rune desktop app links against at build time.
           desktopBuildInputs = [
             pkgs.libxkbcommon
             pkgs.wayland
           ];
-          # Libraries Rune/wgpu/winit `dlopen` at runtime.
           desktopRuntimeLibs = [
             pkgs.dbus
             pkgs.fontconfig
@@ -82,13 +78,11 @@
             pkgs.libxrandr
             pkgs.libxcb
           ];
-          # Programs Rune runs: xdg-open for links (e.g. a new PR), fc-list for system font lookup.
           desktopRuntimeBins = [
             pkgs.xdg-utils
             pkgs.fontconfig.bin
           ];
 
-          # Cargo sources plus the base16 schemes and harness icons the desktop embeds with `include_str!`.
           src = lib.fileset.toSource {
             root = ./.;
             fileset = lib.fileset.unions [
@@ -106,9 +100,6 @@
             cargoExtraArgs = "--locked --workspace";
             cargoVendorDir = craneLib.vendorCargoDeps {
               inherit src;
-              # Crane lists each git crate's files with `cargo package -l`, which rejects Rune's
-              # checkout: its vendored crates ship upstream's `Cargo.toml.orig`, and `spikes/` holds
-              # a manifest outside Rune's workspace.
               overrideVendorGitCheckout =
                 ps: drv:
                 if lib.any (p: lib.hasPrefix "git+https://github.com/anomalyco/rune" (p.source or "")) ps then
@@ -182,18 +173,15 @@
 
           devShells.default = craneLib.devShell {
             packages = [
-              # rust
               pkgs.cargo-edit
               pkgs.cargo-deny
               pkgs.pkg-config
-              # ios
               swiftPkgs.swift
               swiftPkgs.swiftpm
               swiftPkgs.swift-format
               swiftPkgs.sourcekit-lsp
               swiftPkgs.xtool
-              pkgs.libimobiledevice # idevicesyslog, idevicedebug, idevicecrashreport, idevicescreenshot
-              # nix
+              pkgs.libimobiledevice
               pkgs.nil
               config.treefmt.build.wrapper
             ]
@@ -204,7 +192,7 @@
             shellHook = ''
               if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
                 && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
-                echo "viz: no Darwin SDK for iOS builds; run 'xtool setup' (see docs/findings/ios-on-linux.md)" >&2
+                echo "viz: no Darwin SDK for iOS builds; run 'xtool setup'" >&2
               fi
             '';
           };

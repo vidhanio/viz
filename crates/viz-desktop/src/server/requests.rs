@@ -64,12 +64,11 @@ pub(super) fn search(ui: &AppHandle<Desktop>, client: &Client, request: u64, que
 }
 
 /// Shows a desktop notification; a missing notification service is not an error
-/// worth a toast.
+/// worth a toast. The freedesktop backend talks D-Bus on this runtime;
+/// elsewhere `show` blocks, so it runs on the blocking pool.
 pub(super) fn notify(title: &str, body: &'static str) {
     let mut notification = notify_rust::Notification::new();
     notification.appname("viz").summary(title).body(body);
-    // The freedesktop backend talks D-Bus on this runtime; elsewhere `show`
-    // blocks.
     #[cfg(all(unix, not(target_os = "macos")))]
     tokio::spawn(async move {
         _ = notification.show_async().await;

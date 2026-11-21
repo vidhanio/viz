@@ -1,4 +1,4 @@
-//! One ACP harness process and its connection (`docs/findings/acp.md`).
+//! One ACP harness process and its connection.
 //!
 //! viz is the ACP client: it spawns the harness and speaks protocol version 1
 //! over stdio as newline-delimited JSON-RPC, with the SDK's typed schema. It
@@ -100,8 +100,6 @@ struct Connection {
 
 impl Connection {
     fn send(&self, message: &Value) {
-        // The writer only stops once the process is gone, and then `closed`
-        // reports why.
         let _ = self.outgoing.send(message.to_string());
     }
 
@@ -289,7 +287,6 @@ impl Agent {
     ) -> Result<LoadSessionResponse> {
         let params = json!({ "sessionId": id, "cwd": utf8(cwd)?, "mcpServers": mcp });
         if self.capabilities.session_capabilities.resume.is_some() {
-            // A resume response has the load response's fields.
             return self.connection.request("session/resume", params).await;
         }
         ensure!(
@@ -394,8 +391,6 @@ async fn write(
             return;
         }
     }
-    // Deliver what was sent before the shutdown, such as a final
-    // `session/cancel`; dropping stdin then closes it.
     while let Ok(line) = lines.try_recv() {
         if write_line(&mut stdin, &line).await.is_err() {
             return;

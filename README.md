@@ -5,7 +5,7 @@ viz runs persistent ACP threads on one or more configured environments. Threads 
 - Server: Rust, Tokio, and SQLite via Toasty. Server and Rust clients share their Serde wire types.
 - Clients and connectors: Rust (desktop app on [Rune](https://github.com/anomalyco/rune)); iOS in Swift, built with [xtool](https://xtool.sh).
 
-Status: early. See `TODO.md` for the roadmap and `docs/design.md` for what viz is for.
+Status: early.
 
 ## Run
 

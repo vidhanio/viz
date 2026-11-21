@@ -480,8 +480,6 @@ impl<'a> Dialog<'a> {
                     .w_full(),
             );
         }
-        // The button's box is a control tall around a title-line glyph: pull
-        // it up and out so the glyph sits on the title's line and the inset.
         let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::Ghost, Size::Small)
             .on_press(close.clone())
             .build(&t.k)

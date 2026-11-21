@@ -287,7 +287,6 @@ impl<'a> Outline<'a> {
                 .and_then(|id| s.projects.iter().find(|p| p.path == id))
                 .map_or("No project", |project| project.name.as_str())
         });
-        // The runner's mark, in the title's ink.
         let mark = {
             let harness = &thread.harness;
             let ink = if thread.archived {
@@ -332,7 +331,6 @@ impl<'a> Outline<'a> {
         let id = project.path.clone();
         let key = format!("project-{id}");
         let menu_open = actions::menu_open(s, &key);
-        // The folder, turning into the disclosure under the pointer.
         let layer_of = |glyph: &'static rune::Icon, rest: f32, hovered: f32| {
             el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                 .center()
@@ -368,13 +366,6 @@ impl<'a> Outline<'a> {
                 s.navigation.menu = Some(actions::Context::at(&key, at));
             });
         }
-        // The project and its threads share one filled box a step above the
-        // sidebar, which is the nesting: threads keep the project row's columns
-        // (their marks under its folder) instead of stepping in, and only
-        // their tree level says they're inside. The header reads in full ink,
-        // its threads a step quieter than loose ones. The inset plus a row's
-        // radius makes the box's radius, so a highlighted row's corners run
-        // parallel to it.
         let mut branch = col()
             .key(format!("project-branch-{}", project.path))
             .w_full()

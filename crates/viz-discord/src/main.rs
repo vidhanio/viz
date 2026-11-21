@@ -121,7 +121,6 @@ fn chunks(text: &str, max: usize) -> Vec<&str> {
     let mut pieces = Vec::new();
     let mut rest = text;
     while rest.chars().count() > max {
-        // Byte offset after each grapheme that still fits, and the best break.
         let (mut fit, mut newline, mut space, mut chars) = (0, None, None, 0);
         for (at, grapheme) in rest.grapheme_indices(true) {
             chars += grapheme.chars().count();
@@ -135,7 +134,6 @@ fn chunks(text: &str, max: usize) -> Vec<&str> {
                 space = Some(fit);
             }
         }
-        // A grapheme longer than `max` on its own is cut at `max` characters.
         let cut = match newline.or(space) {
             Some(cut) => cut,
             None if fit > 0 => fit,

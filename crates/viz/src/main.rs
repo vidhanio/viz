@@ -54,8 +54,6 @@ struct CliConfig {
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    // Keep command results and agent replies on stdout, separate from
-    // diagnostics.
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()

@@ -7,7 +7,7 @@
 //! allowed_handles = ["+15555550123", "me@example.com"]
 //! ```
 //!
-//! The BlueBubbles bridge itself is not written yet (see `TODO.md`); this
+//! The BlueBubbles bridge itself is not written yet; this
 //! binary validates its config and the server connection so the service wiring
 //! can be exercised.
 
@@ -63,7 +63,6 @@ async fn main() -> anyhow::Result<()> {
     let server_url = imessage
         .server_url
         .context("imessage: missing server_url")?;
-    // Fail early on a password that won't resolve; the bridge will use it.
     imessage
         .password
         .context("imessage: missing password")?
@@ -88,5 +87,5 @@ async fn main() -> anyhow::Result<()> {
         hello.version,
         server_url
     );
-    anyhow::bail!("the BlueBubbles bridge is not implemented yet (TODO.md)")
+    anyhow::bail!("the BlueBubbles bridge is not implemented yet")
 }

@@ -634,7 +634,6 @@ async fn client_call(
     let Some(run) = run.filter(|_| route) else {
         return Ok(());
     };
-    // Replies use the committed origin, including to a retried input.
     let Some(origin) = server.workspace.run_origin(thread.0, run.0).await? else {
         return Ok(());
     };

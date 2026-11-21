@@ -1,4 +1,3 @@
--- One database and one writer per environment.
 CREATE TABLE IF NOT EXISTS projects (
     path TEXT PRIMARY KEY,
     name TEXT NOT NULL,
@@ -73,7 +72,6 @@ CREATE TABLE IF NOT EXISTS attachments (
     PRIMARY KEY (thread, id)
 ) STRICT;
 
--- A receipt survives thread deletion: an idempotent replay cannot allocate a second thread or run.
 CREATE TABLE IF NOT EXISTS launch_requests (
     request_id TEXT PRIMARY KEY,
     thread INTEGER NOT NULL,

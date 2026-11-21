@@ -430,8 +430,6 @@ where
                 }
             }
         }
-        // Close the queue first: a call made from here on fails to send instead
-        // of waiting on a responder nobody will answer.
         drop(rx);
         pending.close();
     });

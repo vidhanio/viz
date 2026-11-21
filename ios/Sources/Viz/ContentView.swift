@@ -24,7 +24,6 @@ struct ContentView: View {
   }
 
   @Environment(Server.self) private var server
-  // iOS App Transport Security requires HTTPS for remote hosts.
   @AppStorage("serverURL") private var serverURL = "https://viz.example.com"
   @AppStorage("serverToken") private var serverToken = ""
   @State private var selection: Selection?

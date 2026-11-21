@@ -27,7 +27,6 @@ const COMPACT_ROWS: f32 = 2.0;
 const WIDE_ROWS: f32 = 6.0;
 
 pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
-    // First in the band, under the title and buttons.
     let mut toolbar = Toolbar::new().center(ui::drag_guard("toolbar-drag-guard").pin(
         Some(0.0),
         Some(0.0),
@@ -164,8 +163,6 @@ pub fn agent_identity(thread: &ThreadSummary, t: &Theme) -> El {
 
 /// Identity shared by durable task rows in the panel and the timeline.
 pub fn task_identity(task: &Task, child: Option<&ThreadSummary>, t: &Theme) -> El {
-    // Durable outcomes are the run's answer or error, not the tool response
-    // envelope.
     let preview = task
         .error
         .as_deref()

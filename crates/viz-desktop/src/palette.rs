@@ -552,8 +552,6 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .on_key(move |s, ev, tx| on_key(s, ev, tx, &choices))
         .build(&t.k)
         .key(FIELD);
-    // No title row or close button: the field says what this is, and the
-    // footer names Escape.
     ui::sheet(
         "palette",
         "Command palette",

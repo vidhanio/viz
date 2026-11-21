@@ -14,7 +14,6 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync"] }
-# `https://` servers connect over `wss://`; Tokio Tungstenite enables no crypto provider.
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 tracing.workspace = true

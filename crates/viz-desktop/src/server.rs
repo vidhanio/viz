@@ -175,7 +175,6 @@ async fn run(
     };
     let shown = endpoint.to_string();
     ui.update(move |s, _| s.endpoint = Some(shown));
-    // Survives reconnects, so the window keeps its thread.
     let mut selected = None;
     let mut environment = None;
     loop {
@@ -451,7 +450,6 @@ impl Session<'_> {
                 Ok(())
             }
             Command::SendInput(send_input) => self.send_input(send_input).await,
-            // Already connected.
             Command::Reconnect => Ok(()),
         }
     }

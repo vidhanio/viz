@@ -35,8 +35,6 @@ pub(crate) async fn run() -> Result<()> {
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     let mut stdout = tokio::io::stdout();
     let mut version: Option<String> = None;
-    // One message at a time, in order: an `initialize` must finish before the
-    // calls that follow it.
     while let Some(line) = lines.next_line().await.context("reading stdin")? {
         if line.trim().is_empty() {
             continue;
@@ -56,8 +54,6 @@ pub(crate) async fn run() -> Result<()> {
         match relay(&client, &url, &token, version.as_deref(), &message).await {
             Ok(replies) => {
                 for reply in replies {
-                    // Later requests carry the negotiated version in their
-                    // headers.
                     if initialize
                         && reply.get("id") == request.as_ref()
                         && let Some(negotiated) = reply
@@ -71,8 +67,6 @@ pub(crate) async fn run() -> Result<()> {
             }
             Err(error) => {
                 eprintln!("mcp-bridge: {error:#}");
-                // Answer a request the server didn't, so the agent isn't left
-                // waiting; notifications need no answer.
                 if let Some(id) = request {
                     let message = format!("{error:#}");
                     let reply = json!({ "jsonrpc": "2.0", "id": id, "error": { "code": INTERNAL_ERROR, "message": message } });

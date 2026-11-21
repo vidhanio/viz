@@ -132,8 +132,6 @@ impl Workspace {
                         cancel: cancel.clone(),
                     };
                 } else if !prepare {
-                    // The queue check and hand-off to the next producer happen
-                    // under the same DB lock.
                     *phase = Worker::Idle;
                     return Ok(());
                 }
@@ -196,8 +194,6 @@ impl Workspace {
         if runs::status(&mut *db, thread, run).await? != Some(RunStatus::Running) {
             return Ok(());
         }
-        // stop can race the runner's last update while waiting for the database
-        // lock.
         if self.closing.is_cancelled() {
             settlement =
                 Settlement::stopped(RunStatus::Interrupted, "interrupted", runs::INTERRUPTED);
@@ -335,8 +331,6 @@ impl Workspace {
             () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
             result = Session::open(config, Path::new(&cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
         };
-        // Once a native session exists, store its id before subsequent runner
-        // calls.
         if session.session_id.as_deref() != Some(running.id()) {
             exec(
                 &mut *self.db.lock().await,

@@ -4,7 +4,11 @@ viz is an ACP workspace. Each environment stores its own projects, threads, and 
 
 viz is in active development with a single user. Do not preserve backward compatibility for configs, stored state, protocol versions, or clients: change them directly and delete local state when needed.
 
-The code is the documentation: read it before changing anything structural. `TODO.md` is the roadmap; `docs/` holds only what code can't say (see "Where things go").
+The code is the documentation: read it before changing anything structural. There is no `docs/` or roadmap file; the code, its doc comments and the `*.example.toml` files are the whole context.
+
+## Scope
+
+viz is one person's workspace for running ACP harnesses on code. Every feature serves one of these jobs: run agents on code, follow delegation, work across environments, find things. Out of scope until a job needs it: git UI, permission prompts, in-app settings forms (config is TOML), terminals, a browser, issue trackers, multi-model fan-out, usage dashboards, a theme editor. Prefer improving an existing surface to adding one, remove what a change makes redundant in the same change, and pick a good default over adding a setting.
 
 ## Layout
 
@@ -29,8 +33,8 @@ New connectors are crates named `viz-<name>` and read `connectors/<name>.toml`.
 Use the dev shell (`direnv allow` or `nix develop`). It provides nightly Rust, Swift 6.4 + xtool (from `nixpkgs-xtool`), Rune's native libraries, and `treefmt`.
 
 - `rustfmt.toml` uses unstable options: format with `treefmt` (nightly rustfmt), not stable `cargo fmt`.
-- Rune is unpublished and pinned by git rev; when bumping, update `workspace.dependencies.rune` **and** every `[patch.crates-io]` rev in `Cargo.toml` together (see `docs/findings/rune.md`).
-- iOS (details: `docs/findings/ios-on-linux.md`): one-time `xtool setup` (Apple ID or App Store Connect key, then the Xcode .xip); `swift sdk list` must show `darwin`. `cd ios && xtool dev` builds, signs and installs on a USB-paired device; tap the icon or use `xtool launch`. No simulator or SwiftUI previews on Linux; only non-SwiftUI files can be checked with `swiftc -typecheck`. iOS enforces ATS; reach the server over HTTPS.
+- Rune is unpublished and pinned by git rev; when bumping, update `workspace.dependencies.rune` **and** every `[patch.crates-io]` rev in `Cargo.toml` together.
+- iOS: one-time `xtool setup` (Apple ID or App Store Connect key, then the Xcode .xip); `swift sdk list` must show `darwin`. `cd ios && xtool dev` builds, signs and installs on a USB-paired device; tap the icon or use `xtool launch`. No simulator or SwiftUI previews on Linux; only non-SwiftUI files can be checked with `swiftc -typecheck`. iOS enforces ATS; reach the server over HTTPS.
 
 ## Local config
 
@@ -40,7 +44,7 @@ For app chats and delegation, configure a real ACP executable under `[harnesses.
 
 ## Verification
 
-**No tests.** Don't write or run unit or integration tests, `cargo test`, fixtures, or faux-model harnesses. Read the invariants from the code; explain non-obvious decisions in comments.
+**No tests.** Don't write or run unit or integration tests, `cargo test`, fixtures, or faux-model harnesses. Read the invariants from the code.
 
 Run the static gate (CI runs it via `nix flake check`):
 
@@ -56,11 +60,13 @@ After changing shared wire types, run `cargo run -p viz-server -- schema --outpu
 - Cargo: declare all direct dependencies under `[workspace.dependencies]` in the root `Cargo.toml`. Members inherit them with `dep.workspace = true` or `{ workspace = true, features = [...] }` for crate-specific features.
 - Config: the server layers `config.toml` and `config.d/*.toml` (later wins, tables merge); clients load separate TOML files under the same config directory. Secrets are `"inline" | { file = "..." } | { env = "..." }`. Reference: the `*.example.toml` files.
 - State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); only the owning server writes its environment's workspace database. Storage changes do not use migration shims.
+- Comments: doc comments only (`///`, `//!`, Swift `///`). No line comments in code: if a decision needs explaining, put it in the doc comment of the item that makes it, or make the code say it.
 - Commit often, as soon as a coherent change passes verification. Each commit must stand on its own: keep an API or config change with its callers and generated artifacts; split independent work. Use lowercase Conventional Commit subjects. Do not include unrelated work or secrets.
 
 ## Where things go
 
-- `TODO.md`: roadmap and open work, checked off as it lands. Update it in the same change.
-- `docs/design.md`: product scope (what viz is for and leaves out) and the desktop design system rules. Read before adding a feature or UI.
-- `docs/findings/<topic>.md`: research about external things (libraries, protocols, reference projects), dated, with sources. Re-verify before relying on old findings.
-- Everything else (how the system fits together, why a choice was made, config keys) lives in code: module doc comments, comments at the decision point, schema descriptions, and the `*.example.toml` files. No architecture docs, decision records or session logs.
+- How the system fits together and why: module and item doc comments.
+- Config keys: Serde doc comments and the `*.example.toml` files.
+- Wire types: their doc comments, which become `protocol/schema.json` descriptions.
+- Desktop UI rules: the `viz-desktop` crate doc and `theme.rs`; render affected scenes in light and dark (`cargo run -p viz-desktop -- --snap <png> --scene <name>`) and look at them before calling a UI change done.
+- No architecture docs, roadmaps, research notes, decision records or session logs.

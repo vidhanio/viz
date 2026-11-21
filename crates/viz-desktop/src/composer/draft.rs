@@ -37,8 +37,6 @@ pub(super) fn toolbar(
 fn harness(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> El {
     let label = "Choose harness";
     let runner = thread.active_harness(&s.harnesses);
-    // The chosen runner's mark leads the value inside its trigger, as in its
-    // menu.
     let mut menu = runner.map_or_else(
         || picker(s, HARNESS, label, None, t),
         |runner| {

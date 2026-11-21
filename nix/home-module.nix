@@ -51,8 +51,6 @@ let
         Reference secrets by file or environment variable, not inline.
       '';
     };
-  # Match the impure merger's TOML serialization, so an unchanged mutable file can be replaced by
-  # a store link when `mutableSettings` is turned off again (same as upstream's herdr module).
   settingsSource = pkgs.runCommand "viz-config.toml" { } ''
     settings="$(${lib.getExe pkgs.jaq} --from toml --to toml '.' ${generatedSettings})"
     printf '%s\n' "$settings" > "$out"
@@ -282,7 +280,6 @@ in
           UMask = "0077";
           StandardOutput = "journal";
           StandardError = "journal";
-          # $XDG_STATE_HOME/viz is exported as $STATE_DIRECTORY.
           StateDirectory = "viz";
           StateDirectoryMode = "0700";
         };

@@ -107,9 +107,6 @@ impl Peers {
                 },
             );
         }
-        // A configured LAN/Internet name never qualifies for plaintext, and
-        // even localhost must not send its bearer through DNS or an ambient
-        // HTTP proxy.
         let client = Client::builder()
             .redirect(Policy::none())
             .no_proxy()

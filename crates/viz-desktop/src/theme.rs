@@ -17,7 +17,8 @@
 //!   title starts at [`SIDEBAR_INSET`] plus [`TREE_STEP`] per depth; every row
 //!   ends in a [`TRAILING`]-wide slot centered under the sidebar toggle.
 //! - Main pane: one [`READING_WIDTH`] column, [`READING_INSET`] from the pane's
-//!   edges, shared by the toolbar title, the transcript and the composer.
+//!   edges, shared by the transcript and the composer; the toolbar title sits
+//!   at [`READING_INSET`].
 
 mod scheme;
 
@@ -43,14 +44,10 @@ pub fn families() -> (&'static str, &'static str) {
         shared: false,
         system_fonts: true,
     });
-    // `sans-serif` first: fontique's fontconfig `system-ui` list doesn't follow
-    // the user's preference (it led with Noto Sans CJK KR where `fc-match
-    // system-ui` and `sans-serif` both give the configured Allo).
     let sans = [GenericFamily::SansSerif, GenericFamily::SystemUi]
         .into_iter()
         .find_map(|generic| system.generic_families(generic).next())
         .and_then(|id| system.family_name(id))
-        // Once per launch: `AppSpec` keeps the families for the app's lifetime.
         .map_or("sans-serif", |name| name.to_owned().leak());
     (sans, "ui-monospace")
 }
@@ -417,7 +414,6 @@ impl Theme {
         let (bg, surface, wash) = (b[0x0], b[0x1], b[0x2]);
         let dark = b[0x5].luminance() > bg.luminance();
         let interactive = wash.mix(b[0x5], 0.35);
-        // A wash must remain visible on the sidebar as well as the main pane.
         let tint = |step: f32| {
             interactive.alpha(reach(bg, interactive, step).max(reach(surface, interactive, step)))
         };
@@ -428,9 +424,6 @@ impl Theme {
         let by_luminance = |x: &Color, y: &Color| x.luminance().total_cmp(&y.luminance());
         let lightest = b[..8].iter().copied().max_by(by_luminance).unwrap_or(bg);
         let darkest = b[..8].iter().copied().min_by(by_luminance).unwrap_or(bg);
-        // Overlays sit one step above whatever they float over, the sidebar
-        // included: lighter than `surface` in the dark, the scheme's lightest
-        // paper in the light, where the shadow alone lifts it.
         let overlay = if dark {
             over(surface, wash, reach(surface, wash, 0.04))
         } else {
@@ -481,7 +474,6 @@ impl Theme {
         k.c = Palette {
             page: bg,
             bg_base: bg,
-            // The shell's backdrop: the sidebar.
             bg_deep: surface,
             layer_01: surface,
             layer_02: raised,
@@ -549,9 +541,6 @@ impl Theme {
             std_icon_strong: strong,
             std_text: muted,
         };
-        // rune-kit uses Oklab tints for diff words; they are the closest
-        // those backgrounds get to the syntax ink. Use the stronger tint for
-        // both appearances to leave a margin on the lighter diff washes.
         let bg_lab = bg.to_oklab();
         let diff_word = |ink: Color| {
             let lab = ink.to_oklab();
@@ -610,9 +599,6 @@ impl Theme {
         k.radius.md = Size::Default.radius();
         k.radius.lg = Size::Default.radius();
         k.radius.xl = Size::Large.radius();
-        // Two layers: a tight contact shadow that defines the edge, and a wide
-        // soft one that lifts the surface. Darker on dark schemes, where a
-        // shadow has less light to take away.
         let shade = |a: f32| Color::BLACK.alpha(if dark { a * 2.4 } else { a });
         let lift = |near: f32, far: (f32, f32)| {
             vec![
@@ -636,8 +622,6 @@ impl Theme {
         k.elevation.overlay = lift(0.10, (S16, S48));
         let mut shell = k.clone();
         shell.radius.lg = 0.0;
-        // rune-kit fills menus, popovers and dialogs from these and outlines
-        // the standard ones in `std_border`.
         let mut overlay_kit = k.clone();
         overlay_kit.c.layer_01 = overlay;
         overlay_kit.c.surface_raised = overlay;

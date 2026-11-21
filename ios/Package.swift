@@ -9,7 +9,6 @@ let package = Package(
     .macOS(.v14),
   ],
   products: [
-    // An xtool project contains exactly one library product: the app.
     .library(
       name: "Viz",
       targets: ["Viz"]

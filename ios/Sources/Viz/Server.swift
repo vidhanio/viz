@@ -2,7 +2,6 @@ import Foundation
 import Observation
 
 #if canImport(FoundationNetworking)
-  // Lets `swiftc -typecheck` run on Linux; iOS gets these types from Foundation.
   import FoundationNetworking
 #endif
 
