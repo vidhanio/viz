@@ -339,10 +339,15 @@ pub struct RunDiff {
     pub summary: bool,
 }
 
-/// Compare the first and latest completed checkpoint in a thread.
+/// Compare the first and latest completed checkpoint in a thread, or inspect
+/// its checkout.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ThreadDiff {
     pub thread: ThreadId,
+    /// Compare the staged, unstaged, and untracked files in the checkout to
+    /// HEAD.
+    #[serde(default)]
+    pub working_tree: bool,
     /// Omit the unified patch and return only paths and change kinds.
     #[serde(default)]
     pub summary: bool,

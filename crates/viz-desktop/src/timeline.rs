@@ -217,7 +217,20 @@ fn items<'a>(
     while let Some((item, streaming)) = items.next() {
         match item {
             Item::User(user) => rows.push(Kind::Mine, mine(s, user, t)),
-            Item::Text { key, text } => rows.push(Kind::Prose, prose(key, text, streaming, t)),
+            Item::Text { key, text } => {
+                let mut content = prose(key, text, streaming, t);
+                if let Some(end) = items
+                    .clone()
+                    .take_while(|(item, _)| !matches!(item, Item::User(_)))
+                    .find_map(|(item, _)| match item {
+                        Item::TurnEnd(end) => Some(end),
+                        _ => None,
+                    })
+                {
+                    content = content.hover_group_shared(end.key.as_str());
+                }
+                rows.push(Kind::Prose, content);
+            }
             Item::Thinking { .. } | Item::Tool(_) => {
                 let count = items
                     .clone()
@@ -1210,6 +1223,13 @@ fn draft_base_branch_picker(
         .base_ref
         .as_deref()
         .map(short_ref)
+        .map(|base| {
+            if base.len() == 40 && base.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                &base[..12]
+            } else {
+                base
+            }
+        })
         .or(git.branch.as_deref())
         .unwrap_or("HEAD");
     let open = s.open_picker.as_deref() == Some(DRAFT_BASE_BRANCH) && !sending;
@@ -1470,23 +1490,25 @@ fn user_actions(s: &Desktop, user: &User, t: &Theme) -> Option<El> {
         && s.connected()
         && !s.busy()
     {
-        let prompt_text = user.text.clone();
-        actions.push(action_chip(
-            "rewind-user",
-            &ui::UNDO_2,
-            "Rewind",
-            t.faint,
-            t.warning,
-            move |s: &mut Desktop, _| {
-                s.checkpoint = Some(CheckpointDialog::Rewind {
-                    thread,
-                    run,
-                    turn,
-                    prompt_text: prompt_text.clone(),
-                });
-            },
-            t,
-        ));
+        if user.checkpoint {
+            let prompt_text = user.text.clone();
+            actions.push(action_chip(
+                "rewind-user",
+                &ui::UNDO_2,
+                "Rewind",
+                t.faint,
+                t.warning,
+                move |s: &mut Desktop, _| {
+                    s.checkpoint = Some(CheckpointDialog::Rewind {
+                        thread,
+                        run,
+                        turn,
+                        prompt_text: prompt_text.clone(),
+                    });
+                },
+                t,
+            ));
+        }
         actions.push(action_chip(
             "fork-user",
             &ui::GIT_FORK,
@@ -1564,7 +1586,7 @@ fn turn_end(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
             .key(end.key.clone())
             .w_full()
             .gap(S4)
-            .hover_group()
+            .hover_group_shared(end.key.as_str())
             .children(chip)
             .children(footer),
     )
@@ -1679,6 +1701,7 @@ fn changed_files_list(s: &Desktop, end: &TurnEnd, t: &Theme) -> El {
     col().key("changed-files-list").w_full().py(S4).children(
         files
             .iter()
+            .take(6)
             .enumerate()
             .map(|(index, file)| changed_file_row(index, file, run, turn, t)),
     )
@@ -1757,7 +1780,7 @@ fn assistant_actions(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
             move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::End, false, tx),
             t,
         ));
-        if s.project().is_some_and(|project| project.git.is_some()) {
+        if changed.is_some() {
             actions.push(action_chip(
                 "fork-worktree",
                 &ui::GIT_BRANCH_PLUS,
@@ -1767,12 +1790,10 @@ fn assistant_actions(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
                 move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::End, true, tx),
                 t,
             ));
-        }
-        if changed.is_some() {
             actions.push(action_chip(
                 "restore-checkpoint",
                 &ui::ROTATE_CCW,
-                "Restore",
+                "Restore checkpoint",
                 t.faint,
                 t.worktree,
                 move |s: &mut Desktop, _| {

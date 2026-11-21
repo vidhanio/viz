@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use git2::{Commit, DiffFormat, DiffOptions, ErrorCode, IndexAddOption, Repository, Tree};
+use git2::{Commit, Diff, DiffFormat, DiffOptions, ErrorCode, IndexAddOption, Repository, Tree};
 use viz_client::protocol::{GitDiff, GitDiffFile};
 
 use super::{
@@ -90,6 +90,32 @@ impl Workspace {
         )
         .await?;
         Ok(count)
+    }
+
+    pub(super) async fn working_tree_diff(
+        &self,
+        thread: u64,
+        summary: bool,
+    ) -> Result<GitDiff, RpcError> {
+        let cwd = store::binding(&mut *self.db.lock().await, thread)
+            .await?
+            .cwd;
+        tokio::task::spawn_blocking(move || {
+            let repo = super::git::open(Path::new(&cwd))?;
+            let head = head_commit(&repo)?
+                .map(|commit| commit.tree())
+                .transpose()?;
+            let mut options = DiffOptions::new();
+            options
+                .include_typechange(true)
+                .include_untracked(true)
+                .recurse_untracked_dirs(true)
+                .show_untracked_content(!summary);
+            let diff = repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut options))?;
+            render_diff(&diff, summary)
+        })
+        .await
+        .map_err(RpcError::internal)?
     }
 
     pub(super) async fn checkpoint_diff(
@@ -209,13 +235,17 @@ fn diff(
     let mut options = DiffOptions::new();
     options.include_typechange(true);
     let diff = repo.diff_tree_to_tree(Some(start), Some(end), Some(&mut options))?;
+    render_diff(&diff, summary)
+}
+
+fn render_diff(diff: &Diff<'_>, summary: bool) -> Result<GitDiff, RpcError> {
     let files = diff
         .deltas()
         .map(|delta| {
             use git2::Delta;
             use viz_client::protocol::GitChange;
             let change = match delta.status() {
-                Delta::Added => GitChange::Added,
+                Delta::Added | Delta::Untracked => GitChange::Added,
                 Delta::Deleted => GitChange::Deleted,
                 Delta::Typechange => GitChange::TypeChanged,
                 _ => GitChange::Modified,

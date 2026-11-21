@@ -127,8 +127,9 @@ pub enum ProjectChange {
 /// Diff inspection and checkpoint commands backed by the server's Git layer.
 #[derive(Debug)]
 pub enum GitCommand {
-    ThreadDiff {
+    CheckoutDiff {
         thread: ThreadId,
+        working_tree: bool,
     },
     RunDiff {
         thread: ThreadId,
@@ -294,10 +295,14 @@ fn offline(
             });
         }
         Command::SearchFiles { .. } | Command::ListBranches(_) => {}
-        Command::Git(GitCommand::ThreadDiff { thread }) => {
+        Command::Git(GitCommand::CheckoutDiff {
+            thread,
+            working_tree,
+        }) => {
             ui.update(move |s, _| {
                 if s.selected == Some(thread) {
-                    s.diff.apply_error(DiffScope::Thread, "Offline".into());
+                    s.diff
+                        .apply_error(DiffScope::checkout(working_tree), "Offline".into());
                 }
             });
         }
@@ -779,7 +784,10 @@ impl Session<'_> {
 
     async fn on_git(&self, command: GitCommand) -> viz_client::Result<()> {
         match command {
-            GitCommand::ThreadDiff { thread } => self.load_thread_diff(thread),
+            GitCommand::CheckoutDiff {
+                thread,
+                working_tree,
+            } => self.load_checkout_diff(thread, working_tree),
             GitCommand::RunDiff {
                 thread,
                 run,
@@ -791,8 +799,8 @@ impl Session<'_> {
                 self.ui.update(move |s, tx| {
                     if s.selected == Some(thread) {
                         s.toast(tx, "Restored working tree", None);
-                        if s.diff.open {
-                            s.open_thread_diff(tx);
+                        if s.diff.open && s.diff.scope == DiffScope::WorkingTree {
+                            s.open_working_tree_diff(tx);
                         }
                     }
                 });
@@ -828,13 +836,14 @@ impl Session<'_> {
         Ok(())
     }
 
-    fn load_thread_diff(&self, thread: ThreadId) {
+    fn load_checkout_diff(&self, thread: ThreadId, working_tree: bool) {
         let ui = self.ui.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
             let result = client
                 .request(&ThreadDiff {
                     thread,
+                    working_tree,
                     summary: false,
                 })
                 .await;
@@ -842,6 +851,7 @@ impl Session<'_> {
                 if s.selected != Some(thread) {
                     return;
                 }
+                let scope = DiffScope::checkout(working_tree);
                 match result {
                     Ok(diff) => {
                         let files = diff
@@ -852,10 +862,14 @@ impl Session<'_> {
                                 change: file.change,
                             })
                             .collect();
-                        s.diff
-                            .apply_diff(DiffScope::Thread, files, diff.patch.as_deref(), tx);
+                        s.diff.apply_diff(scope, files, diff.patch.as_deref(), tx);
                     }
-                    Err(error) => s.diff.apply_error(DiffScope::Thread, error.to_string()),
+                    Err(Error::Rpc {
+                        code: NOT_FOUND, ..
+                    }) if !working_tree => {
+                        s.diff.apply_diff(scope, Vec::new(), None, tx);
+                    }
+                    Err(error) => s.diff.apply_error(scope, error.to_string()),
                 }
             });
         });

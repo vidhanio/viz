@@ -6,8 +6,9 @@
 //! UI rules:
 //!
 //! - Layout: sidebar and thread. A thread with delegated tasks keeps a
-//!   persistent Tasks Dock tucked above the composer. Menus, palette, dialogs
-//!   and toasts are temporary overlays.
+//!   persistent Tasks Dock tucked above the composer. Git changes open in a
+//!   docked panel, which becomes a sheet on a narrow window. Menus, palette,
+//!   dialogs and toasts are temporary overlays.
 //! - Sidebar: pinned threads, _Recent_ (newest first, project under each title)
 //!   and _Projects_ (collapsible) modes, and an environment picker in the
 //!   footer when more than one is configured. Task status lives in the Tasks
@@ -20,10 +21,10 @@
 //!   action. Show display names, never wire IDs.
 //! - Visuals come from `theme.rs` tokens and `ui` components. Shared scales and
 //!   columns are tokens; a component-specific cap may be a named module
-//!   constant on the 4-pt grid. Icons are Lucide (harnesses may use their
-//!   official marks); never draw custom ones. Surfaces are flat, separated by
-//!   hairlines and fills; overlays also take a hairline outline and shadow. One
-//!   accent, for the primary action, focus and selection.
+//!   constant on the 4-pt grid. Icons are Lucide, with harness marks and the
+//!   onboarding prism as brand marks. The composer and its drawers use frosted
+//!   glass over the transcript. Hover lifts the ink, and semantic accents
+//!   distinguish selection, steering, worktrees and delegation.
 //! - Motion: changing threads moves the transcript and toolbar title, never the
 //!   composer: vertically by sidebar order, horizontally into a delegated task
 //!   (left) and back out (right); short springs without bounce.

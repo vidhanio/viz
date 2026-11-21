@@ -202,13 +202,18 @@ fn populate_branch_menu(
                 }),
         );
     }
+    let base = git.head.clone();
     menu.separator().item(
-        MenuItem::new("New worktree thread")
+        MenuItem::new("New worktree from here")
             .icon(&ui::GIT_BRANCH_PLUS)
-            .disabled(!s.connected())
-            .on_select_tx(|s: &mut Desktop, tx| {
+            .disabled(
+                !s.connected()
+                    || base.is_none()
+                    || s.project().is_none_or(|project| project.git.is_none()),
+            )
+            .on_select_tx(move |s: &mut Desktop, tx| {
                 s.open_picker = None;
-                s.create_in_worktree(tx);
+                s.create_worktree_from(base.clone(), tx);
             }),
     )
 }

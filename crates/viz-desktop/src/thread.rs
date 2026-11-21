@@ -88,6 +88,8 @@ pub struct User {
     pub run: Option<RunId>,
     /// 1-based settled turn index, paired with [`User::run`].
     pub turn: Option<usize>,
+    /// A complete Git checkpoint exists for this settled prompt.
+    pub checkpoint: bool,
 }
 
 /// A settled run boundary: carries checkpoint id, changed-file count, and the
@@ -301,6 +303,7 @@ impl Thread {
                         attachments: attachments.iter().map(|file| file.name.clone()).collect(),
                         run: None,
                         turn: None,
+                        checkpoint: false,
                     }));
                     Some(index)
                 } else {
@@ -411,6 +414,7 @@ impl Thread {
             {
                 user.run = Some(run);
                 user.turn = Some(turn);
+                user.checkpoint = end.changed_files.is_some();
             }
             let answer = if prose_parts.is_empty() {
                 end.answer.clone().unwrap_or_default()

@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rune::{Color, Cursor, El, Phase, Shadow, Tx, col, el, icon, row, text};
+use rune::{Color, Cursor, El, Phase, ScrollSpec, Shadow, Tx, col, el, icon, row, text};
 use rune_kit::{
     ButtonVariant, IconButtonVariant,
     diff::{DiffMode, DiffState, DiffView, parse},
@@ -31,6 +31,8 @@ pub const NARROW_BREAKPOINT: f32 = 1040.0;
 const DEFAULT_WIDTH: f32 = 480.0;
 /// Narrowest docked diff panel width, in points.
 const MIN_WIDTH: f32 = 360.0;
+/// Keep enough reading-pane space for the composer controls.
+const MIN_READING_WIDTH: f32 = 420.0;
 /// Widest docked diff panel width, in points.
 const MAX_WIDTH: f32 = 640.0;
 /// Width of the draggable left resize hit target.
@@ -42,6 +44,8 @@ pub enum DiffScope {
     /// Whole-thread diff (`thread.diff`): first to latest completed checkpoint.
     #[default]
     Thread,
+    /// Uncommitted changes in the thread's checkout.
+    WorkingTree,
     /// Single settled run diff (`run.diff`).
     Run {
         /// Wire run identifier.
@@ -49,6 +53,16 @@ pub enum DiffScope {
         /// 1-based settled turn number for display.
         turn: usize,
     },
+}
+
+impl DiffScope {
+    pub const fn checkout(working_tree: bool) -> Self {
+        if working_tree {
+            Self::WorkingTree
+        } else {
+            Self::Thread
+        }
+    }
 }
 
 /// One changed path in a summary or diff response.
@@ -81,6 +95,7 @@ pub struct DiffPanel {
     pub open: bool,
     /// Scope currently loaded or loading in the panel.
     pub scope: DiffScope,
+    turn_scope: Option<(RunId, usize)>,
     /// Docked panel width in points.
     pub width: f32,
     /// Current load state.
@@ -104,6 +119,7 @@ impl Default for DiffPanel {
         Self {
             open: false,
             scope: DiffScope::Thread,
+            turn_scope: None,
             width: DEFAULT_WIDTH,
             status: DiffStatus::Idle,
             files: Vec::new(),
@@ -121,6 +137,7 @@ impl DiffPanel {
     pub fn reset(&mut self) {
         self.open = false;
         self.scope = DiffScope::Thread;
+        self.turn_scope = None;
         self.status = DiffStatus::Idle;
         self.files.clear();
         self.view.set_files(Vec::new());
@@ -133,6 +150,11 @@ impl DiffPanel {
     pub fn begin_load(&mut self, scope: DiffScope, jump_file: Option<String>) {
         self.open = true;
         self.scope = scope;
+        if let DiffScope::Run { run, turn } = scope {
+            self.turn_scope = Some((run, turn));
+        }
+        self.files.clear();
+        self.view.set_files(Vec::new());
         self.status = DiffStatus::Loading;
         self.pending_file = jump_file;
     }
@@ -180,8 +202,7 @@ impl DiffPanel {
 
     /// Populates the panel with preview data for headless scenes.
     pub fn set_preview(&mut self, scope: DiffScope, files: Vec<DiffFile>, patch: &str) {
-        self.open = true;
-        self.scope = scope;
+        self.begin_load(scope, None);
         self.files = files;
         self.view.set_files(parse(patch));
         self.status = DiffStatus::Ready;
@@ -205,11 +226,20 @@ pub const fn change_badge(change: GitChange, t: &Theme) -> (&'static str, Color)
     }
 }
 
+fn max_docked_width(s: &Desktop) -> f32 {
+    (s.window_width - s.sidebar.shown_width() - MIN_READING_WIDTH).min(MAX_WIDTH)
+}
+
+/// Width that a docked diff panel takes out of the reading pane.
+pub fn docked_width(s: &Desktop) -> Option<f32> {
+    let max = max_docked_width(s);
+    (s.diff.open && s.window_width >= NARROW_BREAKPOINT && max >= MIN_WIDTH)
+        .then(|| s.diff.width.clamp(MIN_WIDTH, max))
+}
+
 /// Docked right-side diff panel when the window is wide enough.
 pub fn docked(s: &Desktop, t: &Theme) -> Option<El> {
-    if !s.diff.open || s.window_width < NARROW_BREAKPOINT {
-        return None;
-    }
+    let width = docked_width(s)?;
     let handle = el()
         .key("diff-panel-resize")
         .w(RESIZE_HIT)
@@ -217,16 +247,16 @@ pub fn docked(s: &Desktop, t: &Theme) -> Option<El> {
         .absolute(0.0, 0.0)
         .cursor(Cursor::ResizeColumn)
         .on_drag(|s: &mut Desktop, drag, _| match drag.phase {
-            Phase::Down => s.diff.drag_start = s.diff.width,
+            Phase::Down => s.diff.drag_start = docked_width(s).unwrap_or(s.diff.width),
             Phase::Move => {
-                let max_allowed = (s.window_width * 0.55).clamp(MIN_WIDTH, MAX_WIDTH);
-                s.diff.width = (s.diff.drag_start - drag.dx).clamp(MIN_WIDTH, max_allowed);
+                s.diff.width = (s.diff.drag_start - drag.dx)
+                    .clamp(MIN_WIDTH, max_docked_width(s).max(MIN_WIDTH));
             }
             Phase::Up => {}
         });
     Some(
         el().key("diff-panel-docked")
-            .w(s.diff.width)
+            .w(width)
             .h_full()
             .min_h(0.0)
             .shrink()
@@ -246,7 +276,7 @@ pub fn docked(s: &Desktop, t: &Theme) -> Option<El> {
 
 /// Floating right-aligned overlay sheet for narrow windows.
 pub fn sheet(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
-    if !s.diff.open || s.window_width >= NARROW_BREAKPOINT {
+    if !s.diff.open || docked_width(s).is_some() {
         return;
     }
     let width = (s.window_width - 48.0).clamp(MIN_WIDTH, DEFAULT_WIDTH);
@@ -308,31 +338,32 @@ fn panel_content(s: &Desktop, t: &Theme) -> El {
 fn header_bar(s: &Desktop, t: &Theme) -> El {
     let (add, del) = s.diff.stats();
     let mode = s.diff.view.mode();
-    let mut tabs = row().key("diff-scope-tabs").gap(S12).center_y().min_w(0.0);
-    if let DiffScope::Run { run, turn } = s.diff.scope {
+    let scope = s.diff.scope;
+    let mut tabs = row().key("diff-scope-tabs").gap(S8).center_y().min_w(0.0);
+    if let Some((run, turn)) = s.diff.turn_scope {
         tabs = tabs.child(scope_tab(
             "scope-run",
             &format!("Turn #{turn}"),
-            true,
+            scope == DiffScope::Run { run, turn },
             move |s: &mut Desktop, tx| s.open_run_diff(run, turn, None, tx),
             t,
         ));
-        tabs = tabs.child(scope_tab(
-            "scope-thread",
-            "All changes",
-            false,
-            Desktop::open_thread_diff,
-            t,
-        ));
-    } else {
-        tabs = tabs.child(scope_tab(
-            "scope-thread",
-            "All changes",
-            true,
-            Desktop::open_thread_diff,
-            t,
-        ));
     }
+    tabs = tabs
+        .child(scope_tab(
+            "scope-thread",
+            "Thread",
+            scope == DiffScope::Thread,
+            Desktop::open_thread_diff,
+            t,
+        ))
+        .child(scope_tab(
+            "scope-working-tree",
+            "Working tree",
+            scope == DiffScope::WorkingTree,
+            Desktop::open_working_tree_diff,
+            t,
+        ));
     let stats = (add > 0 || del > 0).then(|| {
         row()
             .key("diff-stats")
@@ -487,11 +518,19 @@ fn file_strip(s: &Desktop, t: &Theme) -> Option<El> {
         row()
             .key("diff-file-strip")
             .w_full()
-            .px(S12)
-            .py(S6)
-            .gap(S6)
-            .flex_wrap()
-            .children(chips),
+            .max_h(96.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .child(
+                row()
+                    .w_full()
+                    .px(S12)
+                    .py(S6)
+                    .gap(S6)
+                    .flex_wrap()
+                    .children(chips),
+            ),
     )
 }
 
@@ -528,6 +567,7 @@ fn body(s: &Desktop, t: &Theme) -> El {
                     ui::button("Retry", ButtonVariant::Outline, Size::Small)
                         .on_press_tx(move |s: &mut Desktop, tx| match scope {
                             DiffScope::Thread => s.open_thread_diff(tx),
+                            DiffScope::WorkingTree => s.open_working_tree_diff(tx),
                             DiffScope::Run { run, turn } => s.open_run_diff(run, turn, None, tx),
                         })
                         .build(&t.k),
@@ -545,7 +585,15 @@ fn body(s: &Desktop, t: &Theme) -> El {
                     .color(t.faint)
                     .a11y_hidden(),
             )
-            .child(text("No recorded file changes").font(t.ui).color(t.muted)),
+            .child(
+                text(if s.diff.scope == DiffScope::WorkingTree {
+                    "Working tree is clean"
+                } else {
+                    "No recorded file changes"
+                })
+                .font(t.ui)
+                .color(t.muted),
+            ),
         DiffStatus::Ready => DiffView::new(
             |s: &Desktop| &s.diff.view,
             |s: &mut Desktop| &mut s.diff.view,

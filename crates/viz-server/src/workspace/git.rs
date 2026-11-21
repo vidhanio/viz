@@ -149,10 +149,14 @@ impl Workspace {
             }
             ThreadDiff::NAME => {
                 let input: ThreadDiff = decode(params)?;
-                encode(
+                let diff = if input.working_tree {
+                    self.working_tree_diff(input.thread.0, input.summary)
+                        .await?
+                } else {
                     self.checkpoint_diff(input.thread.0, None, input.summary)
-                        .await?,
-                )
+                        .await?
+                };
+                encode(diff)
             }
             ListGitBranches::NAME => {
                 let input: ListGitBranches = decode(params)?;

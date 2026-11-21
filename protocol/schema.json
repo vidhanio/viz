@@ -3526,11 +3526,16 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ThreadDiff",
-        "description": "Compare the first and latest completed checkpoint in a thread.",
+        "description": "Compare the first and latest completed checkpoint in a thread, or inspect\nits checkout.",
         "type": "object",
         "properties": {
           "thread": {
             "$ref": "#/$defs/ThreadId"
+          },
+          "working_tree": {
+            "description": "Compare the staged, unstaged, and untracked files in the checkout to\nHEAD.",
+            "type": "boolean",
+            "default": false
           },
           "summary": {
             "description": "Omit the unified patch and return only paths and change kinds.",

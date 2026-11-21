@@ -674,6 +674,18 @@ impl Desktop {
         self.prepare_thread(thread, tx);
     }
 
+    /// Prepares a worktree draft at the open checkout's current commit.
+    pub fn create_worktree_from(&mut self, base_ref: Option<String>, tx: &mut Tx) {
+        if let Some(project) = self.project().filter(|project| project.git.is_some()) {
+            let mut thread = NewThread::new(self.next_draft, Some(project));
+            thread.worktree = Some(WorktreeRequest {
+                base_ref,
+                branch: None,
+            });
+            self.prepare_thread(thread, tx);
+        }
+    }
+
     /// Open a draft for a project without creating its server session.
     pub fn create_in_project(&mut self, id: &str, tx: &mut Tx) {
         if let Some(project) = self.projects.iter().find(|project| project.path == id) {
@@ -1222,14 +1234,19 @@ impl Desktop {
         }
     }
 
-    /// Toggles the right-side diff panel for the active thread (`⌘D` /
-    /// `Ctrl+D`).
+    /// Toggles the diff panel for the active Git thread.
     pub fn toggle_diff_panel(&mut self, tx: &mut Tx) {
-        if self.selected.is_none() {
+        let Some(git) = self
+            .selected
+            .and_then(|id| self.summary(id))
+            .and_then(|summary| summary.git.as_ref())
+        else {
             return;
-        }
+        };
         if self.diff.open {
             self.diff.open = false;
+        } else if git.dirty_files > 0 {
+            self.open_working_tree_diff(tx);
         } else {
             self.open_thread_diff(tx);
         }
@@ -1237,12 +1254,28 @@ impl Desktop {
 
     /// Opens the diff panel scoped to all recorded changes in the open thread.
     pub fn open_thread_diff(&mut self, tx: &mut Tx) {
+        self.open_checkout_diff(false, tx);
+    }
+
+    /// Opens the diff panel scoped to the current checkout against HEAD.
+    pub fn open_working_tree_diff(&mut self, tx: &mut Tx) {
+        self.open_checkout_diff(true, tx);
+    }
+
+    fn open_checkout_diff(&mut self, working_tree: bool, tx: &mut Tx) {
         let Some(thread) = self.selected else {
             return;
         };
-        self.diff.begin_load(DiffScope::Thread, None);
-        if self.connected() {
-            self.send(Command::Git(GitCommand::ThreadDiff { thread }), tx);
+        let scope = DiffScope::checkout(working_tree);
+        self.diff.begin_load(scope, None);
+        if !self.send(
+            Command::Git(GitCommand::CheckoutDiff {
+                thread,
+                working_tree,
+            }),
+            tx,
+        ) {
+            self.diff.apply_error(scope, "Offline".into());
         }
     }
 
@@ -1260,16 +1293,16 @@ impl Desktop {
         };
         let scope = DiffScope::Run { run, turn };
         self.diff.begin_load(scope, jump_file);
-        if self.connected() {
-            self.send(
-                Command::Git(GitCommand::RunDiff {
-                    thread,
-                    run,
-                    turn,
-                    summary: false,
-                }),
-                tx,
-            );
+        if !self.send(
+            Command::Git(GitCommand::RunDiff {
+                thread,
+                run,
+                turn,
+                summary: false,
+            }),
+            tx,
+        ) {
+            self.diff.apply_error(scope, "Offline".into());
         }
     }
 
