@@ -108,13 +108,12 @@ pub const ROW_INSET: f32 = SIDEBAR_INSET - SIDEBAR_PAD;
 pub const TREE_ROW: f32 = Size::Default.height();
 /// A sidebar row with a quiet second line (Recent's project names).
 pub const TREE_ROW_TALL: f32 = S40;
-/// One depth: a leading icon and its gap, so a child's label lines up with
-/// its parent's.
-pub const TREE_STEP: f32 = ICON + S8;
+/// An indented delegated child row in the sidebar task tree.
+pub const TREE_ROW_CHILD: f32 = 26.0;
+/// One depth: indent step per delegated child level in the sidebar tree.
+pub const TREE_STEP: f32 = S20;
 /// The fixed slot every sidebar row ends in (status, unread, actions).
 pub const TRAILING: f32 = Size::Default.height();
-/// The gap inside a Projects-mode project's box, around its rows.
-pub const PROJECT_BOX_INSET: f32 = S2;
 
 /// The transcript and composer column.
 pub const READING_WIDTH: f32 = 760.0;
@@ -188,9 +187,6 @@ pub struct Theme {
     pub overlay: Kit,
     /// Cards on the main pane (expanded tool output, code) and sidebar ground.
     pub surface: Color,
-    /// A group's fill on the sidebar (a project and its threads): one step
-    /// from `surface`, so it reads without an outline.
-    pub group: Color,
     /// Recessed fill for medallions, chips, and quiet controls.
     pub chip_fill: Color,
     /// Translucent frosted fill for the floating composer card.
@@ -231,8 +227,8 @@ pub struct Theme {
     pub steer: Color,
     /// Worktree, checkpoint, and remote environment accent (`base0C`).
     pub worktree: Color,
-    /// The open thread's row.
-    pub selected: Color,
+    /// Delegated sub-thread tree guide highlight (`base0E`).
+    pub delegated: Color,
     /// Errors.
     pub danger: Color,
     /// High-contrast ink on filled danger controls.
@@ -497,21 +493,14 @@ impl Theme {
         } else {
             lightest
         };
-        let group = if dark || (overlay.to_oklab()[0] - surface.to_oklab()[0]).abs() >= 0.035 {
-            overlay
-        } else {
-            over(surface, wash, reach(surface, wash, 0.032))
-        };
         let surfaces = [
             bg,
             surface,
             raised,
             overlay,
-            group,
             over(bg, interactive, selected.a),
             over(surface, interactive, selected.a),
             over(overlay, interactive, selected.a),
-            over(group, interactive, selected.a),
         ];
         let legible = |c: Color, min: f32| legible(c, &surfaces, dark, min);
         let text = legible(b[0x5], 5.5);
@@ -544,11 +533,12 @@ impl Theme {
                 .unwrap_or(bg)
         };
         let on_accent = on_fill(accent);
-        let (danger, warning, success, info) = (
+        let (danger, warning, success, info, delegated) = (
             legible(b[0x8], 4.5),
             legible(b[0xA], 4.5),
             legible(b[0xB], 4.5),
             legible(b[0xC], 4.5),
+            legible(b[0xE], 4.5),
         );
         let on_danger = on_fill(danger);
         let glass_base = if dark {
@@ -849,7 +839,6 @@ impl Theme {
             shell,
             overlay: overlay_kit,
             surface,
-            group,
             chip_fill,
             glass,
             dock_glass,
@@ -870,7 +859,7 @@ impl Theme {
             accent_veil,
             steer,
             worktree: info,
-            selected,
+            delegated,
             danger,
             on_danger,
             success,
@@ -953,4 +942,20 @@ pub fn now_ms() -> i64 {
         .ok()
         .and_then(|now| i64::try_from(now.as_millis()).ok())
         .unwrap_or_default()
+}
+
+/// Compact relative age (`now`, `2m`, `3h`, `4d`, `2w`) for sidebar rows.
+pub fn relative_age(updated_at_ms: i64, now: i64) -> Option<String> {
+    if updated_at_ms <= 0 {
+        return None;
+    }
+    let secs = now.saturating_sub(updated_at_ms).max(0) / 1_000;
+    let label = match secs {
+        0..60 => "now".to_owned(),
+        60..3_600 => format!("{}m", secs / 60),
+        3_600..86_400 => format!("{}h", secs / 3_600),
+        86_400..604_800 => format!("{}d", secs / 86_400),
+        _ => format!("{}w", secs / 604_800),
+    };
+    Some(label)
 }

@@ -1,6 +1,6 @@
 //! The sidebar: pinned threads, other threads either newest first (Recent) or
-//! under their projects (Projects), and a footer for connection status and
-//! environment switching. Subagents live in their parent thread, not here.
+//! under their projects (Projects), delegated task subtrees under their parent
+//! threads, and a footer for connection status and environment switching.
 
 mod actions;
 
@@ -9,14 +9,19 @@ use std::{
     path::PathBuf,
 };
 
-use rune::{Color, El, TextEdit, Tx, col, el, icon, row, text};
+use rune::{Color, El, LineCap, Shape, TextEdit, Tx, canvas, col, el, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement, shell::Sidebar};
 use serde_json::{Value, json};
-use viz_client::protocol::{EnvironmentStatus, Project, ThreadId, ThreadSummary};
+use viz_client::protocol::{
+    EnvironmentStatus, Project, TaskStatus, ThreadId, ThreadStatus, ThreadSummary,
+};
 
 use crate::{
     app::{Desktop, Status, thread_title},
-    theme::{self, HAIRLINE, ICON, ICON_SMALL, PROJECT_BOX_INSET, ROW_INSET, S8, Size, Theme},
+    theme::{
+        self, HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_INSET, S2, S4, S6, S8,
+        S12, Size, TREE_ROW_CHILD, TREE_STEP, Theme,
+    },
     ui::{self, TreeLine},
 };
 
@@ -45,6 +50,7 @@ pub struct Navigation {
     archived: bool,
     mode: Mode,
     collapsed_projects: HashSet<String>,
+    collapsed_parents: HashSet<ThreadId>,
     env_menu: bool,
     menu: Option<actions::Context>,
     edit: Option<actions::Edit>,
@@ -60,6 +66,7 @@ impl Default for Navigation {
             archived: false,
             mode: Mode::default(),
             collapsed_projects: HashSet::new(),
+            collapsed_parents: HashSet::new(),
             env_menu: false,
             menu: None,
             edit: None,
@@ -144,6 +151,12 @@ impl Navigation {
         self.persist();
     }
 
+    fn toggle_parent(&mut self, id: ThreadId) {
+        if !self.collapsed_parents.remove(&id) {
+            self.collapsed_parents.insert(id);
+        }
+    }
+
     fn set_mode(&mut self, mode: Mode) {
         if self.mode != mode {
             self.mode = mode;
@@ -173,17 +186,20 @@ fn top_level(summaries: &[ThreadSummary], id: ThreadId, environment: Option<&str
     top
 }
 
-/// Top-level threads by place, filtered once per frame.
+/// Top-level threads and their delegated child trees, filtered once per frame.
 struct Outline<'a> {
     state: &'a Desktop,
-    /// A delegated thread highlights its top-level parent.
+    /// Exact open thread (parent or delegated child).
     open: Option<ThreadId>,
     projects: HashMap<&'a str, Vec<&'a ThreadSummary>>,
     loose: Vec<&'a ThreadSummary>,
     pinned: Vec<&'a ThreadSummary>,
     /// Every listed thread but the pinned ones, newest first.
     recent: Vec<&'a ThreadSummary>,
+    /// Local delegated child threads indexed by their parent thread id.
+    children: HashMap<ThreadId, Vec<&'a ThreadSummary>>,
     query: String,
+    now: i64,
 }
 
 impl<'a> Outline<'a> {
@@ -191,14 +207,14 @@ impl<'a> Outline<'a> {
         let query = state.navigation.filter.text.trim().to_lowercase();
         let mut outline = Self {
             state,
-            open: state
-                .selected
-                .map(|id| top_level(&state.threads, id, state.environment.as_deref())),
+            open: state.selected,
             projects: HashMap::new(),
             loose: Vec::new(),
             pinned: Vec::new(),
             recent: Vec::new(),
+            children: HashMap::new(),
             query,
+            now: theme::now_ms(),
         };
         let known_projects: HashSet<_> = state.projects.iter().map(|p| p.path.as_str()).collect();
         let matching_projects: HashSet<_> = state
@@ -207,16 +223,33 @@ impl<'a> Outline<'a> {
             .filter(|project| outline.matches(&project.name) || outline.matches(&project.path))
             .map(|project| project.path.as_str())
             .collect();
+        let mut child_ids = HashSet::new();
         for thread in &state.threads {
-            let child = thread.parent.is_some_and(|parent| {
+            if thread.archived && !state.navigation.archived {
+                continue;
+            }
+            if let Some(parent) = thread.parent.filter(|&parent| {
                 thread
                     .parent_environment
                     .as_ref()
                     .is_none_or(|env| Some(env) == state.environment.as_ref())
                     && parent < thread.id
                     && state.threads.iter().any(|other| other.id == parent)
+            }) {
+                child_ids.insert(thread.id);
+                outline.children.entry(parent).or_default().push(thread);
+            }
+        }
+        for kids in outline.children.values_mut() {
+            kids.sort_by_key(|thread| {
+                (
+                    thread.status != ThreadStatus::Working,
+                    std::cmp::Reverse(thread.updated_at),
+                )
             });
-            if child || (thread.archived && !state.navigation.archived) {
+        }
+        for thread in &state.threads {
+            if child_ids.contains(&thread.id) || (thread.archived && !state.navigation.archived) {
                 continue;
             }
             let project = thread
@@ -225,6 +258,7 @@ impl<'a> Outline<'a> {
                 .filter(|id| known_projects.contains(id));
             if !outline.matches(thread_title(thread))
                 && !project.is_some_and(|id| matching_projects.contains(id))
+                && !outline.descendant_matches(thread.id)
             {
                 continue;
             }
@@ -253,14 +287,34 @@ impl<'a> Outline<'a> {
         self.query.is_empty() || value.to_lowercase().contains(&self.query)
     }
 
+    fn descendant_matches(&self, parent: ThreadId) -> bool {
+        let Some(kids) = self.children.get(&parent) else {
+            return false;
+        };
+        kids.iter()
+            .any(|child| self.matches(thread_title(child)) || self.descendant_matches(child.id))
+    }
+
+    fn has_active_or_selected_child(&self, parent: ThreadId) -> bool {
+        let Some(kids) = self.children.get(&parent) else {
+            return false;
+        };
+        kids.iter().any(|child| {
+            child.status == ThreadStatus::Working
+                || self.open == Some(child.id)
+                || self.has_active_or_selected_child(child.id)
+        })
+    }
+
     fn visible_project(&self, project: &Project) -> bool {
         self.projects.contains_key(project.path.as_str())
             || self.matches(&project.name)
             || self.matches(&project.path)
     }
 
-    /// A top-level thread's row, its title at rest in `ink`. With `detail`, a
-    /// quiet second line names its project.
+    /// A top-level thread's row (and any expanded delegated children), its
+    /// title at rest in `ink`. With `detail`, a quiet second line names its
+    /// project.
     fn thread(
         &self,
         thread: &ThreadSummary,
@@ -274,14 +328,43 @@ impl<'a> Outline<'a> {
         let selected = self.open == Some(id);
         let key = format!("thread-{id}");
         let menu_open = actions::menu_open(s, &key);
-        let rest = ui::status(thread.status, t).or_else(|| {
-            thread.unread.then(|| {
-                ui::dot(t.accent)
-                    .role("status")
-                    .label("Unread")
-                    .help("Unread")
+        let kids = self.children.get(&id).map_or(&[][..], Vec::as_slice);
+        let auto_open = !self.query.is_empty() || self.has_active_or_selected_child(id);
+        let show_kids =
+            !kids.is_empty() && (auto_open || !s.navigation.collapsed_parents.contains(&id));
+        let rest = ui::status(thread.status, selected, t)
+            .or_else(|| {
+                thread.unread.then(|| {
+                    ui::dot(t.accent)
+                        .role("status")
+                        .label("Unread")
+                        .help("Unread")
+                })
             })
-        });
+            .or_else(|| {
+                (!kids.is_empty() && !show_kids).then(|| {
+                    row()
+                        .key("child-count")
+                        .role("button")
+                        .label(format!("Show {} delegated tasks", kids.len()))
+                        .help("Expand delegated tasks")
+                        .px(S4)
+                        .h(18.0)
+                        .center()
+                        .radius(RADIUS_INNER)
+                        .hover_alone()
+                        .on_press(move |s: &mut Desktop| s.navigation.toggle_parent(id))
+                        .child(
+                            text(kids.len().to_string())
+                                .font(t.mono_micro)
+                                .color(t.delegated),
+                        )
+                })
+            })
+            .or_else(|| {
+                theme::relative_age(thread.updated_at, self.now)
+                    .map(|age| text(age).font(t.mono_micro).color(t.faint).a11y_hidden())
+            });
         let menu = actions::thread_menu(s, thread, &key, t, layer);
         let place = detail.then(|| {
             thread
@@ -325,7 +408,129 @@ impl<'a> Outline<'a> {
                 s.navigation.menu = Some(actions::Context::at(&key, at));
             });
         }
-        node
+        if kids.is_empty() {
+            return node;
+        }
+        let mut branch = col()
+            .key(format!("thread-branch-{id}"))
+            .w_full()
+            .child(node);
+        if show_kids {
+            let active_tree = self.has_active_or_selected_child(id);
+            branch = branch.children(self.child_rows(kids, 1, active_tree, t));
+        }
+        branch
+    }
+
+    fn child_rows(
+        &self,
+        kids: &[&'a ThreadSummary],
+        depth: u16,
+        active_tree: bool,
+        t: &Theme,
+    ) -> Vec<El> {
+        let mut out = Vec::new();
+        let last_index = kids.len().saturating_sub(1);
+        for (index, child) in kids.iter().enumerate() {
+            let last = index == last_index;
+            out.push(self.child_row(child, depth, last, active_tree, t));
+            if let Some(grandchildren) = self.children.get(&child.id) {
+                let grand_active = self.has_active_or_selected_child(child.id);
+                let show_grand = !self.query.is_empty()
+                    || grand_active
+                    || !self.state.navigation.collapsed_parents.contains(&child.id);
+                if show_grand {
+                    out.extend(self.child_rows(grandchildren, depth + 1, grand_active, t));
+                }
+            }
+        }
+        out
+    }
+
+    fn child_row(
+        &self,
+        child: &ThreadSummary,
+        depth: u16,
+        last: bool,
+        active_tree: bool,
+        t: &Theme,
+    ) -> El {
+        let id = child.id;
+        let selected = self.open == Some(id);
+        let elbow = child_guide(last, active_tree || selected, t);
+        let task_status = self
+            .state
+            .tasks
+            .iter()
+            .find(|task| task.thread == Some(id))
+            .map(|task| task.status);
+        let status_mark = match (child.status, task_status) {
+            (ThreadStatus::Working, _) | (_, Some(TaskStatus::Running)) => Some(ui::radar(
+                11.0,
+                if selected { t.accent } else { t.muted },
+                t,
+            )),
+            (ThreadStatus::Failed, _) | (_, Some(TaskStatus::Failed)) => Some(ui::dot(t.danger)),
+            (_, Some(TaskStatus::Completed)) => Some(ui::dot(t.success)),
+            (_, Some(TaskStatus::Cancelled)) => Some(ui::dot(t.faint)),
+            _ => None,
+        };
+        let title = thread_title(child);
+        let indent = f32::from(depth.saturating_sub(1)).mul_add(TREE_STEP, ROW_INSET);
+        let mut row_el = row()
+            .key(format!("thread-{id}"))
+            .role("treeitem")
+            .label(title)
+            .level(u32::from(depth) + 1)
+            .w_full()
+            .h(TREE_ROW_CHILD)
+            .pl(indent)
+            .pr(S6)
+            .gap(S6)
+            .center_y()
+            .radius(RADIUS_CONTROL)
+            .continuous_corners()
+            .fill(if selected {
+                t.accent_veil
+            } else {
+                Color::TRANSPARENT
+            })
+            .hover_group()
+            .focusable(true)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
+        if selected {
+            row_el = row_el.child(
+                el().key("selected-rail")
+                    .pin(Some(S2), Some((TREE_ROW_CHILD - 14.0) / 2.0), None, None)
+                    .size(2.5, 14.0)
+                    .radius(1.25)
+                    .fill(t.accent)
+                    .a11y_hidden(),
+            );
+        }
+        row_el
+            .child(elbow)
+            .child(
+                icon(ui::harness_icon(&child.harness), ICON_SMALL + 1.0)
+                    .color(if selected { t.text } else { t.faint })
+                    .group_color(t.muted)
+                    .help(&child.harness_name)
+                    .a11y_hidden(),
+            )
+            .child(
+                text(title)
+                    .font(if selected { t.small_medium } else { t.small })
+                    .color(if selected { t.text } else { t.muted })
+                    .group_color(t.text)
+                    .grow(1.0)
+                    .shrink()
+                    .min_w(0.0)
+                    .truncate()
+                    .help_when_truncated(title)
+                    .a11y_hidden(),
+            )
+            .children(status_mark.map(|mark| el().size(ICON, ICON).center().child(mark)))
     }
 
     fn project(&self, project: &Project, t: &Theme, layer: &mut Vec<El>) -> El {
@@ -333,6 +538,7 @@ impl<'a> Outline<'a> {
         let open =
             !self.query.is_empty() || !s.navigation.collapsed_projects.contains(&project.path);
         let id = project.path.clone();
+        let new_id = project.path.clone();
         let key = format!("project-{id}");
         let menu_open = actions::menu_open(s, &key);
         let leading = if open {
@@ -340,7 +546,7 @@ impl<'a> Outline<'a> {
                 el().pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
                     .center()
                     .group_opacity(rest, hovered)
-                    .child(icon(glyph, ICON).color(t.text))
+                    .child(icon(glyph, ICON).color(t.muted).group_color(t.text))
             };
             el().size(ICON, ICON)
                 .child(layer_of(&ui::FOLDER, 1.0, 0.0))
@@ -348,20 +554,37 @@ impl<'a> Outline<'a> {
         } else {
             el().size(ICON, ICON)
                 .center()
-                .child(icon(&ui::CHEVRON, ICON).color(t.muted).group_color(t.text))
+                .child(icon(&ui::CHEVRON, ICON).color(t.faint).group_color(t.text))
         };
+        let add_thread = ui::icon_button(
+            &ui::PLUS,
+            &format!("New thread in {}", project.name),
+            IconButtonVariant::GhostMuted,
+            Size::Small,
+        )
+        .disabled(!s.connected() || s.new_thread.is_some())
+        .on_press_tx(move |s: &mut Desktop, tx| s.create_in_project(&new_id, tx))
+        .build(&t.k)
+        .key("project-new-thread")
+        .hover_alone();
         let menu = actions::project_menu(s, project, &key, t, layer);
+        let trailing_actions = row()
+            .gap(S2)
+            .center_y()
+            .group_opacity(if menu_open { 1.0 } else { 0.0 }, 1.0)
+            .child(add_thread)
+            .child(menu);
         let mut node = TreeLine {
             key: &key,
             label: &project.name,
             detail: None,
             depth: 0,
-            strong: false,
+            strong: true,
             dim: false,
             selected: false,
             ink: t.text,
         }
-        .build(Some(leading), ui::trailing(None, Some(menu), menu_open), t)
+        .build(Some(leading), trailing_actions, t)
         .expanded(open)
         .help(&project.path)
         .on_press(move |s: &mut Desktop| s.navigation.toggle_project(&id));
@@ -373,9 +596,6 @@ impl<'a> Outline<'a> {
         let mut branch = col()
             .key(format!("project-branch-{}", project.path))
             .w_full()
-            .padding(PROJECT_BOX_INSET)
-            .radius(Size::Default.radius() + PROJECT_BOX_INSET)
-            .fill(t.group)
             .child(node);
         if let Some(threads) = self.projects.get(project.path.as_str()).filter(|_| open) {
             branch = branch.children(
@@ -386,6 +606,43 @@ impl<'a> Outline<'a> {
         }
         branch
     }
+}
+
+/// Vector L-elbow (last child) or T-junction (middle child) tree guide.
+fn child_guide(last: bool, highlighted: bool, t: &Theme) -> El {
+    let guide = if highlighted {
+        t.delegated.alpha(0.5)
+    } else {
+        t.hairline
+    };
+    let shape = if last {
+        Shape::new().stroke(
+            vec![
+                [7.0, 0.0],
+                [7.0, TREE_ROW_CHILD / 2.0],
+                [TREE_STEP - S4, TREE_ROW_CHILD / 2.0],
+            ],
+            HAIRLINE,
+            guide,
+        )
+    } else {
+        Shape::new()
+            .line(
+                [7.0, 0.0],
+                [7.0, TREE_ROW_CHILD],
+                HAIRLINE,
+                LineCap::Round,
+                guide,
+            )
+            .line(
+                [7.0, TREE_ROW_CHILD / 2.0],
+                [TREE_STEP - S4, TREE_ROW_CHILD / 2.0],
+                HAIRLINE,
+                LineCap::Round,
+                guide,
+            )
+    };
+    canvas(shape).size(TREE_STEP, TREE_ROW_CHILD).a11y_hidden()
 }
 
 /// Where `id`'s top-level thread is listed in the sidebar, counting from the
@@ -597,9 +854,9 @@ fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     if !projects.is_empty() {
         tree = tree.child(
             col()
-                .key("project-boxes")
+                .key("project-groups")
                 .w_full()
-                .gap(theme::S4)
+                .gap(S12)
                 .children(projects.iter().map(|p| outline.project(p, t, layer))),
         );
     }
@@ -662,13 +919,15 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
                     .group_color(t.text)
                     .a11y_hidden(),
             )
-            .child(
-                el().pin(Some(S8), None, Some(S8), Some(0.0))
-                    .h(theme::S2)
+            .children(active.then(|| {
+                el().key("mode-rail")
+                    .matched("sidebar-mode-rail")
+                    .pin(Some(S8), None, Some(S8), Some(0.0))
+                    .h(S2)
                     .radius(HAIRLINE)
-                    .fill(if active { t.accent } else { Color::TRANSPARENT })
-                    .a11y_hidden(),
-            )
+                    .fill(t.accent)
+                    .a11y_hidden()
+            }))
     };
     row()
         .key("sidebar-mode")
@@ -784,10 +1043,9 @@ fn environment_footer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             Some(EnvironmentStatus::Local) | None => (t.success, None, "Local"),
         },
     };
-    let chevron = if open {
-        &ui::CHEVRON_UP
-    } else {
-        &ui::CHEVRON_OPEN
+    let machine = match active_env.map(|env| env.status) {
+        Some(EnvironmentStatus::Local) | None => &ui::LAPTOP,
+        Some(EnvironmentStatus::Reachable | EnvironmentStatus::Unreachable) => &ui::SERVER,
     };
     let trigger = row()
         .key("environment-picker-trigger")
@@ -802,16 +1060,22 @@ fn environment_footer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .w_full()
         .h(Size::Default.height())
         .px(ROW_INSET)
-        .gap(S8)
+        .gap(S6)
         .center_y()
-        .radius(Size::Default.radius())
+        .radius(RADIUS_CONTROL)
+        .continuous_corners()
         .on_press(|s: &mut Desktop| s.navigation.env_menu = !s.navigation.env_menu)
-        .child(ui::lead(ui::dot(color), Size::Default.height()))
+        .child(ui::dot(color))
         .child(
-            text(current)
-                .font(t.small_medium)
+            icon(machine, ICON_SMALL + 1.0)
                 .color(if open { t.text } else { t.muted })
                 .group_color(t.text)
+                .a11y_hidden(),
+        )
+        .child(
+            text(current)
+                .font(t.ui_medium)
+                .color(t.text)
                 .grow(1.0)
                 .shrink()
                 .min_w(0.0)
@@ -820,7 +1084,7 @@ fn environment_footer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         )
         .children(note.map(|note| text(note).font(t.small).color(t.faint).a11y_hidden()))
         .child(
-            icon(chevron, ICON_SMALL)
+            icon(&ui::CHEVRONS_UP_DOWN, ICON_SMALL)
                 .color(if open { t.text } else { t.faint })
                 .group_color(t.text)
                 .a11y_hidden(),

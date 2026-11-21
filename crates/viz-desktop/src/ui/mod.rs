@@ -13,8 +13,8 @@ use viz_client::protocol::ThreadStatus;
 use crate::theme::{
     CARD_INSET, CARD_WIDTH, DECK_INSET, DECK_OVERLAP, DIALOG_INSET, DIALOG_WIDTH, DOCK_BLUR, DOT,
     EMPTY_WIDTH, HAIRLINE, HORIZON_HEIGHT, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_COMPOSER,
-    RADIUS_DECK, RADIUS_INNER, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16,
-    S20, Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
+    RADIUS_CONTROL, RADIUS_DECK, RADIUS_INNER, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6,
+    S8, S12, S16, S20, Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -599,12 +599,15 @@ pub fn medallion(harness: Option<(&str, &str)>, active: bool, t: &Theme) -> El {
     }
 }
 
-/// A thread's run state as an icon-sized mark: a spinner while it works,
+/// A thread's run state as an icon-sized mark: a radar spinner while it works,
 /// a danger dot after a failure, nothing while idle.
-pub fn status(status: ThreadStatus, t: &Theme) -> Option<El> {
+pub fn status(status: ThreadStatus, active: bool, t: &Theme) -> Option<El> {
     let (mark, label) = match status {
         ThreadStatus::Idle => return None,
-        ThreadStatus::Working => (spinner(t), "Working"),
+        ThreadStatus::Working => (
+            radar(ICON_SMALL, if active { t.accent } else { t.muted }, t),
+            "Working",
+        ),
         ThreadStatus::Failed => (dot(t.danger), "Failed"),
     };
     Some(
@@ -698,15 +701,27 @@ impl TreeLine<'_> {
             .pl(f32::from(self.depth).mul_add(TREE_STEP, ROW_INSET))
             .gap(S8)
             .center_y()
-            .radius(Size::Default.radius())
+            .radius(RADIUS_CONTROL)
+            .continuous_corners()
             .fill(if self.selected {
-                t.selected
+                t.accent_veil
             } else {
                 Color::TRANSPARENT
             })
             .hover_group()
             .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent);
+        if self.selected {
+            line = line.child(
+                el().key("selected-rail")
+                    .pin(Some(S2), Some((height - S16) / 2.0), None, None)
+                    .size(2.5, S16)
+                    .radius(1.25)
+                    .fill(t.accent)
+                    .a11y_hidden(),
+            );
+        }
+        line = line
             .children(leading.map(|mark| lead(mark, TREE_ROW)))
             .child(labels)
             .child(slot);
@@ -1207,6 +1222,14 @@ lucide! {
     FOLDER = Folder;
     /// Add project.
     FOLDER_PLUS = FolderPlus;
+    /// Add thread inside a project.
+    PLUS = Plus;
+    /// Local environment indicator.
+    LAPTOP = Laptop;
+    /// Remote environment indicator.
+    SERVER = Server;
+    /// Environment picker chevron pair.
+    CHEVRONS_UP_DOWN = ChevronsUpDown;
     THREAD = MessageSquare;
     STOP = Square;
     SIDEBAR = PanelLeft;
