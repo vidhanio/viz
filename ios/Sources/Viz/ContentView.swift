@@ -590,8 +590,8 @@ private struct ThreadDetail: View {
         Text("Stopped")
           .font(.footnote)
           .foregroundStyle(.secondary)
-      } else if run.stopReason != "end_turn" {
-        Text("Ended: \(run.stopReason)")
+      } else if let reason = run.stopReason, reason != "end_turn" {
+        Text("Ended: \(reason)")
           .font(.footnote)
           .foregroundStyle(.secondary)
       }

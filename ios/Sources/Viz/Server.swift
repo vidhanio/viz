@@ -112,7 +112,7 @@ enum VizProtocol {
     }
 
     struct RunEnd: Decodable {
-      let stopReason: String
+      let stopReason: String?
       let error: String?
       let answer: String?
     }
