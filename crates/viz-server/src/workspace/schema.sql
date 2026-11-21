@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS threads (
     harness TEXT NOT NULL,
     cwd TEXT NOT NULL,
     project TEXT REFERENCES projects(path) ON DELETE SET NULL,
+    worktree TEXT,
     parent INTEGER,
     parent_environment TEXT,
     archived INTEGER NOT NULL DEFAULT 0,

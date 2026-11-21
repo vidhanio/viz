@@ -39,8 +39,16 @@ enum VizProtocol {
     let path: String
     let name: String
     let createdAt: Int64
+    let git: Bool
+    let branch: String?
 
     var id: String { path }
+  }
+
+  /// The linked Git worktree a thread runs in.
+  struct ThreadWorktree: Decodable {
+    let path: String
+    let branch: String?
   }
 
   struct ThreadSummary: Decodable, Identifiable {
@@ -55,6 +63,7 @@ enum VizProtocol {
     let parent: Int?
     let parentEnvironment: String?
     let project: String?
+    let worktree: ThreadWorktree?
     let status: Status
     let archived: Bool
     let updatedAt: Int64
@@ -210,6 +219,7 @@ enum VizProtocol {
 
     let status: ThreadSummary.Status
     let harness: String
+    let worktree: ThreadWorktree?
     let cwd: String
     let queue: [Queued]
     let live: LiveTurn?

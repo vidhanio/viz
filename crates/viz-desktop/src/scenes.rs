@@ -3,15 +3,16 @@
 
 use viz_client::protocol::{
     Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
-    EntryData, EntryId, Environment, EnvironmentStatus, Harness, LiveText, LiveTextKind, LiveTurn,
-    OptionChoice, OptionKind, OptionValue, PlanEntry, PlanPriority, PlanStatus, Project,
+    EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, Harness, LiveText, LiveTextKind,
+    LiveTurn, OptionChoice, OptionKind, OptionValue, PlanEntry, PlanPriority, PlanStatus, Project,
     PromptAttachment, RunEnd, SearchHit, SlashCommand, Task, TaskStatus, ThreadId, ThreadState,
-    ThreadStatus, ThreadSummary, ToolCallStatus, ToolDiff, ToolRecord,
+    ThreadStatus, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord, Worktree,
+    WorktreeTarget,
 };
 
 use crate::{
-    app::{Desktop, NewThread, Status},
-    composer, palette, sidebar,
+    app::{Checkouts, Desktop, NewThread, Status},
+    checkout, composer, palette, sidebar,
     thread::Thread,
     timeline,
 };
@@ -41,11 +42,14 @@ pub const SCENES: &[Scene] = &[
     ("overflow", overflow),
     ("projects", projects),
     ("draft-project", draft_project),
+    ("draft-worktree", draft_worktree),
+    ("move-thread", move_thread),
     ("environments", environments),
     ("offline", offline),
 ];
 
 const THREAD: ThreadId = ThreadId(11);
+const WORKTREE: &str = "/state/worktrees/workbench/viz-trim-export-whitespace";
 
 fn workspace(s: &mut Desktop) {
     s.status = Status::Connected {
@@ -65,6 +69,8 @@ fn workspace(s: &mut Desktop) {
         name: name.into(),
         path: path.into(),
         created_at: 0,
+        git: path == "/work/workbench",
+        branch: (path == "/work/workbench").then(|| "main".into()),
     })
     .into();
     s.threads = list();
@@ -132,6 +138,10 @@ fn list() -> Vec<ThreadSummary> {
         parent: parent.map(ThreadId),
         parent_environment: None,
         project: project.map(str::to_owned),
+        worktree: (id == 10).then(|| ThreadWorktree {
+            path: WORKTREE.into(),
+            branch: Some("viz/trim-export-whitespace".into()),
+        }),
         harness: preview_harness(id).0.into(),
         harness_name: preview_harness(id).1.into(),
         model: match id {
@@ -164,6 +174,7 @@ fn thread() -> ThreadState {
         status: ThreadStatus::Idle,
         harness: "claude".into(),
         project: Some("/work/workbench".into()),
+        worktree: None,
         cwd: "/work/workbench".into(),
         options: options(),
         commands: vec![SlashCommand {
@@ -685,6 +696,8 @@ fn projects(s: &mut Desktop) {
         name: "Release scripts".into(),
         path: "/work/release-scripts".into(),
         created_at: 0,
+        git: false,
+        branch: None,
     });
     sidebar::preview_projects(s, &["/work/release-scripts"]);
 }
@@ -693,6 +706,60 @@ fn projects(s: &mut Desktop) {
 fn draft_project(s: &mut Desktop) {
     new_agent(s);
     s.open_picker = Some(timeline::DRAFT_PROJECT.into());
+}
+
+/// The Workbench project's preview branches and worktrees.
+fn checkouts(s: &mut Desktop) {
+    s.checkouts.insert(
+        "/work/workbench".into(),
+        Checkouts {
+            branches: ["main", "release", "origin/main", "origin/release"]
+                .map(|name| GitBranch {
+                    name: name.into(),
+                    remote: name.starts_with("origin/"),
+                })
+                .into(),
+            worktrees: vec![
+                Worktree {
+                    path: "/work/workbench".into(),
+                    branch: Some("main".into()),
+                    main: true,
+                    managed: false,
+                    threads: vec![THREAD],
+                },
+                Worktree {
+                    path: WORKTREE.into(),
+                    branch: Some("viz/trim-export-whitespace".into()),
+                    main: false,
+                    managed: true,
+                    threads: vec![ThreadId(10)],
+                },
+            ],
+        },
+    );
+}
+
+/// A fresh thread in a Git project with its checkout picker open.
+fn draft_worktree(s: &mut Desktop) {
+    new_agent(s);
+    checkouts(s);
+    if let Some(draft) = &mut s.new_thread {
+        draft.worktree = Some(WorktreeTarget::New {
+            base: None,
+            branch: None,
+        });
+    }
+    s.open_picker = Some(checkout::DRAFT_CHECKOUT.into());
+}
+
+/// A thread in a worktree with the toolbar's move menu open.
+fn move_thread(s: &mut Desktop) {
+    workspace(s);
+    checkouts(s);
+    s.show(ThreadId(10));
+    s.thread = transcript(&[]);
+    s.loading = false;
+    s.open_picker = Some(checkout::THREAD_CHECKOUT.into());
 }
 
 /// Multiple configured environments with the sidebar footer picker open.

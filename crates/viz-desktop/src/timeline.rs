@@ -24,7 +24,7 @@ use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSumma
 
 use crate::{
     app::{Desktop, NewThread, PANE_TRAVEL, Status},
-    attachments, header, sidebar,
+    attachments, checkout, header, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL,
         RADIUS_INNER, S2, S4, S6, S8, S12, S16, S24, S32, Size, Theme,
@@ -849,9 +849,10 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// The `open_picker` value of a draft's project picker.
 pub const DRAFT_PROJECT: &str = "draft-project";
 
-/// Where a draft will run: a picker of every project and none, and an add
+/// Where a draft will run: a picker of every project and none, an add
 /// button whose new project the draft takes once the server has it
-/// (`Desktop::project_added`). Fixed once the first message is on its way.
+/// (`Desktop::project_added`), and for a Git project its checkout. Fixed once
+/// the first message is on its way.
 fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> El {
     let open = s.open_picker.as_deref() == Some(DRAFT_PROJECT) && !thread.sending;
     let current = s
@@ -906,13 +907,16 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
     .on_press_tx(sidebar::open_add_project)
     .build(&t.k)
     .key("draft-add-project");
+    let place = menu.build(&t.overlay, layer).min_w(0.0).shrink();
+    let checkout = checkout::draft(s, thread, t, layer);
     row()
         .key("draft-place")
         .gap(S4)
         .center_y()
         .min_w(0.0)
-        .child(menu.build(&t.overlay, layer).min_w(0.0).shrink())
+        .child(place)
         .child(add)
+        .children(checkout)
 }
 
 fn draft_project_trigger(

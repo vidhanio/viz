@@ -179,8 +179,8 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::send`].
-    pub async fn delete_thread(&self, thread: ThreadId) -> Result<()> {
-        self.request(&DeleteThread { thread }).await.map(drop)
+    pub async fn delete_thread(&self, params: &DeleteThread) -> Result<()> {
+        self.request(params).await.map(drop)
     }
 
     /// Lists available project directories.

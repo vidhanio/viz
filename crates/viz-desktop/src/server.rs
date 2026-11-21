@@ -11,14 +11,15 @@ use tokio::sync::mpsc;
 use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
-        CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
-        HarnessOptions, LaunchThread, ListEnvironments, ListTasks, Notification, OptionValue,
-        RemoveProject, SearchFiles, SendInput, ThreadId, UpdateProject, UpdateThread,
+        CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, DeleteThread, Entry,
+        EntryId, HarnessOptions, LaunchThread, ListBranches, ListEnvironments, ListTasks,
+        ListWorktrees, MoveThread, Notification, OptionValue, RemoveProject, SearchFiles,
+        SendInput, ThreadId, UpdateProject, UpdateThread, WorktreeTarget,
     },
 };
 
 use crate::{
-    app::{Desktop, Status},
+    app::{Checkouts, Desktop, Status},
     attachments::{Source, Target as AttachmentTarget},
 };
 
@@ -51,7 +52,19 @@ pub enum Command {
     /// A fresh draft's runner choices.
     LoadDraft(u64),
     Update(ThreadId, ThreadChange),
-    Delete(ThreadId),
+    /// Delete a thread, and with `remove_worktree` the worktree viz created
+    /// for it.
+    Delete {
+        thread: ThreadId,
+        remove_worktree: bool,
+    },
+    /// A project's branches and worktrees, for a checkout picker.
+    LoadCheckouts(String),
+    /// Move an idle thread to another checkout of its project.
+    Move {
+        thread: ThreadId,
+        worktree: WorktreeTarget,
+    },
     Configure {
         thread: ThreadId,
         option: String,
@@ -398,7 +411,26 @@ impl Session<'_> {
                 Ok(())
             }
             Command::Update(thread, change) => self.update_thread(thread, &change).await,
-            Command::Delete(thread) => self.client.delete_thread(thread).await,
+            Command::Delete {
+                thread,
+                remove_worktree,
+            } => {
+                self.client
+                    .delete_thread(&DeleteThread {
+                        thread,
+                        remove_worktree,
+                    })
+                    .await
+            }
+            Command::LoadCheckouts(project) => {
+                self.load_checkouts(project);
+                Ok(())
+            }
+            Command::Move { thread, worktree } => self
+                .client
+                .request(&MoveThread { thread, worktree })
+                .await
+                .map(drop),
             Command::Configure {
                 thread,
                 option,
@@ -657,6 +689,36 @@ impl Session<'_> {
             ui.update(move |s, _| {
                 if s.selected == Some(thread) {
                     s.completion.file_result(request, result);
+                }
+            });
+        });
+    }
+
+    fn load_checkouts(&self, project: String) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        let environment = Arc::clone(&self.environment);
+        tokio::spawn(async move {
+            let result = async {
+                let branches = client.request(&ListBranches { project: &project }).await?;
+                let worktrees = client.request(&ListWorktrees { project: &project }).await?;
+                Ok::<_, Error>(Checkouts {
+                    branches: branches.branches,
+                    worktrees: worktrees.worktrees,
+                })
+            }
+            .await;
+            ui.update(move |s, tx| {
+                if s.environment.as_deref() != Some(environment.as_ref()) {
+                    return;
+                }
+                match result {
+                    Ok(checkouts) => {
+                        s.checkouts.insert(project, checkouts);
+                    }
+                    Err(error) => {
+                        s.toast(tx, "Couldn’t list branches", Some(error.to_string()));
+                    }
                 }
             });
         });

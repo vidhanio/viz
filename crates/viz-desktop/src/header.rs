@@ -8,7 +8,7 @@ use viz_client::protocol::{Task, ThreadId, ThreadSummary};
 
 use crate::{
     app::{Desktop, Switch, TITLE_ENTER_DELAY, TITLE_TRAVEL, thread_title},
-    sidebar,
+    checkout, sidebar,
     theme::{
         HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
     },
@@ -20,7 +20,7 @@ const BREADCRUMB_MAX: f32 = 272.0;
 
 /// The toolbar. Its title is keyed per thread inside its own clip, so it
 /// moves with the transcript when the thread changes (`app::Switch`).
-pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
+pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
     let mut toolbar = Toolbar::new().center(ui::drag_guard("toolbar-drag-guard").pin(
         Some(0.0),
         Some(0.0),
@@ -53,7 +53,11 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         toolbar = toolbar.leading(sidebar::new_thread_button(s, Size::Default, t));
         title
     };
-    toolbar.leading(title)
+    let toolbar = toolbar.leading(title);
+    match checkout::thread(s, t, layer) {
+        Some(checkout) => toolbar.trailing(checkout),
+        None => toolbar,
+    }
 }
 
 /// Identity for older timeline entries that have no durable task.

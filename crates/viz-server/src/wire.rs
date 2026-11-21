@@ -13,7 +13,7 @@ pub(crate) use viz_client::protocol::{
     Notification, OptionChoice, OptionKind, OptionValue, Origin, PROTOCOL_VERSION, PlanEntry,
     PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, Run, RunEnd, RunId, RunKind,
     RunStatus, SearchHit, SlashCommand as Command, Task, TaskStatus, ThreadId, ThreadState,
-    ThreadStatus, ThreadSummary, ToolCallStatus, ToolDiff, ToolRecord, WaitResult,
+    ThreadStatus, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord, WaitResult,
 };
 
 pub(crate) const RPC_PATH: &str = "/v2/rpc";

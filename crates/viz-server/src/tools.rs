@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use viz_client::protocol::{
     EnvironmentList, HarnessList, HarnessOptions, HarnessOptionsResult, LaunchThread, ListEntries,
     ReadThreadState, SendMode, StopThread, TaskList, TaskResult, ThreadStateResult, WaitThread,
+    WorktreeTarget,
 };
 
 use crate::{
@@ -88,6 +89,10 @@ rpc_tools! {
     "project_create", "project.create", ProjectCreate, "Register an existing directory as a project.";
     "project_update", "project.update", ProjectUpdate, "Rename a project by its absolute path.";
     "project_remove", "project.remove", Project, "Remove a project record without deleting its files.";
+    "project_branches", "project.branches", Project, "List a Git project's local and remote-tracking branches, usable as a worktree base.";
+    "worktree_list", "worktrees.list", Project, "List the checkouts of a Git project's repository, with their branches and the threads running in each.";
+    "worktree_remove", "worktree.remove", WorktreeRemove, "Remove a worktree viz created once no thread runs in it. Refuses uncommitted changes unless force is set; the branch is kept.";
+    "thread_move", "thread.move", ThreadMove, "Move an idle project thread to a new worktree ({\"mode\":\"new\"}), an existing one, or back to the project checkout ({\"mode\":\"local\"}). Its conversation continues there.";
 }
 
 pub(crate) fn definitions() -> Vec<ToolDefinition> {
@@ -430,6 +435,22 @@ struct ThreadUpdate {
 #[derive(Serialize, Deserialize, JsonSchema)]
 struct Project {
     project: String,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct WorktreeRemove {
+    /// Absolute path of the worktree root.
+    path: String,
+    /// Discard uncommitted changes and untracked files.
+    #[serde(default)]
+    force: bool,
+}
+
+#[derive(Serialize, Deserialize, JsonSchema)]
+struct ThreadMove {
+    #[schemars(range(min = 1))]
+    thread: u64,
+    worktree: WorktreeTarget,
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]

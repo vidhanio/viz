@@ -32,6 +32,7 @@
 
 mod app;
 mod attachments;
+mod checkout;
 mod composer;
 mod config;
 mod header;
@@ -94,7 +95,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let titlebar_inset = cx.titlebar_inset();
     let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
     let split = split
-        .toolbar(header::toolbar(s, t))
+        .toolbar(header::toolbar(s, t, &mut overlays))
         .titlebar_inset(titlebar_inset)
         .frame_inset(0.0)
         .toolbar_in_panel()

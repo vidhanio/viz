@@ -1119,6 +1119,10 @@ lucide! {
     CHEVRON_UP = ChevronUp;
     MORE = Ellipsis;
     FOLDER = Folder;
+    /// A Git checkout or branch.
+    GIT_BRANCH = GitBranch;
+    /// A new worktree.
+    GIT_BRANCH_PLUS = GitBranchPlus;
     /// Add project.
     FOLDER_PLUS = FolderPlus;
     /// Add thread inside a project.

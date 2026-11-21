@@ -5,6 +5,7 @@
 mod actions;
 
 use std::{
+    borrow::Cow,
     collections::{HashMap, HashSet},
     path::PathBuf,
 };
@@ -255,6 +256,11 @@ impl<'a> Outline<'a> {
                 .as_deref()
                 .filter(|id| known_projects.contains(id));
             if !outline.matches(thread_title(thread))
+                && !thread
+                    .worktree
+                    .as_ref()
+                    .and_then(|worktree| worktree.branch.as_deref())
+                    .is_some_and(|branch| outline.matches(branch))
                 && !project.is_some_and(|id| matching_projects.contains(id))
                 && !outline.descendant_matches(thread.id)
             {
@@ -332,13 +338,22 @@ impl<'a> Outline<'a> {
             !kids.is_empty() && (auto_open || !s.navigation.collapsed_parents.contains(&id));
         let rest = self.thread_rest_slot(thread, selected, kids.len(), show_kids, t);
         let menu = actions::thread_menu(s, thread, &key, t, layer);
-        let place = detail.then(|| {
-            thread
+        let branch = thread
+            .worktree
+            .as_ref()
+            .map(|worktree| worktree.branch.as_deref().unwrap_or("detached"));
+        let place = if detail {
+            let project = thread
                 .project
                 .as_deref()
                 .and_then(|id| s.projects.iter().find(|p| p.path == id))
-                .map_or("No project", |project| project.name.as_str())
-        });
+                .map_or("No project", |project| project.name.as_str());
+            Some(branch.map_or(Cow::Borrowed(project), |branch| {
+                Cow::Owned(format!("{project} · {branch}"))
+            }))
+        } else {
+            branch.map(Cow::Borrowed)
+        };
         let mark = {
             let harness = &thread.harness;
             let ink = if thread.archived {
@@ -356,7 +371,7 @@ impl<'a> Outline<'a> {
         let mut node = TreeLine {
             key: &key,
             label: thread_title(thread),
-            detail: place,
+            detail: place.as_deref(),
             depth: 0,
             strong: thread.unread && !thread.archived,
             dim: thread.archived,

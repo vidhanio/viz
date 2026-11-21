@@ -49,6 +49,8 @@ pub(super) enum Edit {
     RemoveProject(String),
     RenameThread(ThreadId),
     DeleteThread(ThreadId),
+    /// Delete a thread and the worktree viz created for it.
+    DeleteWithWorktree(ThreadId),
 }
 
 fn open_edit(s: &mut Desktop, edit: Edit, value: &str, tx: &mut Tx) {
@@ -104,7 +106,12 @@ fn edit_send_input(s: &mut Desktop, tx: &mut Tx) {
         return;
     };
     let value = s.navigation.value.text.trim();
-    if value.is_empty() && !matches!(edit, Edit::RemoveProject(_) | Edit::DeleteThread(_)) {
+    if value.is_empty()
+        && !matches!(
+            edit,
+            Edit::RemoveProject(_) | Edit::DeleteThread(_) | Edit::DeleteWithWorktree(_)
+        )
+    {
         return;
     }
     let command = match edit {
@@ -114,7 +121,14 @@ fn edit_send_input(s: &mut Desktop, tx: &mut Tx) {
         }),
         Edit::RemoveProject(id) => Command::Project(ProjectChange::Remove(id.clone())),
         Edit::RenameThread(id) => Command::Update(*id, ThreadChange::Title(value.into())),
-        Edit::DeleteThread(id) => Command::Delete(*id),
+        Edit::DeleteThread(id) => Command::Delete {
+            thread: *id,
+            remove_worktree: false,
+        },
+        Edit::DeleteWithWorktree(id) => Command::Delete {
+            thread: *id,
+            remove_worktree: true,
+        },
     };
     if s.send(command, tx) {
         s.navigation.edit = None;
@@ -154,7 +168,28 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         Edit::DeleteThread(id) => DialogForm {
             title: "Delete thread?",
             subject: Some(s.title(*id)),
-            detail: Some("This can’t be undone."),
+            detail: Some(
+                if s.summary(*id)
+                    .is_some_and(|thread| thread.worktree.is_some())
+                {
+                    "This can’t be undone. Its worktree stays."
+                } else {
+                    "This can’t be undone."
+                },
+            ),
+            field: None,
+            action: "Delete",
+            variant: ButtonVariant::Danger,
+        },
+        Edit::DeleteWithWorktree(id) => DialogForm {
+            title: "Delete thread and worktree?",
+            subject: s
+                .summary(*id)
+                .and_then(|thread| thread.worktree.as_ref())
+                .map(|worktree| worktree.path.as_str()),
+            detail: Some(
+                "The worktree must have no uncommitted changes. Its branch is kept. This can’t be undone.",
+            ),
             field: None,
             action: "Delete",
             variant: ButtonVariant::Danger,
@@ -271,6 +306,7 @@ pub(super) fn thread_menu(
             .collect();
         menu = menu.item(
             MenuItem::new("Move to project")
+                .disabled(thread.worktree.is_some())
                 .submenu(destinations, context.moving)
                 .on_select(|s: &mut Desktop| {
                     if let Some(context) = &mut s.navigation.menu {
@@ -284,6 +320,15 @@ pub(super) fn thread_menu(
             .danger(true)
             .on_select_tx(move |s: &mut Desktop, tx| delete_thread(s, id, tx)),
     );
+    if thread.worktree.is_some() {
+        menu = menu.item(
+            MenuItem::new("Delete with worktree")
+                .danger(true)
+                .on_select_tx(move |s: &mut Desktop, tx| {
+                    open_edit(s, Edit::DeleteWithWorktree(id), "", tx);
+                }),
+        );
+    }
     menu.build(&t.overlay, layer)
 }
 

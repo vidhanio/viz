@@ -111,6 +111,10 @@ methods! {
     SearchThreads<'_> => "threads.search", SearchHits;
     ListEntries => "thread.entries", EntryPage;
     RemoveQueuedInput => "queue.remove", Empty;
+    ListBranches<'_> => "project.branches", BranchList;
+    ListWorktrees<'_> => "worktrees.list", WorktreeList;
+    RemoveWorktree<'_> => "worktree.remove", Empty;
+    MoveThread => "thread.move", Moved;
 }
 
 /// What kind of client is connecting; decides which notifications it receives.
@@ -204,6 +208,9 @@ pub struct ThreadSummary {
     pub parent_environment: Option<String>,
     /// The project directory this thread belongs to, if any.
     pub project: Option<String>,
+    /// The project's linked Git worktree the thread runs in; `None` in the
+    /// project's own checkout.
+    pub worktree: Option<ThreadWorktree>,
     /// Configuration key of the ACP harness.
     pub harness: String,
     /// Display name of the ACP harness.
@@ -248,6 +255,10 @@ pub struct LaunchThread {
     /// Configured runner; absent uses the server default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
+    /// Where in the project's repository to run; absent uses the project's
+    /// checkout. Requires `project`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeTarget>,
     /// Initial configuration by option id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub options: std::collections::BTreeMap<String, OptionValue>,
@@ -374,6 +385,8 @@ pub struct ThreadState {
     pub harness: String,
     /// The containing project, if any.
     pub project: Option<String>,
+    /// The linked Git worktree the thread runs in, if any.
+    pub worktree: Option<ThreadWorktree>,
     /// Working directory.
     pub cwd: String,
     /// Configuration reported by the runner.
@@ -502,6 +515,44 @@ pub struct Project {
     pub path: String,
     /// Creation time in Unix milliseconds.
     pub created_at: i64,
+    /// Whether the directory is inside a Git checkout, so its threads can
+    /// run in worktrees.
+    pub git: bool,
+    /// The checkout's current branch; `None` outside Git or on a detached
+    /// HEAD.
+    pub branch: Option<String>,
+}
+
+/// A linked Git worktree a thread runs in.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct ThreadWorktree {
+    /// Absolute path of the worktree root.
+    pub path: String,
+    /// Its current branch; `None` on a detached HEAD or once removed.
+    pub branch: Option<String>,
+}
+
+/// Where in a project's Git repository a thread runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "mode", rename_all = "lowercase")]
+pub enum WorktreeTarget {
+    /// The project's own checkout.
+    Local,
+    /// A new linked worktree on a new branch.
+    New {
+        /// Branch, remote-tracking branch or commit to start from; defaults
+        /// to the project checkout's HEAD.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        base: Option<String>,
+        /// New branch name; defaults to `viz/` and a slug of the thread title.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        branch: Option<String>,
+    },
+    /// An existing linked worktree of the project's repository.
+    Existing {
+        /// Absolute path of the worktree root.
+        path: String,
+    },
 }
 
 /// A configured ACP runner.
@@ -565,9 +616,104 @@ pub struct StopThread {
 
 /// Delete a thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct DeleteThread {
     /// The thread to delete.
     pub thread: ThreadId,
+    /// Also remove the worktree viz created for the thread, when it is clean
+    /// and no other thread uses it. Its branch is kept.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub remove_worktree: bool,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Move an idle thread to another checkout of its project's repository. The
+/// harness reopens its session there, or starts a new one primed with the
+/// transcript when it cannot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct MoveThread {
+    /// The thread to move.
+    pub thread: ThreadId,
+    /// Where to move it.
+    pub worktree: WorktreeTarget,
+}
+
+/// `thread.move` result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Moved {
+    /// The new working directory.
+    pub cwd: String,
+    /// The worktree it now runs in; `None` in the project's checkout.
+    pub worktree: Option<ThreadWorktree>,
+}
+
+/// List a project's local and remote-tracking branches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ListBranches<'a> {
+    /// Project path.
+    pub project: &'a str,
+}
+
+/// `project.branches` result.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct BranchList {
+    /// Short names usable as a worktree base, local branches first.
+    pub branches: Vec<GitBranch>,
+}
+
+/// A branch usable as a worktree base.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct GitBranch {
+    /// Short name, such as `main` or `origin/main`.
+    pub name: String,
+    /// Whether this is a remote-tracking branch.
+    pub remote: bool,
+}
+
+/// List the worktrees of a project's repository.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct ListWorktrees<'a> {
+    /// Project path.
+    pub project: &'a str,
+}
+
+/// `worktrees.list` result.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct WorktreeList {
+    /// The main checkout first, then linked worktrees.
+    pub worktrees: Vec<Worktree>,
+}
+
+/// One checkout of a repository.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct Worktree {
+    /// Absolute path of the worktree root.
+    pub path: String,
+    /// Checked-out branch; `None` on a detached HEAD.
+    pub branch: Option<String>,
+    /// Whether this is the repository's main checkout.
+    pub main: bool,
+    /// Whether viz created it, so `worktree.remove` may remove it.
+    pub managed: bool,
+    /// Threads running in it.
+    pub threads: Vec<ThreadId>,
+}
+
+/// Remove a clean, unused worktree that viz created. Its branch is kept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct RemoveWorktree<'a> {
+    /// Absolute path of the worktree root.
+    pub path: &'a str,
+    /// Discard uncommitted changes and untracked files in it.
+    #[serde(skip_serializing_if = "is_false")]
+    pub force: bool,
 }
 
 /// List projects.
@@ -917,6 +1063,8 @@ pub struct DelegateTask<'a> {
     pub thinking: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<&'a WorktreeTarget>,
     pub text: &'a str,
     #[serde(skip_serializing_if = "slice_is_empty")]
     pub attachments: &'a [Attachment],

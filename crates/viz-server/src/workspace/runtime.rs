@@ -18,7 +18,7 @@ use tokio_util::sync::CancellationToken;
 use super::{
     Workspace, attachments,
     runs::{self, Claimed, Settlement},
-    sql::{exec, row},
+    sql::{exec, row, rows},
     store::{self, Binding},
     titles,
 };
@@ -424,7 +424,7 @@ impl Workspace {
     ) -> anyhow::Result<Outcome> {
         let Bound { session, .. } = self.session(thread, driver, slot, cancel).await?;
         let files = attachments::materialize(self, thread, claim.id, claim.attachments).await?;
-        let text = if let Some(author) = claim
+        let mut text = if let Some(author) = claim
             .origin
             .as_ref()
             .and_then(|origin| origin.author.as_deref())
@@ -433,9 +433,20 @@ impl Workspace {
         } else {
             std::borrow::Cow::Borrowed(claim.text.as_str())
         };
+        let handoff = {
+            let mut db = self.db.lock().await;
+            let binding = store::binding(&mut *db, thread).await?;
+            match binding.session.handoff {
+                Some(from) => Some(handoff_note(&mut *db, thread, &binding.cwd, &from).await?),
+                None => None,
+            }
+        };
+        if let Some(note) = &handoff {
+            text = std::borrow::Cow::Owned(format!("{note}{text}"));
+        }
         let id = session.id().to_owned();
         let id = id.as_str();
-        session
+        let outcome = session
             .prompt(
                 Prompt {
                     text: &text,
@@ -452,7 +463,16 @@ impl Workspace {
                         .map_err(anyhow::Error::from)
                 },
             )
-            .await
+            .await;
+        if handoff.is_some() && outcome.is_ok() {
+            exec(
+                &mut *self.db.lock().await,
+                "UPDATE threads SET session = json_remove(session, '$.handoff') WHERE id = ?1",
+                [thread.into()],
+            )
+            .await?;
+        }
+        outcome
     }
 
     async fn publish(
@@ -820,4 +840,40 @@ fn option_label<'a>(options: &'a [crate::wire::ConfigOption], category: &str) ->
             .find(|item| &item.value == value)
             .map_or(value.as_str(), |item| item.name.as_str()),
     )
+}
+
+/// The most transcript a handoff carries, newest turns first.
+const HANDOFF_BYTES: usize = 24 * 1024;
+
+/// The context prefixed to the first prompt after a move: the directory
+/// change and the earlier turns' prompts and answers.
+async fn handoff_note(
+    db: &mut dyn Executor,
+    thread: u64,
+    cwd: &str,
+    from: &str,
+) -> Result<String, RpcError> {
+    let moved = format!("The working directory moved from {from} to {cwd}.");
+    let mut turns = Vec::new();
+    let mut size = 0;
+    for mut row in rows(
+        db,
+        "SELECT text, coalesce(answer, '') FROM runs WHERE thread = ?1 AND kind = 'prompt'
+            AND status IN ('completed', 'failed', 'cancelled', 'interrupted') ORDER BY id DESC",
+        [thread.into()],
+    )
+    .await?
+    {
+        let turn = format!("User: {}\n\nAssistant: {}\n\n", row.str(0)?, row.str(1)?);
+        size += turn.len();
+        if size > HANDOFF_BYTES && !turns.is_empty() {
+            break;
+        }
+        turns.push(turn);
+    }
+    turns.reverse();
+    Ok(format!(
+        "<context>\n{moved} This conversation continues in a new session; its earlier turns, oldest first:\n\n{}</context>\n\n",
+        turns.concat()
+    ))
 }

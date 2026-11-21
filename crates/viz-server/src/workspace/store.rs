@@ -10,13 +10,14 @@ use toasty::Executor;
 use super::{
     Workspace,
     sql::{exec, row, rows},
+    worktree,
 };
 use crate::{
     acp::{Desired, Selection, tool_record::ToolContent, transcript::Output},
     wire::{
         AttachmentCapabilities, Command, ConfigOption, Entry, EntryId, EntryPage, NewEntry,
         Project, QueuedInput, RpcError, RunId, SearchHit, ThreadId, ThreadState, ThreadStatus,
-        ThreadSummary, ToolCallStatus, Usage,
+        ThreadSummary, ThreadWorktree, ToolCallStatus, Usage,
     },
 };
 
@@ -70,11 +71,27 @@ pub(super) async fn project(db: &mut dyn Executor, path: &str) -> Result<Project
     )
     .await?
     .ok_or_else(|| RpcError::not_found(format!("no project {path}")))?;
-    Ok(Project {
-        path: path.to_owned(),
-        name: row.str(0)?,
-        created_at: row.i64(1)?,
-    })
+    Ok(project_at(path.to_owned(), row.str(0)?, row.i64(1)?))
+}
+
+/// A project with its checkout's Git state.
+pub(super) fn project_at(path: String, name: String, created_at: i64) -> Project {
+    let checkout = worktree::checkout(Path::new(&path));
+    Project {
+        git: checkout.is_some(),
+        branch: checkout.and_then(|checkout| checkout.branch),
+        path,
+        name,
+        created_at,
+    }
+}
+
+/// A thread's worktree, with its branch read from disk.
+pub(super) fn thread_worktree(path: String) -> ThreadWorktree {
+    ThreadWorktree {
+        branch: worktree::checkout(Path::new(&path)).and_then(|checkout| checkout.branch),
+        path,
+    }
 }
 
 pub(super) async fn projects(db: &mut dyn Executor) -> Result<Vec<Project>, RpcError> {
@@ -84,13 +101,7 @@ pub(super) async fn projects(db: &mut dyn Executor) -> Result<Vec<Project>, RpcE
         [],
     )
     .await?
-    .map(|mut row| {
-        Ok(Project {
-            path: row.str(0)?,
-            name: row.str(1)?,
-            created_at: row.i64(2)?,
-        })
-    })
+    .map(|mut row| Ok(project_at(row.str(0)?, row.str(1)?, row.i64(2)?)))
     .collect()
 }
 
@@ -103,6 +114,11 @@ pub(super) struct SavedSession {
     pub(super) images: bool,
     pub(super) usage: Option<Usage>,
     pub(super) selection: Option<Selection>,
+    /// Set when the thread moved away from this working directory since
+    /// its last prompt. Harnesses differ in whether a restored session
+    /// follows a new directory, so a move starts a new session and its first
+    /// prompt carries the earlier turns.
+    pub(super) handoff: Option<String>,
 }
 
 #[derive(Debug)]
@@ -110,21 +126,23 @@ pub(super) struct Binding {
     pub(super) harness: String,
     pub(super) cwd: String,
     pub(super) project: Option<String>,
+    pub(super) worktree: Option<String>,
     pub(super) parent: Option<ThreadId>,
     pub(super) parent_environment: Option<String>,
     pub(super) session: SavedSession,
 }
 
 pub(super) async fn binding(db: &mut dyn Executor, thread: u64) -> Result<Binding, RpcError> {
-    let mut row = row(db, "SELECT harness, cwd, project, parent, parent_environment, session FROM threads WHERE id = ?1", [thread.into()]).await?
+    let mut row = row(db, "SELECT harness, cwd, project, worktree, parent, parent_environment, session FROM threads WHERE id = ?1", [thread.into()]).await?
         .ok_or_else(|| missing(thread))?;
     Ok(Binding {
         harness: row.str(0)?,
         cwd: row.str(1)?,
         project: row.opt_str(2)?,
-        parent: row.opt_u64(3)?.map(ThreadId),
-        parent_environment: row.opt_str(4)?,
-        session: from_json(&row.str(5)?)?,
+        worktree: row.opt_str(3)?,
+        parent: row.opt_u64(4)?.map(ThreadId),
+        parent_environment: row.opt_str(5)?,
+        session: from_json(&row.str(6)?)?,
     })
 }
 
@@ -143,6 +161,7 @@ pub(super) struct NewThread<'a> {
     pub(super) harness: &'a str,
     pub(super) cwd: &'a str,
     pub(super) project: Option<&'a str>,
+    pub(super) worktree: Option<&'a str>,
     pub(super) parent: Option<u64>,
     pub(super) parent_environment: Option<&'a str>,
     pub(super) title: Option<&'a str>,
@@ -153,10 +172,10 @@ pub(super) async fn create_thread(
     db: &mut dyn Executor,
     new: &NewThread<'_>,
 ) -> Result<u64, RpcError> {
-    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id", [
+    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
         new.harness.into(), new.cwd.into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
-        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(),
+        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(), new.worktree.into(),
     ]).await?.expect("thread INSERT RETURNING yielded one row");
     row.u64(0)
 }
@@ -175,7 +194,7 @@ pub(super) async fn list_threads(
 ) -> Result<Vec<ThreadSummary>, RpcError> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
-            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking
+            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.worktree
         FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
         ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC"
     );
@@ -189,6 +208,7 @@ pub(super) async fn list_threads(
                 parent: row.opt_u64(2)?.map(ThreadId),
                 parent_environment: row.opt_str(3)?,
                 project: row.opt_str(4)?,
+                worktree: row.opt_str(13)?.map(thread_worktree),
                 harness_name: workspace.harness_name(&harness).to_owned(),
                 harness,
                 status: status(&row.str(6)?)?,
@@ -205,7 +225,7 @@ pub(super) async fn list_threads(
 
 pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadState, RpcError> {
     let query = format!(
-        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS} FROM threads AS t WHERE t.id = ?1"
+        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS}, t.worktree FROM threads AS t WHERE t.id = ?1"
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
@@ -229,6 +249,7 @@ pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadSt
     Ok(ThreadState {
         harness: row.str(0)?,
         project: row.opt_str(1)?,
+        worktree: row.opt_str(5)?.map(thread_worktree),
         cwd: row.str(2)?,
         status: status(&row.str(4)?)?,
         options: session.options,

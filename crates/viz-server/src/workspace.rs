@@ -2,6 +2,7 @@
 //! transcript.
 
 mod attachments;
+mod checkouts;
 mod files;
 mod rpc;
 pub(crate) mod runs;
@@ -9,6 +10,7 @@ mod runtime;
 pub(crate) mod sql;
 mod store;
 mod titles;
+mod worktree;
 
 use std::{
     collections::{BTreeMap, HashMap},
@@ -75,6 +77,9 @@ pub(crate) struct Workspace {
     pub(crate) environment: String,
     cwd: PathBuf,
     dir: PathBuf,
+    /// Canonical parent of the worktrees viz creates; any worktree below it
+    /// is viz's to remove.
+    worktrees: PathBuf,
     default_harness: Option<String>,
     harnesses: BTreeMap<String, HarnessConfig>,
     changes: broadcast::Sender<Change>,
@@ -103,6 +108,11 @@ impl Workspace {
             .create(&dir)
             .await
             .with_context(|| format!("creating workspace directory {}", dir.display()))?;
+        let worktrees = dir.join("worktrees");
+        tokio::fs::create_dir_all(&worktrees)
+            .await
+            .with_context(|| format!("creating worktree directory {}", worktrees.display()))?;
+        let worktrees = tokio::fs::canonicalize(&worktrees).await?;
         let pool = Db::builder()
             .models(toasty::models!(TaskRow, StoppedTaskRun))
             .max_pool_size(1)
@@ -124,6 +134,7 @@ impl Workspace {
             environment: config.environment.clone(),
             cwd: config.cwd.clone(),
             dir,
+            worktrees,
             default_harness: config.default_harness.clone(),
             harnesses: config.harnesses.clone(),
             changes,

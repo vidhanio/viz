@@ -21,7 +21,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use viz_client::protocol::{TaskList, TaskResult, TaskStatusResult};
+use viz_client::protocol::{TaskList, TaskResult, TaskStatusResult, WorktreeTarget};
 
 use self::model::{StoppedTaskRun, TaskRow};
 use crate::{
@@ -128,6 +128,10 @@ impl std::fmt::Debug for Tasks {
 pub(crate) struct Delegate {
     environment: Option<String>,
     project: Option<String>,
+    /// Checkout of the project to run in: `{"mode": "new"}` isolates the
+    /// child on a new branch. Omit to use `project`'s checkout, or the
+    /// parent's checkout when `project` is omitted too.
+    worktree: Option<WorktreeTarget>,
     harness: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
@@ -207,6 +211,8 @@ struct AdmissionRequest<'a> {
     thread: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     project: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worktree: Option<&'a WorktreeTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     harness: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -406,6 +412,7 @@ impl Tasks {
                     parent,
                     thread: input.thread,
                     project: input.project.as_deref(),
+                    worktree: input.worktree.as_ref(),
                     harness: input.harness.as_deref(),
                     model: input.model.as_deref(),
                     thinking: input.thinking.as_deref(),

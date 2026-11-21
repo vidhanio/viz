@@ -11,8 +11,9 @@ use rune::{Spring, SpringPair, TextEdit, Transition, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, ConfigOption, Environment, Harness, LaunchThread, OptionValue, Project, SendInput,
-    SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    Attachment, ConfigOption, Environment, GitBranch, Harness, LaunchThread, OptionValue, Project,
+    SendInput, SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary, Worktree,
+    WorktreeTarget,
 };
 
 use crate::{
@@ -59,10 +60,19 @@ pub struct Toast {
 }
 
 /// A local draft. No ACP session is open until its first send.
+/// A Git project's branches and worktrees.
+#[derive(Debug, Clone)]
+pub struct Checkouts {
+    pub branches: Vec<GitBranch>,
+    pub worktrees: Vec<Worktree>,
+}
+
 #[derive(Debug)]
 pub struct NewThread {
     pub id: u64,
     pub project: Option<String>,
+    /// Which checkout of a Git project to run in; `None` is the project's own.
+    pub worktree: Option<WorktreeTarget>,
     pub harness: Option<String>,
     pub options: BTreeMap<String, OptionValue>,
     pub sending: bool,
@@ -74,6 +84,7 @@ impl NewThread {
         Self {
             id,
             project: project.map(|project| project.path.clone()),
+            worktree: None,
             harness: None,
             options: BTreeMap::new(),
             sending: false,
@@ -83,6 +94,7 @@ impl NewThread {
 
     fn set_project(&mut self, project: Option<&Project>) {
         self.project = project.map(|project| project.path.clone());
+        self.worktree = None;
     }
 
     pub fn active_harness<'a>(&self, runners: &'a [Harness]) -> Option<&'a Harness> {
@@ -206,6 +218,9 @@ pub struct Desktop {
     /// Every thread as the server lists it, titles included.
     pub threads: Vec<ThreadSummary>,
     pub projects: Vec<Project>,
+    /// Branches and worktrees by project path, loaded when a checkout picker
+    /// opens.
+    pub checkouts: HashMap<String, Checkouts>,
     pub harnesses: Vec<Harness>,
     /// The thread in the main pane.
     pub selected: Option<ThreadId>,
@@ -264,6 +279,7 @@ impl Desktop {
             tasks: Vec::new(),
             threads: Vec::new(),
             projects: Vec::new(),
+            checkouts: HashMap::new(),
             harnesses: Vec::new(),
             selected: None,
             thread: Thread::default(),
@@ -767,6 +783,7 @@ impl Desktop {
         self.forward.clear();
         self.threads.clear();
         self.projects.clear();
+        self.checkouts.clear();
         self.harnesses.clear();
         self.tasks.clear();
         self.navigation.dismiss_overlays();
@@ -881,6 +898,7 @@ impl Desktop {
                 draft: thread.id,
                 params: LaunchThread {
                     project: thread.project.clone(),
+                    worktree: thread.worktree.clone(),
                     harness: thread.harness.clone(),
                     options: thread.options.clone(),
                     text: Some(self.draft.text.clone()),
