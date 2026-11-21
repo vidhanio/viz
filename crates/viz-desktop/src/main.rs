@@ -47,7 +47,7 @@ mod ui;
 use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
-use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Tx, col};
+use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col};
 use rune_kit::{
     ToastRegion,
     shell::{SidebarToggle, SplitView},
@@ -133,6 +133,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     palette::mount(s, t, &mut overlays);
     overlays.extend(toasts(s, t));
     rune_kit::root(split, overlays)
+        .hover_motion_within(rune::tok::motion::INSTANT, Spring::new(0.12, 0.0))
 }
 
 /// The toast stack, when there's anything in it.

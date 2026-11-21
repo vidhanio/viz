@@ -70,10 +70,12 @@ pub const ICON_SMALL: f32 = 12.0;
 pub const ICON: f32 = 16.0;
 pub const DOT: f32 = 6.0;
 
-/// Chips, key caps and other marks inside a control.
-pub const RADIUS_INNER: f32 = S4;
-/// Cards, the composer, popovers.
+/// Chips, harness medallions, key caps and other marks inside a control.
+pub const RADIUS_INNER: f32 = S6;
+/// Cards, tool output, popovers.
 pub const RADIUS_CARD: f32 = S8;
+/// Main composer card and user message bubbles.
+pub const RADIUS_COMPOSER: f32 = S16;
 
 /// The shell's title band: the toolbar and the sidebar's header row.
 pub const TOOLBAR_HEIGHT: f32 = rune_kit::shell::TOOLBAR_HEIGHT;
@@ -167,11 +169,13 @@ pub struct Theme {
     /// fill with a hairline outline and shadow; `overlay.c.layer_01` fills
     /// dialogs and toasts.
     pub overlay: Kit,
-    /// Cards on the main pane (composer, expanded tool output, code).
+    /// Cards on the main pane (expanded tool output, code) and sidebar ground.
     pub surface: Color,
     /// A group's fill on the sidebar (a project and its threads): one step
     /// from `surface`, so it reads without an outline.
     pub group: Color,
+    /// Recessed fill for medallions, chips, and quiet controls.
+    pub chip_fill: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
     /// The quiet wash behind my messages.
@@ -186,6 +190,8 @@ pub struct Theme {
     pub accent: Color,
     /// The accent at text contrast (>= 4.5:1) for links and highlighted copy.
     pub accent_text: Color,
+    /// Accent veil behind selected rows and active menu options.
+    pub accent_veil: Color,
     /// The open thread's row.
     pub selected: Color,
     /// Errors.
@@ -211,11 +217,11 @@ pub struct Theme {
     pub small_medium: TextStyle,
     /// Message text, 14.5 on 23.
     pub body: TextStyle,
-    /// Titles: the toolbar, empty states, dialogs, 15 semibold on 22.
+    /// Titles: the toolbar, empty states, dialogs, 14 semibold on 20.
     pub title: TextStyle,
-    /// Tool rows and code, 12 on 18.
+    /// Tool rows and code, 12 on 18, tabular numerals.
     pub mono: TextStyle,
-    /// Small mono for durations and counts, 11.5 on 16.
+    /// Small mono for durations and counts, 11.5 on 16, tabular numerals.
     pub mono_small: TextStyle,
 }
 
@@ -424,9 +430,13 @@ impl Theme {
         let tint = |step: f32| {
             interactive.alpha(reach(bg, interactive, step).max(reach(surface, interactive, step)))
         };
-        let pressed = tint(0.040);
         let selected = tint(0.055);
-        let raised = over(bg, wash, reach(bg, wash, 0.05));
+        let raised = over(bg, wash, reach(bg, wash, if dark { 0.038 } else { 0.032 }));
+        let chip_fill = if dark {
+            over(surface, wash, 0.35)
+        } else {
+            over(bg, surface, 0.65)
+        };
         let by_luminance = |x: &Color, y: &Color| x.luminance().total_cmp(&y.luminance());
         let lightest = b[..8].iter().copied().max_by(by_luminance).unwrap_or(bg);
         let darkest = b[..8].iter().copied().min_by(by_luminance).unwrap_or(bg);
@@ -473,6 +483,7 @@ impl Theme {
         let faint = legible(b[0x3], 4.5);
         let accent = legible(b[0xD], 3.0);
         let accent_text = legible(b[0xD], 4.5);
+        let accent_veil = accent.alpha(if dark { 0.11 } else { 0.085 });
         let on_accent = [bg, b[0x7], lightest, darkest]
             .into_iter()
             .max_by(|x, y| contrast(*x, accent).total_cmp(&contrast(*y, accent)))
@@ -534,7 +545,7 @@ impl Theme {
             border_strong: rule,
             border_focus: accent,
             hover: Color::TRANSPARENT,
-            pressed,
+            pressed: Color::TRANSPARENT,
             contrast_hover: bg.alpha(0.10),
             contrast_pressed: bg.alpha(0.20),
             scrim: darkest.alpha(if dark { 0.5 } else { 0.3 }),
@@ -553,7 +564,7 @@ impl Theme {
             surface_hover: Color::TRANSPARENT,
             surface_raised: surface,
             surface_raised_base: surface,
-            surface_raised_hover: surface,
+            surface_raised_hover: Color::TRANSPARENT,
             surface_float: text,
             surface_disabled: raised,
             border_weak: hairline,
@@ -607,13 +618,20 @@ impl Theme {
             theme.with(kind, c)
         });
         let medium = |style: TextStyle| TextStyle {
-            weight: 500.0,
+            weight: 520.0,
             ..style
         };
         let ui = TextStyle::new(13.0, 400.0).lh(20.0);
         let small = TextStyle::new(11.5, 400.0).lh(16.0);
-        let body = TextStyle::new(14.5, 400.0).lh(23.0);
-        let mono = TextStyle::new(12.0, 400.0).mono().lh(18.0);
+        let body = TextStyle::new(14.5, 400.0).lh(23.0).tracking(-0.05);
+        let mono = TextStyle::new(12.0, 400.0)
+            .mono()
+            .lh(18.0)
+            .features("'tnum' 1");
+        let mono_small = TextStyle::new(11.5, 400.0)
+            .mono()
+            .lh(16.0)
+            .features("'tnum' 1");
         k.ty.ui = ui;
         k.ty.ui_medium = medium(ui);
         k.ty.ui_compact = ui.lh(small.line_height);
@@ -659,8 +677,8 @@ impl Theme {
         let mut overlay_kit = k.clone();
         overlay_kit.c.layer_01 = overlay;
         overlay_kit.c.surface_raised = overlay;
-        overlay_kit.c.hover = accent.alpha(if dark { 0.16 } else { 0.12 });
-        overlay_kit.c.surface_raised_hover = overlay;
+        overlay_kit.c.hover = accent_veil;
+        overlay_kit.c.surface_raised_hover = Color::TRANSPARENT;
         overlay_kit.c.std_border = Color::TRANSPARENT;
         overlay_kit.elevation.floating.insert(0, ring);
         overlay_kit.elevation.md.insert(0, ring);
@@ -670,6 +688,7 @@ impl Theme {
             overlay: overlay_kit,
             surface,
             group,
+            chip_fill,
             hairline,
             mine: raised,
             text,
@@ -677,6 +696,7 @@ impl Theme {
             faint,
             accent,
             accent_text,
+            accent_veil,
             selected,
             danger,
             success,
@@ -689,9 +709,9 @@ impl Theme {
             small,
             small_medium: medium(small),
             body,
-            title: TextStyle::new(15.0, 600.0).lh(22.0),
+            title: TextStyle::new(14.0, 600.0).lh(20.0).tracking(-0.18),
             mono,
-            mono_small: TextStyle::new(11.5, 400.0).mono().lh(16.0),
+            mono_small,
             k,
         }
     }

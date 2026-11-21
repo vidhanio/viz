@@ -6,15 +6,16 @@ use std::borrow::Cow;
 
 use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
 use rune_kit::{
-    ButtonVariant, IconButtonVariant, Keybind, Kit, Loader, Menu, MenuItem, Placement, PopupList,
+    ButtonVariant, IconButtonVariant, Keybind, Kit, Menu, MenuItem, Placement, PopupList, Spinner,
     TextInput,
 };
 use viz_client::protocol::ThreadStatus;
 
 use crate::theme::{
     CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON,
-    ICON_SMALL, RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16,
-    Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
+    ICON_SMALL, RADIUS_CARD, RADIUS_COMPOSER, RADIUS_INNER, READING_INSET, READING_WIDTH,
+    ROW_INSET, S2, S4, S6, S8, S12, S16, S20, Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP,
+    Theme,
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -246,6 +247,7 @@ impl Button {
             .gap(S6)
             .center()
             .radius(self.size.radius())
+            .continuous_corners()
             .fill(style.fill)
             .disabled(self.disabled)
             .focusable(!self.disabled)
@@ -254,7 +256,7 @@ impl Button {
             el = el.border(HAIRLINE, border);
         }
         if !self.disabled {
-            el = el.hover_group().press_color(style.hover);
+            el = el.hover_group().press_color(style.hover).press_scale(0.97);
             if style.press.a > 0.0 {
                 el = el.press(style.press);
             }
@@ -350,6 +352,7 @@ impl IconButton {
             .size(side, side)
             .center()
             .radius(self.size.radius())
+            .continuous_corners()
             .fill(style.fill)
             .disabled(self.disabled)
             .focusable(!self.disabled)
@@ -364,7 +367,7 @@ impl IconButton {
             el = el.border(HAIRLINE, border);
         }
         if !self.disabled {
-            el = el.hover_group().press_color(style.hover);
+            el = el.hover_group().press_color(style.hover).press_scale(0.97);
             if style.press.a > 0.0 {
                 el = el.press(style.press);
             }
@@ -474,11 +477,23 @@ pub enum Card {
 impl Card {
     /// The surface alone, for compound cards whose children own their insets.
     pub fn frame(self, t: &Theme) -> El {
-        let frame = col().w_full().radius(RADIUS_CARD);
         match self {
-            Self::Surface => frame.fill(t.surface).border(HAIRLINE, t.hairline),
-            Self::Outline => frame.border(HAIRLINE, t.hairline),
-            Self::Message => frame.fill(t.mine),
+            Self::Surface => col()
+                .w_full()
+                .radius(RADIUS_CARD)
+                .continuous_corners()
+                .fill(t.surface)
+                .border(HAIRLINE, t.hairline),
+            Self::Outline => col()
+                .w_full()
+                .radius(RADIUS_CARD)
+                .continuous_corners()
+                .border(HAIRLINE, t.hairline),
+            Self::Message => col()
+                .w_full()
+                .radius(RADIUS_COMPOSER)
+                .continuous_corners()
+                .fill(t.mine),
         }
     }
 
@@ -520,8 +535,43 @@ pub fn dot(color: Color) -> El {
         .a11y_hidden()
 }
 
+/// The 5x5 radar sweep indicator, sharing wall-clock phase across the window.
+pub fn radar(size: f32, color: Color, t: &Theme) -> El {
+    Spinner::new().size(size).color(color).build(&t.k)
+}
+
 pub fn spinner(t: &Theme) -> El {
-    Loader::new().size(ICON_SMALL).color(t.muted).build(&t.k)
+    radar(ICON_SMALL, t.accent, t)
+}
+
+/// A harness brand mark framed in a continuous-corner squircle medallion; an
+/// active thread or task adds a quiet accent halo.
+pub fn medallion(harness: Option<(&str, &str)>, active: bool, t: &Theme) -> El {
+    let glyph = icon(
+        harness.map_or(&HARNESS, |(id, _)| harness_icon(id)),
+        ICON_SMALL,
+    )
+    .color(if active { t.text } else { t.muted })
+    .a11y_hidden();
+    let mut box_el = el()
+        .size(S20, S20)
+        .center()
+        .radius(RADIUS_INNER)
+        .continuous_corners()
+        .fill(t.chip_fill)
+        .border(HAIRLINE, if active { t.accent_veil } else { t.hairline })
+        .child(glyph);
+    if active {
+        box_el = box_el.radial_gradient(
+            [0.5, 0.5],
+            [S16, S16],
+            [(0.0, t.accent_veil), (1.0, Color::TRANSPARENT)],
+        );
+    }
+    match harness {
+        Some((_, name)) => box_el.help(name),
+        None => box_el.a11y_hidden(),
+    }
 }
 
 /// A thread's run state as an icon-sized mark: a spinner while it works,
@@ -713,7 +763,6 @@ fn inline_trigger(
     max_w: Option<f32>,
     t: &Theme,
 ) -> El {
-    let chevron = if open { &CHEVRON_UP } else { &CHEVRON_OPEN };
     let label = current.unwrap_or(name);
     let rest_text = if current.is_some() || open {
         t.text
@@ -735,6 +784,7 @@ fn inline_trigger(
         .gap(S4)
         .center_y()
         .radius(Size::Default.radius())
+        .continuous_corners()
         .children(mark.map(|glyph| {
             icon(glyph, ICON)
                 .color(rest_icon)
@@ -752,7 +802,8 @@ fn inline_trigger(
                 .a11y_hidden(),
         )
         .child(
-            icon(chevron, ICON)
+            icon(&CHEVRON_OPEN, ICON_SMALL)
+                .icon_rotation(if open { std::f32::consts::PI } else { 0.0 })
                 .color(rest_icon)
                 .group_color(t.text)
                 .a11y_hidden(),

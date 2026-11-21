@@ -367,14 +367,15 @@ fn title(s: &Desktop, t: &Theme) -> El {
                     .active_harness(&s.harnesses)
                     .map(|runner| (runner.id.as_str(), runner.name.as_str()));
                 group
-                    .child(harness_mark(harness, t))
+                    .child(ui::medallion(harness, false, t))
                     .child(title_text("New thread", t))
             },
         );
     };
     let thread = s.summary(id);
-    let mark = harness_mark(
+    let mark = ui::medallion(
         thread.map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
+        s.busy(),
         t,
     );
     let title = title_text(s.title(id), t);
@@ -395,18 +396,6 @@ fn title(s: &Desktop, t: &Theme) -> El {
         .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint).a11y_hidden())
         .child(mark)
         .child(title)
-}
-
-fn harness_mark(harness: Option<(&str, &str)>, t: &Theme) -> El {
-    let mark = icon(
-        harness.map_or(&ui::HARNESS, |(id, _)| ui::harness_icon(id)),
-        ICON,
-    )
-    .color(t.muted);
-    match harness {
-        Some((_, name)) => mark.help(name),
-        None => mark.a11y_hidden(),
-    }
 }
 
 fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Theme) -> El {
