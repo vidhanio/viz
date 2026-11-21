@@ -188,6 +188,10 @@ pub enum PlanStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct RunEnd {
+    /// Run identifier for checkpoint actions.
+    pub run: Option<super::RunId>,
+    /// Number of changed paths when both Git checkpoints were captured.
+    pub changed_files: Option<usize>,
     pub stop_reason: Option<String>,
     pub error: Option<String>,
     pub answer: Option<String>,

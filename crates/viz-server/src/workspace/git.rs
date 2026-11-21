@@ -9,7 +9,7 @@ use git2::{
 use serde_json::{Value, json};
 use viz_client::protocol::{
     CreateGitWorktree, GitBranch, GitBranches, GitSummary, GitWorktree, ListGitBranches, Method,
-    Project, RemoveGitWorktree, WorktreeRequest,
+    Project, RemoveGitWorktree, RunDiff, ThreadDiff, WorktreeRequest,
 };
 
 use super::{
@@ -68,7 +68,7 @@ pub(super) fn dirty_files(repo: &Repository, include_ignored: bool) -> Result<us
     Ok(statuses.len())
 }
 
-fn open(cwd: &Path) -> Result<Repository, RpcError> {
+pub(super) fn open(cwd: &Path) -> Result<Repository, RpcError> {
     let repo = Repository::discover(cwd).map_err(RpcError::from)?;
     if repo.workdir().is_none() {
         return Err(RpcError::invalid("a Git checkout is required"));
@@ -125,6 +125,20 @@ impl Drop for Provisioned {
 impl Workspace {
     pub(super) async fn git_call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
+            RunDiff::NAME => {
+                let input: RunDiff = decode(params)?;
+                encode(
+                    self.checkpoint_diff(input.thread.0, Some(input.run.0), input.summary)
+                        .await?,
+                )
+            }
+            ThreadDiff::NAME => {
+                let input: ThreadDiff = decode(params)?;
+                encode(
+                    self.checkpoint_diff(input.thread.0, None, input.summary)
+                        .await?,
+                )
+            }
             ListGitBranches::NAME => {
                 let input: ListGitBranches = decode(params)?;
                 let project = store::project(&mut *self.db.lock().await, &input.project).await?;

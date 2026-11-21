@@ -34,6 +34,20 @@ enum VizProtocol {
     let environments: [Environment]
   }
 
+  struct GitDiff: Decodable {
+    struct File: Decodable {
+      enum Change: String, Decodable {
+        case added, deleted, modified, typeChanged
+      }
+
+      let path: String
+      let change: Change
+    }
+
+    let files: [File]
+    let patch: String?
+  }
+
   struct GitSummary: Decodable {
     let branch: String?
     let head: String?
@@ -134,6 +148,8 @@ enum VizProtocol {
     }
 
     struct RunEnd: Decodable {
+      let run: Int?
+      let changedFiles: Int?
       let stopReason: String?
       let error: String?
       let answer: String?
@@ -416,6 +432,14 @@ final class Server {
   func delete(thread: Int, removeWorktree: Bool = false) async throws {
     _ = try await call(
       "thread.delete", params: ["thread": thread, "removeWorktree": removeWorktree])
+  }
+
+  func diff(thread: Int, run: Int? = nil, summary: Bool = false) async throws -> VizProtocol.GitDiff
+  {
+    var params: [String: Any] = ["thread": thread, "summary": summary]
+    if let run { params["run"] = run }
+    let data = try await call(run == nil ? "thread.diff" : "run.diff", params: params)
+    return try JSONDecoder().decode(VizProtocol.GitDiff.self, from: data)
   }
 
   func search(query: String, limit: Int? = nil) async throws -> [VizProtocol.SearchHit] {

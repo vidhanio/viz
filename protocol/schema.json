@@ -3175,6 +3175,176 @@
         }
       }
     },
+    "run.diff": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RunDiff",
+        "description": "Compare the working tree at the start and end of a run.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "summary": {
+            "description": "Omit the unified patch and return only paths and change kinds.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "thread",
+          "run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitDiff",
+        "description": "Changes between two snapshots of the working tree.",
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GitDiffFile"
+            }
+          },
+          "patch": {
+            "description": "Unified diff, absent when only the summary was requested.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "$defs": {
+          "GitDiffFile": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Path relative to the repository root.",
+                "type": "string"
+              },
+              "change": {
+                "$ref": "#/$defs/GitChange"
+              }
+            },
+            "required": [
+              "path",
+              "change"
+            ]
+          },
+          "GitChange": {
+            "type": "string",
+            "enum": [
+              "added",
+              "deleted",
+              "modified",
+              "typeChanged"
+            ]
+          }
+        }
+      }
+    },
+    "thread.diff": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadDiff",
+        "description": "Compare the first and latest completed checkpoint in a thread.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "summary": {
+            "description": "Omit the unified patch and return only paths and change kinds.",
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitDiff",
+        "description": "Changes between two snapshots of the working tree.",
+        "type": "object",
+        "properties": {
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GitDiffFile"
+            }
+          },
+          "patch": {
+            "description": "Unified diff, absent when only the summary was requested.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "files"
+        ],
+        "$defs": {
+          "GitDiffFile": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "description": "Path relative to the repository root.",
+                "type": "string"
+              },
+              "change": {
+                "$ref": "#/$defs/GitChange"
+              }
+            },
+            "required": [
+              "path",
+              "change"
+            ]
+          },
+          "GitChange": {
+            "type": "string",
+            "enum": [
+              "added",
+              "deleted",
+              "modified",
+              "typeChanged"
+            ]
+          }
+        }
+      }
+    },
     "git.branches": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4196,6 +4366,26 @@
           "RunEnd": {
             "type": "object",
             "properties": {
+              "run": {
+                "description": "Run identifier for checkpoint actions.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/RunId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "changedFiles": {
+                "description": "Number of changed paths when both Git checkpoints were captured.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
               "stopReason": {
                 "type": [
                   "string",
@@ -4215,6 +4405,12 @@
                 ]
               }
             }
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
           }
         }
       }
@@ -4918,6 +5114,26 @@
       "RunEnd": {
         "type": "object",
         "properties": {
+          "run": {
+            "description": "Run identifier for checkpoint actions.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "changedFiles": {
+            "description": "Number of changed paths when both Git checkpoints were captured.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
+          },
           "stopReason": {
             "type": [
               "string",

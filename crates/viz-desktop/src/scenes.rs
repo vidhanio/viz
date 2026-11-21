@@ -232,6 +232,8 @@ fn transcript(attachments: &[&str]) -> Thread {
                 )
             }),
             EntryData::Run(RunEnd {
+                run: None,
+                changed_files: None,
                 stop_reason: Some("end_turn".into()),
                 error: None,
                 answer: None,
@@ -350,6 +352,8 @@ fn worklog(s: &mut Desktop) {
                 text: "Task t-21 (Review line endings) on local thread 21 completed.\n\nCRLF survives the join; only the final newline was missing.".into(),
             },
             EntryData::Run(RunEnd {
+                    run: None,
+                    changed_files: None,
                 stop_reason: Some("cancelled".into()),
                 error: None,
                 answer: None,

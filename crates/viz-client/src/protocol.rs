@@ -104,6 +104,8 @@ methods! {
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
     LaunchThread => "thread.launch", Launched;
+    RunDiff => "run.diff", GitDiff;
+    ThreadDiff => "thread.diff", GitDiff;
     ListGitBranches => "git.branches", GitBranches;
     CreateGitWorktree => "git.worktree.create", GitWorktree;
     RemoveGitWorktree => "git.worktree.remove", Empty;
@@ -272,6 +274,49 @@ pub struct GitWorktree {
     pub path: String,
     /// Local branch at creation.
     pub branch: String,
+}
+
+/// Compare the working tree at the start and end of a run.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RunDiff {
+    pub thread: ThreadId,
+    pub run: RunId,
+    /// Omit the unified patch and return only paths and change kinds.
+    #[serde(default)]
+    pub summary: bool,
+}
+
+/// Compare the first and latest completed checkpoint in a thread.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ThreadDiff {
+    pub thread: ThreadId,
+    /// Omit the unified patch and return only paths and change kinds.
+    #[serde(default)]
+    pub summary: bool,
+}
+
+/// Changes between two snapshots of the working tree.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GitDiff {
+    pub files: Vec<GitDiffFile>,
+    /// Unified diff, absent when only the summary was requested.
+    pub patch: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct GitDiffFile {
+    /// Path relative to the repository root.
+    pub path: String,
+    pub change: GitChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum GitChange {
+    Added,
+    Deleted,
+    Modified,
+    TypeChanged,
 }
 
 /// List local and remote-tracking branches for a registered project.

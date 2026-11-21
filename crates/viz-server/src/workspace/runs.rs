@@ -301,6 +301,8 @@ impl Settlement {
         Self {
             status: RunStatus::Failed,
             end: RunEnd {
+                run: None,
+                changed_files: None,
                 stop_reason: Some("error".into()),
                 error: Some(error),
                 answer: None,
@@ -312,6 +314,8 @@ impl Settlement {
         Self {
             status,
             end: RunEnd {
+                run: None,
+                changed_files: None,
                 stop_reason: Some(reason.into()),
                 error: Some(error.into()),
                 answer: None,
@@ -324,7 +328,7 @@ pub(super) async fn settle(
     db: &mut dyn Executor,
     thread: u64,
     run: u64,
-    settlement: Settlement,
+    mut settlement: Settlement,
     unread: bool,
 ) -> Result<(), RpcError> {
     let status = match settlement.status {
@@ -334,6 +338,7 @@ pub(super) async fn settle(
         RunStatus::Interrupted => "interrupted",
         RunStatus::Queued | RunStatus::Running => unreachable!("settlement is terminal"),
     };
+    settlement.end.run = Some(RunId(run));
     let data = NewEntry::Run(settlement.end);
     let entry = store::append(db, thread, &data).await?;
     let NewEntry::Run(end) = data else {

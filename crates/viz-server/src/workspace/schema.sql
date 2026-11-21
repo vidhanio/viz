@@ -60,6 +60,8 @@ CREATE TABLE IF NOT EXISTS runs (
     end_entry INTEGER,
     answer TEXT,
     error TEXT,
+    checkpoint_start TEXT,
+    checkpoint_end TEXT,
     UNIQUE (thread, request_id)
 ) STRICT;
 

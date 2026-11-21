@@ -5,8 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use viz_client::protocol::{
     CreateGitWorktree, DeleteThread, HarnessOptions, LaunchThread, Launched, ListGitBranches,
-    Method, RemoveGitWorktree, RemoveProject, RunId, SendInput, SendMode, Sent, ThreadId,
-    WorktreeRequest,
+    Method, RemoveGitWorktree, RemoveProject, RunDiff, RunId, SendInput, SendMode, Sent,
+    ThreadDiff, ThreadId, WorktreeRequest,
 };
 
 use super::{
@@ -38,9 +38,11 @@ impl Workspace {
             | "project.update"
             | RemoveProject::NAME => self.project_call(method, params).await,
             LaunchThread::NAME => encode(self.launch(decode(params)?).await?),
-            ListGitBranches::NAME | CreateGitWorktree::NAME | RemoveGitWorktree::NAME => {
-                self.git_call(method, params).await
-            }
+            ListGitBranches::NAME
+            | CreateGitWorktree::NAME
+            | RemoveGitWorktree::NAME
+            | RunDiff::NAME
+            | ThreadDiff::NAME => self.git_call(method, params).await,
             SendInput::NAME => {
                 let input: SendInput = decode(params)?;
                 if input.origin.is_some() {

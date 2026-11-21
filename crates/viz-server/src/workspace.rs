@@ -2,6 +2,7 @@
 //! transcript.
 
 mod attachments;
+mod checkpoints;
 mod files;
 mod git;
 mod rpc;

@@ -161,6 +161,7 @@ impl Workspace {
             if let Some(claim) = claim {
                 self.changed(Some(thread));
                 let run = claim.id;
+                let checkpoint = self.start_checkpoint(thread, run).await;
                 let mut slot = driver.session.lock().await;
                 let result = self.prompt(thread, driver, &mut slot, claim, &cancel).await;
                 let settlement = if self.closing.is_cancelled() {
@@ -174,7 +175,15 @@ impl Workspace {
                     slot.take();
                 }
                 drop(slot);
-                if let Err(error) = self.finish(thread, run, settlement, &cancel).await {
+                let changed_files = if let Some(checkpoint) = checkpoint {
+                    self.end_checkpoint(run, checkpoint).await
+                } else {
+                    None
+                };
+                if let Err(error) = self
+                    .finish(thread, run, settlement, changed_files, &cancel)
+                    .await
+                {
                     self.abandon(thread, run, &error).await;
                     return Err(error);
                 }
@@ -232,6 +241,7 @@ impl Workspace {
             drop(db);
             (run, entry)
         };
+        let checkpoint = self.start_checkpoint(thread, run).await;
         let mut transcript = Transcript::new(entry.to_string(), Arc::default());
         let result = async {
             let mut pending = pending;
@@ -282,17 +292,25 @@ impl Workspace {
             }
             self.publish(thread, run, session.id(), transcript.finish(), None, None)
                 .await?;
+            let changed_files = if let Some(checkpoint) = checkpoint {
+                self.end_checkpoint(run, checkpoint).await
+            } else {
+                None
+            };
             self.finish(
                 thread,
                 run,
                 Settlement {
                     status: RunStatus::Completed,
                     end: RunEnd {
+                        run: None,
+                        changed_files: None,
                         stop_reason: None,
                         answer: Some(transcript.answer().to_owned()),
                         error: None,
                     },
                 },
+                changed_files,
                 cancel,
             )
             .await
@@ -309,6 +327,7 @@ impl Workspace {
         thread: u64,
         run: u64,
         mut settlement: Settlement,
+        changed_files: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<(), RpcError> {
         let mut db = self.db.lock().await;
@@ -323,6 +342,7 @@ impl Workspace {
                 Settlement::stopped(RunStatus::Cancelled, "cancelled", "ACP turn cancelled");
         }
         let mut tx = db.transaction().await?;
+        settlement.end.changed_files = changed_files;
         runs::settle(&mut tx, thread, run, settlement, self.unread(thread)).await?;
         tx.commit().await?;
         self.transient
@@ -633,6 +653,8 @@ fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
             Settlement {
                 status,
                 end: RunEnd {
+                    run: None,
+                    changed_files: None,
                     stop_reason: Some(stop_reason_name(stop_reason)),
                     answer: Some(answer),
                     error,

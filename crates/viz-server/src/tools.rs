@@ -9,7 +9,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use viz_client::protocol::{
     EnvironmentList, HarnessList, HarnessOptions, HarnessOptionsResult, LaunchThread, ListEntries,
-    ReadThreadState, SendMode, StopThread, TaskList, TaskResult, ThreadStateResult, WaitThread,
+    ListGitBranches, ReadThreadState, RunDiff, SendMode, StopThread, TaskList, TaskResult,
+    ThreadDiff, ThreadStateResult, WaitThread,
 };
 
 use crate::{
@@ -75,6 +76,9 @@ macro_rules! rpc_tools {
 
 rpc_tools! {
     "thread_list", "threads.list", ThreadList, "List threads in the selected environment, optionally filtered by project.";
+    "git_branches", "git.branches", ListGitBranches, "List local and remote-tracking branches of a registered project.";
+    "run_diff", "run.diff", RunDiff, "Compare the Git working tree at the start and end of a run.";
+    "thread_diff", "thread.diff", ThreadDiff, "Compare the first and latest complete Git checkpoints of a thread.";
     "thread_read", "thread.entries", ListEntries, "Read recent thread entries. Pass before for earlier entries.";
     "thread_state", "thread.state", ReadThreadState, "Read a thread's current state, ACP options, working directory, and queue.";
     "thread_search", "threads.search", Search, "Search thread transcripts in the selected environment.";
