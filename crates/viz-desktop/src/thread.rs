@@ -56,6 +56,9 @@ pub enum Item {
     Plan { key: String, steps: Vec<PlanStep> },
     /// A non-default ACP stop reason shown in the activity timeline.
     TurnStatus { key: String, text: String },
+    /// A delegated task's outcome, delivered back to the thread that
+    /// delegated it.
+    TaskResult(TaskResult),
     /// An assistant reply that ended without an answer.
     Notice {
         /// Stable element key.
@@ -77,11 +80,48 @@ pub struct User {
     pub attachments: Vec<String>,
 }
 
+/// A delegated task's outcome, from the server's delivery text: `Task <id>
+/// (<title>) on <place> <status>.`, then a blank line and the task's result or
+/// error. Only the title, status and detail are shown; the rest are wire
+/// details.
+#[derive(Debug, Clone)]
+pub struct TaskResult {
+    /// Stable element key.
+    pub key: String,
+    /// The task's id, to find it among the thread's tasks.
+    pub task: String,
+    pub title: String,
+    /// `completed`, `failed` or `cancelled`.
+    pub status: String,
+    /// The task's result or error.
+    pub detail: String,
+}
+
+impl TaskResult {
+    fn parse(key: String, task: &str, text: &str) -> Self {
+        let (head, detail) = text.split_once("\n\n").unwrap_or((text, ""));
+        let head = head.trim().trim_end_matches('.');
+        let title = head
+            .split_once(" (")
+            .and_then(|(_, rest)| rest.rsplit_once(") on "))
+            .map_or("", |(title, _)| title);
+        let status = head.rsplit_once(' ').map_or("", |(_, status)| status);
+        Self {
+            key,
+            task: task.to_owned(),
+            title: title.to_owned(),
+            status: status.to_owned(),
+            detail: detail.trim().to_owned(),
+        }
+    }
+}
+
 impl Item {
     pub fn key(&self) -> &str {
         match self {
             Self::User(user) => &user.key,
             Self::Tool(tool) => &tool.key,
+            Self::TaskResult(result) => &result.key,
             Self::Text { key, .. }
             | Self::Thinking { key, .. }
             | Self::Plan { key, .. }
@@ -233,11 +273,12 @@ impl Thread {
                 }
                 self.start(*id);
             }
-            EntryData::TaskResult { text, .. } => {
-                self.items.push(Item::TurnStatus {
-                    key: format!("e{id}"),
-                    text: text.clone(),
-                });
+            EntryData::TaskResult { task, text } => {
+                self.items.push(Item::TaskResult(TaskResult::parse(
+                    format!("e{id}"),
+                    task,
+                    text,
+                )));
                 self.start(*id);
             }
             EntryData::Text { text, key } => self.commit_text(key, text, false),

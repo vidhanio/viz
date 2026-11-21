@@ -748,6 +748,16 @@ lucide! {
     FILE_EDIT = FilePenLine;
     WRENCH = Wrench;
     TIMER = Timer;
+    /// A plan step not started yet.
+    CIRCLE = Circle;
+    /// A plan.
+    PLAN = ListChecks;
+    /// A run that ended early.
+    CIRCLE_STOP = CircleStop;
+    /// A delegated task's result arriving.
+    INBOX = Inbox;
+    /// Fetching a page.
+    GLOBE = Globe;
     /// A harness without a known mark.
     HARNESS = SquareTerminal;
 }

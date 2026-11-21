@@ -20,6 +20,7 @@ type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
     ("activity", activity),
+    ("worklog", worklog),
     ("selectors", selectors),
     ("model-search", model_search),
     ("new-agent", new_agent),
@@ -256,6 +257,97 @@ fn activity(s: &mut Desktop) {
     );
     s.toggle("acp-1-search-1-activity");
     s.toggle("acp-1-run-1");
+}
+
+/// Every kind of activity, open: a plan, reads, an edit's diff, a failed
+/// command, a tool viz doesn't know, a delegated task's result and a stopped
+/// run.
+fn worklog(s: &mut Desktop) {
+    workspace(s);
+    let tool = |id: &str, title: &str, kind: &str, input: &str| ToolRecord {
+        input: Some(input.into()),
+        ..preview_tool(id, title, kind, ToolCallStatus::Completed)
+    };
+    s.thread = preview_thread(
+        [
+            prompt("Make the export keep CRLF line endings, then run the tests."),
+            EntryData::Plan {
+                entries: [
+                    ("Find where blocks are joined", PlanStatus::Completed),
+                    ("Keep the input's line endings", PlanStatus::InProgress),
+                    ("Run the export tests", PlanStatus::Pending),
+                ]
+                .into_iter()
+                .map(|(content, status)| PlanEntry {
+                    content: content.into(),
+                    priority: PlanPriority::Medium,
+                    status,
+                })
+                .collect(),
+            },
+            EntryData::Thought {
+                key: "1:0".into(),
+                text: "The join uses a literal `\\n`; it should reuse whatever the source file used."
+                    .into(),
+            },
+            EntryData::Tool(tool(
+                "read-1",
+                "Read",
+                "read",
+                r#"{"path":"/work/workbench/src/export/markdown.rs"}"#,
+            )),
+            EntryData::Tool(tool("grep-1", "Search", "search", r#"{"pattern":"join(\"\\n"}"#)),
+            EntryData::Tool(ToolRecord {
+                output: Some("Updated 1 file.".into()),
+                diffs: vec![ToolDiff {
+                    path: "/work/workbench/src/export/markdown.rs".into(),
+                    old_text: Some(
+                        "fn render(blocks: &[Block]) -> String {\n    let body = blocks.join(\"\\n\\n\");\n    body\n}\n"
+                            .into(),
+                    ),
+                    new_text: "fn render(blocks: &[Block], ending: LineEnding) -> String {\n    let separator = ending.repeat(2);\n    let body = blocks.join(&separator);\n    body + ending.as_str()\n}\n"
+                        .into(),
+                }],
+                ..tool(
+                    "edit-1",
+                    "Edit",
+                    "edit",
+                    r#"{"path":"/work/workbench/src/export/markdown.rs"}"#,
+                )
+            }),
+            EntryData::Tool(ToolRecord {
+                output: Some(
+                    "Created At: 2026-11-20T19:51:26-05:00\nCompleted At: 2026-11-20T19:51:31-05:00\nCommand exited with code 101.\n\nCommand output:\nrunning 12 tests\ntest export::crlf ... FAILED\n\nfailures:\n    export::crlf: expected \"a\\r\\n\\r\\nb\\r\\n\", got \"a\\r\\n\\r\\nb\\n\"\n".into(),
+                ),
+                ..tool(
+                    "test-1",
+                    "Run tests",
+                    "execute",
+                    r#"{"command":"cargo test -p workbench export::"}"#,
+                )
+            }),
+            EntryData::Tool(tool(
+                "mcp-1",
+                "mcp__docs__search_pages",
+                "mcp__docs__search_pages",
+                r#"{"query":"CRLF in CommonMark"}"#,
+            )),
+            response("The test caught the last block's ending; I’ll fix that next."),
+            EntryData::TaskResult {
+                task: "t-21".into(),
+                text: "Task t-21 (Review line endings) on local thread 21 completed.\n\nCRLF survives the join; only the final newline was missing.".into(),
+            },
+            EntryData::Run(RunEnd {
+                stop_reason: Some("cancelled".into()),
+                error: None,
+                answer: None,
+            }),
+        ],
+        None,
+    );
+    for key in ["1:0-activity", "acp-1-edit-1", "acp-1-test-1", "e10"] {
+        s.toggle(key);
+    }
 }
 
 /// The model picker open on the session's model.

@@ -192,6 +192,11 @@ pub struct Theme {
     pub success: Color,
     /// Connecting.
     pub warning: Color,
+    /// An added line's wash in a diff: `success` at low alpha, so it reads on
+    /// any card.
+    pub added: Color,
+    /// A removed line's wash in a diff.
+    pub removed: Color,
     /// Code colors: Markdown fences.
     pub syntax: SyntaxTheme,
     /// Interface text, 13 on 20.
@@ -644,6 +649,8 @@ impl Theme {
             danger,
             success,
             warning,
+            added: success.alpha(if dark { 0.12 } else { 0.10 }),
+            removed: danger.alpha(if dark { 0.12 } else { 0.10 }),
             syntax,
             ui,
             ui_medium: medium(ui),

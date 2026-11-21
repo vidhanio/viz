@@ -1,10 +1,19 @@
 //! Transcript, activity, plan checklists, expandable tool records and
 //! subagent cards, in the reading column.
 //!
-//! Activity shares a narrow icon column. Details are only shown when there
-//! is something to read, and a running command stays visible in a folded burst.
+//! The column has one grid. Prose and the user's bubbles span it. Every
+//! activity row puts its mark in an [`ICON`]-wide column at the column's left
+//! edge and its words at [`INDENT`]; what a row opens (output, changes,
+//! reasoning, task cards) starts at [`INDENT`] too, and everything ends at the
+//! column's right edge. Rows are flat: hovering one brings its ink from muted
+//! to text, never a fill.
+//!
+//! A burst of reasoning and tool calls folds into one row that says what
+//! happened ("Thought, read 2 files and ran 3 commands"); a running command
+//! stays visible under it while folded. Details are only offered when there is
+//! something to read.
 
-use rune::{El, LoopSpec, ScrollSpec, Span, Transition, Tx, col, el, icon, rich, row, text};
+use rune::{El, Icon, ScrollSpec, Span, Transition, Tx, col, el, icon, rich, row, text};
 use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
     diff::{FileDiff, LineKind},
@@ -16,18 +25,22 @@ use crate::{
     attachments, header, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, S2, S4, S8, S12, S16,
-        S24, S32, S40, Size, Theme,
+        S20, S24, S32, Size, Theme,
     },
-    thread::{Item, PlanStep, Tool, ToolStatus, User, is_command},
+    thread::{Item, PlanStep, TaskResult, Tool, ToolStatus, User, is_command},
     ui::{self, Card},
 };
 
-/// The tallest an expanded tool block gets before it scrolls.
+/// The tallest an expanded tool block's body gets before it scrolls.
 const BLOCK_HEIGHT: f32 = 280.0;
 /// An activity row's height.
-const ACTIVITY_ROW: f32 = Size::Default.height();
-/// Where an activity row's label starts: the card inset, a glyph and a gap.
-const ACTIVITY_TEXT: f32 = CARD_INSET + ICON + S8;
+const ACTIVITY_ROW: f32 = Size::Small.height();
+/// Where an activity row's words start, and where what it opens starts: the
+/// mark's column and a gap.
+const INDENT: f32 = ICON + S8;
+/// The most diff lines an expanded edit draws; the copy action still copies
+/// the whole patch.
+const DIFF_LINES: usize = 400;
 /// The empty state's shortcut labels' column.
 const SHORTCUT_LABEL: f32 = S32 + S32 + S8;
 /// The widest a user bubble gets, as a share of the reading column.
@@ -45,7 +58,7 @@ enum Kind {
 /// Points above a row of kind `next` that follows one of kind `prev`.
 const fn space(prev: Kind, next: Kind) -> f32 {
     match (prev, next) {
-        (Kind::Activity, Kind::Activity) => 0.0,
+        (Kind::Activity, Kind::Activity) => S4,
         (Kind::Mine, _) => S24,
         (_, Kind::Mine) => S32,
         _ => S16,
@@ -147,10 +160,11 @@ const fn is_activity(item: &Item) -> bool {
     matches!(item, Item::Tool(_) | Item::Thinking { .. })
 }
 
-/// A single tool has its own disclosure; it doesn't need a second fold.
+/// A single tool has its own disclosure; it doesn't need a second fold. A
+/// lone delegation is a task card.
 fn single_tool(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     match subagent_call(tool) {
-        Some(Call::Spawn) if spawned(tool) => subagent_link(s, tool, t),
+        Some(Call::Spawn) if spawned(tool) => agent_stack(s, std::iter::once(tool), t),
         Some(call) if call != Call::Spawn && tool.status != ToolStatus::Failed => {
             subagent_row(s, tool, call, t)
         }
@@ -190,25 +204,153 @@ fn items<'a>(
             Item::Plan { key, steps } => rows.push(Kind::Prose, plan(key, steps, t)),
             Item::TurnStatus { key, text: words } => rows.push(
                 Kind::Activity,
-                text(words)
-                    .key(key)
-                    .font(t.ui)
-                    .color(t.muted)
-                    .wrap()
-                    .w_full()
-                    .pl(ACTIVITY_TEXT)
-                    .pr(CARD_INSET),
+                line(key, mark(&ui::CIRCLE_STOP, t))
+                    .role("status")
+                    .child(text(words).font(t.ui).color(t.muted).truncate().shrink()),
             ),
+            Item::TaskResult(result) => rows.push(Kind::Activity, task_result(s, result, t)),
             Item::Notice { key, text } => rows.push(Kind::Notice, notice(key, text, t)),
         }
     }
 }
 
+/// What a tool call does, for its verb, mark and its burst's summary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Action {
+    Command,
+    Read,
+    Write,
+    Edit,
+    Delete,
+    Move,
+    Search,
+    Fetch,
+    Other,
+}
+
+impl Action {
+    /// Summary order: what changed things first.
+    const ALL: [Self; 9] = [
+        Self::Edit,
+        Self::Write,
+        Self::Delete,
+        Self::Move,
+        Self::Command,
+        Self::Read,
+        Self::Search,
+        Self::Fetch,
+        Self::Other,
+    ];
+    const COUNT: usize = Self::ALL.len();
+
+    fn of(tool: &Tool) -> Self {
+        match tool.name.as_str() {
+            name if is_command(name) => Self::Command,
+            "read" | "read_file" => Self::Read,
+            "write" | "create" | "write_file" => Self::Write,
+            "edit" | "apply_patch" | "edit_file" => Self::Edit,
+            "delete" => Self::Delete,
+            "move" => Self::Move,
+            "search" | "grep" | "glob" | "web_search" => Self::Search,
+            "fetch" | "web_fetch" => Self::Fetch,
+            _ => Self::Other,
+        }
+    }
+
+    fn index(self) -> usize {
+        Self::ALL
+            .iter()
+            .position(|&a| a == self)
+            .unwrap_or_default()
+    }
+
+    /// Its target names a file.
+    const fn on_file(self) -> bool {
+        matches!(
+            self,
+            Self::Read | Self::Write | Self::Edit | Self::Delete | Self::Move
+        )
+    }
+
+    const fn icon(self) -> &'static Icon {
+        match self {
+            Self::Command => &ui::TERMINAL,
+            Self::Read => &ui::FILE_READ,
+            Self::Write => &ui::FILE_WRITE,
+            Self::Edit | Self::Move => &ui::FILE_EDIT,
+            Self::Delete => &ui::TRASH,
+            Self::Search => &ui::SEARCH,
+            Self::Fetch => &ui::GLOBE,
+            Self::Other => &ui::WRENCH,
+        }
+    }
+
+    /// The verb, finished or under way; `None` for a tool viz doesn't know.
+    const fn verb(self, done: bool) -> Option<&'static str> {
+        Some(match (self, done) {
+            (Self::Command, true) => "Ran",
+            (Self::Command, false) => "Running",
+            (Self::Read, true) => "Read",
+            (Self::Read, false) => "Reading",
+            (Self::Write, true) => "Wrote",
+            (Self::Write, false) => "Writing",
+            (Self::Edit, true) => "Edited",
+            (Self::Edit, false) => "Editing",
+            (Self::Delete, true) => "Deleted",
+            (Self::Delete, false) => "Deleting",
+            (Self::Move, true) => "Moved",
+            (Self::Move, false) => "Moving",
+            (Self::Search, true) => "Searched",
+            (Self::Search, false) => "Searching",
+            (Self::Fetch, true) => "Fetched",
+            (Self::Fetch, false) => "Fetching",
+            (Self::Other, _) => return None,
+        })
+    }
+
+    /// `n` of these, as a clause of a burst's summary.
+    fn clause(self, n: usize) -> String {
+        let count = |one: &'static str, many: &'static str| format!("{n} {}", plural(n, one, many));
+        match self {
+            Self::Command => format!("ran {}", count("command", "commands")),
+            Self::Read => format!("read {}", count("file", "files")),
+            Self::Write => format!("wrote {}", count("file", "files")),
+            Self::Edit => format!("edited {}", count("file", "files")),
+            Self::Delete => format!("deleted {}", count("file", "files")),
+            Self::Move => format!("moved {}", count("file", "files")),
+            Self::Search if n == 1 => "searched".to_owned(),
+            Self::Search => format!("searched {n} times"),
+            Self::Fetch => format!("fetched {}", count("page", "pages")),
+            Self::Other => format!("used {}", count("tool", "tools")),
+        }
+    }
+}
+
+/// A tool name viz doesn't know, as words: `mcp__docs__search_pages` reads
+/// "Search pages".
+fn humanize(name: &str) -> String {
+    let name = name.rsplit("__").next().unwrap_or(name);
+    let mut words = name
+        .split(['_', '-', ' ', '.'])
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join(" ");
+    if let Some(first) = words.get(..1) {
+        let upper = first.to_uppercase();
+        words.replace_range(..1, &upper);
+    }
+    words
+}
+
 /// What an activity burst holds, for its folded heading.
 struct Tally<'a> {
+    thoughts: usize,
     thinking: bool,
-    tools: usize,
+    actions: [usize; Action::COUNT],
     spawns: usize,
+    /// Messages to, checks on and stops of delegated tasks.
+    calls: [usize; 3],
     agents: [usize; Agent::COUNT],
     failures: usize,
     last_thought: Option<&'a str>,
@@ -218,9 +360,11 @@ struct Tally<'a> {
 impl<'a> Tally<'a> {
     fn of(s: &Desktop, burst: impl Iterator<Item = (&'a Item, bool)>) -> Self {
         let mut tally = Self {
+            thoughts: 0,
             thinking: false,
-            tools: 0,
+            actions: [0; Action::COUNT],
             spawns: 0,
+            calls: [0; 3],
             agents: [0; Agent::COUNT],
             failures: 0,
             last_thought: None,
@@ -229,6 +373,7 @@ impl<'a> Tally<'a> {
         for (item, streaming) in burst {
             match item {
                 Item::Thinking { text, .. } => {
+                    tally.thoughts += 1;
                     tally.thinking |= streaming;
                     let text = text.trim();
                     if !text.is_empty() {
@@ -239,12 +384,19 @@ impl<'a> Tally<'a> {
                     tally.spawns += 1;
                     tally.agents[Agent::of(s, tool, delegated_task(s, tool)).index()] += 1;
                 }
+                Item::Tool(tool)
+                    if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running) =>
+                {
+                    tally.active_tool = Some(tool);
+                }
                 Item::Tool(tool) => {
-                    tally.tools += 1;
-                    tally.failures += usize::from(tool.status == ToolStatus::Failed);
-                    if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running) {
-                        tally.active_tool = Some(tool);
+                    match subagent_call(tool) {
+                        Some(Call::Message) => tally.calls[0] += 1,
+                        Some(Call::Read | Call::List) => tally.calls[1] += 1,
+                        Some(Call::Cancel) => tally.calls[2] += 1,
+                        _ => tally.actions[Action::of(tool).index()] += 1,
                     }
+                    tally.failures += usize::from(tool.status == ToolStatus::Failed);
                 }
                 _ => {}
             }
@@ -252,31 +404,87 @@ impl<'a> Tally<'a> {
         tally
     }
 
-    const fn only_thought(&self) -> bool {
-        self.tools == 0 && self.spawns == 0
+    fn tools(&self) -> usize {
+        self.actions.iter().chain(&self.calls).sum()
     }
 
+    fn only_thought(&self) -> bool {
+        self.tools() == 0 && self.spawns == 0 && self.active_tool.is_none()
+    }
+
+    /// "Thought, read 2 files and ran 1 command": reasoning first, then each
+    /// kind of settled call, then delegations. A call under way shows as its
+    /// own row instead, so the summary never says it ran.
     fn label(&self) -> String {
-        match (self.tools, self.spawns) {
-            (0, 0) => if self.thinking { "Thinking" } else { "Thought" }.to_owned(),
-            (0, n) => format!("Delegated {n} {}", plural(n, "task", "tasks")),
-            (n, 0) => format!("Called {n} {}", plural(n, "tool", "tools")),
-            (tools, agents) => format!(
-                "Called {tools} {}, delegated {agents} {}",
-                plural(tools, "tool", "tools"),
-                plural(agents, "task", "tasks")
-            ),
+        let mut clauses = Vec::new();
+        if self.thinking {
+            clauses.push("thinking".to_owned());
+        } else if self.thoughts > 0 {
+            clauses.push("thought".to_owned());
         }
+        for action in Action::ALL {
+            let n = self.actions[action.index()];
+            if n > 0 {
+                clauses.push(action.clause(n));
+            }
+        }
+        if self.spawns > 0 {
+            clauses.push(format!(
+                "delegated {} {}",
+                self.spawns,
+                plural(self.spawns, "task", "tasks")
+            ));
+        }
+        let [messages, checks, stops] = self.calls;
+        if messages > 0 {
+            clauses.push(format!(
+                "messaged {messages} {}",
+                plural(messages, "task", "tasks")
+            ));
+        }
+        if checks > 0 {
+            clauses.push("checked tasks".to_owned());
+        }
+        if stops > 0 {
+            clauses.push(format!(
+                "stopped {stops} {}",
+                plural(stops, "task", "tasks")
+            ));
+        }
+        let mut label = match clauses.as_slice() {
+            [] => "working".to_owned(),
+            [only] => only.clone(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        };
+        if let Some(first) = label.get(..1) {
+            let upper = first.to_uppercase();
+            label.replace_range(..1, &upper);
+        }
+        label
     }
 
-    fn mark(&self) -> &'static rune::Icon {
+    /// The mark of what mattered most in the burst.
+    fn mark(&self) -> &'static Icon {
         if self.only_thought() {
-            &ui::BRAIN
-        } else if self.tools == 0 {
-            &ui::AGENT
-        } else {
-            &ui::WRENCH
+            return &ui::BRAIN;
         }
+        if self.spawns > 0 || self.calls.iter().sum::<usize>() > 0 {
+            return &ui::AGENT;
+        }
+        Action::ALL
+            .into_iter()
+            .find(|action| self.actions[action.index()] > 0)
+            .map_or_else(
+                || {
+                    if self.thoughts > 0 {
+                        &ui::BRAIN
+                    } else {
+                        self.active_tool
+                            .map_or(&ui::WRENCH, |tool| Action::of(tool).icon())
+                    }
+                },
+                Action::icon,
+            )
     }
 }
 
@@ -289,54 +497,47 @@ fn activity_group<'a>(
     let key = format!("{first}-activity");
     let open = s.expanded.contains(&key);
     let tally = Tally::of(s, burst.clone());
-    let Tally {
-        thinking,
-        spawns: spawn_count,
-        failures,
-        last_thought,
-        active_tool,
-        ..
-    } = tally;
     let only_thought = tally.only_thought();
-    let can_open = !only_thought || last_thought.is_some();
+    let can_open = !only_thought || tally.last_thought.is_some();
     let label = tally.label();
-    let mark = tally.mark();
-    let mut heading = if can_open {
-        disclosure(&key, mark, open, t)
-    } else {
-        activity("header", icon(mark, ICON_SMALL).color(t.muted))
-    };
-    heading = heading.label(label.clone()).child(
-        text(label)
-            .font(t.ui_medium)
-            .color(t.text)
-            .truncate()
-            .shrink(),
-    );
+    let mut heading = line("header", mark(tally.mark(), t))
+        .label(label.clone())
+        .child(
+            text(label)
+                .font(t.ui_medium)
+                .color(t.text)
+                .truncate()
+                .shrink(),
+        );
+    if can_open {
+        heading = disclosure(heading, &key, open, t);
+    }
     let preview = if can_open {
-        last_thought
-            .filter(|_| !open && (only_thought || thinking))
+        tally
+            .last_thought
+            .filter(|_| !open && (only_thought || tally.thinking))
             .and_then(|thought| thought.lines().next())
+            .map(|thought| thought.trim_matches(['*', '_', '#', ' ']))
     } else {
-        (!thinking).then_some("Reasoning hidden")
+        (!tally.thinking).then_some("Reasoning hidden")
     };
     heading = heading.child(
         text(preview.unwrap_or_default())
             .font(t.ui)
-            .color(t.muted)
+            .color(t.faint)
             .grow(1.0)
             .min_w(0.0)
             .shrink()
             .truncate(),
     );
-    if spawn_count > 0 {
+    if tally.spawns > 0 {
         let marks = burst.clone().filter_map(|(item, _)| match item {
             Item::Tool(tool) if spawned(tool) => {
                 Some(local_child(s, tool, delegated_task(s, tool)))
             }
             _ => None,
         });
-        heading = heading.child(agent_marks(marks, spawn_count, t));
+        heading = heading.child(agent_marks(marks, tally.spawns, t));
     }
     if let Some(status) = Agent::summary(&tally.agents) {
         heading = heading.child(
@@ -347,35 +548,33 @@ fn activity_group<'a>(
                 .truncate(),
         );
     }
-    if failures > 0 {
+    if tally.failures > 0 {
         heading = heading.child(
-            text(format!("{failures} failed"))
+            text(format!("{} failed", tally.failures))
                 .font(t.small)
                 .color(t.danger),
         );
     }
-    if thinking {
+    if tally.thinking {
         heading = heading.child(ui::spinner(t));
     }
-    let mut group = col()
-        .key(key)
-        .w_full()
-        .child(heading.children(can_open.then(|| chevron(open, t))));
+    let mut group = col().key(key).w_full().gap(S2).child(heading);
     if can_open && open {
         group = group.child(activity_details(s, burst, t));
-    } else if let Some(tool) = active_tool {
-        group = group.child(single_tool(s, tool, t).ml(S8));
+    } else if let Some(tool) = tally.active_tool {
+        group = group.child(single_tool(s, tool, t));
     }
     group
 }
 
-/// An open activity group: reasoning, tools, and runs of delegated tasks.
+/// An open activity group: reasoning, tools, and runs of delegated tasks, in
+/// the group's own icon column.
 fn activity_details<'a>(
     s: &Desktop,
     burst: &(impl Iterator<Item = (&'a Item, bool)> + Clone),
     t: &Theme,
 ) -> El {
-    let mut details = col().key("details").w_full().pl(S8).gap(S2);
+    let mut details = col().key("details").w_full().gap(S2);
     let mut entries = burst.clone().peekable();
     while let Some((item, streaming)) = entries.next() {
         match item {
@@ -394,11 +593,18 @@ fn activity_details<'a>(
                     }
                     _ => None,
                 });
-                details = details.child(agent_stack(
-                    s,
-                    std::iter::once(tool.as_ref()).chain(others),
-                    t,
-                ));
+                details = details.child(
+                    col()
+                        .key(format!("{}-tasks", tool.key))
+                        .w_full()
+                        .pl(INDENT)
+                        .py(S4)
+                        .child(agent_stack(
+                            s,
+                            std::iter::once(tool.as_ref()).chain(others),
+                            t,
+                        )),
+                );
             }
             Item::Tool(tool) => details = details.child(single_tool(s, tool, t)),
             _ => {}
@@ -415,29 +621,40 @@ fn spawned(tool: &Tool) -> bool {
     subagent_call(tool) == Some(Call::Spawn) && tool.status != ToolStatus::Failed
 }
 
-/// An activity row: a glyph at the card inset, then the label.
-fn activity(key: &str, mark: El) -> El {
+/// An activity mark: a small Lucide icon in muted ink, text ink while its row
+/// is hovered.
+fn mark(glyph: &'static Icon, t: &Theme) -> El {
+    icon(glyph, ICON_SMALL).color(t.muted).group_color(t.text)
+}
+
+/// An activity row: its mark in the icon column, then whatever follows at
+/// [`INDENT`], word-spaced.
+fn line(key: &str, mark: El) -> El {
     row()
         .key(key.to_owned())
         .w_full()
         .h(ACTIVITY_ROW)
-        .px(CARD_INSET)
-        .gap(S8)
+        .gap(S4)
         .center_y()
-        .radius(Size::Default.radius())
-        .child(ui::lead(mark, ACTIVITY_ROW))
+        .child(ui::lead(mark, ACTIVITY_ROW).mr(S4))
 }
 
-/// An activity row that opens and closes on press.
-fn disclosure(key: &str, mark: &'static rune::Icon, open: bool, t: &Theme) -> El {
+/// A row that does something on press: focusable, ink-only hover.
+fn pressable(row: El, t: &Theme) -> El {
+    row.focusable(true)
+        .focus_ring(HAIRLINE, S2, t.accent)
+        .radius(Size::Small.radius())
+        .hover_group()
+}
+
+/// `row` opens and closes `key` on press, with a chevron after its words.
+fn disclosure(row: El, key: &str, open: bool, t: &Theme) -> El {
     let toggle = key.to_owned();
-    activity("header", icon(mark, ICON_SMALL).color(t.muted))
+    pressable(row, t)
         .role("button")
         .expanded(open)
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .hover(t.hover)
         .on_press(move |s: &mut Desktop| s.toggle(&toggle))
+        .child(chevron(open, t))
 }
 
 fn chevron(open: bool, t: &Theme) -> El {
@@ -450,11 +667,12 @@ fn chevron(open: bool, t: &Theme) -> El {
         ICON_SMALL,
     )
     .color(t.faint)
+    .group_color(t.text)
     .a11y_hidden()
 }
 
-/// The streamed answer’s caret, or a quiet line while the run has not emitted
-/// activity.
+/// A quiet line while the run is working but shows nothing else that moves:
+/// no reasoning or call under way and no answer streaming in.
 fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
     if !s.busy() {
         return;
@@ -470,21 +688,10 @@ fn live(s: &Desktop, rows: &mut Rows, t: &Theme) {
     if partial.is_empty() && !running {
         rows.push(
             Kind::Activity,
-            activity("working", ui::spinner(t))
+            line("working", ui::spinner(t))
                 .role("status")
                 .label("Working")
                 .child(text("Working").font(t.ui).color(t.muted)),
-        );
-    } else if matches!(partial.last(), Some(Item::Text { .. })) {
-        rows.push(
-            Kind::Activity,
-            el().key("caret")
-                .w(S2)
-                .h(ICON)
-                .radius(HAIRLINE)
-                .fill(t.accent)
-                .looping(LoopSpec::opacity(1.0, 0.0, 0.0, 1.0))
-                .a11y_hidden(),
         );
     }
 }
@@ -715,22 +922,24 @@ fn prose(key: &str, source: &str, streaming: bool, t: &Theme) -> El {
         .w_full()
 }
 
-/// Keep the trace in the work-log lane without a second heading or the
-/// runner's leading/trailing blank lines.
+/// Reasoning: the trace beside a thin rail in the icon column, its words at
+/// [`INDENT`], without the runner's leading or trailing blank lines.
 fn thought(key: &str, thought: &str, streaming: bool, t: &Theme) -> El {
     row()
         .key(key.to_owned())
         .w_full()
-        .px(CARD_INSET)
         .py(S4)
         .gap(S8)
-        .items_start()
+        .items_stretch()
         .role("group")
         .label(if streaming { "Thinking" } else { "Thought" })
-        .child(ui::lead(
-            icon(&ui::BRAIN, ICON_SMALL).color(t.faint),
-            t.ui.line_height,
-        ))
+        .child(
+            col()
+                .w(ICON)
+                .items_center()
+                .a11y_hidden()
+                .child(el().w(S2).grow(1.0).radius(HAIRLINE).fill(t.hairline)),
+        )
         .child(
             Markdown::new(thought.to_owned())
                 .style(t.markdown().body_font(t.ui).text(t.muted).link(t.text))
@@ -745,30 +954,49 @@ fn thought(key: &str, thought: &str, streaming: bool, t: &Theme) -> El {
         )
 }
 
-fn tool_mark(tool: &Tool) -> (&'static rune::Icon, &str) {
-    if let Some(call) = subagent_call(tool) {
-        let label = match call {
-            Call::Spawn => "Delegate task",
-            Call::Message => "Message thread",
-            Call::Read => "Read activity",
-            Call::List => "List tasks",
-            Call::Cancel => "Stop task",
-        };
-        return (&ui::AGENT, label);
-    }
-    match tool.name.as_str() {
-        "bash" | "execute" | "shell" | "terminal" => (&ui::TERMINAL, "Run"),
-        "read" | "read_file" => (&ui::FILE_READ, "Read"),
-        "write" | "create" | "write_file" => (&ui::FILE_WRITE, "Write"),
-        "edit" | "apply_patch" | "edit_file" => (&ui::FILE_EDIT, "Edit"),
-        "search" | "grep" | "glob" | "web_search" => (&ui::SEARCH, "Search"),
-        "tool" | "other" => (&ui::WRENCH, "Tool"),
-        name => (&ui::WRENCH, name),
-    }
+/// `path` as its directory (with a trailing slash, or empty) and its name.
+fn split_path(path: &str) -> (&str, &str) {
+    let trimmed = path.trim_end_matches('/');
+    trimmed
+        .rfind('/')
+        .map_or(("", trimmed), |cut| (&trimmed[..=cut], &trimmed[cut + 1..]))
 }
 
+/// `path` from the thread's working directory, when it's inside it.
+fn relative<'a>(s: &Desktop, path: &'a str) -> &'a str {
+    s.state
+        .as_ref()
+        .and_then(|state| path.strip_prefix(state.cwd.trim_end_matches('/')))
+        .and_then(|rest| rest.strip_prefix('/'))
+        .filter(|rest| !rest.is_empty())
+        .unwrap_or(path)
+}
+
+/// A file as its name in full ink and its directory after it, faint, cut
+/// first when the row is narrow.
+fn file_target(s: &Desktop, path: &str, t: &Theme) -> El {
+    let (dir, name) = split_path(relative(s, path));
+    row()
+        .key("target")
+        .gap(S8)
+        .min_w(0.0)
+        .shrink()
+        .center_y()
+        .help(path)
+        .child(text(name).font(t.ui).color(t.text).truncate().min_w(0.0))
+        .children((!dir.is_empty()).then(|| {
+            text(dir.trim_end_matches('/'))
+                .font(t.ui)
+                .color(t.faint)
+                .truncate()
+                .shrink()
+                .min_w(0.0)
+        }))
+}
+
+/// Where a call stands, at the row's end: nothing once it's done.
 fn meta(tool: &Tool, now: i64, t: &Theme) -> Option<El> {
-    let faint = |words: String| text(words).font(t.small).color(t.faint);
+    let faint = |words: &str| text(words.to_owned()).font(t.small).color(t.faint);
     match tool.status {
         ToolStatus::Running if tool.timeout_ms.is_some() => tool.timeout_ms.map(|limit| {
             let label = format!("Timeout: {}", theme::duration(limit));
@@ -789,8 +1017,8 @@ fn meta(tool: &Tool, now: i64, t: &Theme) -> Option<El> {
             )
         }),
         ToolStatus::Running => Some(ui::spinner(t)),
-        ToolStatus::Pending => Some(faint("Pending".to_owned())),
-        ToolStatus::Abandoned => Some(faint("Stopped".to_owned())),
+        ToolStatus::Pending => Some(faint("Queued")),
+        ToolStatus::Abandoned => Some(faint("Stopped")),
         ToolStatus::Failed => Some(
             text(
                 tool.exit_code
@@ -804,94 +1032,179 @@ fn meta(tool: &Tool, now: i64, t: &Theme) -> Option<El> {
     }
 }
 
+/// One call: its mark, a verb and its target (a file, a command in mono, a
+/// query), then where it stands. Opens its output or changes when it has any.
 fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let action = Action::of(tool);
     let expandable = !tool.output.is_empty() || !tool.diffs.is_empty();
     let open = expandable && s.expanded.contains(&tool.key);
-    let (mark, verb) = tool_mark(tool);
-    let command = is_command(&tool.name);
+    let done = !matches!(tool.status, ToolStatus::Pending | ToolStatus::Running);
+    let generic = matches!(tool.name.as_str(), "tool" | "other" | "");
+    let verb = action.verb(done).map_or_else(
+        || (!generic).then(|| humanize(&tool.name)),
+        |verb| Some(verb.to_owned()),
+    );
     let detail = tool.summary.as_str();
-    let mut summary = text(detail)
-        .font(if command { t.mono } else { t.ui })
-        .color(t.muted)
-        .min_w(0.0)
-        .truncate()
-        .grow(1.0)
-        .shrink();
-    if let Some(full_command) = tool
-        .input
-        .as_deref()
-        .filter(|input| command && *input != detail)
-    {
-        summary = summary.help(full_command);
+    let mut glyph = icon(action.icon(), ICON_SMALL);
+    glyph = if tool.status == ToolStatus::Failed {
+        glyph.color(t.danger)
     } else {
-        summary = summary.help_when_truncated(detail);
+        glyph.color(t.muted).group_color(t.text)
+    };
+    let mut header = line("tool", glyph).label(match &verb {
+        Some(verb) if !detail.is_empty() => format!("{verb} {detail}"),
+        Some(verb) => verb.clone(),
+        None => detail.to_owned(),
+    });
+    if let Some(verb) = &verb {
+        header = header.child(
+            text(verb.clone())
+                .font(t.ui)
+                .color(t.muted)
+                .group_color(t.text),
+        );
     }
-    let mut header = activity("tool", icon(mark, ICON_SMALL).color(t.muted))
-        .label(format!("{verb} {detail}"))
-        .child(text(verb).font(t.ui_medium).color(t.text))
-        .child(summary)
-        .children(meta(tool, s.tool_clock, t));
+    let target = if detail.is_empty() {
+        None
+    } else if is_command(&tool.name) {
+        let mut command = text(detail)
+            .font(t.mono)
+            .color(t.text)
+            .min_w(0.0)
+            .truncate()
+            .shrink();
+        command = match tool.input.as_deref().filter(|input| *input != detail) {
+            Some(full) => command.help(full),
+            None => command.help_when_truncated(detail),
+        };
+        Some(command)
+    } else if action.on_file() {
+        Some(file_target(s, detail, t))
+    } else {
+        Some(
+            text(detail)
+                .font(t.ui)
+                .color(if verb.is_some() { t.text } else { t.muted })
+                .min_w(0.0)
+                .truncate()
+                .shrink()
+                .help_when_truncated(detail),
+        )
+    };
+    header = header.children(target);
     if expandable {
-        let key = tool.key.clone();
-        header = header
-            .role("button")
-            .expanded(open)
-            .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .hover(t.hover)
-            .on_press(move |s: &mut Desktop| s.toggle(&key))
-            .child(chevron(open, t));
+        header = disclosure(header, &tool.key, open, t);
     }
+    header = header
+        .child(el().grow(1.0).min_w(0.0).a11y_hidden())
+        .children(meta(tool, s.tool_clock, t));
     let mut stack = col().key(tool.key.clone()).w_full().child(header);
     if open {
-        stack = stack.child(output(tool, t));
+        stack = stack.child(output(s, tool, t));
     }
     stack
 }
 
-fn output(tool: &Tool, t: &Theme) -> El {
-    let mut inner = col().key("inner").w_full().gap(S8).px(S12).py(S8);
-    if !tool.output.is_empty() {
-        let literal = is_command(&tool.name) || matches!(tool.name.as_str(), "read" | "read_file");
-        inner = inner.child(if literal {
-            ui::code(&tool.output, t)
-        } else {
-            text(&tool.output)
-                .w_full()
-                .font(t.ui)
-                .color(t.text)
-                .wrap_anywhere()
-                .selectable(true)
-                .selection_color(t.k.selection())
-        });
-    }
-    if !tool.diffs.is_empty() {
-        inner = inner.child(rune::memo(
+/// An open call's output and changes, as cards at [`INDENT`]. An edit's
+/// changes say more than its "Updated 1 file", so they replace it.
+fn output(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let mut blocks = col().key("body").w_full().pl(INDENT).pt(S4).pb(S8).gap(S8);
+    if tool.diffs.is_empty() {
+        blocks = blocks.child(output_card(s, tool, t));
+    } else {
+        let cwd = s.state.as_ref().map(|state| state.cwd.as_str());
+        blocks = blocks.child(rune::memo(
             format!("{}-diffs", tool.key),
-            (&tool.diffs, t.k.dark),
-            || diff_sections(tool, t),
+            (&tool.diffs, t.k.dark, cwd),
+            || diffs(s, tool, t),
         ));
     }
-    col()
-        .key("body")
-        .w_full()
-        .pl(ACTIVITY_TEXT)
-        .pr(CARD_INSET)
-        .pb(S4)
-        .child(
-            Card::Surface
-                .frame(t)
-                .max_h(BLOCK_HEIGHT)
-                .min_h(0.0)
-                .clip_rounded(theme::RADIUS_CARD)
-                .scroll(ScrollSpec {
-                    stick_bottom: tool.status == ToolStatus::Running,
-                })
-                .child(inner),
-        )
+    blocks
 }
 
-fn diff_sections(tool: &Tool, t: &Theme) -> El {
+/// A card's title band: what it holds, then a copy action at its end.
+fn card_header(title: El, copy: El) -> El {
+    row()
+        .key("head")
+        .w_full()
+        .h(S32)
+        .pl(CARD_INSET)
+        .pr(S4)
+        .gap(S8)
+        .center_y()
+        .child(title.grow(1.0).shrink().min_w(0.0))
+        .child(copy)
+}
+
+fn copy_button(label: &str, copied: String, t: &Theme) -> El {
+    ui::icon_button(&ui::COPY, label, IconButtonVariant::GhostMuted, Size::Small)
+        .on_press_tx(move |_: &mut Desktop, tx: &mut Tx| tx.copy(copied.clone()))
+        .build(&t.k)
+        .key("copy")
+}
+
+/// A card body that scrolls past [`BLOCK_HEIGHT`], following the end while
+/// the call runs.
+fn card_body(body: El, follow: bool) -> El {
+    col()
+        .key("scroll")
+        .w_full()
+        .max_h(BLOCK_HEIGHT)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: follow,
+        })
+        .child(body)
+}
+
+/// Output: a command's or file's text in mono, anything else as prose.
+fn output_card(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let command = is_command(&tool.name);
+    let literal = command || Action::of(tool) == Action::Read;
+    let title = if command {
+        let full = tool.input.as_deref().unwrap_or(&tool.summary);
+        text(format!("$ {}", full.lines().next().unwrap_or_default()))
+            .font(t.mono)
+            .color(t.muted)
+            .truncate()
+            .help_when_truncated(full)
+    } else if Action::of(tool).on_file() {
+        text(relative(s, &tool.summary))
+            .font(t.ui)
+            .color(t.muted)
+            .truncate()
+            .help_when_truncated(&tool.summary)
+    } else {
+        text("Output").font(t.ui).color(t.muted)
+    };
+    let output = tool.output.trim_end();
+    let body = if literal {
+        ui::code(output, t)
+    } else {
+        text(output)
+            .w_full()
+            .font(t.ui)
+            .color(t.text)
+            .wrap()
+            .selectable(true)
+            .selection_color(t.k.selection())
+    };
+    Card::Surface
+        .frame(t)
+        .key("output")
+        .clip_rounded(theme::RADIUS_CARD)
+        .child(card_header(
+            title,
+            copy_button("Copy output", tool.output.clone(), t),
+        ))
+        .child(ui::rule(t))
+        .child(card_body(
+            col().w_full().px(CARD_INSET).py(S8).child(body),
+            tool.status == ToolStatus::Running,
+        ))
+}
+
+fn diffs(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     col()
         .role("group")
         .label("Changes")
@@ -904,77 +1217,168 @@ fn diff_sections(tool: &Tool, t: &Theme) -> El {
                 diff.old_text.as_deref().unwrap_or_default(),
                 &diff.new_text,
             );
-            let mut section = col().key(format!("diff-{index}")).w_full().gap(S4).child(
-                ui::section(file.path(), t)
-                    .truncate()
-                    .help_when_truncated(file.path()),
-            );
-            if file.hunks.is_empty() {
-                section = section.child(ui::section(
-                    if file.binary {
-                        "Binary change"
-                    } else {
-                        "No text changes"
-                    },
-                    t,
-                ));
-            }
-            section.children(file.hunks.iter().enumerate().map(|(i, hunk)| {
-                let mut body = String::new();
-                let mut spans = Vec::new();
-                for line in &hunk.lines {
-                    if !body.is_empty() {
-                        body.push('\n');
-                    }
-                    let start = body.len();
-                    let (prefix, color) = match line.kind {
-                        LineKind::Added => ('+', t.success),
-                        LineKind::Removed => ('-', t.danger),
-                        LineKind::Context => (' ', t.muted),
-                    };
-                    body.push(prefix);
-                    body.push(' ');
-                    body.push_str(&line.text);
-                    spans.push(Span {
-                        color: Some(color),
-                        ..Span::new(start, body.len())
-                    });
-                }
-                col()
-                    .key(format!("hunk-{i}"))
-                    .w_full()
-                    .gap(S2)
-                    .child(text(hunk.header()).font(t.mono_small).color(t.faint))
-                    .child(
-                        rich(body, spans)
-                            .font(t.mono)
-                            .wrap_anywhere()
-                            .w_full()
-                            .selectable(true)
-                            .selection_color(t.k.selection()),
-                    )
-            }))
+            diff_card(s, &file, t).key(format!("diff-{index}"))
         }))
 }
 
+/// One file's changes: its name, directory and line counts over its hunks,
+/// added and removed lines on their washes, changed words washed again.
+fn diff_card(s: &Desktop, file: &FileDiff, t: &Theme) -> El {
+    let path = file.path();
+    let (dir, name) = split_path(relative(s, path));
+    let count = |n: usize, sign: char, ink| {
+        (n > 0).then(|| text(format!("{sign}{n}")).font(t.mono_small).color(ink))
+    };
+    let title = row()
+        .gap(S8)
+        .center_y()
+        .help(path)
+        .child(
+            text(name)
+                .font(t.ui_medium)
+                .color(t.text)
+                .truncate()
+                .min_w(0.0),
+        )
+        .children((!dir.is_empty()).then(|| {
+            text(dir.trim_end_matches('/'))
+                .font(t.ui)
+                .color(t.faint)
+                .truncate()
+                .shrink()
+                .min_w(0.0)
+        }))
+        .children(count(file.additions(), '+', t.success))
+        .children(count(file.deletions(), '−', t.danger));
+    let mut body = col().w_full().py(S4);
+    if file.hunks.is_empty() {
+        body = body.child(
+            text(if file.binary {
+                "Binary change"
+            } else {
+                "No text changes"
+            })
+            .font(t.ui)
+            .color(t.muted)
+            .px(CARD_INSET),
+        );
+    }
+    let total: usize = file.hunks.iter().map(|hunk| hunk.lines.len()).sum();
+    let mut shown = 0;
+    for (index, hunk) in file.hunks.iter().enumerate() {
+        if shown == DIFF_LINES {
+            break;
+        }
+        if index > 0 {
+            body = body.child(
+                text(hunk.header())
+                    .font(t.mono_small)
+                    .color(t.faint)
+                    .px(CARD_INSET)
+                    .py(S4),
+            );
+        }
+        for line in hunk.lines.iter().take(DIFF_LINES - shown) {
+            body = body.child(diff_line(line, t));
+            shown += 1;
+        }
+    }
+    if total > shown {
+        body = body.child(
+            text(format!("{} more lines", total - shown))
+                .font(t.small)
+                .color(t.faint)
+                .px(CARD_INSET)
+                .pt(S4),
+        );
+    }
+    Card::Surface
+        .frame(t)
+        .clip_rounded(theme::RADIUS_CARD)
+        .child(card_header(
+            title,
+            copy_button("Copy patch", file.patch(), t),
+        ))
+        .child(ui::rule(t))
+        .child(card_body(body, false))
+}
+
+/// A diff line: its sign in a gutter, then the line, wrapping only where it
+/// must and continuing under itself rather than under the sign.
+fn diff_line(line: &rune_kit::diff::Line, t: &Theme) -> El {
+    let (sign, sign_ink, wash, ink) = match line.kind {
+        LineKind::Added => ("+", t.success, Some(t.added), t.text),
+        LineKind::Removed => ("−", t.danger, Some(t.removed), t.text),
+        LineKind::Context => ("", t.faint, None, t.muted),
+    };
+    let spans = wash.map_or_else(Vec::new, |wash| {
+        line.changes
+            .iter()
+            .filter(|range| range.start < range.end && range.end <= line.text.len())
+            .map(|range| Span {
+                bg: Some(wash),
+                ..Span::new(range.start, range.end)
+            })
+            .collect()
+    });
+    let mut row = row()
+        .w_full()
+        .px(CARD_INSET)
+        .gap(S4)
+        .items_start()
+        .child(text(sign).font(t.mono).color(sign_ink).w(S12).a11y_hidden())
+        .child(
+            rich(line.text.clone(), spans)
+                .font(t.mono)
+                .color(ink)
+                .wrap_anywhere()
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .selectable(true)
+                .selection_color(t.k.selection()),
+        );
+    if let Some(wash) = wash {
+        row = row.fill(wash);
+    }
+    row
+}
+
+/// The run's checklist, in the activity grid: a heading row with progress,
+/// then each step's mark in the icon column.
 fn plan(key: &str, steps: &[PlanStep], t: &Theme) -> El {
-    let line = t.ui.line_height;
-    Card::Outline
-        .build(t)
+    let line_height = t.ui.line_height;
+    let done = steps
+        .iter()
+        .filter(|step| step.status == ToolStatus::Done)
+        .count();
+    col()
         .key(key)
+        .w_full()
         .role("list")
         .label("Plan")
         .gap(S4)
-        .child(ui::section("Plan", t))
+        .child(
+            line("heading", mark(&ui::PLAN, t))
+                .child(text("Plan").font(t.ui_medium).color(t.text))
+                .child(
+                    text(format!("{done} of {}", steps.len()))
+                        .font(t.small)
+                        .color(t.faint),
+                ),
+        )
         .children(steps.iter().enumerate().map(|(index, step)| {
-            let (mark, label) = match step.status {
-                ToolStatus::Done => (icon(&ui::CHECK, ICON).color(t.success), "Done"),
-                ToolStatus::Running => (ui::spinner(t), "In progress"),
+            let (mark, label, ink) = match step.status {
+                ToolStatus::Done => (
+                    icon(&ui::CHECK, ICON_SMALL).color(t.success),
+                    "Done",
+                    t.muted,
+                ),
+                ToolStatus::Running => (ui::spinner(t), "In progress", t.text),
                 _ => (
-                    el().size(ICON_SMALL - S2, ICON_SMALL - S2)
-                        .radius(theme::S2 + HAIRLINE)
-                        .border(HAIRLINE, t.faint),
+                    icon(&ui::CIRCLE, ICON_SMALL).color(t.faint),
                     "Pending",
+                    t.muted,
                 ),
             };
             row()
@@ -984,20 +1388,88 @@ fn plan(key: &str, steps: &[PlanStep], t: &Theme) -> El {
                 .w_full()
                 .gap(S8)
                 .items_start()
-                .child(ui::lead(mark, line))
+                .child(ui::lead(mark, line_height))
                 .child(
                     text(&step.text)
                         .font(t.ui)
-                        .color(if step.status == ToolStatus::Pending {
-                            t.muted
-                        } else {
-                            t.text
-                        })
+                        .color(ink)
                         .grow(1.0)
                         .shrink()
                         .wrap(),
                 )
         }))
+}
+
+/// A delegated task's outcome arriving: its title and how it ended, opening
+/// its thread; the result itself opens beneath.
+fn task_result(s: &Desktop, result: &TaskResult, t: &Theme) -> El {
+    let task = s.tasks.iter().find(|task| task.id == result.task);
+    let title = task
+        .map(|task| task.title.as_str())
+        .filter(|title| !title.is_empty())
+        .or_else(|| (!result.title.is_empty()).then_some(result.title.as_str()))
+        .unwrap_or("Delegated task");
+    let (word, ink) = match result.status.as_str() {
+        "completed" => ("finished", t.muted),
+        "failed" => ("failed", t.danger),
+        "cancelled" => ("was stopped", t.muted),
+        _ => ("ended", t.muted),
+    };
+    let open = !result.detail.is_empty() && s.expanded.contains(&result.key);
+    let mut heading = line("heading", mark(&ui::INBOX, t))
+        .label(format!("{title} {word}"))
+        .child(
+            text(title)
+                .font(t.ui_medium)
+                .color(t.text)
+                .truncate()
+                .shrink(),
+        )
+        .child(text(word).font(t.ui).color(ink));
+    if !result.detail.is_empty() {
+        heading = disclosure(heading, &result.key, open, t);
+    }
+    let preview = (!open)
+        .then(|| result.detail.lines().find(|line| !line.trim().is_empty()))
+        .flatten();
+    heading = heading.child(
+        text(preview.unwrap_or_default())
+            .font(t.ui)
+            .color(t.faint)
+            .truncate()
+            .shrink()
+            .grow(1.0)
+            .min_w(0.0),
+    );
+    if let Some((child, environment)) = task
+        .filter(|task| task.reachable)
+        .and_then(|task| task.thread.map(|child| (child, task.environment.clone())))
+    {
+        heading = heading.child(
+            ui::button("Open", ButtonVariant::GhostMuted, Size::Small)
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    open_child(s, child, Some(&environment), tx);
+                })
+                .build(&t.k)
+                .key("open"),
+        );
+    }
+    let mut block = col().key(result.key.clone()).w_full().child(heading);
+    if open {
+        block = block.child(
+            col().key("detail").w_full().pl(INDENT).pt(S2).pb(S8).child(
+                Markdown::new(result.detail.clone())
+                    .style(t.markdown().body_font(t.ui).text(t.muted).link(t.text))
+                    .selectable(true)
+                    .on_link_tx(|_: &mut Desktop, url: &str, tx: &mut Tx| {
+                        _ = tx.open_url(url);
+                    })
+                    .build(&t.k)
+                    .w_full(),
+            ),
+        );
+    }
+    block
 }
 
 /// How a call relates to a subagent.
@@ -1183,6 +1655,8 @@ impl Agent {
     }
 }
 
+/// Up to three delegated agents' marks, overlapping, each ringed in the
+/// page's color so neighbours stay apart.
 fn agent_marks<'a>(
     agents: impl Iterator<Item = Option<&'a ThreadSummary>>,
     total: usize,
@@ -1190,16 +1664,20 @@ fn agent_marks<'a>(
 ) -> El {
     const MARKS: usize = 3;
     let mut stack = row().center_y().a11y_hidden();
-    for thread in agents.take(MARKS) {
-        let mark = thread.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
-        stack = stack.child(
-            el().size(S24, S24)
-                .ml(-S4)
-                .radius(S12)
-                .fill(t.surface)
-                .center()
-                .child(icon(mark, ICON_SMALL).color(t.muted)),
-        );
+    for (index, thread) in agents.take(MARKS).enumerate() {
+        let glyph = thread.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
+        let mark = el()
+            .size(S20, S20)
+            .radius(S12)
+            .fill(t.surface)
+            .border(S2, t.k.c.bg_base)
+            .center()
+            .child(icon(glyph, ICON_SMALL).color(t.muted));
+        stack = stack.child(if index == 0 {
+            mark
+        } else {
+            mark.ml(-theme::S6)
+        });
     }
     if total > MARKS {
         stack = stack.child(
@@ -1212,6 +1690,8 @@ fn agent_marks<'a>(
     stack
 }
 
+/// One delegated task in a task card: who runs it, what it's called, where
+/// it stands; opens its thread when that's reachable.
 fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let task = delegated_task(s, tool);
     let thread = local_child(s, tool, task);
@@ -1252,42 +1732,43 @@ fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         .label(title)
         .description(agent.word())
         .w_full()
-        .min_h(S40)
-        .py(S2)
-        .px(S8)
+        .px(CARD_INSET)
+        .py(S8)
         .gap(S8)
         .center_y()
-        .radius(Size::Default.radius())
-        .child(identity)
+        .child(identity.grow(1.0).shrink().min_w(0.0))
         .child(agent.mark(t))
         .child(text(agent.word()).font(t.small).color(t.muted));
     if let Some((child, environment)) =
         child_link(tool, task).filter(|_| task.is_none_or(|task| task.reachable))
     {
         let environment = environment.map(str::to_owned);
-        link = link
+        link = pressable(link, t)
             .role("link")
-            .hover(t.hover)
-            .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 open_child(s, child, environment.as_deref(), tx);
             })
-            .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint));
+            .child(chevron(false, t));
     }
     link
 }
 
+/// Delegated tasks side by side in one card, a hairline between each.
 fn agent_stack<'a>(s: &Desktop, tools: impl Iterator<Item = &'a Tool>, t: &Theme) -> El {
     let mut tools = tools.peekable();
     let key = tools.peek().map_or("tasks", |tool| tool.key.as_str());
-    col()
+    let mut card = Card::Outline
+        .frame(t)
         .key(format!("{key}-stack"))
-        .w_full()
-        .radius(theme::RADIUS_CARD)
-        .fill(t.surface)
-        .padding(S4)
-        .children(tools.map(|tool| subagent_link(s, tool, t)))
+        .role("list")
+        .label("Delegated tasks");
+    for (index, tool) in tools.enumerate() {
+        if index > 0 {
+            card = card.child(ui::rule(t).key(format!("rule-{index}")));
+        }
+        card = card.child(subagent_link(s, tool, t));
+    }
+    card
 }
 
 /// Talking to, reading, listing or stopping a subagent: one activity row
@@ -1302,7 +1783,7 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
     };
     let task = delegated_task(s, tool);
     let thread = local_child(s, tool, task);
-    let mark = thread.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
+    let glyph = thread.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
     let name = (tool.child.is_some() || task.is_some())
         .then(|| subagent_title(tool, task, thread))
         .filter(|title| !title.is_empty());
@@ -1313,49 +1794,47 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
         _ => verb,
     };
     let label = name.map_or_else(|| verb.to_owned(), |name| format!("{verb} {name}"));
-    let mut line = activity(&tool.key, icon(mark, ICON_SMALL).color(t.muted))
+    let mut row = line(&tool.key, mark(glyph, t))
         .label(label)
-        .child(text(verb).font(t.ui).color(t.muted))
+        .child(text(verb).font(t.ui).color(t.muted).group_color(t.text))
         .children(name.map(|name| {
             text(name)
                 .key("title")
                 .font(t.ui)
                 .color(t.text)
                 .truncate()
-                .grow(1.0)
                 .shrink()
+                .min_w(0.0)
         }));
-    if name.is_none() {
-        line = line.child(el().grow(1.0).a11y_hidden());
-    }
-    if let Some(meta) = meta(tool, s.tool_clock, t) {
-        line = line.child(meta.key("meta"));
-    }
     let environment = tool.child_environment.clone();
-    match tool.child {
-        Some(child) if task.is_none_or(|task| task.reachable) => line
+    let link = tool
+        .child
+        .filter(|_| task.is_none_or(|task| task.reachable));
+    if let Some(child) = link {
+        row = pressable(row, t)
             .role("link")
-            .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .help("Open thread")
-            .hover(t.hover)
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 open_child(s, child, environment.as_deref(), tx);
-            }),
-        _ => line,
+            })
+            .child(chevron(false, t));
     }
+    row.child(el().grow(1.0).min_w(0.0).a11y_hidden())
+        .children(meta(tool, s.tool_clock, t).map(|meta| meta.key("meta")))
 }
 
-/// An answer that didn't come: a danger-tinted line.
+/// An answer that didn't come, in danger ink.
 fn notice(key: &str, message: &str, t: &Theme) -> El {
     row()
         .key(key.to_owned())
         .role("alert")
         .w_full()
-        .px(CARD_INSET)
         .gap(S8)
         .items_start()
-        .child(ui::lead(ui::dot(t.danger), t.ui.line_height))
+        .child(ui::lead(
+            icon(&ui::CIRCLE_X, ICON_SMALL).color(t.danger),
+            t.ui.line_height,
+        ))
         .child(
             text(message.to_owned())
                 .font(t.ui)
