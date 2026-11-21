@@ -9,7 +9,7 @@ use viz_client::protocol::{
 };
 
 use super::{
-    Workspace, attachments,
+    Workspace, attachments, git,
     runs::{self, NewRun, Place},
     runtime,
     sql::{exec, row, rows},
@@ -135,6 +135,21 @@ impl Workspace {
                     self,
                 )
                 .await?;
+                let threads = tokio::task::spawn_blocking(move || {
+                    let mut summaries = std::collections::HashMap::new();
+                    threads
+                        .into_iter()
+                        .map(|(cwd, mut thread)| {
+                            let git = summaries
+                                .entry(cwd.clone())
+                                .or_insert_with(|| git::summary(Path::new(&cwd)));
+                            thread.git.clone_from(git);
+                            thread
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .map_err(RpcError::internal)?;
                 Ok(json!({"threads":threads}))
             }
             "thread.entries" => {
@@ -186,11 +201,22 @@ impl Workspace {
         match method {
             "projects.list" => {
                 let projects = store::projects(&mut *self.db.lock().await).await?;
+                let projects = tokio::task::spawn_blocking(move || {
+                    projects
+                        .into_iter()
+                        .map(git::project_summary)
+                        .collect::<Vec<_>>()
+                })
+                .await
+                .map_err(RpcError::internal)?;
                 Ok(json!({"projects":projects}))
             }
             "project.read" => {
                 let ProjectKey { project } = decode(params)?;
                 let project = store::project(&mut *self.db.lock().await, &project).await?;
+                let project = tokio::task::spawn_blocking(move || git::project_summary(project))
+                    .await
+                    .map_err(RpcError::internal)?;
                 Ok(json!({"project":project}))
             }
             "project.create" => {
@@ -477,11 +503,15 @@ impl Workspace {
             return Err(RpcError::invalid(format!("project already exists: {path}")));
         }
         self.changed(None);
-        Ok(Project {
+        let project = Project {
+            git: None,
             path: path.to_owned(),
             name,
             created_at,
-        })
+        };
+        tokio::task::spawn_blocking(move || git::project_summary(project))
+            .await
+            .map_err(RpcError::internal)
     }
 
     async fn remove_project(&self, project: &str) -> Result<(), RpcError> {

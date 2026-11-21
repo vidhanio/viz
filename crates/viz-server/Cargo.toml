@@ -17,6 +17,7 @@ clap = { workspace = true, features = ["derive"] }
 config.workspace = true
 futures.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
+git2.workspace = true
 jsonrpsee-types.workspace = true
 listenfd.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls-no-provider"] }

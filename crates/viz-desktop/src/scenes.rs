@@ -64,6 +64,7 @@ fn workspace(s: &mut Desktop) {
         ("Field notes", "/work/field-notes"),
     ]
     .map(|(name, path)| Project {
+        git: None,
         name: name.into(),
         path: path.into(),
         created_at: 0,
@@ -129,6 +130,7 @@ fn list() -> Vec<ThreadSummary> {
         (4, "Draft release notes", None, None, Idle),
     ]
     .map(|(id, title, parent, project, status)| ThreadSummary {
+        git: None,
         id: ThreadId(id),
         title: title.into(),
         parent: parent.map(ThreadId),
@@ -680,6 +682,7 @@ fn subagent(s: &mut Desktop) {
 fn projects(s: &mut Desktop) {
     workspace(s);
     s.projects.push(Project {
+        git: None,
         name: "Release scripts".into(),
         path: "/work/release-scripts".into(),
         created_at: 0,

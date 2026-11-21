@@ -190,10 +190,30 @@ pub struct ThreadList {
     pub threads: Vec<ThreadSummary>,
 }
 
+/// Live Git status for a working directory.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct GitSummary {
+    /// Local branch, absent on a detached HEAD.
+    pub branch: Option<String>,
+    /// Full Git object ID, absent before the initial commit.
+    pub head: Option<String>,
+    /// Number of paths with staged, unstaged or untracked changes.
+    pub dirty_files: usize,
+    /// Commits ahead of the locally known upstream.
+    pub ahead: Option<usize>,
+    /// Commits behind the locally known upstream.
+    pub behind: Option<usize>,
+    /// Whether the checkout is a linked worktree.
+    pub linked_worktree: bool,
+}
+
 /// A `threads.list` item.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
+    /// Git status for the thread's working directory.
+    pub git: Option<GitSummary>,
     /// Its id.
     pub id: ThreadId,
     /// A user rename, an ACP session title, or a title from the first prompt.
@@ -496,6 +516,8 @@ pub struct ContextUsage {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
+    /// Git status for the project directory.
+    pub git: Option<GitSummary>,
     /// Display name.
     pub name: String,
     /// Absolute directory path.

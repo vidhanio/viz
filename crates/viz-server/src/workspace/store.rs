@@ -71,6 +71,7 @@ pub(super) async fn project(db: &mut dyn Executor, path: &str) -> Result<Project
     .await?
     .ok_or_else(|| RpcError::not_found(format!("no project {path}")))?;
     Ok(Project {
+        git: None,
         path: path.to_owned(),
         name: row.str(0)?,
         created_at: row.i64(1)?,
@@ -86,6 +87,7 @@ pub(super) async fn projects(db: &mut dyn Executor) -> Result<Vec<Project>, RpcE
     .await?
     .map(|mut row| {
         Ok(Project {
+            git: None,
             path: row.str(0)?,
             name: row.str(1)?,
             created_at: row.i64(2)?,
@@ -172,10 +174,10 @@ pub(super) async fn list_threads(
     archived: Option<bool>,
     project: Option<&str>,
     workspace: &Workspace,
-) -> Result<Vec<ThreadSummary>, RpcError> {
+) -> Result<Vec<(String, ThreadSummary)>, RpcError> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
-            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking
+            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.cwd
         FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
         ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC"
     );
@@ -183,22 +185,26 @@ pub(super) async fn list_threads(
         .await?
         .map(|mut row| {
             let harness = row.str(5)?;
-            Ok(ThreadSummary {
-                id: ThreadId(row.u64(0)?),
-                title: row.str(1)?,
-                parent: row.opt_u64(2)?.map(ThreadId),
-                parent_environment: row.opt_str(3)?,
-                project: row.opt_str(4)?,
-                harness_name: workspace.harness_name(&harness).to_owned(),
-                harness,
-                status: status(&row.str(6)?)?,
-                archived: row.flag(7)?,
-                updated_at: row.i64(8)?,
-                unread: row.flag(9)?,
-                pinned: row.flag(10)?,
-                model: row.opt_str(11)?,
-                thinking: row.opt_str(12)?,
-            })
+            Ok((
+                row.str(13)?,
+                ThreadSummary {
+                    git: None,
+                    id: ThreadId(row.u64(0)?),
+                    title: row.str(1)?,
+                    parent: row.opt_u64(2)?.map(ThreadId),
+                    parent_environment: row.opt_str(3)?,
+                    project: row.opt_str(4)?,
+                    harness_name: workspace.harness_name(&harness).to_owned(),
+                    harness,
+                    status: status(&row.str(6)?)?,
+                    archived: row.flag(7)?,
+                    updated_at: row.i64(8)?,
+                    unread: row.flag(9)?,
+                    pinned: row.flag(10)?,
+                    model: row.opt_str(11)?,
+                    thinking: row.opt_str(12)?,
+                },
+            ))
         })
         .collect()
 }

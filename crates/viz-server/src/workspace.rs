@@ -3,6 +3,7 @@
 
 mod attachments;
 mod files;
+mod git;
 mod rpc;
 pub(crate) mod runs;
 mod runtime;

@@ -1549,6 +1549,17 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
+              "git": {
+                "description": "Git status for the project directory.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -1567,6 +1578,58 @@
               "name",
               "path",
               "createdAt"
+            ]
+          },
+          "GitSummary": {
+            "description": "Live Git status for a working directory.",
+            "type": "object",
+            "properties": {
+              "branch": {
+                "description": "Local branch, absent on a detached HEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "head": {
+                "description": "Full Git object ID, absent before the initial commit.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dirtyFiles": {
+                "description": "Number of paths with staged, unstaged or untracked changes.",
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "ahead": {
+                "description": "Commits ahead of the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "behind": {
+                "description": "Commits behind the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "linkedWorktree": {
+                "description": "Whether the checkout is a linked worktree.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "dirtyFiles",
+              "linkedWorktree"
             ]
           }
         }
@@ -1671,6 +1734,17 @@
             "description": "A `threads.list` item.",
             "type": "object",
             "properties": {
+              "git": {
+                "description": "Git status for the thread's working directory.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "id": {
                 "description": "Its id.",
                 "$ref": "#/$defs/ThreadId"
@@ -1757,6 +1831,58 @@
               "updatedAt",
               "unread",
               "pinned"
+            ]
+          },
+          "GitSummary": {
+            "description": "Live Git status for a working directory.",
+            "type": "object",
+            "properties": {
+              "branch": {
+                "description": "Local branch, absent on a detached HEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "head": {
+                "description": "Full Git object ID, absent before the initial commit.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dirtyFiles": {
+                "description": "Number of paths with staged, unstaged or untracked changes.",
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "ahead": {
+                "description": "Commits ahead of the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "behind": {
+                "description": "Commits behind the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "linkedWorktree": {
+                "description": "Whether the checkout is a linked worktree.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "dirtyFiles",
+              "linkedWorktree"
             ]
           },
           "ThreadId": {
@@ -2015,6 +2141,17 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
+              "git": {
+                "description": "Git status for the project directory.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -2033,6 +2170,58 @@
               "name",
               "path",
               "createdAt"
+            ]
+          },
+          "GitSummary": {
+            "description": "Live Git status for a working directory.",
+            "type": "object",
+            "properties": {
+              "branch": {
+                "description": "Local branch, absent on a detached HEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "head": {
+                "description": "Full Git object ID, absent before the initial commit.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dirtyFiles": {
+                "description": "Number of paths with staged, unstaged or untracked changes.",
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "ahead": {
+                "description": "Commits ahead of the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "behind": {
+                "description": "Commits behind the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "linkedWorktree": {
+                "description": "Whether the checkout is a linked worktree.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "dirtyFiles",
+              "linkedWorktree"
             ]
           }
         }
@@ -2080,6 +2269,17 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
+              "git": {
+                "description": "Git status for the project directory.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitSummary"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -2098,6 +2298,58 @@
               "name",
               "path",
               "createdAt"
+            ]
+          },
+          "GitSummary": {
+            "description": "Live Git status for a working directory.",
+            "type": "object",
+            "properties": {
+              "branch": {
+                "description": "Local branch, absent on a detached HEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "head": {
+                "description": "Full Git object ID, absent before the initial commit.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "dirtyFiles": {
+                "description": "Number of paths with staged, unstaged or untracked changes.",
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "ahead": {
+                "description": "Commits ahead of the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "behind": {
+                "description": "Commits behind the locally known upstream.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint",
+                "minimum": 0
+              },
+              "linkedWorktree": {
+                "description": "Whether the checkout is a linked worktree.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "dirtyFiles",
+              "linkedWorktree"
             ]
           }
         }

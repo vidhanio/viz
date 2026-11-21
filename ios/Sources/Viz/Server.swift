@@ -34,11 +34,21 @@ enum VizProtocol {
     let environments: [Environment]
   }
 
+  struct GitSummary: Decodable {
+    let branch: String?
+    let head: String?
+    let dirtyFiles: Int
+    let ahead: Int?
+    let behind: Int?
+    let linkedWorktree: Bool
+  }
+
   /// A directory that threads run in; its path is its id.
   struct Project: Decodable, Identifiable {
     let path: String
     let name: String
     let createdAt: Int64
+    let git: GitSummary?
 
     var id: String { path }
   }
@@ -62,6 +72,7 @@ enum VizProtocol {
     let pinned: Bool
     let model: String?
     let thinking: String?
+    let git: GitSummary?
   }
 
   struct ToolRecord: Decodable {
