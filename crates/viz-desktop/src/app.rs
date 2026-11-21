@@ -113,7 +113,7 @@ impl NewThread {
 pub struct EditingQueued {
     pub thread: ThreadId,
     pub run: RunId,
-    saved_draft: String,
+    saved_draft: TextEdit,
 }
 
 /// Pending destructive checkpoint action awaiting user confirmation.
@@ -494,6 +494,7 @@ impl Desktop {
     }
 
     fn save_draft(&mut self) {
+        self.restore_queue_draft();
         let edit = mem::replace(&mut self.draft, TextEdit::new(""));
         let attachments = mem::take(&mut self.attachments);
         if let Some(id) = self.selected.take()
@@ -552,7 +553,7 @@ impl Desktop {
         if let Some(editing) = &self.editing_queued
             && (editing.thread != id || !state.queue.iter().any(|item| item.run == editing.run))
         {
-            self.editing_queued = None;
+            self.restore_queue_draft();
         }
         self.thread.sync_acp(state.live.as_ref());
         self.state = Some(state);
@@ -922,7 +923,7 @@ impl Desktop {
     }
 
     fn attachment_target(&self) -> Option<AttachmentTarget> {
-        if !self.connected() {
+        if !self.connected() || self.editing_queued.is_some() {
             return None;
         }
         if let Some(thread) = &self.new_thread {
@@ -1016,68 +1017,73 @@ impl Desktop {
         };
     }
 
-    /// Loads a queued input into the composer for inline editing, saving any
-    /// unsent draft text to restore on cancel or save.
+    /// Loads a queued input into the composer and keeps the unsent draft.
     pub fn start_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str, tx: &mut Tx) {
-        let saved_draft = match self.editing_queued.take() {
-            Some(existing) => existing.saved_draft,
-            None => self.draft.text.clone(),
-        };
+        self.preview_edit_queued(thread, run, body);
+        self.completion.reset();
+        tx.focus("draft", false);
+    }
+
+    /// Loads queue-edit mode, including for previews with no input transaction.
+    pub fn preview_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str) {
+        let mut edit = TextEdit::new(body);
+        edit.focused = true;
+        let previous = mem::replace(&mut self.draft, edit);
+        let saved_draft = self
+            .editing_queued
+            .take()
+            .map_or(previous, |editing| editing.saved_draft);
         self.editing_queued = Some(EditingQueued {
             thread,
             run,
             saved_draft,
         });
-        self.draft = TextEdit::new(body);
-        self.draft.focused = true;
-        self.completion.reset();
-        tx.focus("draft", false);
     }
 
-    /// Enters queue-edit mode for a preview scene (no `Tx`).
-    pub fn preview_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str) {
-        self.editing_queued = Some(EditingQueued {
-            thread,
-            run,
-            saved_draft: String::new(),
-        });
-        self.draft = TextEdit::new(body);
-        self.draft.focused = true;
+    fn restore_queue_draft(&mut self) {
+        if let Some(editing) = self.editing_queued.take() {
+            let focused = self.draft.focused;
+            self.draft = editing.saved_draft;
+            self.draft.focused = focused;
+            self.completion.reset();
+        }
     }
 
     /// Leaves queue-edit mode and restores the draft saved before editing.
     pub fn cancel_edit_queued(&mut self, tx: &mut Tx) {
-        if let Some(editing) = self.editing_queued.take() {
-            self.draft = TextEdit::new(&editing.saved_draft);
-            self.draft.focused = true;
-            self.completion.reset();
-            tx.focus("draft", false);
-        }
+        self.restore_queue_draft();
+        self.draft.focused = true;
+        tx.focus("draft", false);
+    }
+
+    /// Whether the queued input still exists and has text or attachments.
+    pub fn can_save_queued(&self) -> bool {
+        self.connected()
+            && self.editing_queued.as_ref().is_some_and(|editing| {
+                self.state.as_ref().is_some_and(|state| {
+                    state.queue.iter().any(|item| {
+                        item.run == editing.run
+                            && (!self.draft.text.trim().is_empty() || item.attachment_count > 0)
+                    })
+                })
+            })
     }
 
     /// Saves the edited queued message via `queue.update` and restores the
     /// prior draft.
     pub fn save_edit_queued(&mut self, tx: &mut Tx) {
-        let Some(editing) = self.editing_queued.clone() else {
-            return;
-        };
-        let updated = self.draft.text.clone();
-        if updated.trim().is_empty() {
-            return;
-        }
-        if self.send(
-            Command::EditQueued {
-                thread: editing.thread,
-                run: editing.run,
-                text: updated,
-            },
-            tx,
-        ) {
-            self.editing_queued = None;
-            self.draft = TextEdit::new(&editing.saved_draft);
-            self.draft.focused = true;
-            self.completion.reset();
-            tx.focus("draft", false);
+        if self.can_save_queued()
+            && let Some(editing) = &self.editing_queued
+            && self.send(
+                Command::EditQueued {
+                    thread: editing.thread,
+                    run: editing.run,
+                    text: self.draft.text.clone(),
+                },
+                tx,
+            )
+        {
+            self.cancel_edit_queued(tx);
         }
     }
 

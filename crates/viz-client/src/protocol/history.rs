@@ -52,6 +52,16 @@ pub struct AttachmentCapabilities {
 pub struct QueuedInput {
     pub run: RunId,
     pub text: String,
+    /// Number of attachments already stored for this input.
+    #[serde(rename = "attachmentCount")]
+    pub attachment_count: u64,
+}
+
+/// Promote a queued run to the front and stop the active run, if any.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SteerQueuedInput {
+    pub thread: ThreadId,
+    pub run: RunId,
 }
 
 /// Remove an input from the queue.

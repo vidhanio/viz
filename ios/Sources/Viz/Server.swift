@@ -262,6 +262,7 @@ enum VizProtocol {
     struct Queued: Decodable, Identifiable {
       let run: Int
       let text: String
+      let attachmentCount: UInt64
 
       var id: Int { run }
     }

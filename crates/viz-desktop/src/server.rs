@@ -14,8 +14,8 @@ use viz_client::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
         ForkThread, ForkWorktree, HarnessOptions, LaunchThread, ListEnvironments, ListGitBranches,
         ListTasks, Notification, OptionValue, RemoveProject, RemoveQueuedInput, RestoreRun,
-        RewindThread, RunBoundary, RunDiff, RunId, SearchFiles, SendInput, SendMode, ThreadDiff,
-        ThreadId, UpdateProject, UpdateQueuedInput, UpdateThread,
+        RewindThread, RunBoundary, RunDiff, RunId, SearchFiles, SendInput, SteerQueuedInput,
+        ThreadDiff, ThreadId, UpdateProject, UpdateQueuedInput, UpdateThread,
     },
 };
 
@@ -91,11 +91,7 @@ pub enum Command {
         run: RunId,
         before: Option<RunId>,
     },
-    SteerQueued {
-        thread: ThreadId,
-        run: RunId,
-        text: String,
-    },
+    SteerQueued(SteerQueuedInput),
     Attach {
         scope: u64,
         target: AttachmentTarget,
@@ -522,9 +518,7 @@ impl Session<'_> {
                 run,
                 before,
             } => self.update_queued(thread, run, None, Some(before)).await,
-            Command::SteerQueued { thread, run, text } => {
-                self.steer_queued(thread, run, text).await
-            }
+            Command::SteerQueued(input) => self.client.request(&input).await.map(drop),
             Command::Notify { title, body } => {
                 requests::notify(&title, body);
                 Ok(())
@@ -604,28 +598,6 @@ impl Session<'_> {
                 run,
                 text,
                 before,
-            })
-            .await
-            .map(drop)
-    }
-
-    async fn steer_queued(
-        &self,
-        thread: ThreadId,
-        run: RunId,
-        text: String,
-    ) -> viz_client::Result<()> {
-        self.client
-            .remove_queued_input(&RemoveQueuedInput { thread, run })
-            .await?;
-        self.client
-            .send(&SendInput {
-                thread,
-                mode: Some(SendMode::Steer),
-                text,
-                request_id: None,
-                origin: None,
-                attachments: Vec::new(),
             })
             .await
             .map(drop)

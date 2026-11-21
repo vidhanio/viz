@@ -10,7 +10,7 @@ use std::fmt;
 pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryData, EntryId, EntryPage, ListEntries,
     PlanEntry, PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd,
-    SearchHit, SearchHits, SearchThreads, UpdateQueuedInput,
+    SearchHit, SearchHits, SearchThreads, SteerQueuedInput, UpdateQueuedInput,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -90,6 +90,7 @@ methods! {
     WaitThread => "thread.wait", WaitResult;
     ReadThreadState => "thread.state", ThreadStateResult;
     ReadProject<'_> => "project.read", ProjectResult;
+    SteerQueuedInput => "queue.steer", Empty;
     UpdateQueuedInput<'_> => "queue.update", Empty;
     ListThreads<'_> => "threads.list", ThreadList;
     UpdateThread<'_> => "thread.update", Empty;

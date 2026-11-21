@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use viz_client::protocol::{
     CommitGit, CreateGitBranch, CreateGitWorktree, DeleteThread, ForkThread, HarnessOptions,
     LaunchThread, Launched, ListGitBranches, Method, PushGit, RemoveGitWorktree, RemoveProject,
-    RestoreRun, RewindThread, RunDiff, RunId, SendInput, SendMode, Sent, ThreadDiff, ThreadId,
-    WorktreeRequest,
+    RestoreRun, RewindThread, RunDiff, RunId, SendInput, SendMode, Sent, SteerQueuedInput,
+    ThreadDiff, ThreadId, WorktreeRequest,
 };
 
 use super::{
@@ -109,6 +109,7 @@ impl Workspace {
                 Ok(json!({}))
             }
             "queue.update" => self.update_queue(decode(params)?).await,
+            SteerQueuedInput::NAME => self.steer_queue(decode(params)?).await,
             "harnesses.list" => Ok(json!({"harnesses": self.list_harnesses().await})),
             HarnessOptions::NAME => {
                 let HarnessOptions { harness, model } = decode(params)?;
@@ -134,6 +135,23 @@ impl Workspace {
         tx.commit().await?;
         drop(db);
         self.changed(Some(thread.get()));
+        Ok(json!({}))
+    }
+
+    async fn steer_queue(self: &Arc<Self>, input: SteerQueuedInput) -> Result<Value, RpcError> {
+        let thread = input.thread.0;
+        let mut db = self.db.lock().await;
+        let mut tx = db.transaction().await?;
+        store::require(&mut tx, thread).await?;
+        let active = runs::active(&mut tx, thread).await?;
+        runs::promote_queued(&mut tx, thread, input.run.0).await?;
+        tx.commit().await?;
+        if let Some(active) = active {
+            self.cancel_active(thread, active);
+        }
+        self.kick(thread, false);
+        drop(db);
+        self.changed(Some(thread));
         Ok(json!({}))
     }
 

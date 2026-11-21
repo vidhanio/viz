@@ -1278,11 +1278,18 @@
               },
               "text": {
                 "type": "string"
+              },
+              "attachmentCount": {
+                "description": "Number of attachments already stored for this input.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "required": [
               "run",
-              "text"
+              "text",
+              "attachmentCount"
             ]
           },
           "RunId": {
@@ -1671,6 +1678,46 @@
             ]
           }
         }
+      }
+    },
+    "queue.steer": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SteerQueuedInput",
+        "description": "Promote a queued run to the front and stop the active run, if any.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          }
+        },
+        "required": [
+          "thread",
+          "run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
       }
     },
     "queue.update": {
@@ -5840,11 +5887,18 @@
           },
           "text": {
             "type": "string"
+          },
+          "attachmentCount": {
+            "description": "Number of attachments already stored for this input.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "required": [
           "run",
-          "text"
+          "text",
+          "attachmentCount"
         ]
       },
       "AttachmentCapabilities": {

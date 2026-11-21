@@ -411,6 +411,26 @@ pub(super) async fn recover(db: &mut dyn Executor) -> Result<(), RpcError> {
     Ok(())
 }
 
+/// Move the existing run ahead of other queued inputs, preserving its payload.
+pub(super) async fn promote_queued(
+    db: &mut dyn Executor,
+    thread: u64,
+    run: u64,
+) -> Result<(), RpcError> {
+    let changed = exec(
+        db,
+        "UPDATE runs SET position = (SELECT coalesce(min(position) - 1, 0) FROM runs
+            WHERE thread = ?1 AND status = 'queued' AND id <> ?2)
+        WHERE thread = ?1 AND id = ?2 AND status = 'queued'",
+        [thread.into(), run.into()],
+    )
+    .await?;
+    if changed == 0 {
+        return Err(RpcError::invalid("run is not queued"));
+    }
+    Ok(())
+}
+
 pub(super) async fn remove_queued(
     db: &mut dyn Executor,
     thread: u64,

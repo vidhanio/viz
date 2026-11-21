@@ -9,11 +9,11 @@ mod tasks;
 pub use completion::{Completion, poll};
 pub use model::{ModelMenu, preview as preview_model_menu};
 use rune::{
-    Color, El, GrowthSpec, Key, KeyEvent, ScrollSpec, Spring, SpringPair, Transition, Tx, col, el,
-    icon, row, text, text_input,
+    Color, Cursor, El, GrowthSpec, Key, KeyEvent, Phase, ScrollSpec, Spring, SpringPair,
+    Transition, Tx, col, el, icon, row, text, text_input,
 };
 pub use tasks::DOCK_KEY as TASKS_DOCK_KEY;
-use viz_client::protocol::{QueuedInput, RunId, SendMode, ThreadId};
+use viz_client::protocol::{QueuedInput, RunId, SendMode, SteerQueuedInput, ThreadId};
 
 use crate::{
     app::Desktop,
@@ -21,7 +21,7 @@ use crate::{
     server::Command,
     theme::{
         CARD_INSET, GLASS_BLUR, HAIRLINE, ICON_SMALL, RADIUS_COMPOSER, RADIUS_CONTROL,
-        RADIUS_INNER, S2, S4, S6, S8, S12, S16, S24, S48, Size, Theme,
+        RADIUS_INNER, S2, S4, S6, S8, S12, S16, S24, S32, S48, Size, Theme,
     },
     ui,
 };
@@ -48,7 +48,7 @@ const QUEUE_HEIGHT: f32 = 152.0;
 /// mounted.
 const BASE_CLEARANCE: f32 = 148.0;
 /// Extra clearance per queued row above the composer.
-const QUEUE_ROW_CLEARANCE: f32 = 34.0;
+const QUEUE_ROW_HEIGHT: f32 = S32;
 
 /// Bottom padding the transcript needs so its latest message scrolls completely
 /// clear of the floating composer stack.
@@ -56,16 +56,14 @@ pub fn clearance(s: &Desktop) -> f32 {
     if s.selected.is_none() && s.new_thread.is_none() {
         return S24;
     }
-    let queue_rows = u16::try_from(
-        s.state
-            .as_ref()
-            .map_or(0, |state| state.queue.len().min(QUEUE_PREVIEW_LIMIT)),
-    )
-    .unwrap_or(3);
-    let queue_extra = if queue_rows > 0 {
-        f32::from(queue_rows).mul_add(QUEUE_ROW_CLEARANCE, 32.0)
-    } else {
+    let queue_len = s.state.as_ref().map_or(0, |state| state.queue.len());
+    let queue_extra = if queue_len == 0 {
         0.0
+    } else if queue_len > QUEUE_PREVIEW_LIMIT && s.expanded.contains(QUEUE_ALL_KEY) {
+        QUEUE_HEIGHT + S32
+    } else {
+        let rows = u16::try_from(queue_len.min(QUEUE_PREVIEW_LIMIT)).unwrap_or_default();
+        f32::from(rows).mul_add(QUEUE_ROW_HEIGHT + HAIRLINE, S32)
     };
     BASE_CLEARANCE + queue_extra + tasks::clearance(s)
 }
@@ -502,7 +500,7 @@ fn queue_row(
     let mut row_el = row()
         .key(format!("queue-{run}"))
         .w_full()
-        .min_h(32.0)
+        .h(QUEUE_ROW_HEIGHT)
         .px(TOOLBAR_PAD_X)
         .py(S4)
         .gap(S8)
@@ -518,13 +516,15 @@ fn queue_row(
         );
     }
     row_el
-        .child(
-            text(format!("{}", index + 1))
-                .font(t.mono_micro)
-                .color(if is_editing { t.accent_text } else { t.faint })
-                .w(14.0)
-                .a11y_hidden(),
-        )
+        .child(queue_position(
+            thread,
+            run,
+            index,
+            all.len(),
+            s.connected(),
+            is_editing,
+            t,
+        ))
         .child(
             text(title)
                 .font(t.ui)
@@ -536,6 +536,22 @@ fn queue_row(
                 .truncate()
                 .help(&input.text),
         )
+        .children((input.attachment_count > 0).then(|| {
+            row()
+                .gap(S4)
+                .center_y()
+                .label(format!("{} attached files", input.attachment_count))
+                .child(
+                    icon(&ui::PAPERCLIP, ICON_SMALL)
+                        .color(t.faint)
+                        .a11y_hidden(),
+                )
+                .child(
+                    text(input.attachment_count.to_string())
+                        .font(t.mono_micro)
+                        .color(t.faint),
+                )
+        }))
         .children(is_editing.then(|| {
             text("Editing")
                 .font(t.mono_micro)
@@ -546,6 +562,61 @@ fn queue_row(
                 .fill(t.accent_veil)
         }))
         .child(actions)
+}
+
+fn queue_position(
+    thread: ThreadId,
+    run: RunId,
+    index: usize,
+    length: usize,
+    connected: bool,
+    editing: bool,
+    t: &Theme,
+) -> El {
+    let mark = text((index + 1).to_string())
+        .font(t.mono_micro)
+        .color(if editing { t.accent_text } else { t.faint })
+        .a11y_hidden();
+    let handle = el()
+        .key("queue-position")
+        .w(14.0)
+        .h(S24)
+        .center()
+        .child(mark);
+    if !connected || length < 2 {
+        return handle;
+    }
+    handle
+        .cursor(Cursor::Grab)
+        .help("Drag to reorder")
+        .on_drag(move |s: &mut Desktop, drag, tx| {
+            if !matches!(drag.phase, Phase::Up) || drag.cancelled() || s.selected != Some(thread) {
+                return;
+            }
+            let Some(queue) = s.state.as_ref().map(|state| &state.queue) else {
+                return;
+            };
+            let Some(from) = queue.iter().position(|item| item.run == run) else {
+                return;
+            };
+            #[expect(
+                clippy::cast_possible_truncation,
+                reason = "the drag is rounded to whole rows"
+            )]
+            let offset = (drag.dy / (QUEUE_ROW_HEIGHT + HAIRLINE)).round() as isize;
+            let to = from.saturating_add_signed(offset).min(queue.len() - 1);
+            if to != from {
+                let before = queue.get(to + usize::from(to > from)).map(|item| item.run);
+                s.send(
+                    Command::MoveQueued {
+                        thread,
+                        run,
+                        before,
+                    },
+                    tx,
+                );
+            }
+        })
 }
 
 fn queue_row_actions(
@@ -626,23 +697,17 @@ fn queue_row_actions(
                 s.send(Command::RemoveQueued { thread, run }, tx);
             }),
         )
-        .child(queue_send_now(
-            thread,
-            run,
-            input.text.clone(),
-            index == 0 && s.busy(),
-            t,
-        ));
+        .child(queue_send_now(thread, run, index == 0, t));
     actions
 }
 
-fn queue_send_now(thread: ThreadId, run: RunId, text_body: String, labeled: bool, t: &Theme) -> El {
+fn queue_send_now(thread: ThreadId, run: RunId, labeled: bool, t: &Theme) -> El {
     if labeled {
         row()
             .key("send-now")
             .role("button")
             .label("Send now")
-            .help("Cancel active turn and send now")
+            .help("Send next and stop the active turn, if any")
             .h(S24)
             .px(S6)
             .gap(S4)
@@ -654,14 +719,7 @@ fn queue_send_now(thread: ThreadId, run: RunId, text_body: String, labeled: bool
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .on_press_tx(move |s: &mut Desktop, tx| {
-                s.send(
-                    Command::SteerQueued {
-                        thread,
-                        run,
-                        text: text_body.clone(),
-                    },
-                    tx,
-                );
+                s.send(Command::SteerQueued(SteerQueuedInput { thread, run }), tx);
             })
             .child(
                 icon(&ui::CORNER_UP_RIGHT, ICON_SMALL)
@@ -685,14 +743,7 @@ fn queue_send_now(thread: ThreadId, run: RunId, text_body: String, labeled: bool
         )
         .group_opacity(0.0, 1.0)
         .on_press_tx(move |s: &mut Desktop, tx| {
-            s.send(
-                Command::SteerQueued {
-                    thread,
-                    run,
-                    text: text_body.clone(),
-                },
-                tx,
-            );
+            s.send(Command::SteerQueued(SteerQueuedInput { thread, run }), tx);
         })
     }
 }
@@ -739,7 +790,7 @@ fn send_button(s: &Desktop, t: &Theme) -> El {
         .center_y()
         .instant_changes();
     if s.editing_queued.is_some() {
-        let enabled = s.connected() && !s.draft.text.trim().is_empty();
+        let enabled = s.can_save_queued();
         let (fill, ink) = if enabled {
             (t.accent, t.on_accent)
         } else {

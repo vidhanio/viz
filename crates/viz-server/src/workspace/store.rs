@@ -224,7 +224,8 @@ pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadSt
     let session: SavedSession = from_json(&row.str(3)?)?;
     let queue = rows(
         db,
-        "SELECT id, text FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
+        "SELECT id, text, coalesce(json_array_length(attachments), 0) FROM runs
+        WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
         [thread.into()],
     )
     .await?
@@ -232,6 +233,7 @@ pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadSt
         Ok(QueuedInput {
             run: RunId(row.u64(0)?),
             text: row.str(1)?,
+            attachment_count: row.u64(2)?,
         })
     })
     .collect::<Result<_, RpcError>>()?;

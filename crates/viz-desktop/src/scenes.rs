@@ -920,6 +920,7 @@ fn queue(s: &mut Desktop) {
         .map(|(run, text)| QueuedInput {
             run: RunId(run),
             text: text.into(),
+            attachment_count: u64::from(run == 32),
         })
         .into();
     }
