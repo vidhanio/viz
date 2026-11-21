@@ -379,7 +379,7 @@ fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             return ui::empty(
                 None,
                 "Offline",
-                "Start viz-backend to reconnect.",
+                "Start viz-server to reconnect.",
                 Some(
                     ui::button("Retry", ButtonVariant::Outline, Size::Default)
                         .on_press_tx(Desktop::reconnect)
@@ -452,7 +452,7 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 pub const DRAFT_PROJECT: &str = "draft-project";
 
 /// Where a draft will run: a picker of every project and none, and an add
-/// button whose new project the draft takes once the backend has it
+/// button whose new project the draft takes once the server has it
 /// (`Desktop::project_added`). Fixed once the first message is on its way.
 fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> El {
     let open = s.open_picker.as_deref() == Some(DRAFT_PROJECT) && !thread.sending;

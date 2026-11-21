@@ -1,5 +1,5 @@
 [package]
-name = "viz-backend"
+name = "viz-server"
 description = "Durable ACP threads and delegation across viz environments"
 version.workspace = true
 edition.workspace = true

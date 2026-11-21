@@ -1,5 +1,5 @@
-//! The backend connection: a tokio runtime on its own thread that connects
-//! (retrying while the backend is down), watches the selected thread, and
+//! The server connection: a tokio runtime on its own thread that connects
+//! (retrying while the server is down), watches the selected thread, and
 //! pushes state into the UI.
 
 mod requests;
@@ -27,7 +27,7 @@ use crate::{
 const RETRY: Duration = Duration::from_secs(3);
 const NOT_FOUND: i64 = -32001;
 
-/// What the UI asks of the backend.
+/// What the UI asks of the server.
 #[derive(Debug)]
 pub enum Command {
     /// Watch this thread instead.
@@ -203,7 +203,7 @@ async fn run(
                         continue;
                     }
                     Ended::Lost(e) => {
-                        toast(ui, "Lost the connection to the backend", e.to_string());
+                        toast(ui, "Lost the connection to the server", e.to_string());
                         e.to_string()
                     }
                 }
@@ -273,7 +273,7 @@ fn offline(
         } => requests::attach(ui, scope, target, source),
         Command::Notify { title, body } => requests::notify(&title, body),
         Command::Reconnect => return false,
-        _ => toast(ui, "Offline", "Backend disconnected".into()),
+        _ => toast(ui, "Offline", "Server disconnected".into()),
     }
     true
 }

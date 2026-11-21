@@ -8,7 +8,7 @@ use viz_client::protocol::{SearchHit, ThreadId, ThreadSummary};
 
 use crate::{
     app::{Desktop, thread_title},
-    backend::{Command, ThreadChange},
+    server::{Command, ThreadChange},
     sidebar,
     theme::{DIALOG_INSET, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
     ui,
@@ -48,7 +48,7 @@ impl Palette {
         self.open
     }
 
-    /// Accepts a backend result only while its request still owns the search.
+    /// Accepts a server result only while its request still owns the search.
     pub fn set_hits(&mut self, request: u64, result: Result<Vec<SearchHit>, String>) {
         if self.open && self.request == request && matches!(self.search, Search::Pending) {
             self.search = Search::Complete(result);
@@ -138,7 +138,7 @@ pub fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
             let query = s.palette.input.text.trim().to_owned();
             s.palette.search = Search::Pending;
             if !s.send(Command::SearchThreads { request, query }, tx) {
-                s.palette.search = Search::Complete(Err("The backend is offline.".into()));
+                s.palette.search = Search::Complete(Err("The server is offline.".into()));
             }
         }
         _ => return false,

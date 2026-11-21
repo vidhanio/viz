@@ -12,7 +12,7 @@ use crate::wire::{
 };
 
 pub(super) const INTERRUPTED: &str =
-    "backend was interrupted during the ACP turn; the prompt was not resent";
+    "server was interrupted during the ACP turn; the prompt was not resent";
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub(super) enum Place {

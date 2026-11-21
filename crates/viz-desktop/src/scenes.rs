@@ -1,5 +1,5 @@
 //! Deterministic `AppSpec` scenes for inspecting desktop layout without a live
-//! backend.
+//! server.
 
 use viz_client::protocol::{
     Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
@@ -524,10 +524,10 @@ fn overflow(s: &mut Desktop) {
         "error: failed to write \
          /home/vidhanio/Projects/viz/target/preview/export-markdown-notes-4f1c2a/crates/\
          viz-desktop/src/ui/mod.rs: Permission denied (os error 13)\nhint: check the \
-         directory's owner\nhint: or remove it and start the thread again\nnote: the backend \
+         directory's owner\nhint: or remove it and start the thread again\nnote: the server \
          kept the previous version on disk",
     );
-    s.preview_toast("Offline", "The backend disconnected.");
+    s.preview_toast("Offline", "The server disconnected.");
 }
 
 fn queue(s: &mut Desktop) {

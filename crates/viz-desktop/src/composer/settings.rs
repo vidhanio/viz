@@ -5,7 +5,7 @@ use viz_client::protocol::{ConfigOption, OptionKind, OptionValue, ThreadId};
 use super::{draft, model};
 use crate::{
     app::{Desktop, NewThread},
-    backend::Command,
+    server::Command,
     theme::{S2, Size, Theme},
     ui,
 };

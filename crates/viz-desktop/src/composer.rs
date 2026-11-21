@@ -14,7 +14,7 @@ use viz_client::protocol::{QueuedInput, ThreadId};
 use crate::{
     app::Desktop,
     attachments,
-    backend::Command,
+    server::Command,
     theme::{CARD_INSET, ICON, READING_INSET, S4, S8, S48, Size, Theme},
     ui::{self, Card},
 };

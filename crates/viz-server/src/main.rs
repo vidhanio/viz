@@ -1,4 +1,4 @@
-//! viz-backend runs ACP threads and delegates work to configured environments.
+//! viz-server runs ACP threads and delegates work to configured environments.
 
 #![expect(
     clippy::redundant_pub_crate,
@@ -34,7 +34,7 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
-    /// Read one backend TOML file instead of the default layers.
+    /// Read one server TOML file instead of the default layers.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]
@@ -43,7 +43,7 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Start the backend (also the default when no command is given).
+    /// Start the server (also the default when no command is given).
     Serve,
     /// Write JSON Schema for the shared wire types.
     Schema {
@@ -80,7 +80,7 @@ fn main() -> Result<()> {
             tracing_subscriber::fmt()
                 .with_env_filter(
                     tracing_subscriber::EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| "viz_backend=info".into()),
+                        .unwrap_or_else(|_| "viz_server=info".into()),
                 )
                 .with_writer(std::io::stderr)
                 .init();

@@ -109,7 +109,7 @@ impl Workspace {
             .build(Sqlite::open(dir.join("workspace.sqlite3")))
             .await?;
         let mut db = pool.connection().await?;
-        // SQLite holds this lock after the initial write; two backends must
+        // SQLite holds this lock after the initial write; two servers must
         // never drive the same queue.
         row(&mut db, "PRAGMA locking_mode = EXCLUSIVE", []).await?;
         row(&mut db, "PRAGMA journal_mode = WAL", []).await?;

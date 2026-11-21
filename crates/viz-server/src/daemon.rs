@@ -1,4 +1,4 @@
-//! Foreground service integration; the backend also runs without a service
+//! Foreground service integration; the server also runs without a service
 //! manager.
 
 use std::net::SocketAddr;
@@ -26,7 +26,7 @@ pub(crate) fn activated_listener(address: SocketAddr) -> Result<Option<std::net:
         let actual = listener.local_addr()?;
         ensure!(
             actual == address,
-            "activation address {actual} does not match backend.listen {address}"
+            "activation address {actual} does not match server.listen {address}"
         );
         listener.set_nonblocking(true)?;
         return Ok(Some(listener));

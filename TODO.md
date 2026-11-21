@@ -2,9 +2,9 @@
 
 Roadmap and open work. Check items off in the same change that lands them.
 
-## Backend
+## Server
 
-- [x] Rust/Tokio backend, Toasty SQLite workspace, and Serde TOML config with lexical drop-ins.
+- [x] Rust/Tokio server, Toasty SQLite workspace, and Serde TOML config with lexical drop-ins.
 - [x] Configured environments over ordinary HTTP(S), independent stores, and a URL-only client connection.
 - [x] Reusable ACP threads, per-input runs, and durable delegated tasks. Deliver the task result to its parent once, without making later runs part of that task.
 - [x] Project metadata keyed by absolute directory, searchable transcripts, paged entries, queue editing, and attachments.
@@ -17,12 +17,12 @@ Roadmap and open work. Check items off in the same change that lands them.
 
 ## Protocol
 
-- [x] Backend and Rust clients share Serde types and generate JSON Schema from them.
+- [x] Server and Rust clients share Serde types and generate JSON Schema from them.
 - [ ] Generate Swift payload types from the schema.
 
 ## Connectors
 
-- [ ] Discord: typing indicator until the reply lands, attachments (images to the model), threads as forked conversations, slash commands (`/abort`, `/model`), reconnect with backoff when the backend restarts.
+- [ ] Discord: typing indicator until the reply lands, attachments (images to the model), threads as forked conversations, slash commands (`/abort`, `/model`), reconnect with backoff when the server restarts.
 - [ ] iMessage: implement the BlueBubbles bridge (REST + webhooks/socket), or an alternative if BlueBubbles' API doesn't fit.
 - [ ] Shared connector runtime crate once a second real connector exists (reconnect loop, origin helpers, chunking).
 - [ ] More connectors: Telegram, email, Matrix, Signal.
@@ -47,7 +47,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [ ] Release path: paid account + GitHub macOS runner or Xcode Cloud (Linux-only upload conflicts with the Xcode license)
 - [ ] Evaluate isim (kolabs-dev/isim) for simulator runs / rendering `#Preview` on Linux
 - [ ] Push notifications (needs a relay; out of scope until remote auth exists)
-- [ ] Replace the hand-rolled JSON-RPC correlation in `Backend.swift` with `ChimeHQ/JSONRPC` (needs a small custom `DataChannel` to send the `Authorization` header); blocked on a device build to verify
+- [ ] Replace the hand-rolled JSON-RPC correlation in `Server.swift` with `ChimeHQ/JSONRPC` (needs a small custom `DataChannel` to send the `Authorization` header); blocked on a device build to verify
 
 ## Nix / ops
 

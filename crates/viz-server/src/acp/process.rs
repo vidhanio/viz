@@ -54,7 +54,7 @@ pub(crate) async fn drain_processes() {
 }
 
 /// Keeps the harness usable without inheriting provider tokens, viz config
-/// overrides, or other backend secrets.
+/// overrides, or other server secrets.
 const RUNTIME_ENV: &[&str] = &[
     "PATH",
     "HOME",

@@ -23,10 +23,10 @@ struct ContentView: View {
     let result: Result<[VizProtocol.SearchHit], Error>
   }
 
-  @Environment(Backend.self) private var backend
+  @Environment(Server.self) private var server
   // iOS App Transport Security requires HTTPS for remote hosts.
-  @AppStorage("backendURL") private var backendURL = "https://viz.example.com"
-  @AppStorage("backendToken") private var backendToken = ""
+  @AppStorage("serverURL") private var serverURL = "https://viz.example.com"
+  @AppStorage("serverToken") private var serverToken = ""
   @State private var selection: Selection?
   @State private var drafts: [Int: String] = [:]
   @State private var errors: [Int: String] = [:]
@@ -41,7 +41,7 @@ struct ContentView: View {
       List(selection: $selection) {
         if searchQuery.isEmpty {
           threadSections
-          backendSection
+          serverSection
         } else {
           searchSection
         }
@@ -90,7 +90,7 @@ struct ContentView: View {
           importing = false
           selection = .thread(id)
         }
-        .environment(backend)
+        .environment(server)
       }
     } detail: {
       if let thread = selectedThread {
@@ -112,18 +112,18 @@ struct ContentView: View {
   }
 
   private var connected: Bool {
-    backend.environment != nil
+    server.environment != nil
   }
 
   private var visibleThreads: [VizProtocol.ThreadSummary] {
-    backend.threads.filter { !$0.archived }
+    server.threads.filter { !$0.archived }
   }
 
   private var newMenu: some View {
     Menu {
       Section("New thread") {
         Button("No project") { launch(project: nil) }
-        ForEach(backend.projects) { project in
+        ForEach(server.projects) { project in
           Button(project.name) { launch(project: project.path) }
         }
       }
@@ -150,7 +150,7 @@ struct ContentView: View {
       }
     }
     let rest = threads.filter { !$0.pinned }
-    ForEach(backend.projects) { project in
+    ForEach(server.projects) { project in
       Section(project.name) {
         ForEach(rest.filter { $0.project == project.path }) { thread in
           threadRow(thread)
@@ -158,7 +158,7 @@ struct ContentView: View {
       }
     }
     let ungrouped = rest.filter { thread in
-      !backend.projects.contains { $0.path == thread.project }
+      !server.projects.contains { $0.path == thread.project }
     }
     if !ungrouped.isEmpty {
       Section("Threads") {
@@ -169,22 +169,22 @@ struct ContentView: View {
     }
   }
 
-  private var backendSection: some View {
-    Section("Backend") {
-      TextField("URL", text: $backendURL)
+  private var serverSection: some View {
+    Section("Server") {
+      TextField("URL", text: $serverURL)
         .autocorrectionDisabled()
-      SecureField("Token", text: $backendToken)
+      SecureField("Token", text: $serverToken)
       Button("Connect") {
-        guard let url = URL(string: backendURL) else { return }
+        guard let url = URL(string: serverURL) else { return }
         resetLocal()
-        Task { await backend.connect(url: url, token: backendToken) }
+        Task { await server.connect(url: url, token: serverToken) }
       }
-      if let current = backend.environment, !backend.environments.isEmpty {
+      if let current = server.environment, !server.environments.isEmpty {
         Picker(
           "Environment",
           selection: Binding(get: { current }, set: { switchEnvironment($0) })
         ) {
-          ForEach(backend.environments) { environment in
+          ForEach(server.environments) { environment in
             Text(environmentLabel(environment)).tag(environment.id)
           }
         }
@@ -192,7 +192,7 @@ struct ContentView: View {
       Text(status)
         .font(.footnote)
         .foregroundStyle(.secondary)
-      if let error = backend.listError {
+      if let error = server.listError {
         Text(error)
           .font(.footnote)
           .foregroundStyle(.secondary)
@@ -258,7 +258,7 @@ struct ContentView: View {
     guard let query else { return }
     do {
       try await Task.sleep(for: .milliseconds(250))
-      let hits = try await backend.search(query: query)
+      let hits = try await server.search(query: query)
       guard !Task.isCancelled else { return }
       searchResults = SearchResults(query: query, result: .success(hits))
     } catch {
@@ -290,7 +290,7 @@ struct ContentView: View {
 
   private var selectedThread: VizProtocol.ThreadSummary? {
     guard let selection else { return nil }
-    return backend.threads.first { $0.id == selection.threadID }
+    return server.threads.first { $0.id == selection.threadID }
   }
 
   private func title(_ thread: VizProtocol.ThreadSummary) -> String {
@@ -351,20 +351,20 @@ struct ContentView: View {
   }
 
   private func switchEnvironment(_ environment: String) {
-    guard environment != backend.environment else { return }
+    guard environment != server.environment else { return }
     resetLocal()
-    Task { await backend.select(environment: environment) }
+    Task { await server.select(environment: environment) }
   }
 
   /// Opens a thread, first switching environments when it lives in another one.
   private func open(thread: Int, environment: String?) {
-    guard let environment, environment != backend.environment else {
+    guard let environment, environment != server.environment else {
       selection = .thread(thread)
       return
     }
     resetLocal()
     Task {
-      await backend.select(environment: environment)
+      await server.select(environment: environment)
       selection = .thread(thread)
     }
   }
@@ -372,8 +372,8 @@ struct ContentView: View {
   private func launch(project: String?) {
     Task {
       do {
-        let id = try await backend.launch(project: project)
-        await backend.refresh()
+        let id = try await server.launch(project: project)
+        await server.refresh()
         selection = .thread(id)
       } catch {
         notice = ("New thread failed", error.localizedDescription)
@@ -388,7 +388,7 @@ struct ContentView: View {
   ) {
     Task {
       do {
-        try await backend.update(thread: thread.id, archived: archived, pinned: pinned)
+        try await server.update(thread: thread.id, archived: archived, pinned: pinned)
         if archived == true, selection?.threadID == thread.id {
           selection = nil
         }
@@ -402,7 +402,7 @@ struct ContentView: View {
     let parent = thread.parentEnvironment == nil ? thread.parent : nil
     Task {
       do {
-        try await backend.delete(thread: thread.id)
+        try await server.delete(thread: thread.id)
         if selection?.threadID == thread.id {
           selection = parent.map { .thread($0) }
         }
@@ -423,11 +423,11 @@ struct ContentView: View {
   }
 
   private var status: String {
-    switch backend.state {
+    switch server.state {
     case .disconnected: "Disconnected"
     case .connecting: "Connecting…"
     case .connected(let version, let environment):
-      "Connected to viz-backend \(version) (\(environment))"
+      "Connected to viz-server \(version) (\(environment))"
     case .failed(let message): "Failed: \(message)"
     }
   }
@@ -435,7 +435,7 @@ struct ContentView: View {
 
 /// A watched thread's transcript, live turn, queue, and composer.
 private struct ThreadDetail: View {
-  @Environment(Backend.self) private var backend
+  @Environment(Server.self) private var server
   let thread: VizProtocol.ThreadSummary
   let title: String
   /// A search hit's entry to scroll to.
@@ -461,13 +461,13 @@ private struct ThreadDetail: View {
   }
 
   var body: some View {
-    let entries = backend.entries[thread.id] ?? []
-    let state = backend.threadStates[thread.id]
+    let entries = server.entries[thread.id] ?? []
+    let state = server.threadStates[thread.id]
     let status = state?.status ?? thread.status
     VStack(spacing: 0) {
       ScrollViewReader { proxy in
         List {
-          if backend.earlier[thread.id] != nil {
+          if server.earlier[thread.id] != nil {
             Button("Load earlier") {
               Task { await loadEarlier() }
             }
@@ -540,20 +540,20 @@ private struct ThreadDetail: View {
         }
       }
     }
-    .task(id: backend.connection) {
+    .task(id: server.connection) {
       do {
-        try await backend.watch(thread: thread.id)
+        try await server.watch(thread: thread.id)
       } catch {
         if !Task.isCancelled { failure = error.localizedDescription }
       }
     }
-    .onDisappear { [id = thread.id, backend = backend] in
-      Task { await backend.unwatch(thread: id) }
+    .onDisappear { [id = thread.id, server = server] in
+      Task { await server.unwatch(thread: id) }
     }
     .task(id: thread.unread ? thread.id : nil) {
       guard thread.unread else { return }
       do {
-        try await backend.update(thread: thread.id, unread: false)
+        try await server.update(thread: thread.id, unread: false)
       } catch {
         if !Task.isCancelled { failure = error.localizedDescription }
       }
@@ -696,17 +696,17 @@ private struct ThreadDetail: View {
   /// Scrolls to the target entry, loading older pages until it is loaded.
   private func reveal(_ proxy: ScrollViewProxy) {
     guard let target else { return }
-    let entries = backend.entries[thread.id] ?? []
+    let entries = server.entries[thread.id] ?? []
     if entries.contains(where: { $0.id == target }) {
       proxy.scrollTo(target, anchor: .center)
-    } else if let first = entries.first, target < first.id, backend.earlier[thread.id] != nil {
+    } else if let first = entries.first, target < first.id, server.earlier[thread.id] != nil {
       Task { await loadEarlier() }
     }
   }
 
   private func loadEarlier() async {
     do {
-      try await backend.loadEarlier(thread: thread.id)
+      try await server.loadEarlier(thread: thread.id)
     } catch {
       failure = error.localizedDescription
     }
@@ -717,7 +717,7 @@ private struct ThreadDetail: View {
     draft = ""
     Task {
       do {
-        _ = try await backend.send(text: text, thread: thread.id)
+        _ = try await server.send(text: text, thread: thread.id)
         failure = nil
       } catch {
         if draft.isEmpty { draft = text }
@@ -729,7 +729,7 @@ private struct ThreadDetail: View {
   private func stop() {
     Task {
       do {
-        try await backend.stop(thread: thread.id)
+        try await server.stop(thread: thread.id)
         failure = nil
       } catch {
         failure = error.localizedDescription
@@ -740,7 +740,7 @@ private struct ThreadDetail: View {
   private func removeQueued(_ run: Int) {
     Task {
       do {
-        try await backend.removeQueued(thread: thread.id, run: run)
+        try await server.removeQueued(thread: thread.id, run: run)
       } catch {
         failure = error.localizedDescription
       }
@@ -750,7 +750,7 @@ private struct ThreadDetail: View {
 
 /// Lists a harness's own sessions and imports one as a thread.
 private struct ImportSheet: View {
-  @Environment(Backend.self) private var backend
+  @Environment(Server.self) private var server
   @Environment(\.dismiss) private var dismiss
   let imported: (Int) -> Void
   @State private var harnesses: [VizProtocol.HarnessCatalog.Harness] = []
@@ -777,7 +777,7 @@ private struct ImportSheet: View {
           }
           Picker("Project", selection: $project) {
             Text("None").tag(String?.none)
-            ForEach(backend.projects) { project in
+            ForEach(server.projects) { project in
               Text(project.name).tag(Optional(project.path))
             }
           }
@@ -829,7 +829,7 @@ private struct ImportSheet: View {
       }
       .task {
         do {
-          harnesses = try await backend.listHarnesses()
+          harnesses = try await server.listHarnesses()
           harness = harnesses.first(where: \.default)?.id ?? harnesses.first?.id
         } catch {
           failure = error.localizedDescription
@@ -852,7 +852,7 @@ private struct ImportSheet: View {
     failure = nil
     defer { loading = false }
     do {
-      let page = try await backend.nativeThreads(
+      let page = try await server.nativeThreads(
         harness: harness, project: project, cursor: reset ? nil : cursor)
       guard !Task.isCancelled, self.harness == harness, self.project == project else { return }
       sessions.append(contentsOf: page.threads)
@@ -868,9 +868,9 @@ private struct ImportSheet: View {
     importingSession = session.sessionId
     Task {
       do {
-        let id = try await backend.importThread(
+        let id = try await server.importThread(
           harness: harness, sessionId: session.sessionId, cwd: session.cwd, project: project)
-        await backend.refresh()
+        await server.refresh()
         imported(id)
       } catch {
         failure = error.localizedDescription

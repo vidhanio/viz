@@ -8,7 +8,7 @@ viz is one person's workspace for running ACP harnesses on code. Every feature s
 
 1. **Run agents on code.** Start or import a thread in a project, pick a model and thinking level, attach files, use slash commands, stop a run, or queue the next input.
 2. **Follow delegation.** See tasks a thread delegated, where they run, and whether they finished. Open their threads and continue them independently of the task.
-3. **Work across environments.** Switch among configured backends and manage their own projects and threads.
+3. **Work across environments.** Switch among configured servers and manage their own projects and threads.
 4. **Find things.** Search threads and jump to a result from the palette.
 
 Out of scope until a job above needs it: git (diffs, checkpoints, worktrees, commit/push/PR; the agents do git themselves), permission prompts, in-app settings forms (config is TOML), terminals, a browser, issue trackers, multi-model fan-out, usage dashboards, a theme editor.

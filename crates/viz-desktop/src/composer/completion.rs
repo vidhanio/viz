@@ -6,7 +6,7 @@ use viz_client::protocol::SlashCommand;
 
 use crate::{
     app::Desktop,
-    backend::Command,
+    server::Command,
     theme::{ICON_SMALL, Theme},
     ui,
 };

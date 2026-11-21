@@ -1,4 +1,4 @@
-//! Validated backend addresses and their optional credentials.
+//! Validated server addresses and their optional credentials.
 
 use std::{fmt, net::IpAddr};
 
@@ -76,13 +76,13 @@ impl fmt::Display for Endpoint {
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveEndpointError {
     /// The address is not a valid HTTP(S) origin.
-    #[error("[backend].url must be an HTTP or HTTPS origin without a path, query, or credentials")]
+    #[error("[server].url must be an HTTP or HTTPS origin without a path, query, or credentials")]
     InvalidUrl,
     /// Only loopback origins may use plaintext HTTP.
-    #[error("[backend].url must use HTTPS outside loopback")]
+    #[error("[server].url must use HTTPS outside loopback")]
     RemoteHttp,
     /// The remote origin needs a bearer token.
-    #[error("a non-loopback [backend].url requires [backend].token")]
+    #[error("a non-loopback [server].url requires [server].token")]
     MissingToken,
     /// The configured token could not be resolved.
     #[error(transparent)]

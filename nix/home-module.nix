@@ -17,8 +17,8 @@ let
   vizPackages = self.packages.${pkgs.stdenv.hostPlatform.system};
 
   tomlFormat = pkgs.formats.toml { };
-  backendSettings = cfg.settings;
-  generatedSettings = tomlFormat.generate "viz-settings.toml" backendSettings;
+  serverSettings = cfg.settings;
+  generatedSettings = tomlFormat.generate "viz-settings.toml" serverSettings;
 
   stylixColors = config.lib.stylix.colors or null;
   stylixPolarity = config.stylix.polarity or "either";
@@ -117,7 +117,7 @@ in
       default = { };
       example = lib.literalExpression ''
         {
-          backend = {
+          server = {
             environment = "workstation";
             listen = "127.0.0.1:7420";
             token.file = config.sops.secrets."viz/token".path;
@@ -131,8 +131,8 @@ in
         }
       '';
       description = ''
-        Backend configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`. Only
-        viz-backend reads it, along with unmanaged drop-ins under
+        Server configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`. Only
+        viz-server reads it, along with unmanaged drop-ins under
         {file}`$XDG_CONFIG_HOME/viz/config.d/`. See `config.example.toml` for keys
         and defaults. Reference secrets by file or environment variable so the
         values stay out of the Nix store. Configure clients separately with
@@ -160,26 +160,26 @@ in
       default = null;
       example = "/run/secrets/viz-env";
       description = ''
-        `KEY=value` file loaded into every viz service: provider credentials for the backend
+        `KEY=value` file loaded into every viz service: provider credentials for the server
         (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) and variables referenced by
         `{ env = "NAME"; }` secrets.
       '';
     };
 
-    backend = {
+    server = {
       enable = mkOption {
         type = types.bool;
         default = true;
         description = ''
-          Run `viz-backend.service` as a systemd user service with `StateDirectory=viz`.
-          Changes to the generated backend settings trigger a restart.
+          Run `viz-server.service` as a systemd user service with `StateDirectory=viz`.
+          Changes to the generated server settings trigger a restart.
         '';
       };
       package = mkOption {
         type = types.package;
-        default = vizPackages.backend;
-        defaultText = lib.literalExpression "viz.packages.\${system}.backend";
-        description = "The viz-backend package.";
+        default = vizPackages.server;
+        defaultText = lib.literalExpression "viz.packages.\${system}.server";
+        description = "The viz-server package.";
       };
     };
 
@@ -231,7 +231,7 @@ in
     home.packages = [ cfg.package ] ++ lib.optional cfg.desktop.enable cfg.desktop.package;
 
     xdg.configFile = {
-      "viz/config.toml" = mkIf (!cfg.mutableSettings && backendSettings != { }) {
+      "viz/config.toml" = mkIf (!cfg.mutableSettings && serverSettings != { }) {
         source = settingsSource;
       };
       "viz/desktop.toml" = mkIf (desktopSettings != { }) {
@@ -248,7 +248,7 @@ in
       }
     ) (lib.filterAttrs (_: settings: settings != { }) connectorSettings);
 
-    home.activation.vizMutableSettings = mkIf (cfg.mutableSettings && backendSettings != { }) (
+    home.activation.vizMutableSettings = mkIf (cfg.mutableSettings && serverSettings != { }) (
       lib.hm.dag.entryAfter [ "linkGeneration" ] (
         lib.hm.generators.mkImpureConfigMerger {
           inherit pkgs;
@@ -262,7 +262,7 @@ in
       )
     );
 
-    home.activation.vizImmutableSettings = mkIf (!cfg.mutableSettings && backendSettings != { }) (
+    home.activation.vizImmutableSettings = mkIf (!cfg.mutableSettings && serverSettings != { }) (
       lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] (
         lib.hm.generators.mkImpureConfigCleanup {
           file = config.xdg.configFile."viz/config.toml";
@@ -271,9 +271,9 @@ in
     );
 
     systemd.user.services = {
-      viz-backend = mkIf cfg.backend.enable (service {
-        description = "viz backend environment";
-        inherit (cfg.backend) package;
+      viz-server = mkIf cfg.server.enable (service {
+        description = "viz server environment";
+        inherit (cfg.server) package;
         restartTriggers = [ settingsSource ];
         extraService = {
           Type = "notify";
@@ -293,7 +293,7 @@ in
       lib.nameValuePair "viz-${name}" (service {
         description = "viz ${name} connector";
         inherit (connector) package;
-        after = lib.optional cfg.backend.enable "viz-backend.service";
+        after = lib.optional cfg.server.enable "viz-server.service";
         restartTriggers = lib.optional (connectorSettings.${name} != { }) connectorSources.${name};
       })
     ) enabledConnectors;

@@ -1,4 +1,4 @@
-//! Client for the viz backend: JSON-RPC 2.0 over a WebSocket, with an optional
+//! Client for the viz server: JSON-RPC 2.0 over a WebSocket, with an optional
 //! bearer token.
 
 mod client;

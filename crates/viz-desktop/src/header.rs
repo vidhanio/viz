@@ -6,7 +6,7 @@ use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadSummary};
 
 use crate::{
     app::{Desktop, thread_title},
-    backend::Command,
+    server::Command,
     sidebar,
     theme::{
         CARD_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, READING_INSET, S2, S4, S8, S12, S16,

@@ -31,7 +31,7 @@ use crate::{
     },
 };
 
-/// The WebSocket path the backend serves the protocol on.
+/// The WebSocket path the server serves the protocol on.
 const RPC_PATH: &str = "/v2/rpc";
 
 /// A connected client. Cheap to clone; calls may run concurrently.
@@ -42,13 +42,13 @@ pub struct Client {
     next_id: Arc<AtomicU64>,
 }
 
-/// A fresh connection: the client, its notifications, and the backend's `hello`
+/// A fresh connection: the client, its notifications, and the server's `hello`
 /// answer.
 #[derive(Debug)]
 pub struct Connection {
     /// Handle for calls.
     pub client: Client,
-    /// Notifications pushed by the backend. Ends when the connection closes.
+    /// Notifications pushed by the server. Ends when the connection closes.
     pub notifications: mpsc::UnboundedReceiver<Notification>,
     /// The `hello` result.
     pub hello: Hello,
@@ -66,7 +66,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns an error if the backend is unreachable, rejects the client, or
+    /// Returns an error if the server is unreachable, rejects the client, or
     /// speaks another protocol version.
     ///
     /// # Panics
@@ -111,7 +111,7 @@ impl Client {
             .await?;
         if hello.protocol != PROTOCOL_VERSION {
             return Err(Error::Protocol {
-                backend: hello.protocol,
+                server: hello.protocol,
             });
         }
         Ok(Connection {
@@ -126,7 +126,7 @@ impl Client {
         _ = self.outgoing.send(Message::Close(None));
     }
 
-    /// Lists every thread, titled by the backend.
+    /// Lists every thread, titled by the server.
     ///
     /// # Errors
     ///
@@ -274,7 +274,7 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Rpc`] for a backend error, [`Error::Encode`] or
+    /// Returns [`Error::Rpc`] for a server error, [`Error::Encode`] or
     /// [`Error::Decode`] for a request or response that isn't valid protocol,
     /// or [`Error::Closed`].
     pub async fn send(&self, send: &SendInput) -> Result<RunId> {
@@ -453,7 +453,7 @@ fn dispatch(
     let route: Route = match serde_json::from_str(text.as_str()) {
         Ok(message) => message,
         Err(e) => {
-            tracing::warn!("backend sent invalid JSON: {e}");
+            tracing::warn!("server sent invalid JSON: {e}");
             return;
         }
     };

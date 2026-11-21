@@ -1,4 +1,4 @@
-//! `viz`: inspect configuration and talk to the backend from a terminal.
+//! `viz`: inspect configuration and talk to the server from a terminal.
 
 use std::{
     env, fs, io,
@@ -31,7 +31,7 @@ struct Cli {
 enum Command {
     /// Print component config locations and the CLI's own effective settings.
     Config,
-    /// Connect to the backend and print its `hello`.
+    /// Connect to the server and print its `hello`.
     Status,
     /// Send a message to a thread and print its reply.
     Send {
@@ -46,7 +46,7 @@ enum Command {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct CliConfig {
-    backend: Connection,
+    server: Connection,
     thread: Option<ThreadId>,
     environment: Option<String>,
 }
@@ -56,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let file = cli.config.map_or_else(ClientFile::cli, ClientFile::path);
     let config: CliConfig = viz_config::load(&file)?;
-    let endpoint = || Endpoint::from_connection(&config.backend);
+    let endpoint = || Endpoint::from_connection(&config.server);
     match cli.command {
         Command::Config => print_config(&file, &Paths::from_env()?, config),
         Command::Status => status(&endpoint()?, config.environment).await,
@@ -72,11 +72,11 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn print_config(file: &ClientFile, paths: &Paths, config: CliConfig) -> anyhow::Result<()> {
-    let backend_override = env::var_os("VIZ_CONFIG").filter(|value| !value.is_empty());
-    if let Some(path) = backend_override {
-        print_path("backend", Path::new(&path))?;
+    let server_override = env::var_os("VIZ_CONFIG").filter(|value| !value.is_empty());
+    if let Some(path) = server_override {
+        print_path("server", Path::new(&path))?;
     } else {
-        print_path("backend", &paths.config_dir.join("config.toml"))?;
+        print_path("server", &paths.config_dir.join("config.toml"))?;
         print_dropins(&paths.config_dir.join("config.d"))?;
     }
     print_path("desktop", &ClientFile::desktop().resolve()?)?;
@@ -85,12 +85,12 @@ fn print_config(file: &ClientFile, paths: &Paths, config: CliConfig) -> anyhow::
         print_path(name, &ClientFile::connector(name).resolve()?)?;
     }
     let CliConfig {
-        backend,
+        server,
         thread,
         environment,
     } = config;
-    println!("\nCLI [backend]");
-    let url = backend.url.as_deref().unwrap_or(DEFAULT_URL);
+    println!("\nCLI [server]");
+    let url = server.url.as_deref().unwrap_or(DEFAULT_URL);
     println!(
         "url: {}",
         if url.contains(['@', '?', '#']) {
@@ -101,7 +101,7 @@ fn print_config(file: &ClientFile, paths: &Paths, config: CliConfig) -> anyhow::
     );
     println!(
         "token: {}",
-        if backend.token.is_some() {
+        if server.token.is_some() {
             "<configured>"
         } else {
             "<not configured>"
@@ -117,7 +117,7 @@ fn print_config(file: &ClientFile, paths: &Paths, config: CliConfig) -> anyhow::
 }
 
 fn print_dropins(dir: &Path) -> anyhow::Result<()> {
-    print_path("backend drop-ins", dir)?;
+    print_path("server drop-ins", dir)?;
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
@@ -152,7 +152,7 @@ fn print_path(component: &str, path: &Path) -> anyhow::Result<()> {
 async fn status(endpoint: &Endpoint, environment: Option<String>) -> anyhow::Result<()> {
     let hello = Client::connect(endpoint, info(), environment).await?.hello;
     println!(
-        "{endpoint}: viz-backend {} (protocol {}), environment {}",
+        "{endpoint}: viz-server {} (protocol {}), environment {}",
         hello.version, hello.protocol, hello.environment
     );
     Ok(())

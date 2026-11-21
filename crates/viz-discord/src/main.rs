@@ -24,7 +24,7 @@ use viz_client::{
     Client, Connection, Endpoint,
     protocol::{ClientInfo, ClientKind, Notification, Origin, SendInput, ThreadId},
 };
-use viz_config::{ClientFile, Connection as BackendConnection, Secret};
+use viz_config::{ClientFile, Connection as ServerConnection, Secret};
 
 /// The connector's name: its config filename, `hello` name and origins.
 const NAME: &str = "discord";
@@ -44,7 +44,7 @@ struct Args {
 #[serde(deny_unknown_fields)]
 struct DiscordConfig {
     #[serde(default)]
-    backend: BackendConnection,
+    server: ServerConnection,
     bot_token: Option<Secret>,
     thread: Option<ThreadId>,
     environment: Option<String>,
@@ -174,7 +174,7 @@ async fn main() -> anyhow::Result<()> {
         !discord.allowed_users.is_empty(),
         "discord: allowed_users is empty: nobody could talk to viz"
     );
-    let endpoint = Endpoint::from_connection(&discord.backend)?;
+    let endpoint = Endpoint::from_connection(&discord.server)?;
     let Connection {
         client: viz,
         mut notifications,
@@ -188,7 +188,7 @@ async fn main() -> anyhow::Result<()> {
         discord.environment,
     )
     .await?;
-    tracing::info!("connected to viz-backend {} at {endpoint}", hello.version);
+    tracing::info!("connected to viz-server {} at {endpoint}", hello.version);
 
     let intents = GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::GUILD_MESSAGES
@@ -224,7 +224,7 @@ async fn main() -> anyhow::Result<()> {
 
     tokio::select! {
         result = client.start() => result?,
-        _ = replies => anyhow::bail!("lost the connection to viz-backend"),
+        _ = replies => anyhow::bail!("lost the connection to viz-server"),
     }
     Ok(())
 }

@@ -77,13 +77,13 @@
         "type": "object",
         "properties": {
           "protocol": {
-            "description": "Protocol version the backend speaks.",
+            "description": "Protocol version the server speaks.",
             "type": "integer",
             "format": "uint32",
             "minimum": 0
           },
           "version": {
-            "description": "Backend version.",
+            "description": "Server version.",
             "type": "string"
           },
           "environment": {
@@ -1132,7 +1132,7 @@
             ]
           },
           "ConfigOption": {
-            "description": "A setting offered by the backend or ACP session.",
+            "description": "A setting offered by the server or ACP session.",
             "type": "object",
             "properties": {
               "id": {
@@ -2155,7 +2155,7 @@
         "type": "object",
         "properties": {
           "path": {
-            "description": "Existing directory; `~` expands to the backend's home directory.",
+            "description": "Existing directory; `~` expands to the server's home directory.",
             "type": "string"
           },
           "name": {
@@ -2303,7 +2303,7 @@
                 "type": "string"
               },
               "default": {
-                "description": "Whether this is the backend default.",
+                "description": "Whether this is the server default.",
                 "type": "boolean"
               },
               "options": {
@@ -2322,7 +2322,7 @@
             ]
           },
           "ConfigOption": {
-            "description": "A setting offered by the backend or ACP session.",
+            "description": "A setting offered by the server or ACP session.",
             "type": "object",
             "properties": {
               "id": {
@@ -2548,7 +2548,7 @@
         ],
         "$defs": {
           "ConfigOption": {
-            "description": "A setting offered by the backend or ACP session.",
+            "description": "A setting offered by the server or ACP session.",
             "type": "object",
             "properties": {
               "id": {
@@ -2750,7 +2750,7 @@
             "type": "string"
           },
           "limit": {
-            "description": "Limit from 1 to 200; omit to use the backend default.",
+            "description": "Limit from 1 to 200; omit to use the server default.",
             "type": [
               "integer",
               "null"
@@ -2843,7 +2843,7 @@
             ]
           },
           "harness": {
-            "description": "Configured runner; absent uses the backend default.",
+            "description": "Configured runner; absent uses the server default.",
             "type": [
               "string",
               "null"
@@ -4581,7 +4581,7 @@
         ]
       },
       "ConfigOption": {
-        "description": "A setting offered by the backend or ACP session.",
+        "description": "A setting offered by the server or ACP session.",
         "type": "object",
         "properties": {
           "id": {

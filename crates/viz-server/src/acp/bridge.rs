@@ -1,4 +1,4 @@
-//! `viz-backend mcp-bridge`: a stdio MCP server that relays to viz's HTTP MCP
+//! `viz-server mcp-bridge`: a stdio MCP server that relays to viz's HTTP MCP
 //! endpoint, for ACP agents that only take `command`-style MCP servers (every
 //! ACP agent must support those). It reads newline-delimited JSON-RPC from
 //! stdin, POSTs each message with the thread's token and the negotiated
@@ -71,7 +71,7 @@ pub(crate) async fn run() -> Result<()> {
             }
             Err(error) => {
                 eprintln!("mcp-bridge: {error:#}");
-                // Answer a request the backend didn't, so the agent isn't left
+                // Answer a request the server didn't, so the agent isn't left
                 // waiting; notifications need no answer.
                 if let Some(id) = request {
                     let message = format!("{error:#}");

@@ -1,4 +1,4 @@
-//! Shared protocol types and the backend's JSON-RPC envelope.
+//! Shared protocol types and the server's JSON-RPC envelope.
 
 use std::{fmt::Display, path::PathBuf};
 

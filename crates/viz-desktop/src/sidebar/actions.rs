@@ -4,7 +4,7 @@ use viz_client::protocol::{Project, ThreadId, ThreadSummary};
 
 use crate::{
     app::Desktop,
-    backend::{Command, ProjectChange, ThreadChange},
+    server::{Command, ProjectChange, ThreadChange},
     theme::{S8, S12, S32, Size, Theme},
     ui::{self, DialogForm},
 };
@@ -62,7 +62,7 @@ fn open_edit(s: &mut Desktop, edit: Edit, value: &str, tx: &mut Tx) {
     tx.focus_when_shown("edit-value", false);
 }
 
-/// Picks a folder with the OS dialog and adds it as a project; the backend
+/// Picks a folder with the OS dialog and adds it as a project; the server
 /// names it after the folder (rename it from its menu).
 pub(super) fn add_project(s: &mut Desktop, tx: &mut Tx) {
     if !s.connected() {

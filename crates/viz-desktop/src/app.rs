@@ -1,4 +1,4 @@
-//! The window's state and what the user can do to it. The backend thread fills
+//! The window's state and what the user can do to it. The server thread fills
 //! it in through the app handle; the views only read it.
 
 use std::{
@@ -17,9 +17,9 @@ use viz_client::protocol::{
 
 use crate::{
     attachments::{self, Loaded, Source, Target as AttachmentTarget},
-    backend::{Command, ThreadChange},
     composer::{Completion, ModelMenu},
     palette::Palette,
+    server::{Command, ThreadChange},
     sidebar::Navigation,
     thread::Thread,
 };
@@ -31,14 +31,14 @@ const TOAST_MAX: usize = 3;
 /// The window's size on launch, in points; headless renders use it too.
 pub const WINDOW_SIZE: (f32, f32) = (1240.0, 760.0);
 
-/// The backend connection, as the sidebar footer shows it.
+/// The server connection, as the sidebar footer shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
     /// Trying to connect.
     Connecting,
-    /// Connected to a backend of this version.
+    /// Connected to a server of this version.
     Connected {
-        /// Backend version.
+        /// Server version.
         version: String,
     },
     /// Not connected, and why.
@@ -123,13 +123,13 @@ pub struct Desktop {
     commands: mpsc::UnboundedSender<Command>,
     /// The connection.
     pub status: Status,
-    /// Where the backend is, once the config is read.
+    /// Where the server is, once the config is read.
     pub endpoint: Option<String>,
     pub environment: Option<String>,
     pub environments: Vec<Environment>,
     pub tasks: Vec<Task>,
     pub imports: Option<ImportBrowser>,
-    /// Every thread as the backend lists it, titles included.
+    /// Every thread as the server lists it, titles included.
     pub threads: Vec<ThreadSummary>,
     pub projects: Vec<Project>,
     pub harnesses: Vec<Harness>,
@@ -223,7 +223,7 @@ impl Desktop {
         Self::new(mpsc::unbounded_channel().0)
     }
 
-    /// Connected to a backend.
+    /// Connected to a server.
     pub const fn connected(&self) -> bool {
         matches!(self.status, Status::Connected { .. })
     }
@@ -481,7 +481,7 @@ impl Desktop {
         self.prepare_thread(thread, tx);
     }
 
-    /// Open a draft for a project without creating its backend session.
+    /// Open a draft for a project without creating its server session.
     pub fn create_in_project(&mut self, id: &str, tx: &mut Tx) {
         if let Some(project) = self.projects.iter().find(|project| project.path == id) {
             let thread = NewThread::new(self.next_draft, Some(project));
@@ -489,7 +489,7 @@ impl Desktop {
         }
     }
 
-    /// The backend added `project`. Listed at once (the list refresh may come
+    /// The server added `project`. Listed at once (the list refresh may come
     /// later), and an open draft takes it: a folder added while drafting is
     /// the one the thread is meant for, whether it came from the draft's own
     /// add button, the sidebar or the palette.
@@ -937,8 +937,8 @@ impl Desktop {
         self.threads.iter().find(|summary| summary.id == thread)
     }
 
-    /// The thread's name in the sidebar and header: the backend's title,
-    /// or what it is until the backend has one.
+    /// The thread's name in the sidebar and header: the server's title,
+    /// or what it is until the server has one.
     pub fn title(&self, thread: ThreadId) -> &str {
         self.summary(thread).map_or("New thread", thread_title)
     }

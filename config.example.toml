@@ -1,5 +1,5 @@
 # Copy to config.toml in $VIZ_CONFIG_DIR or $XDG_CONFIG_HOME/viz (default ~/.config/viz).
-# Backend only. With Home Manager, use programs.viz.settings instead.
+# Server only. With Home Manager, use programs.viz.settings instead.
 # Then load config.d/*.toml in lexical order from that same directory:
 # tables merge recursively, and other values are replaced by later layers.
 # $VIZ_CONFIG selects a single existing file instead (no drop-ins).
@@ -7,14 +7,14 @@
 # Secrets accept "inline", { file = "/run/secrets/x" } (one trailing line ending
 # is removed), or { env = "NAME" }. Prefer file or env for real credentials.
 
-[backend]
+[server]
 # Defaults to 127.0.0.1:7420. Clients use a URL; there is no Unix socket.
 # For other hosts, put an HTTPS reverse proxy in front of this listener.
 # A token is required for non-loopback binds and when linking an environment.
 # listen = "127.0.0.1:7420"
 # token = { file = "/run/secrets/viz-token" }
 # State storage: $STATE_DIRECTORY under systemd, otherwise $XDG_STATE_HOME/viz
-# (default ~/.local/state/viz). The Rust backend uses a fresh workspace database.
+# (default ~/.local/state/viz).
 # state_dir = "/var/lib/viz"
 # Stable identity; required to differ from every linked environment's ID.
 # environment = "workstation"
@@ -29,7 +29,7 @@
 # url = "https://lab.example.com"
 # token = { file = "/run/secrets/viz-lab-token" }
 
-# Trusted ACP runners run under the backend account and own their model credentials.
+# Trusted ACP runners run under the server account and own their model credentials.
 # viz does not add a sandbox or interactive permission policy.
 # [harnesses.claude]
 # Display name for selectors; the table key is still used in requests. Omit to show the key.

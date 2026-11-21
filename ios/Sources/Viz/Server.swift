@@ -272,7 +272,7 @@ enum VizProtocol {
 /// `hello` picks the environment the whole connection talks to.
 @MainActor
 @Observable
-final class Backend {
+final class Server {
   enum State: Equatable {
     case disconnected
     case connecting
@@ -304,7 +304,7 @@ final class Backend {
   struct RPCError: LocalizedError {
     let code: Int
     let message: String
-    var errorDescription: String? { "backend error \(code): \(message)" }
+    var errorDescription: String? { "server error \(code): \(message)" }
   }
 
   var environment: String? {
@@ -312,7 +312,7 @@ final class Backend {
     return environment
   }
 
-  /// Connects to the backend at `url`; `environment` selects a peer for the whole connection.
+  /// Connects to the server at `url`; `environment` selects a peer for the whole connection.
   func connect(url: URL, token: String, environment: String? = nil) async {
     task?.cancel(with: .goingAway, reason: nil)
     for continuation in pending.values {
@@ -358,7 +358,7 @@ final class Backend {
     }
   }
 
-  /// Reconnects to the same backend with another environment selected.
+  /// Reconnects to the same server with another environment selected.
   func select(environment: String) async {
     guard let endpoint else { return }
     await connect(url: endpoint.url, token: endpoint.token, environment: environment)

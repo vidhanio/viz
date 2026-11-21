@@ -5,10 +5,10 @@
 
 # Default thread for `viz send`; override with `--thread`.
 # thread = 42
-# Optional peer environment, otherwise the backend you connect to.
+# Optional peer environment, otherwise the server you connect to.
 # environment = "workstation"
 
-[backend]
+[server]
 # Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
 # url = "https://viz.example.com"
 # Secrets accept "inline", { file = "/run/secrets/x" } (one trailing line ending

@@ -5,12 +5,12 @@
 
 mod app;
 mod attachments;
-mod backend;
 mod composer;
 mod config;
 mod header;
 mod palette;
 mod scenes;
+mod server;
 mod sidebar;
 mod theme;
 mod thread;
@@ -226,7 +226,7 @@ fn main() {
         .flatten();
     let (theme_error, endpoint) = match viz_config::load::<DesktopConfig>(&file) {
         Ok(config) => {
-            let endpoint = Endpoint::from_connection(&config.backend).map_err(|e| e.to_string());
+            let endpoint = Endpoint::from_connection(&config.server).map_err(|e| e.to_string());
             (
                 theme::install(&config.theme, scene_theme.as_deref()),
                 endpoint,
@@ -285,7 +285,7 @@ fn main() {
     });
     if !preview {
         let (first, connected) = std::sync::mpsc::channel();
-        backend::spawn(app.handle(), receiver, first, endpoint);
+        server::spawn(app.handle(), receiver, first, endpoint);
         if headless {
             // The default snapshot shows the first connection attempt's
             // outcome.

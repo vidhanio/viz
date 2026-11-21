@@ -4,10 +4,10 @@ use serde::Deserialize;
 
 use crate::Secret;
 
-/// The default local backend origin.
+/// The default local server origin.
 pub const DEFAULT_URL: &str = "http://127.0.0.1:7420";
 
-/// The client's `[backend]` connection table.
+/// The client's `[server]` connection table.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Connection {

@@ -1,6 +1,6 @@
 [package]
 name = "viz-client"
-description = "Client for the viz backend's JSON-RPC-over-WebSocket protocol"
+description = "Client for the viz server's JSON-RPC-over-WebSocket protocol"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,7 +14,7 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt", "sync"] }
-# `https://` backends connect over `wss://`; Tokio Tungstenite enables no crypto provider.
+# `https://` servers connect over `wss://`; Tokio Tungstenite enables no crypto provider.
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 tokio-tungstenite = { workspace = true, features = ["rustls-tls-webpki-roots"] }
 tracing.workspace = true

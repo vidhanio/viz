@@ -95,7 +95,7 @@
               (craneLib.fileset.commonCargoSources ./.)
               ./crates/viz-desktop/themes
               ./crates/viz-desktop/icons
-              ./crates/viz-backend/src/workspace/schema.sql
+              ./crates/viz-server/src/workspace/schema.sql
             ];
           };
           commonArgs = {
@@ -145,7 +145,7 @@
           };
 
           packages = {
-            backend = crate "viz-backend" { };
+            server = crate "viz-server" { };
             viz = crate "viz" { };
             discord = crate "viz-discord" { };
             imessage = crate "viz-imessage" { };
@@ -162,7 +162,7 @@
               meta.mainProgram = "viz";
               paths = with self'.packages; [
                 viz
-                backend
+                server
                 discord
                 imessage
                 desktop

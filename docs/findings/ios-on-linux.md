@@ -167,7 +167,7 @@ AGENTS.md iOS section:
 - Document the 7-day/3-app free-account limits and that push/TestFlight need a paid account.
 - Note no simulator/previews; device testing is mandatory.
 - **ATS**: either change `ContentView` default to `https://…` served by `tailscale serve`, or add `ios/Info.plist` with `NSAppTransportSecurity` exception and `xtool.yml: infoPath: Info.plist`. Prefer HTTPS.
-- Note `@AppStorage("backendToken")` is not Keychain (already in TODO); don't put a real token there.
+- Note `@AppStorage("serverToken")` is not Keychain (already in TODO); don't put a real token there.
 
 TODO.md:
 

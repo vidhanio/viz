@@ -1,4 +1,4 @@
-//! Shared protocol v2 types for viz backends and clients.
+//! Shared protocol v2 types for viz servers and clients.
 //!
 //! Each request's params type implements [`Method`], which names the method on
 //! the wire and its result type.
@@ -169,9 +169,9 @@ pub struct HelloParams {
 /// `hello` result.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Hello {
-    /// Protocol version the backend speaks.
+    /// Protocol version the server speaks.
     pub protocol: u32,
-    /// Backend version.
+    /// Server version.
     pub version: String,
     /// The selected environment.
     pub environment: String,
@@ -247,7 +247,7 @@ pub struct LaunchThread {
     /// Project directory; absent uses the default working directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
-    /// Configured runner; absent uses the backend default.
+    /// Configured runner; absent uses the server default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
     /// Initial configuration by option id.
@@ -336,7 +336,7 @@ pub struct DependentChoice {
     pub description: Option<String>,
 }
 
-/// A setting offered by the backend or ACP session.
+/// A setting offered by the server or ACP session.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ConfigOption {
     /// Identifier for `thread.configure`.
@@ -514,7 +514,7 @@ pub struct Harness {
     pub id: String,
     /// Display name shown to the user.
     pub name: String,
-    /// Whether this is the backend default.
+    /// Whether this is the server default.
     pub default: bool,
     /// Session options advertised the last time the runner reported them.
     pub options: Vec<ConfigOption>,
@@ -587,7 +587,7 @@ pub struct ProjectList {
 /// Add a project directory.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct CreateProject<'a> {
-    /// Existing directory; `~` expands to the backend's home directory.
+    /// Existing directory; `~` expands to the server's home directory.
     pub path: &'a str,
     /// Display name; omit to use the directory name.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -652,7 +652,7 @@ pub struct SearchFiles<'a> {
     pub thread: ThreadId,
     /// Fuzzy path query.
     pub query: &'a str,
-    /// Limit from 1 to 200; omit to use the backend default.
+    /// Limit from 1 to 200; omit to use the server default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
 }

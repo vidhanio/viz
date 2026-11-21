@@ -8,7 +8,7 @@
 //! ```
 //!
 //! The BlueBubbles bridge itself is not written yet (see `TODO.md`); this
-//! binary validates its config and the backend connection so the service wiring
+//! binary validates its config and the server connection so the service wiring
 //! can be exercised.
 
 use std::path::PathBuf;
@@ -40,7 +40,7 @@ struct ImessageConfig {
     /// The environment to connect to for the configuration check.
     environment: Option<String>,
     #[serde(default)]
-    backend: Connection,
+    server: Connection,
     /// BlueBubbles server base URL.
     server_url: Option<String>,
     /// BlueBubbles server password.
@@ -72,7 +72,7 @@ async fn main() -> anyhow::Result<()> {
         !imessage.allowed_handles.is_empty(),
         "imessage: allowed_handles is empty: nobody could talk to viz"
     );
-    let endpoint = Endpoint::from_connection(&imessage.backend)?;
+    let endpoint = Endpoint::from_connection(&imessage.server)?;
     let hello = Client::connect(
         &endpoint,
         ClientInfo {
@@ -84,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
     .await?
     .hello;
     tracing::info!(
-        "connected to viz-backend {} at {endpoint}; BlueBubbles server {}",
+        "connected to viz-server {} at {endpoint}; BlueBubbles server {}",
         hello.version,
         server_url
     );

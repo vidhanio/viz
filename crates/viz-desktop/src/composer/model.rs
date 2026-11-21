@@ -17,7 +17,7 @@ use viz_client::protocol::{
 use super::settings::{self, Options, Owner, Role, role};
 use crate::{
     app::Desktop,
-    backend::Command,
+    server::Command,
     theme::{
         HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, S4, S6, S8, S16, S24, Size,
         Theme,

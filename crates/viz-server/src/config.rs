@@ -1,4 +1,4 @@
-//! Layered backend TOML. Client files and runner credentials stay separate.
+//! Layered server TOML. Client files and runner credentials stay separate.
 
 use std::{
     collections::BTreeMap,
@@ -53,14 +53,14 @@ impl fmt::Debug for PeerConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct File {
-    backend: Backend,
+    server: Server,
     harnesses: BTreeMap<String, HarnessConfig>,
     environments: BTreeMap<String, PeerFile>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct Backend {
+struct Server {
     environment: Option<String>,
     cwd: Option<PathBuf>,
     state_dir: Option<PathBuf>,
@@ -86,23 +86,23 @@ impl Config {
         let file: File = builder
             .build()?
             .try_deserialize()
-            .context("invalid backend configuration")?;
-        let backend = file.backend;
-        let environment = backend.environment.unwrap_or_else(|| String::from("local"));
+            .context("invalid server configuration")?;
+        let server = file.server;
+        let environment = server.environment.unwrap_or_else(|| String::from("local"));
         ensure!(
             valid_name(&environment),
             "invalid environment ID {environment:?}"
         );
-        let listen = backend
+        let listen = server
             .listen
             .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 7420)));
         ensure!(
-            listen.ip().is_loopback() || backend.token.is_some(),
-            "non-loopback listeners require backend.token"
+            listen.ip().is_loopback() || server.token.is_some(),
+            "non-loopback listeners require server.token"
         );
         ensure!(
-            file.environments.is_empty() || backend.token.is_some(),
-            "linked environments require backend.token"
+            file.environments.is_empty() || server.token.is_some(),
+            "linked environments require server.token"
         );
         for (id, harness) in &file.harnesses {
             ensure!(valid_name(id), "invalid harness ID {id:?}");
@@ -118,7 +118,7 @@ impl Config {
                 "harness {id:?} has no executable"
             );
         }
-        let default_harness = match backend.default_harness {
+        let default_harness = match server.default_harness {
             Some(name) => {
                 ensure!(
                     file.harnesses.contains_key(&name),
@@ -153,7 +153,7 @@ impl Config {
                 },
             );
         }
-        let cwd = backend.cwd.map_or_else(
+        let cwd = server.cwd.map_or_else(
             || {
                 env::var_os("HOME")
                     .map(PathBuf::from)
@@ -164,13 +164,13 @@ impl Config {
         let cwd = cwd
             .canonicalize()
             .with_context(|| format!("resolving working directory {}", cwd.display()))?;
-        ensure!(cwd.is_dir(), "backend working directory is not a directory");
+        ensure!(cwd.is_dir(), "server working directory is not a directory");
         Ok(Self {
             environment,
             cwd,
-            state_dir: backend.state_dir.unwrap_or(paths.state_dir),
+            state_dir: server.state_dir.unwrap_or(paths.state_dir),
             listen,
-            token: backend.token,
+            token: server.token,
             default_harness,
             harnesses: file.harnesses,
             environments,

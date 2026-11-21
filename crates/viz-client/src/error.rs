@@ -1,11 +1,11 @@
-//! Errors talking to the backend.
+//! Errors talking to the server.
 
 use crate::protocol::PROTOCOL_VERSION;
 
-/// Errors talking to the backend.
+/// Errors talking to the server.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    /// Couldn't reach the backend.
+    /// Couldn't reach the server.
     #[error("connecting to {endpoint}: {source}")]
     Connect {
         /// The endpoint tried.
@@ -13,8 +13,8 @@ pub enum Error {
         /// The underlying error.
         source: Box<dyn std::error::Error + Send + Sync>,
     },
-    /// The backend returned a JSON-RPC error.
-    #[error("{method}: backend error {code}: {message}")]
+    /// The server returned a JSON-RPC error.
+    #[error("{method}: server error {code}: {message}")]
     Rpc {
         /// The method called.
         method: &'static str,
@@ -40,13 +40,13 @@ pub enum Error {
         source: serde_json::Error,
     },
     /// The connection closed.
-    #[error("connection to the backend closed")]
+    #[error("connection to the server closed")]
     Closed,
-    /// The backend speaks another protocol version.
-    #[error("backend speaks protocol {backend}, this client speaks {PROTOCOL_VERSION}")]
+    /// The server speaks another protocol version.
+    #[error("server speaks protocol {server}, this client speaks {PROTOCOL_VERSION}")]
     Protocol {
-        /// The backend's version.
-        backend: u32,
+        /// The server's version.
+        server: u32,
     },
 }
 

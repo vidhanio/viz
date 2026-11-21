@@ -566,11 +566,11 @@ fn declaration(agent: &Agent, endpoint: &McpEndpoint) -> Result<Value> {
             "headers": [{ "name": "Authorization", "value": format!("Bearer {}", endpoint.token()) }],
         }));
     }
-    let executable = std::env::current_exe()
-        .context("locating the viz-backend executable for the MCP bridge")?;
+    let executable =
+        std::env::current_exe().context("locating the viz-server executable for the MCP bridge")?;
     let executable = executable
         .to_str()
-        .context("the viz-backend executable path is not valid UTF-8")?;
+        .context("the viz-server executable path is not valid UTF-8")?;
     Ok(json!({
         "name": "viz",
         "command": executable,
