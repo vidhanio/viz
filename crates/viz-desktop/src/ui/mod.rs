@@ -1191,6 +1191,8 @@ lucide! {
     LIST_PLUS = ListPlus;
     /// Steer or send immediately into an active turn.
     CORNER_UP_RIGHT = CornerUpRight;
+    /// Open delegated task thread.
+    ARROW_UP_RIGHT = ArrowUpRight;
     /// Queued message clock.
     CLOCK = Clock;
     /// Edit queued message.

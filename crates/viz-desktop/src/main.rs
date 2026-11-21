@@ -5,13 +5,13 @@
 //!
 //! UI rules:
 //!
-//! - Layout: sidebar and thread. A thread with delegated tasks keeps their
-//!   panel at the top right. Menus, palette, dialogs and toasts are temporary
-//!   overlays.
+//! - Layout: sidebar and thread. A thread with delegated tasks keeps a
+//!   persistent Tasks Dock tucked above the composer. Menus, palette, dialogs
+//!   and toasts are temporary overlays.
 //! - Sidebar: pinned threads, _Recent_ (newest first, project under each title)
 //!   and _Projects_ (collapsible) modes, and an environment picker in the
-//!   footer when more than one is configured. Task status belongs in the task
-//!   panel and timeline.
+//!   footer when more than one is configured. Task status lives in the Tasks
+//!   Dock, sidebar task tree, and timeline.
 //! - Activity: reasoning, tools and delegated tasks fold into compact groups;
 //!   running commands stay visible while folded; expand only for readable
 //!   output, changes or the reasoning trace. Context use sits at the trailing
@@ -69,14 +69,12 @@ const HEADLESS_CONNECT_WAIT: Duration = Duration::from_secs(5);
 fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let t = Theme::get(cx.system_dark());
     let mut overlays = Vec::new();
-    let (agents, reserve) = header::agents(s, t);
     let dock = composer::composer(s, t, &mut overlays);
     let mut reading = el()
         .key("reading-pane")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .pr(reserve)
         .child(timeline::timeline(s, t, &mut overlays).pin(
             Some(0.0),
             Some(0.0),
@@ -94,7 +92,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .h_full()
         .min_h(0.0)
         .child(ui::rule(t).key("header-rule"))
-        .children(agents)
         .child(reading);
     let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
         ui::drag_guard("sidebar-drag-guard")

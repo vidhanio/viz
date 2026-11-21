@@ -4,6 +4,7 @@ mod completion;
 mod draft;
 mod model;
 mod settings;
+mod tasks;
 
 pub use completion::{Completion, poll};
 pub use model::{ModelMenu, preview as preview_model_menu};
@@ -11,6 +12,7 @@ use rune::{
     Color, El, GrowthSpec, Key, KeyEvent, ScrollSpec, Spring, SpringPair, Transition, Tx, col, el,
     icon, row, text, text_input,
 };
+pub use tasks::DOCK_KEY as TASKS_DOCK_KEY;
 use viz_client::protocol::{QueuedInput, RunId, SendMode, ThreadId};
 
 use crate::{
@@ -65,7 +67,7 @@ pub fn clearance(s: &Desktop) -> f32 {
     } else {
         0.0
     };
-    BASE_CLEARANCE + queue_extra
+    BASE_CLEARANCE + queue_extra + tasks::clearance(s)
 }
 
 pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
@@ -73,6 +75,9 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         return None;
     }
     let mut column = col();
+    if let Some(dock) = tasks::dock(s, t) {
+        column = column.child(dock);
+    }
     if let Some((id, state)) = s.selected.zip(s.state.as_ref())
         && !state.queue.is_empty()
     {
@@ -389,30 +394,35 @@ fn queue(s: &Desktop, id: ThreadId, inputs: &[QueuedInput], t: &Theme) -> El {
         .child(rune::spacer())
         .child(queue_mode_radio(s.send_mode, t));
 
-    let mut list = col()
+    let mut inner = col()
         .key("queue-rows")
         .w_full()
         .growth(GrowthSpec::default());
-    if expanded && total > QUEUE_PREVIEW_LIMIT {
-        list = list
-            .max_h(QUEUE_HEIGHT)
-            .min_h(0.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .scroll_edge_fade(S12);
-    }
     for (index, input) in visible.iter().enumerate() {
         if index > 0 {
-            list = list.child(
+            inner = inner.child(
                 el().w_full()
                     .h(HAIRLINE)
                     .fill(t.hairline.alpha(0.5))
                     .a11y_hidden(),
             );
         }
-        list = list.child(queue_row(s, id, inputs, index, input, t));
+        inner = inner.child(queue_row(s, id, inputs, index, input, t));
     }
+    let list = if expanded && total > QUEUE_PREVIEW_LIMIT {
+        col()
+            .key("queue-scroll")
+            .w_full()
+            .max_h(QUEUE_HEIGHT)
+            .min_h(0.0)
+            .scroll(ScrollSpec {
+                stick_bottom: false,
+            })
+            .scroll_edge_fade(S12)
+            .child(inner)
+    } else {
+        inner
+    };
 
     let deck_motion = Transition::offset(0.0, S12)
         .combined(Transition::opacity())

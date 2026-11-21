@@ -36,6 +36,7 @@ pub const SCENES: &[Scene] = &[
     ("loading", loading),
     ("onboarding", onboarding),
     ("subagents", subagents),
+    ("tasks-expanded", tasks_expanded),
     ("agents", agents),
     ("subagent", subagent),
     ("delete", delete),
@@ -594,6 +595,37 @@ fn subagents(s: &mut Desktop) {
     if let Some(state) = &mut s.state {
         state.status = ThreadStatus::Working;
     }
+}
+
+/// The persistent Tasks Dock expanded above the composer, including earlier
+/// settled tasks folded under a disclosure row.
+fn tasks_expanded(s: &mut Desktop) {
+    subagents(s);
+    s.tasks.push(Task {
+        id: "22".into(),
+        parent: THREAD,
+        environment: "build-box".into(),
+        thread: Some(ThreadId(22)),
+        run: None,
+        status: TaskStatus::Completed,
+        reachable: true,
+        title: "Verify Linux release build".into(),
+        result: Some("Release binary built cleanly.".into()),
+        error: None,
+    });
+    s.tasks.push(Task {
+        id: "23".into(),
+        parent: THREAD,
+        environment: "local".into(),
+        thread: Some(ThreadId(23)),
+        run: None,
+        status: TaskStatus::Completed,
+        reachable: true,
+        title: "Check markdown table escaping".into(),
+        result: Some("Pipe escapes verified.".into()),
+        error: None,
+    });
+    s.toggle(composer::TASKS_DOCK_KEY);
 }
 
 /// The same thread with its timeline activity expanded.

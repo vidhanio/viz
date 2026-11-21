@@ -229,6 +229,8 @@ pub struct Theme {
     pub accent_veil: Color,
     /// Steer / send-now mode and high-effort accent (`base09`).
     pub steer: Color,
+    /// Worktree, checkpoint, and remote environment accent (`base0C`).
+    pub worktree: Color,
     /// The open thread's row.
     pub selected: Color,
     /// Errors.
@@ -867,6 +869,7 @@ impl Theme {
             on_accent,
             accent_veil,
             steer,
+            worktree: info,
             selected,
             danger,
             on_danger,

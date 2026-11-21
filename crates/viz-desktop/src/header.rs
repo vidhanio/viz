@@ -1,33 +1,22 @@
-//! Thread toolbar and the persistent task panel.
+//! Thread toolbar and shared task identity formatting.
 
 use std::borrow::Cow;
 
-use rune::{El, ScrollSpec, Transition, col, icon, row, text};
+use rune::{El, col, icon, row, text};
 use rune_kit::shell::Toolbar;
-use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadSummary};
+use viz_client::protocol::{Task, ThreadId, ThreadSummary};
 
 use crate::{
     app::{Desktop, Switch, TITLE_ENTER_DELAY, TITLE_TRAVEL, thread_title},
-    server::Command,
     sidebar,
     theme::{
-        CARD_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, READING_INSET, S2, S4, S6, S8, S12,
-        S16, S32, S40, Size, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
+        HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
     },
     ui,
 };
 
 /// The widest the parent's title gets in a subagent's breadcrumb.
 const BREADCRUMB_MAX: f32 = 272.0;
-/// Leave at least this much for the thread before putting the panel beside it.
-const MIN_THREAD_WIDTH: f32 = 560.0;
-const PANEL_GAP: f32 = S16;
-const PREVIOUS: &str = "agents-previous";
-/// Tallest the task list gets in narrow windows (fits two multi-line rows
-/// without clipping).
-const COMPACT_HEIGHT: f32 = S40 * 4.0;
-/// Tallest the task list gets beside the transcript in wide windows.
-const WIDE_HEIGHT: f32 = S40 * 7.0;
 
 /// The toolbar. Its title is keyed per thread inside its own clip, so it
 /// moves with the transcript when the thread changes (`app::Switch`).
@@ -65,122 +54,6 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         title
     };
     toolbar.leading(title)
-}
-
-/// The panel and its horizontal reserve. In small windows it gets its own
-/// band above the transcript instead of covering the latest message.
-pub fn agents(s: &Desktop, t: &Theme) -> (Option<El>, f32) {
-    let Some(parent) = s.selected else {
-        return (None, 0.0);
-    };
-    let children: Vec<_> = s
-        .tasks
-        .iter()
-        .filter(|task| task.parent == parent)
-        .collect();
-    if children.is_empty() {
-        return (None, 0.0);
-    }
-    let wide =
-        s.window_width - s.sidebar.shown_width() >= MIN_THREAD_WIDTH + CARD_WIDTH + PANEL_GAP;
-    let (running, previous): (Vec<_>, Vec<_>) = children
-        .into_iter()
-        .partition(|task| matches!(task.status, TaskStatus::Running | TaskStatus::Queued));
-    let mut header = row()
-        .h(S32)
-        .px(S12)
-        .gap(S8)
-        .center_y()
-        .child(icon(&ui::AGENT, ICON_SMALL).color(t.muted).a11y_hidden())
-        .child(ui::section("Tasks", t).grow(1.0));
-    if !running.is_empty() {
-        header = header.child(
-            text(format!("{} running", running.len()))
-                .font(t.small)
-                .color(t.muted),
-        );
-    }
-    let mut list = col()
-        .key("subagent-list")
-        .w_full()
-        .px(S4)
-        .pb(S4)
-        .max_h(if wide { WIDE_HEIGHT } else { COMPACT_HEIGHT })
-        .min_h(0.0)
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-        .scroll_edge_fade(S16)
-        .children(running.into_iter().map(|thread| task_row(thread, s, t)));
-    if previous.len() == 1 {
-        list = list.child(task_row(previous[0], s, t));
-    } else if !previous.is_empty() {
-        let shown = s.expanded.contains(PREVIOUS);
-        list = list.child(previous_toggle(previous.len(), shown, t));
-        if shown {
-            list = list.children(previous.into_iter().map(|thread| task_row(thread, s, t)));
-        }
-    }
-    let mut panel = col()
-        .key(format!("agents-card-{parent}"))
-        .role("group")
-        .label("Tasks")
-        .radius(RADIUS_CARD)
-        .fill(t.surface)
-        .border(HAIRLINE, t.hairline)
-        .transition(Transition::opacity())
-        .child(header)
-        .child(list);
-    if wide {
-        panel = panel.w(CARD_WIDTH);
-        (
-            Some(panel.pin(None, Some(S12), Some(READING_INSET), None)),
-            CARD_WIDTH + PANEL_GAP,
-        )
-    } else {
-        let band = ui::reading(panel.w_full()).key("agents-band").pt(S12);
-        (Some(band), 0.0)
-    }
-}
-
-fn previous_toggle(count: usize, shown: bool, t: &Theme) -> El {
-    row()
-        .key(PREVIOUS)
-        .role("button")
-        .label("Previous tasks")
-        .expanded(shown)
-        .h(S32)
-        .px(S8)
-        .gap(S8)
-        .center_y()
-        .radius(Size::Default.radius())
-        .hover_group()
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .on_press(|s: &mut Desktop| s.toggle(PREVIOUS))
-        .child(
-            icon(
-                if shown {
-                    &ui::CHEVRON_OPEN
-                } else {
-                    &ui::CHEVRON
-                },
-                ICON_SMALL,
-            )
-            .color(t.faint)
-            .group_color(t.text),
-        )
-        .child(
-            ui::section("Previous tasks", t)
-                .group_color(t.text)
-                .grow(1.0),
-        )
-        .child(
-            text(count.to_string())
-                .font(t.mono_small)
-                .color(t.faint)
-                .group_color(t.text),
-        )
 }
 
 /// Identity for older timeline entries that have no durable task.
@@ -268,77 +141,6 @@ fn identity(label: &str, detail: &str, avatar: El, preview: Option<El>, t: &Them
                 )
                 .children(preview),
         )
-}
-
-fn task_row(task: &Task, desktop: &Desktop, t: &Theme) -> El {
-    use rune_kit::IconButtonVariant;
-
-    let (mark, state) = if task.reachable {
-        match task.status {
-            TaskStatus::Queued => (ui::dot(t.muted), "Queued"),
-            TaskStatus::Running => (ui::spinner(t), "Running"),
-            TaskStatus::Completed => (ui::dot(t.success), "Done"),
-            TaskStatus::Failed => (ui::dot(t.danger), "Failed"),
-            TaskStatus::Cancelled => (ui::dot(t.faint), "Stopped"),
-        }
-    } else {
-        (ui::dot(t.faint), "Unreachable")
-    };
-    let child = task
-        .thread
-        .filter(|_| desktop.environment.as_deref() == Some(task.environment.as_str()))
-        .and_then(|thread| desktop.summary(thread));
-    let detail = task_identity(task, child, t);
-    let mut row = row()
-        .key(format!("task-{}", task.id))
-        .description(state)
-        .help(
-            task.error
-                .as_deref()
-                .or(task.result.as_deref())
-                .unwrap_or(state),
-        )
-        .w_full()
-        .min_h(S40)
-        .py(S6)
-        .px(S8)
-        .gap(S8)
-        .center_y()
-        .radius(Size::Default.radius())
-        .child(detail)
-        .child(mark);
-    if task.reachable
-        && let Some(thread) = task.thread
-    {
-        let environment = task.environment.clone();
-        row = row
-            .role("link")
-            .label(task.title.clone())
-            .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .hover_group()
-            .press(t.k.c.pressed)
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                s.open_in_environment(environment.clone(), Some(thread), tx);
-            });
-    }
-    if desktop.connected() && matches!(task.status, TaskStatus::Queued | TaskStatus::Running) {
-        let id = task.id.clone();
-        row = row.child(
-            ui::icon_button(
-                &ui::STOP,
-                "Stop task",
-                IconButtonVariant::GhostMuted,
-                Size::Small,
-            )
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                s.send(Command::CancelTask(id.clone()), tx);
-            })
-            .build(&t.k)
-            .hover_alone(),
-        );
-    }
-    row
 }
 
 fn title_text(label: &str, t: &Theme) -> El {
