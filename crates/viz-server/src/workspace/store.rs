@@ -71,7 +71,6 @@ pub(super) async fn project(db: &mut dyn Executor, path: &str) -> Result<Project
     .await?
     .ok_or_else(|| RpcError::not_found(format!("no project {path}")))?;
     Ok(Project {
-        git: None,
         path: path.to_owned(),
         name: row.str(0)?,
         created_at: row.i64(1)?,
@@ -87,7 +86,6 @@ pub(super) async fn projects(db: &mut dyn Executor) -> Result<Vec<Project>, RpcE
     .await?
     .map(|mut row| {
         Ok(Project {
-            git: None,
             path: row.str(0)?,
             name: row.str(1)?,
             created_at: row.i64(2)?,
@@ -99,9 +97,6 @@ pub(super) async fn projects(db: &mut dyn Executor) -> Result<Vec<Project>, RpcE
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(super) struct SavedSession {
     pub(super) session_id: Option<String>,
-    /// The session a forked thread copies its conversation from, until its
-    /// own session opens.
-    pub(super) fork_of: Option<String>,
     pub(super) options: Vec<ConfigOption>,
     pub(super) commands: Vec<Command>,
     pub(super) desired: Desired,
@@ -145,7 +140,6 @@ pub(super) fn missing(thread: u64) -> RpcError {
 }
 
 pub(super) struct NewThread<'a> {
-    pub(super) worktree_branch: Option<&'a str>,
     pub(super) harness: &'a str,
     pub(super) cwd: &'a str,
     pub(super) project: Option<&'a str>,
@@ -159,17 +153,17 @@ pub(super) async fn create_thread(
     db: &mut dyn Executor,
     new: &NewThread<'_>,
 ) -> Result<u64, RpcError> {
-    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree_branch)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
+    let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id", [
         new.harness.into(), new.cwd.into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
-        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(), new.worktree_branch.into(),
+        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(),
     ]).await?.expect("thread INSERT RETURNING yielded one row");
     row.u64(0)
 }
 
 const STATUS: &str = "CASE
     WHEN EXISTS (SELECT 1 FROM runs WHERE thread = t.id AND status IN ('queued','running')) THEN 'working'
-    WHEN t.setup_failed = 1 OR (SELECT status FROM runs WHERE thread = t.id AND hidden = 0 AND end_entry IS NOT NULL
+    WHEN t.setup_failed = 1 OR (SELECT status FROM runs WHERE thread = t.id AND end_entry IS NOT NULL
            ORDER BY end_entry DESC LIMIT 1) IN ('failed','interrupted') THEN 'failed'
     ELSE 'idle' END";
 
@@ -178,10 +172,10 @@ pub(super) async fn list_threads(
     archived: Option<bool>,
     project: Option<&str>,
     workspace: &Workspace,
-) -> Result<Vec<(String, ThreadSummary)>, RpcError> {
+) -> Result<Vec<ThreadSummary>, RpcError> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
-            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.cwd, t.worktree_branch
+            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking
         FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
         ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC"
     );
@@ -189,37 +183,29 @@ pub(super) async fn list_threads(
         .await?
         .map(|mut row| {
             let harness = row.str(5)?;
-            let cwd = row.str(13)?;
-            Ok((
-                cwd.clone(),
-                ThreadSummary {
-                    git: None,
-                    worktree: row
-                        .opt_str(14)?
-                        .map(|branch| viz_client::protocol::GitWorktree { path: cwd, branch }),
-                    id: ThreadId(row.u64(0)?),
-                    title: row.str(1)?,
-                    parent: row.opt_u64(2)?.map(ThreadId),
-                    parent_environment: row.opt_str(3)?,
-                    project: row.opt_str(4)?,
-                    harness_name: workspace.harness_name(&harness).to_owned(),
-                    harness,
-                    status: status(&row.str(6)?)?,
-                    archived: row.flag(7)?,
-                    updated_at: row.i64(8)?,
-                    unread: row.flag(9)?,
-                    pinned: row.flag(10)?,
-                    model: row.opt_str(11)?,
-                    thinking: row.opt_str(12)?,
-                },
-            ))
+            Ok(ThreadSummary {
+                id: ThreadId(row.u64(0)?),
+                title: row.str(1)?,
+                parent: row.opt_u64(2)?.map(ThreadId),
+                parent_environment: row.opt_str(3)?,
+                project: row.opt_str(4)?,
+                harness_name: workspace.harness_name(&harness).to_owned(),
+                harness,
+                status: status(&row.str(6)?)?,
+                archived: row.flag(7)?,
+                updated_at: row.i64(8)?,
+                unread: row.flag(9)?,
+                pinned: row.flag(10)?,
+                model: row.opt_str(11)?,
+                thinking: row.opt_str(12)?,
+            })
         })
         .collect()
 }
 
 pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadState, RpcError> {
     let query = format!(
-        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS}, t.history_revision FROM threads AS t WHERE t.id = ?1"
+        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS} FROM threads AS t WHERE t.id = ?1"
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
@@ -241,7 +227,6 @@ pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadSt
     })
     .collect::<Result<_, RpcError>>()?;
     Ok(ThreadState {
-        history_revision: row.u64(5)?,
         harness: row.str(0)?,
         project: row.opt_str(1)?,
         cwd: row.str(2)?,
@@ -286,7 +271,7 @@ pub(super) async fn publish(
             let previous = row(
                 db,
                 "SELECT id, data FROM entries WHERE thread = ?1 AND tool_session = ?2
-                 AND hidden = 0 AND json_extract(data, '$.data.id') = ?3 ORDER BY id DESC LIMIT 1",
+                 AND json_extract(data, '$.data.id') = ?3 ORDER BY id DESC LIMIT 1",
                 [thread.into(), session.into(), id.as_str().into()],
             )
             .await?
@@ -387,7 +372,7 @@ pub(super) async fn entries(
     let mut entries = if let Some(before) = before {
         rows(
             db,
-            "SELECT id, data FROM entries WHERE thread = ?1 AND id < ?2 AND hidden = 0 ORDER BY id DESC LIMIT ?3",
+            "SELECT id, data FROM entries WHERE thread = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
             [thread.into(), before.into(), (limit + 1).into()],
         )
         .await?
@@ -396,7 +381,7 @@ pub(super) async fn entries(
     } else {
         rows(
             db,
-            "SELECT id, data FROM entries WHERE thread = ?1 AND hidden = 0 ORDER BY id DESC LIMIT ?2",
+            "SELECT id, data FROM entries WHERE thread = ?1 ORDER BY id DESC LIMIT ?2",
             [thread.into(), (limit + 1).into()],
         )
         .await?
@@ -422,7 +407,7 @@ pub(super) async fn entries_after(
     require(db, thread).await?;
     rows(
         db,
-        "SELECT id, data FROM entries WHERE thread = ?1 AND id > ?2 AND hidden = 0 ORDER BY id LIMIT ?3",
+        "SELECT id, data FROM entries WHERE thread = ?1 AND id > ?2 ORDER BY id LIMIT ?3",
         [thread.into(), after.into(), limit.into()],
     )
     .await?
@@ -460,8 +445,8 @@ pub(super) async fn search(
     rows(
         db,
         "SELECT s.thread, s.rowid, snippet(search_entries, 0, char(1), char(2), '…', 32)
-        FROM search_entries AS s JOIN entries AS e ON e.id = s.rowid
-        WHERE search_entries MATCH ?1 AND e.hidden = 0 ORDER BY bm25(search_entries), s.rowid DESC LIMIT ?2",
+        FROM search_entries AS s
+        WHERE search_entries MATCH ?1 ORDER BY bm25(search_entries), s.rowid DESC LIMIT ?2",
         [terms.into(), limit.into()],
     )
     .await?

@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 agent-client-protocol = { workspace = true, features = [
-  "unstable_session_fork",
   "unstable_session_options",
 ] }
 anyhow.workspace = true
@@ -20,7 +19,6 @@ clap = { workspace = true, features = ["derive"] }
 config.workspace = true
 futures.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
-git2.workspace = true
 jsonrpsee-types.workspace = true
 listenfd.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls-no-provider"] }

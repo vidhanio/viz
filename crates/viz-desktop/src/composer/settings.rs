@@ -5,7 +5,6 @@ use viz_client::protocol::{ConfigOption, ContextUsage, OptionKind, OptionValue, 
 use super::{draft, model};
 use crate::{
     app::{Desktop, NewThread},
-    diff_panel,
     server::Command,
     theme::{self, ICON_SMALL, READING_INSET, READING_WIDTH, S2, S4, S8, Size, Theme},
     ui,
@@ -96,8 +95,7 @@ fn context_usage(s: &Desktop, usage: &ContextUsage, t: &Theme) -> Option<El> {
     };
     let mut ring_kit = t.k.clone();
     ring_kit.c.icon_muted = ink;
-    let reading_width =
-        s.window_width - s.sidebar.shown_width() - diff_panel::docked_width(s).unwrap_or_default();
+    let reading_width = s.window_width - s.sidebar.shown_width();
     let composer_width = READING_INSET
         .mul_add(-2.0, reading_width)
         .min(READING_WIDTH);

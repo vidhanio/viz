@@ -17,8 +17,6 @@ pub(crate) struct Config {
     pub(crate) environment: String,
     pub(crate) cwd: PathBuf,
     pub(crate) state_dir: PathBuf,
-    pub(crate) worktree_dir: Option<PathBuf>,
-    pub(crate) worktree_branch_prefix: String,
     pub(crate) listen: SocketAddr,
     pub(crate) token: Option<Secret>,
     pub(crate) default_harness: Option<String>,
@@ -66,12 +64,6 @@ struct Server {
     environment: Option<String>,
     cwd: Option<PathBuf>,
     state_dir: Option<PathBuf>,
-    /// Parent directory for generated checkout paths. Defaults to the
-    /// environment state directory's worktrees subdirectory.
-    worktree_dir: Option<PathBuf>,
-    /// Prefix for branch names generated from thread titles. Defaults to
-    /// "viz/".
-    worktree_branch_prefix: Option<String>,
     listen: Option<SocketAddr>,
     token: Option<Secret>,
     default_harness: Option<String>,
@@ -166,10 +158,6 @@ impl Config {
             environment,
             cwd,
             state_dir: server.state_dir.unwrap_or(paths.state_dir),
-            worktree_dir: server.worktree_dir,
-            worktree_branch_prefix: server
-                .worktree_branch_prefix
-                .unwrap_or_else(|| "viz/".into()),
             listen,
             token: server.token,
             default_harness,

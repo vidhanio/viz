@@ -6,9 +6,8 @@
 //! UI rules:
 //!
 //! - Layout: sidebar and thread. A thread with delegated tasks keeps a
-//!   persistent Tasks Dock tucked above the composer. Git changes open in a
-//!   docked panel, which becomes a sheet on a narrow window. Menus, palette,
-//!   dialogs and toasts are temporary overlays.
+//!   persistent Tasks Dock tucked above the composer. Menus, palette, dialogs
+//!   and toasts are temporary overlays.
 //! - Sidebar: pinned threads, _Recent_ (newest first, project under each title)
 //!   and _Projects_ (collapsible) modes, and an environment picker in the
 //!   footer when more than one is configured. Task status lives in the Tasks
@@ -23,8 +22,8 @@
 //!   from the configured base16 scheme in a flat, sans-serif style with crisp
 //!   hairline borders and no blur, glow, or drop shadows. Icons are Lucide plus
 //!   monochrome harness marks. Hover lifts the ink, active controls use filled
-//!   states, and semantic accents distinguish selection, steering, worktrees,
-//!   and delegation.
+//!   states, and semantic accents distinguish selection, steering, remote
+//!   environments, and delegation.
 //! - Motion: changing threads moves the transcript and toolbar title, never the
 //!   composer: vertically by sidebar order, horizontally into a delegated task
 //!   (left) and back out (right); short springs without bounce.
@@ -35,7 +34,6 @@ mod app;
 mod attachments;
 mod composer;
 mod config;
-mod diff_panel;
 mod header;
 mod palette;
 mod scenes;
@@ -49,7 +47,7 @@ mod ui;
 use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
-use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col, row};
+use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col};
 use rune_kit::{
     ToastRegion,
     shell::{SidebarToggle, SplitView},
@@ -73,32 +71,16 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     cx.help_look(t.help_look());
     let mut overlays = Vec::new();
     let dock = composer::composer(s, t, &mut overlays);
-    let mut reading = col()
-        .key("reading-pane")
-        .grow(1.0)
-        .min_w(0.0)
-        .h_full()
-        .min_h(0.0)
-        .child(timeline::timeline(s, t, &mut overlays));
-    if let Some(dock) = dock {
-        reading = reading.child(dock);
-    }
-    let mut main_body = row()
-        .key("main-body")
-        .w_full()
-        .grow(1.0)
-        .min_h(0.0)
-        .child(reading);
-    if let Some(panel) = diff_panel::docked(s, t) {
-        main_body = main_body.child(panel);
-    }
-    let main = col()
+    let mut main = col()
         .key("main")
         .w_full()
         .h_full()
         .min_h(0.0)
         .child(ui::rule(t).key("header-rule"))
-        .child(main_body);
+        .child(timeline::timeline(s, t, &mut overlays));
+    if let Some(dock) = dock {
+        main = main.child(dock);
+    }
     let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
         ui::drag_guard("sidebar-drag-guard")
             .pin(
@@ -112,7 +94,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let titlebar_inset = cx.titlebar_inset();
     let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
     let split = split
-        .toolbar(header::toolbar(s, t, &mut overlays))
+        .toolbar(header::toolbar(s, t))
         .titlebar_inset(titlebar_inset)
         .frame_inset(0.0)
         .toolbar_in_panel()
@@ -143,8 +125,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         split
     };
     sidebar::overlays(s, t, &mut overlays);
-    diff_panel::sheet(s, t, &mut overlays);
-    timeline::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
     overlays.extend(toasts(s, t));
     rune_kit::root(split, overlays)
@@ -178,16 +158,12 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if s.palette.is_open() {
         return false;
     }
-    if ev.is_command('b') && !ev.mods.shift && !ev.mods.alt {
-        s.sidebar.toggle();
-        return true;
-    }
-    if ev.is_command('n') && ev.mods.shift && !ev.mods.alt {
-        s.create_in_worktree(tx);
-        return true;
-    }
     if ev.mods.shift || ev.mods.alt {
         return false;
+    }
+    if ev.is_command('b') {
+        s.sidebar.toggle();
+        return true;
     }
     if ev.is_command('[') {
         s.go_back(tx);
@@ -199,10 +175,6 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if ev.is_command('n') {
         s.create_here(tx);
-        return true;
-    }
-    if ev.is_command('d') && s.selected.is_some() {
-        s.toggle_diff_panel(tx);
         return true;
     }
     if ev.is_command('.') && s.busy() {

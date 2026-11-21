@@ -21,10 +21,9 @@ use std::{
 };
 
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, ForkSessionResponse, InitializeResponse, LoadSessionResponse,
-    NewSessionResponse, PermissionOptionKind, PromptResponse, RequestPermissionRequest,
-    SessionConfigOption, SessionNotification, SessionOptionsResponse,
-    SetSessionConfigOptionResponse,
+    AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
+    PermissionOptionKind, PromptResponse, RequestPermissionRequest, SessionConfigOption,
+    SessionNotification, SessionOptionsResponse, SetSessionConfigOptionResponse,
 };
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 use serde::de::DeserializeOwned;
@@ -282,10 +281,6 @@ impl Agent {
         self.capabilities.session_capabilities.resume.is_some() || self.capabilities.load_session
     }
 
-    pub(super) const fn can_fork(&self) -> bool {
-        self.capabilities.session_capabilities.fork.is_some()
-    }
-
     pub(super) fn is_closed(&self) -> bool {
         self.connection.closed.is_cancelled()
     }
@@ -308,18 +303,6 @@ impl Agent {
         self.connection
             .request("session/new", json!({ "cwd": cwd, "mcpServers": mcp }))
             .await
-    }
-
-    /// Opens a copy of session `source`'s conversation in `cwd`; the caller
-    /// checks [`Self::can_fork`] first.
-    pub(super) async fn fork_session(
-        &self,
-        source: &str,
-        cwd: &Path,
-        mcp: Vec<Value>,
-    ) -> Result<ForkSessionResponse> {
-        let params = json!({ "sessionId": source, "cwd": utf8(cwd)?, "mcpServers": mcp });
-        self.connection.request("session/fork", params).await
     }
 
     /// Reopens a session: `session/resume` when offered (no history), else

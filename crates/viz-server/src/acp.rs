@@ -13,8 +13,6 @@
 //!   `session/load`'s history replay is discarded. A session stays bound to the
 //!   directory it was created in. An idle session the harness can reopen has
 //!   its process stopped, as on a restart.
-//! - Forking copies the source conversation with `session/fork`; otherwise the
-//!   fork opens a new session whose first prompt carries a bounded transcript.
 //! - Option catalogs come from `session/options`, or from a disposable
 //!   prompt-free session. Effort choices of an inactive model always need one.
 //! - viz advertises only boolean config options among the client capabilities,
@@ -36,6 +34,4 @@ pub(crate) use mcp::Mcp;
 pub(crate) use options::{Catalog, Desired, Selection};
 pub(crate) use probe::catalog;
 pub(crate) use process::drain_processes;
-pub(crate) use session::{
-    Opened, Origin, Outcome, Prompt, Session, SessionSnapshot, stop_reason_name,
-};
+pub(crate) use session::{Outcome, Prompt, Session, SessionSnapshot, stop_reason_name};

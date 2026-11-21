@@ -105,17 +105,6 @@ methods! {
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
     LaunchThread => "thread.launch", Launched;
-    RestoreRun => "run.restore", Empty;
-    RewindThread => "thread.rewind", Empty;
-    ForkThread => "thread.fork", Launched;
-    RunDiff => "run.diff", GitDiff;
-    ThreadDiff => "thread.diff", GitDiff;
-    CommitGit => "git.commit", GitCommit;
-    PushGit => "git.push", GitPush;
-    CreateGitBranch => "git.branch.create", GitBranch;
-    ListGitBranches => "git.branches", GitBranches;
-    CreateGitWorktree => "git.worktree.create", GitWorktree;
-    RemoveGitWorktree => "git.worktree.remove", Empty;
     SendInput => "thread.send", Sent;
     Watch => "thread.watch", Watching;
     Unwatch => "thread.unwatch", Watching;
@@ -202,32 +191,10 @@ pub struct ThreadList {
     pub threads: Vec<ThreadSummary>,
 }
 
-/// Live Git status for a working directory.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct GitSummary {
-    /// Local branch, absent on a detached HEAD.
-    pub branch: Option<String>,
-    /// Full Git object ID, absent before the initial commit.
-    pub head: Option<String>,
-    /// Number of paths with staged, unstaged or untracked changes.
-    pub dirty_files: usize,
-    /// Commits ahead of the locally known upstream.
-    pub ahead: Option<usize>,
-    /// Commits behind the locally known upstream.
-    pub behind: Option<usize>,
-    /// Whether the checkout is a linked worktree.
-    pub linked_worktree: bool,
-}
-
 /// A `threads.list` item.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadSummary {
-    /// The worktree provisioned for this thread, if any.
-    pub worktree: Option<GitWorktree>,
-    /// Git status for the thread's working directory.
-    pub git: Option<GitSummary>,
     /// Its id.
     pub id: ThreadId,
     /// A user rename, an ACP session title, or a title from the first prompt.
@@ -259,207 +226,10 @@ pub struct ThreadSummary {
     pub thinking: Option<String>,
 }
 
-/// How to provision a new linked worktree on the environment running the
-/// thread.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct WorktreeRequest {
-    /// Local ref, remote-tracking ref or commit ID. Defaults to the source
-    /// checkout's HEAD.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub base_ref: Option<String>,
-    /// New local branch name. Defaults to a unique name derived from the thread
-    /// title.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub branch: Option<String>,
-}
-
-/// A linked worktree provisioned by viz.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-pub struct GitWorktree {
-    /// Absolute checkout path and identifier for removal.
-    pub path: String,
-    /// Local branch at creation.
-    pub branch: String,
-}
-
-/// Restore the working tree to the start of a settled run.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct RestoreRun {
-    pub thread: ThreadId,
-    pub run: RunId,
-}
-
-/// Restore the working tree and hide transcript entries starting with the
-/// selected run.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct RewindThread {
-    pub thread: ThreadId,
-    pub run: RunId,
-}
-
-/// Copy the transcript up to a settled run boundary into a new ACP thread.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ForkThread {
-    pub thread: ThreadId,
-    pub run: RunId,
-    #[serde(default)]
-    pub boundary: RunBoundary,
-    /// Omit to use the same working directory at its current filesystem state.
-    pub worktree: Option<ForkWorktree>,
-    /// Defaults to the source title with a fork suffix.
-    pub title: Option<String>,
-}
-
-/// Boundary of the run that determines the transcript and checkout snapshot.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum RunBoundary {
-    /// Exclude this run from the forked transcript.
-    Start,
-    /// Include this run in the forked transcript.
-    #[default]
-    End,
-}
-
-/// Start a new branch at the checkpoint commit in a fresh worktree.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ForkWorktree {
-    /// Use the server's generated branch name when omitted.
-    pub branch: Option<String>,
-}
-
-/// Compare the working tree at the start and end of a run.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct RunDiff {
-    pub thread: ThreadId,
-    pub run: RunId,
-    /// Omit the unified patch and return only paths and change kinds.
-    #[serde(default)]
-    pub summary: bool,
-}
-
-/// Compare the first and latest completed checkpoint in a thread, or inspect
-/// its checkout.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ThreadDiff {
-    pub thread: ThreadId,
-    /// Compare the staged, unstaged, and untracked files in the checkout to
-    /// HEAD.
-    #[serde(default)]
-    pub working_tree: bool,
-    /// Omit the unified patch and return only paths and change kinds.
-    #[serde(default)]
-    pub summary: bool,
-}
-
-/// Changes between two snapshots of the working tree.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GitDiff {
-    pub files: Vec<GitDiffFile>,
-    /// Unified diff, absent when only the summary was requested.
-    pub patch: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GitDiffFile {
-    /// Path relative to the repository root.
-    pub path: String,
-    pub change: GitChange,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum GitChange {
-    Added,
-    Deleted,
-    Modified,
-    TypeChanged,
-}
-
-/// Commit in the checkout bound to a thread.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct CommitGit {
-    pub thread: ThreadId,
-    pub message: String,
-    /// Stage all tracked and unignored files before committing. Otherwise
-    /// commit the staged index.
-    #[serde(default)]
-    pub all: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GitCommit {
-    /// Full Git object ID of the new commit.
-    pub head: String,
-}
-
-/// Push the current local branch to a configured remote without force.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct PushGit {
-    pub thread: ThreadId,
-    /// Defaults to the branch's upstream remote, or origin.
-    pub remote: Option<String>,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GitPush {
-    pub remote: String,
-    /// Full ref name updated on the remote.
-    pub reference: String,
-}
-
-/// Create a local branch without changing the checkout.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct CreateGitBranch {
-    pub thread: ThreadId,
-    pub branch: String,
-    /// Defaults to the current HEAD.
-    pub base_ref: Option<String>,
-}
-
-/// List local and remote-tracking branches for a registered project.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct ListGitBranches {
-    pub project: String,
-}
-
-/// Branches available as worktree bases.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GitBranches {
-    pub branches: Vec<GitBranch>,
-}
-
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct GitBranch {
-    /// Full ref name, suitable for use as a worktree base.
-    pub reference: String,
-    /// Full Git object ID at this ref.
-    pub head: String,
-}
-
-/// Provision a linked checkout from a registered project.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct CreateGitWorktree {
-    pub project: String,
-    pub worktree: WorktreeRequest,
-}
-
-/// Remove an unused, clean worktree created by viz. Its branch is kept.
-#[derive(Debug, Serialize, Deserialize, JsonSchema)]
-pub struct RemoveGitWorktree {
-    pub path: String,
-}
-
 /// `thread.launch` params.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct LaunchThread {
-    /// Place the thread in a new linked worktree.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<WorktreeRequest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -597,10 +367,7 @@ pub struct SlashCommand {
 
 /// The current application state of a watched thread.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct ThreadState {
-    /// Increases when a rewind invalidates cached transcript entries.
-    pub history_revision: u64,
     /// Status of this thread.
     pub status: ThreadStatus,
     /// The configured ACP runner.
@@ -729,8 +496,6 @@ pub struct ContextUsage {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
-    /// Git status for the project directory.
-    pub git: Option<GitSummary>,
     /// Display name.
     pub name: String,
     /// Absolute directory path.
@@ -800,11 +565,7 @@ pub struct StopThread {
 
 /// Delete a thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
 pub struct DeleteThread {
-    /// Also remove the thread's worktree, if clean and unused by other threads.
-    #[serde(default)]
-    pub remove_worktree: bool,
     /// The thread to delete.
     pub thread: ThreadId,
 }
@@ -1143,10 +904,6 @@ pub struct TaskResult {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DelegateTask<'a> {
-    /// Place a new child thread in a new linked worktree in the receiving
-    /// environment.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<&'a WorktreeRequest>,
     pub parent: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<&'a str>,

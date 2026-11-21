@@ -4,7 +4,7 @@ use std::borrow::Cow;
 
 use serde_json::Value;
 use viz_client::protocol::{
-    Entry, EntryData, EntryId, LiveTextKind, LiveTurn, PlanStatus, RunEnd, RunId, ThreadId,
+    Entry, EntryData, EntryId, LiveTextKind, LiveTurn, PlanStatus, RunEnd, ThreadId,
     ToolCallStatus, ToolDiff, ToolRecord,
 };
 
@@ -24,8 +24,6 @@ pub struct Thread {
     /// Exclusive cursor for the next page of older entries.
     pub before: Option<EntryId>,
     plan: Option<usize>,
-    turn_user: Option<usize>,
-    settled_turns: usize,
     ended_run: bool,
     acp_turn: Option<String>,
     acp_start: usize,
@@ -70,7 +68,7 @@ pub enum Item {
         /// Why.
         text: String,
     },
-    /// A settled run boundary with checkpoint metadata and copyable reply text.
+    /// A settled run boundary carrying copyable reply text.
     TurnEnd(TurnEnd),
 }
 
@@ -84,26 +82,14 @@ pub struct User {
     pub text: String,
     /// Names of the stored attachments carried by this prompt.
     pub attachments: Vec<String>,
-    /// Settled run started by this prompt, once its run-end entry arrives.
-    pub run: Option<RunId>,
-    /// 1-based settled turn index, paired with [`User::run`].
-    pub turn: Option<usize>,
-    /// A complete Git checkpoint exists for this settled prompt.
-    pub checkpoint: bool,
 }
 
-/// A settled run boundary: carries checkpoint id, changed-file count, and the
-/// assistant prose produced in that run for quick copy/fork/restore actions.
+/// A settled run boundary carrying the assistant prose produced in that run
+/// for one-click copy.
 #[derive(Debug, Clone)]
 pub struct TurnEnd {
     /// Stable element key.
     pub key: String,
-    /// Wire run identifier for diff, fork, and restore calls.
-    pub run: RunId,
-    /// 1-based settled turn number in this transcript view.
-    pub turn: usize,
-    /// Number of changed files recorded between start and end checkpoints.
-    pub changed_files: Option<usize>,
     /// Assistant prose produced in this turn, for one-click copy.
     pub answer: String,
 }
@@ -295,29 +281,20 @@ impl Thread {
             EntryData::Prompt {
                 text, attachments, ..
             } => {
-                let user_index = if !text.trim().is_empty() || !attachments.is_empty() {
-                    let index = self.items.len();
+                if !text.trim().is_empty() || !attachments.is_empty() {
                     self.items.push(Item::User(User {
                         key: format!("e{id}-0"),
                         text: text.clone(),
                         attachments: attachments.iter().map(|file| file.name.clone()).collect(),
-                        run: None,
-                        turn: None,
-                        checkpoint: false,
                     }));
-                    Some(index)
-                } else {
-                    None
-                };
+                }
                 self.start(*id);
-                self.turn_user = user_index;
             }
             EntryData::Continued => {
                 self.items.push(Item::Continued {
                     key: format!("e{id}"),
                 });
                 self.start(*id);
-                self.turn_user = None;
             }
             EntryData::TaskResult { task, text } => {
                 self.items.push(Item::TaskResult(TaskResult::parse(
@@ -326,7 +303,6 @@ impl Thread {
                     text,
                 )));
                 self.start(*id);
-                self.turn_user = None;
             }
             EntryData::Text { text, key } => self.commit_text(key, text, false),
             EntryData::Thought { text, key } => self.commit_text(key, text, true),
@@ -383,7 +359,6 @@ impl Thread {
         self.acp_turn = None;
         self.ended_run = true;
         self.plan = None;
-        let user_index = self.turn_user.take();
         if let Some(text) = &end.error {
             self.items.push(Item::Notice {
                 key: format!("e{id}"),
@@ -406,26 +381,14 @@ impl Thread {
                 text,
             });
         }
-        if let Some(run) = end.run {
-            self.settled_turns += 1;
-            let turn = self.settled_turns;
-            if let Some(index) = user_index
-                && let Some(Item::User(user)) = self.items.get_mut(index)
-            {
-                user.run = Some(run);
-                user.turn = Some(turn);
-                user.checkpoint = end.changed_files.is_some();
-            }
-            let answer = if prose_parts.is_empty() {
-                end.answer.clone().unwrap_or_default()
-            } else {
-                prose_parts.join("\n\n")
-            };
+        let answer = if prose_parts.is_empty() {
+            end.answer.clone().unwrap_or_default()
+        } else {
+            prose_parts.join("\n\n")
+        };
+        if !answer.is_empty() {
             self.items.push(Item::TurnEnd(TurnEnd {
                 key: format!("e{id}-end"),
-                run,
-                turn,
-                changed_files: end.changed_files,
                 answer,
             }));
         }

@@ -605,12 +605,6 @@ pub struct TreeLine<'a> {
 
 impl TreeLine<'_> {
     pub fn build(self, leading: Option<El>, slot: El, t: &Theme) -> El {
-        self.build_with_meta(leading, None, slot, t)
-    }
-
-    /// Like [`Self::build`], replacing the plain text `detail` line with a
-    /// custom metadata element (e.g. project + branch/worktree/dirty badges).
-    pub fn build_with_meta(self, leading: Option<El>, meta: Option<El>, slot: El, t: &Theme) -> El {
         let color = if self.dim {
             t.faint
         } else if self.selected || self.strong {
@@ -625,14 +619,12 @@ impl TreeLine<'_> {
             .group_color(hover_color)
             .truncate()
             .help_when_truncated(self.label);
-        let second = meta.or_else(|| {
-            self.detail.map(|detail| {
-                text(detail)
-                    .font(t.small)
-                    .color(t.faint)
-                    .truncate()
-                    .help_when_truncated(detail)
-            })
+        let second = self.detail.map(|detail| {
+            text(detail)
+                .font(t.small)
+                .color(t.faint)
+                .truncate()
+                .help_when_truncated(detail)
         });
         let has_second = second.is_some();
         let labels = col()
@@ -1167,24 +1159,6 @@ lucide! {
     SERVER = Server;
     /// Environment picker chevron pair.
     CHEVRONS_UP_DOWN = ChevronsUpDown;
-    /// Local git branch.
-    GIT_BRANCH = GitBranch;
-    /// New thread in a git worktree.
-    GIT_BRANCH_PLUS = GitBranchPlus;
-    /// Linked git worktree checkout.
-    FOLDER_GIT_2 = FolderGit2;
-    /// File diff / changed files indicator.
-    FILE_DIFF = FileDiff;
-    /// Unified diff mode.
-    ROWS_2 = Rows2;
-    /// Split side-by-side diff mode.
-    COLUMNS_2 = Columns2;
-    /// Rewind conversation to a prompt checkpoint.
-    UNDO_2 = Undo2;
-    /// Fork conversation from a checkpoint.
-    GIT_FORK = GitFork;
-    /// Restore working tree to a checkpoint.
-    ROTATE_CCW = RotateCcw;
     THREAD = MessageSquare;
     STOP = Square;
     SIDEBAR = PanelLeft;

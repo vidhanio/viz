@@ -12,16 +12,14 @@ use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
-        ForkThread, ForkWorktree, HarnessOptions, LaunchThread, ListEnvironments, ListGitBranches,
-        ListTasks, Notification, OptionValue, RemoveProject, RestoreRun, RewindThread, RunBoundary,
-        RunDiff, RunId, SearchFiles, SendInput, ThreadDiff, ThreadId, UpdateProject, UpdateThread,
+        HarnessOptions, LaunchThread, ListEnvironments, ListTasks, Notification, OptionValue,
+        RemoveProject, SearchFiles, SendInput, ThreadId, UpdateProject, UpdateThread,
     },
 };
 
 use crate::{
     app::{Desktop, Status},
     attachments::{Source, Target as AttachmentTarget},
-    diff_panel::{DiffFile, DiffScope},
 };
 
 /// How long to wait between connection attempts.
@@ -61,8 +59,6 @@ pub enum Command {
     },
     Abort(ThreadId),
     Project(ProjectChange),
-    ListBranches(String),
-    Git(GitCommand),
     SearchFiles {
         thread: ThreadId,
         request: u64,
@@ -106,36 +102,6 @@ pub enum ProjectChange {
     Add(String),
     Rename { id: String, name: String },
     Remove(String),
-}
-
-/// Diff inspection and checkpoint commands backed by the server's Git layer.
-#[derive(Debug)]
-pub enum GitCommand {
-    CheckoutDiff {
-        thread: ThreadId,
-        working_tree: bool,
-    },
-    RunDiff {
-        thread: ThreadId,
-        run: RunId,
-        turn: usize,
-        summary: bool,
-    },
-    RestoreRun {
-        thread: ThreadId,
-        run: RunId,
-    },
-    RewindThread {
-        thread: ThreadId,
-        run: RunId,
-        prompt_text: String,
-    },
-    ForkThread {
-        thread: ThreadId,
-        run: RunId,
-        boundary: RunBoundary,
-        worktree: bool,
-    },
 }
 
 /// Starts the connection thread. `first` hears once the first connection
@@ -278,35 +244,7 @@ fn offline(
                 s.toast(tx, "Offline", None);
             });
         }
-        Command::SearchFiles { .. } | Command::ListBranches(_) => {}
-        Command::Git(GitCommand::CheckoutDiff {
-            thread,
-            working_tree,
-        }) => {
-            ui.update(move |s, _| {
-                if s.selected == Some(thread) {
-                    s.diff
-                        .apply_error(DiffScope::checkout(working_tree), "Offline".into());
-                }
-            });
-        }
-        Command::Git(GitCommand::RunDiff {
-            thread,
-            run,
-            turn,
-            summary,
-        }) => {
-            ui.update(move |s, _| {
-                if s.selected == Some(thread) {
-                    if summary {
-                        s.diff.clear_run_summary_loading(run);
-                    } else {
-                        s.diff
-                            .apply_error(DiffScope::Run { run, turn }, "Offline".into());
-                    }
-                }
-            });
-        }
+        Command::SearchFiles { .. } => {}
         Command::SearchThreads { request, .. } => {
             ui.update(move |s, _| s.palette.set_hits(request, Err("Offline".into())));
         }
@@ -476,11 +414,6 @@ impl Session<'_> {
             }
             Command::Abort(id) => self.client.stop_thread(id).await,
             Command::Project(change) => self.project(change).await,
-            Command::ListBranches(project) => {
-                self.list_branches(project);
-                Ok(())
-            }
-            Command::Git(git) => self.on_git(git).await,
             Command::SearchFiles {
                 thread,
                 request,
@@ -708,164 +641,6 @@ impl Session<'_> {
                     .await
             }
         }
-    }
-
-    fn list_branches(&self, project: String) {
-        let ui = self.ui.clone();
-        let client = self.client.clone();
-        let environment = Arc::clone(&self.environment);
-        tokio::spawn(async move {
-            let result = client
-                .request(&ListGitBranches {
-                    project: project.clone(),
-                })
-                .await;
-            ui.update(move |s, _| {
-                if s.environment.as_deref() == Some(environment.as_ref())
-                    && let Ok(listed) = result
-                {
-                    s.branches.insert(project, listed.branches);
-                }
-            });
-        });
-    }
-
-    async fn on_git(&self, command: GitCommand) -> viz_client::Result<()> {
-        match command {
-            GitCommand::CheckoutDiff {
-                thread,
-                working_tree,
-            } => self.load_checkout_diff(thread, working_tree),
-            GitCommand::RunDiff {
-                thread,
-                run,
-                turn,
-                summary,
-            } => self.load_run_diff(thread, run, turn, summary),
-            GitCommand::RestoreRun { thread, run } => {
-                self.client.request(&RestoreRun { thread, run }).await?;
-                self.ui.update(move |s, tx| {
-                    if s.selected == Some(thread) {
-                        s.toast(tx, "Restored working tree", None);
-                        if s.diff.open && s.diff.scope == DiffScope::WorkingTree {
-                            s.open_working_tree_diff(tx);
-                        }
-                    }
-                });
-            }
-            GitCommand::RewindThread {
-                thread,
-                run,
-                prompt_text,
-            } => {
-                self.client.request(&RewindThread { thread, run }).await?;
-                self.ui
-                    .update(move |s, tx| s.rewound(thread, &prompt_text, tx));
-            }
-            GitCommand::ForkThread {
-                thread,
-                run,
-                boundary,
-                worktree,
-            } => {
-                let launched = self
-                    .client
-                    .request(&ForkThread {
-                        thread,
-                        run,
-                        boundary,
-                        worktree: worktree.then_some(ForkWorktree { branch: None }),
-                        title: None,
-                    })
-                    .await?;
-                self.ui.update(move |s, tx| s.forked(launched.thread, tx));
-            }
-        }
-        Ok(())
-    }
-
-    fn load_checkout_diff(&self, thread: ThreadId, working_tree: bool) {
-        let ui = self.ui.clone();
-        let client = self.client.clone();
-        tokio::spawn(async move {
-            let result = client
-                .request(&ThreadDiff {
-                    thread,
-                    working_tree,
-                    summary: false,
-                })
-                .await;
-            ui.update(move |s, tx| {
-                if s.selected != Some(thread) {
-                    return;
-                }
-                let scope = DiffScope::checkout(working_tree);
-                match result {
-                    Ok(diff) => {
-                        let files = diff
-                            .files
-                            .into_iter()
-                            .map(|file| DiffFile {
-                                path: file.path,
-                                change: file.change,
-                            })
-                            .collect();
-                        s.diff.apply_diff(scope, files, diff.patch.as_deref(), tx);
-                    }
-                    Err(Error::Rpc {
-                        code: NOT_FOUND, ..
-                    }) if !working_tree => {
-                        s.diff.apply_diff(scope, Vec::new(), None, tx);
-                    }
-                    Err(error) => s.diff.apply_error(scope, error.to_string()),
-                }
-            });
-        });
-    }
-
-    fn load_run_diff(&self, thread: ThreadId, run: RunId, turn: usize, summary: bool) {
-        let ui = self.ui.clone();
-        let client = self.client.clone();
-        tokio::spawn(async move {
-            let result = client
-                .request(&RunDiff {
-                    thread,
-                    run,
-                    summary,
-                })
-                .await;
-            ui.update(move |s, tx| {
-                if s.selected != Some(thread) {
-                    return;
-                }
-                let scope = DiffScope::Run { run, turn };
-                match result {
-                    Ok(diff) => {
-                        let files: Vec<DiffFile> = diff
-                            .files
-                            .into_iter()
-                            .map(|file| DiffFile {
-                                path: file.path,
-                                change: file.change,
-                            })
-                            .collect();
-                        if summary {
-                            s.diff.apply_run_summary(run, files);
-                        } else {
-                            s.diff.apply_diff(scope, files, diff.patch.as_deref(), tx);
-                        }
-                    }
-                    Err(error) => {
-                        if summary {
-                            s.diff.clear_run_summary_loading(run);
-                            s.toast(tx, "Couldn’t load changed files", Some(error.to_string()));
-                        } else {
-                            s.diff.apply_error(scope, error.to_string());
-                        }
-                    }
-                }
-            });
-        });
     }
 
     fn search(&self, thread: ThreadId, request: u64, query: String) {

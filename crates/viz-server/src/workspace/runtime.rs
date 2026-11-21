@@ -24,8 +24,7 @@ use super::{
 };
 use crate::{
     acp::{
-        Catalog, Desired, Opened, Origin, Outcome, Prompt, Session, SessionSnapshot, StopReason,
-        stop_reason_name,
+        Catalog, Desired, Outcome, Prompt, Session, SessionSnapshot, StopReason, stop_reason_name,
         transcript::{Output, Transcript},
     },
     wire::{LiveTurn, OptionValue, RpcError, RunEnd, RunId, RunStatus, ToolCallStatus},
@@ -214,7 +213,6 @@ impl Workspace {
             if let Some(claim) = claim {
                 self.changed(Some(thread));
                 let run = claim.id;
-                let checkpoint = self.start_checkpoint(thread, run).await;
                 let mut slot = driver.session.lock().await;
                 let result = self
                     .prompt(thread, driver, &mut slot, claim, &cancel, &steer)
@@ -224,15 +222,7 @@ impl Workspace {
                     slot.take();
                 }
                 drop(slot);
-                let changed_files = if let Some(checkpoint) = checkpoint {
-                    self.end_checkpoint(run, checkpoint).await
-                } else {
-                    None
-                };
-                if let Err(error) = self
-                    .finish(thread, run, settlement, changed_files, &cancel)
-                    .await
-                {
+                if let Err(error) = self.finish(thread, run, settlement, &cancel).await {
                     self.abandon(thread, run, &error).await;
                     return Err(error);
                 }
@@ -264,10 +254,6 @@ impl Workspace {
     /// a continuation is running, queued input takes priority once open tools
     /// finish. Content racing the next prompt is folded into that prompt's
     /// transcript, with patches still applied to the original tool entries.
-    #[expect(
-        clippy::too_many_lines,
-        reason = "autonomous continuation coordinates persistence, open-tool tracking, and shutdown"
-    )]
     async fn continue_idle(
         &self,
         thread: u64,
@@ -296,7 +282,6 @@ impl Workspace {
             drop(db);
             (run, entry)
         };
-        let checkpoint = self.start_checkpoint(thread, run).await;
         let mut transcript = Transcript::new(entry.to_string(), Arc::default());
         let result = async {
             let mut pending = pending;
@@ -349,25 +334,17 @@ impl Workspace {
             }
             self.publish(thread, run, session.id(), transcript.finish(), None, None)
                 .await?;
-            let changed_files = if let Some(checkpoint) = checkpoint {
-                self.end_checkpoint(run, checkpoint).await
-            } else {
-                None
-            };
             self.finish(
                 thread,
                 run,
                 Settlement {
                     status: RunStatus::Completed,
                     end: RunEnd {
-                        run: None,
-                        changed_files: None,
                         stop_reason: None,
                         answer: Some(transcript.answer().to_owned()),
                         error: None,
                     },
                 },
-                changed_files,
                 cancel,
             )
             .await
@@ -384,7 +361,6 @@ impl Workspace {
         thread: u64,
         run: u64,
         mut settlement: Settlement,
-        changed_files: Option<usize>,
         cancel: &CancellationToken,
     ) -> Result<(), RpcError> {
         let mut db = self.db.lock().await;
@@ -401,7 +377,6 @@ impl Workspace {
             settlement = Settlement::stopped(RunStatus::Cancelled, "cancelled", None);
         }
         let mut tx = db.transaction().await?;
-        settlement.end.changed_files = changed_files;
         runs::settle(&mut tx, thread, run, settlement, self.unread(thread)).await?;
         tx.commit().await?;
         self.transient
@@ -460,8 +435,7 @@ impl Workspace {
         };
         let id = session.id().to_owned();
         let id = id.as_str();
-        let (seed, text) = self.seed_prompt(thread, text).await?;
-        let outcome = session
+        session
             .prompt(
                 Prompt {
                     text: &text,
@@ -478,11 +452,7 @@ impl Workspace {
                         .map_err(anyhow::Error::from)
                 },
             )
-            .await?;
-        if seed {
-            super::rewind::clear_seed(&mut *self.db.lock().await, thread).await?;
-        }
-        Ok(outcome)
+            .await
     }
 
     async fn publish(
@@ -564,30 +534,18 @@ impl Workspace {
         slot.take();
         let (_, config) = self.harness(Some(&harness))?;
         let endpoint = self.mcp.endpoint(thread);
-        let origin = match (&session.session_id, &session.fork_of) {
-            (Some(id), _) => Origin::Saved(id),
-            (None, Some(source)) => Origin::Fork(source),
-            (None, None) => Origin::New,
-        };
         let running = tokio::select! {
             biased;
             () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
-            result = Session::open(config, Path::new(&cwd), origin, Some(&endpoint)) => result?,
+            result = Session::open(config, Path::new(&cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
         };
         if session.session_id.as_deref() != Some(running.id()) {
-            let mut db = self.db.lock().await;
-            let mut tx = db.transaction().await?;
             exec(
-                &mut tx,
-                "UPDATE threads SET session = json_remove(json_set(session, '$.session_id', ?2), '$.fork_of') WHERE id = ?1",
+                &mut *self.db.lock().await,
+                "UPDATE threads SET session = json_set(session, '$.session_id', ?2) WHERE id = ?1",
                 [thread.into(), running.id().into()],
             )
             .await?;
-            if running.opened() == Opened::Forked {
-                super::rewind::clear_seed(&mut tx, thread).await?;
-            }
-            tx.commit().await?;
-            drop(db);
         }
         let desired = tokio::select! {
             biased;
@@ -762,8 +720,6 @@ fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
             Settlement {
                 status,
                 end: RunEnd {
-                    run: None,
-                    changed_files: None,
                     stop_reason: Some(stop_reason_name(stop_reason)),
                     answer: Some(answer),
                     error,

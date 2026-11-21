@@ -92,15 +92,11 @@
               ./crates/viz-server/src/workspace/schema.sql
             ];
           };
-          gitBuildInputs = [
-            pkgs.libssh2
-            pkgs.openssl
-          ];
           commonArgs = {
             inherit src;
             strictDeps = true;
             nativeBuildInputs = [ pkgs.pkg-config ];
-            buildInputs = desktopBuildInputs ++ gitBuildInputs ++ [ pkgs.dbus ];
+            buildInputs = desktopBuildInputs ++ [ pkgs.dbus ];
             cargoExtraArgs = "--locked --workspace";
             cargoVendorDir = craneLib.vendorCargoDeps {
               inherit src;
@@ -189,8 +185,7 @@
               pkgs.nil
               config.treefmt.build.wrapper
             ]
-            ++ desktopBuildInputs
-            ++ gitBuildInputs;
+            ++ desktopBuildInputs;
 
             LD_LIBRARY_PATH = lib.makeLibraryPath desktopRuntimeLibs;
 

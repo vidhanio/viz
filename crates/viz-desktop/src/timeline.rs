@@ -20,13 +20,11 @@ use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
     diff::{FileDiff, LineKind},
 };
-use viz_client::protocol::{RunBoundary, Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
+use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use crate::{
-    app::{CheckpointDialog, Desktop, NewThread, PANE_TRAVEL, Status},
-    attachments,
-    diff_panel::{self, DiffFile},
-    header, sidebar,
+    app::{Desktop, NewThread, PANE_TRAVEL, Status},
+    attachments, header, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL,
         RADIUS_INNER, S2, S4, S6, S8, S12, S16, S24, S32, Size, Theme,
@@ -215,7 +213,7 @@ fn items<'a>(
     let mut items = items;
     while let Some((item, streaming)) = items.next() {
         match item {
-            Item::User(user) => rows.push(Kind::Mine, mine(s, user, t)),
+            Item::User(user) => rows.push(Kind::Mine, mine(user, t)),
             Item::Text { key, text } => {
                 let mut content = prose(key, text, streaming, t);
                 if let Some(end) = items
@@ -263,7 +261,7 @@ fn items<'a>(
             Item::TaskResult(result) => rows.push(Kind::Activity, task_result(s, result, t)),
             Item::Notice { key, text } => rows.push(Kind::Notice, notice(key, text, t)),
             Item::TurnEnd(end) => {
-                if let Some(el) = turn_end(s, end, t) {
+                if let Some(el) = turn_end(end, t) {
                     rows.push(Kind::TurnEnd, el);
                 }
             }
@@ -819,8 +817,8 @@ fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     thread_hint(s, t, layer)
 }
 
-/// An empty thread or fresh draft: on a draft, just project and worktree
-/// selection; on an existing empty thread, only the project name.
+/// An empty thread or fresh draft: on a draft, just project selection; on an
+/// existing empty thread, only the project name.
 fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let Some(thread) = &s.new_thread else {
         let title = s
@@ -839,7 +837,6 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .gap(S12)
         .items_center()
         .child(draft_project(s, thread, t, layer))
-        .children(draft_worktree_controls(s, thread, t, layer))
         .children(choose_harness.then(|| {
             text("Choose a harness below.")
                 .font(t.ui)
@@ -847,181 +844,6 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .wrap()
                 .align(rune::Align::Center)
         }))
-}
-
-const DRAFT_BASE_BRANCH: &str = "draft-base-branch";
-
-/// Local vs Worktree toggle and base-branch selector shown on a fresh draft
-/// when its chosen project is a Git repository.
-fn draft_worktree_controls(
-    s: &Desktop,
-    thread: &NewThread,
-    t: &Theme,
-    layer: &mut Vec<El>,
-) -> Option<El> {
-    let project = s.project()?;
-    let git = project.git.as_ref()?;
-    let worktree = thread.worktree.as_ref();
-    let active = worktree.is_some();
-    let mut mode_chip = row()
-        .key("draft-worktree-toggle")
-        .role("switch")
-        .label("New linked worktree")
-        .checked(active)
-        .h(Size::Default.height())
-        .px(S8)
-        .gap(S6)
-        .center_y()
-        .radius(theme::RADIUS_CONTROL)
-        .fill(if active { t.accent } else { t.surface })
-        .disabled(thread.sending)
-        .focusable(!thread.sending)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .hover_group()
-        .press_scale(0.97)
-        .on_press_tx(Desktop::toggle_draft_worktree);
-    if !active {
-        mode_chip = mode_chip.border(HAIRLINE, t.hairline);
-    }
-    let mode_chip = mode_chip
-        .child(
-            icon(
-                if active {
-                    &ui::FOLDER_GIT_2
-                } else {
-                    &ui::GIT_BRANCH
-                },
-                ICON_SMALL,
-            )
-            .color(if active { t.on_accent } else { t.muted })
-            .group_color(if active { t.on_accent } else { t.text })
-            .a11y_hidden(),
-        )
-        .child(
-            text(if active {
-                "New worktree"
-            } else {
-                "Local checkout"
-            })
-            .font(t.small_medium)
-            .color(if active { t.on_accent } else { t.muted })
-            .group_color(if active { t.on_accent } else { t.text })
-            .a11y_hidden(),
-        );
-    let mut strip = row()
-        .key("draft-git-controls")
-        .gap(S8)
-        .center_y()
-        .child(mode_chip);
-    if let Some(req) = worktree {
-        strip = strip.child(draft_base_branch_picker(
-            s,
-            project,
-            git,
-            req,
-            thread.sending,
-            t,
-            layer,
-        ));
-    }
-    Some(strip)
-}
-
-fn draft_base_branch_picker(
-    s: &Desktop,
-    project: &viz_client::protocol::Project,
-    git: &viz_client::protocol::GitSummary,
-    req: &viz_client::protocol::WorktreeRequest,
-    sending: bool,
-    t: &Theme,
-    layer: &mut Vec<El>,
-) -> El {
-    let current_base = req
-        .base_ref
-        .as_deref()
-        .map(short_ref)
-        .map(|base| {
-            if base.len() == 40 && base.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-                &base[..12]
-            } else {
-                base
-            }
-        })
-        .or(git.branch.as_deref())
-        .unwrap_or("HEAD");
-    let open = s.open_picker.as_deref() == Some(DRAFT_BASE_BRANCH) && !sending;
-    let path = project.path.clone();
-    let trigger = ui::select_trigger(
-        DRAFT_BASE_BRANCH,
-        "Base branch",
-        Some(&format!("from {current_base}")),
-        open,
-        ui::PICKER_TRIGGER_MAX,
-        t,
-    )
-    .on_press_tx(move |s: &mut Desktop, tx| {
-        if s.open_picker.as_deref() == Some(DRAFT_BASE_BRANCH) {
-            s.open_picker = None;
-        } else {
-            s.open_picker = Some(DRAFT_BASE_BRANCH.to_owned());
-            s.load_branches(&path, tx);
-        }
-    });
-    let mut menu = Menu::new(format!("{DRAFT_BASE_BRANCH}-picker"))
-        .placement(Placement::Bottom)
-        .min_width(ui::MENU_WIDTH)
-        .open(open)
-        .on_close(|s: &mut Desktop| s.open_picker = None)
-        .trigger(trigger);
-    if open {
-        let is_default = req.base_ref.is_none();
-        menu = menu.item(
-            MenuItem::new(format!(
-                "Current HEAD ({})",
-                git.branch.as_deref().unwrap_or("detached")
-            ))
-            .checked(is_default)
-            .on_select_tx(|s: &mut Desktop, tx| {
-                s.open_picker = None;
-                tx.focus("draft", false);
-                if let Some(wt) = s.new_thread.as_mut().and_then(|t| t.worktree.as_mut()) {
-                    wt.base_ref = None;
-                }
-            }),
-        );
-        if let Some(branches) = s.branches.get(&project.path)
-            && !branches.is_empty()
-        {
-            menu = menu.separator();
-            menu = ui::menu_items(
-                menu,
-                branches.iter().map(|branch| {
-                    let reference = branch.reference.clone();
-                    let picked = req.base_ref.as_deref() == Some(reference.as_str());
-                    MenuItem::new(short_ref(&reference))
-                        .icon(&ui::GIT_BRANCH)
-                        .checked(picked)
-                        .on_select_tx(move |s: &mut Desktop, tx| {
-                            s.open_picker = None;
-                            tx.focus("draft", false);
-                            if let Some(wt) =
-                                s.new_thread.as_mut().and_then(|t| t.worktree.as_mut())
-                            {
-                                wt.base_ref = Some(reference.clone());
-                            }
-                        })
-                }),
-            );
-        }
-    }
-    menu.build(&t.overlay, layer)
-}
-
-fn short_ref(reference: &str) -> &str {
-    reference
-        .strip_prefix("refs/heads/")
-        .or_else(|| reference.strip_prefix("refs/remotes/"))
-        .unwrap_or(reference)
 }
 
 /// The `open_picker` value of a draft's project picker.
@@ -1061,7 +883,7 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
                 .on_select_tx(move |s: &mut Desktop, tx| {
                     s.open_picker = None;
                     tx.focus("draft", false);
-                    s.choose_draft_project(id.as_deref(), tx);
+                    s.choose_draft_project(id.as_deref());
                 })
         };
         menu = menu
@@ -1144,9 +966,9 @@ fn draft_project_trigger(
 }
 
 /// A user message: a bubble on a neutral surface at the right of the column,
-/// with a quiet hover-revealed footer for Copy, Rewind, and Fork.
+/// with a quiet hover-revealed Copy action.
 /// It hugs short text and wraps long text at [`BUBBLE_FRAC`] of the column.
-fn mine(s: &Desktop, user: &User, t: &Theme) -> El {
+fn mine(user: &User, t: &Theme) -> El {
     let mut message = Card::Message
         .build(t)
         .key(&user.key)
@@ -1176,7 +998,7 @@ fn mine(s: &Desktop, user: &User, t: &Theme) -> El {
                 })),
         );
     }
-    let footer = user_actions(s, user, t);
+    let footer = user_actions(user, t);
     row()
         .key(format!("{}-row", user.key))
         .w_full()
@@ -1194,56 +1016,11 @@ fn mine(s: &Desktop, user: &User, t: &Theme) -> El {
         )
 }
 
-fn user_actions(s: &Desktop, user: &User, t: &Theme) -> Option<El> {
-    let mut actions = Vec::new();
-    if !user.text.is_empty() {
-        let copied = user.text.clone();
-        actions.push(action_chip(
-            "copy-user",
-            &ui::COPY,
-            "Copy",
-            t.faint,
-            t.text,
-            move |_: &mut Desktop, tx| tx.copy(copied.clone()),
-            t,
-        ));
-    }
-    if let (Some(thread), Some(run), Some(turn)) = (s.selected, user.run, user.turn)
-        && s.connected()
-        && !s.busy()
-    {
-        if user.checkpoint {
-            let prompt_text = user.text.clone();
-            actions.push(action_chip(
-                "rewind-user",
-                &ui::UNDO_2,
-                "Rewind",
-                t.faint,
-                t.warning,
-                move |s: &mut Desktop, _| {
-                    s.checkpoint = Some(CheckpointDialog::Rewind {
-                        thread,
-                        run,
-                        turn,
-                        prompt_text: prompt_text.clone(),
-                    });
-                },
-                t,
-            ));
-        }
-        actions.push(action_chip(
-            "fork-user",
-            &ui::GIT_FORK,
-            "Fork",
-            t.faint,
-            t.text,
-            move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::Start, false, tx),
-            t,
-        ));
-    }
-    if actions.is_empty() {
+fn user_actions(user: &User, t: &Theme) -> Option<El> {
+    if user.text.is_empty() {
         return None;
     }
+    let copied = user.text.clone();
     Some(
         row()
             .key(format!("{}-actions", user.key))
@@ -1252,7 +1029,15 @@ fn user_actions(s: &Desktop, user: &User, t: &Theme) -> Option<El> {
             .center_y()
             .px(S4)
             .group_opacity(0.0, 1.0)
-            .children(actions),
+            .child(action_chip(
+                "copy-user",
+                &ui::COPY,
+                "Copy",
+                t.faint,
+                t.text,
+                move |_: &mut Desktop, tx| tx.copy(copied.clone()),
+                t,
+            )),
     )
 }
 
@@ -1293,305 +1078,36 @@ fn action_chip(
         )
 }
 
-/// Per-turn changed-files summary chip and quiet hover-revealed checkpoint
-/// actions (`Copy`, `Fork`, `Fork worktree`, `Restore`).
-fn turn_end(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
-    let changed = end.changed_files.filter(|&count| count > 0);
-    let chip = changed.map(|count| changed_files_chip(s, end, count, t));
-    let footer = assistant_actions(s, end, t);
-    if chip.is_none() && footer.is_none() {
+/// Quiet hover-revealed Copy action beneath an assistant turn.
+fn turn_end(end: &TurnEnd, t: &Theme) -> Option<El> {
+    if end.answer.is_empty() {
         return None;
     }
+    let copied = end.answer.clone();
     Some(
         col()
             .key(end.key.clone())
             .w_full()
             .pt(S8)
-            .gap(S4)
             .hover_group_shared(end.key.as_str())
-            .children(chip)
-            .children(footer),
+            .child(
+                row()
+                    .key(format!("{}-actions", end.key))
+                    .h(22.0)
+                    .gap(S12)
+                    .center_y()
+                    .group_opacity(0.0, 1.0)
+                    .child(action_chip(
+                        "copy-answer",
+                        &ui::COPY,
+                        "Copy",
+                        t.faint,
+                        t.text,
+                        move |_: &mut Desktop, tx| tx.copy(copied.clone()),
+                        t,
+                    )),
+            ),
     )
-}
-
-fn changed_files_chip(s: &Desktop, end: &TurnEnd, count: usize, t: &Theme) -> El {
-    let run = end.run;
-    let turn = end.turn;
-    let chip_key = format!("{}-files", end.key);
-    let open = s.expanded.contains(&chip_key);
-    let toggle_key = chip_key.clone();
-    let label = format!("Changed {count} {}", plural(count, "file", "files"));
-    let open_diff = row()
-        .key(format!("{chip_key}-open"))
-        .role("button")
-        .label("Open diff")
-        .h(Size::Small.height())
-        .px(S6)
-        .gap(S4)
-        .center_y()
-        .radius(RADIUS_INNER)
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .hover_group()
-        .press_scale(0.97)
-        .on_press_tx(move |s: &mut Desktop, tx| s.open_run_diff(run, turn, None, tx))
-        .child(
-            text("Open diff")
-                .font(t.small_medium)
-                .color(t.muted)
-                .group_color(t.accent_text)
-                .a11y_hidden(),
-        )
-        .child(
-            icon(&ui::ARROW_UP_RIGHT, ICON_SMALL)
-                .color(t.muted)
-                .group_color(t.accent_text)
-                .a11y_hidden(),
-        );
-    let header = row()
-        .key(format!("{chip_key}-head"))
-        .role("button")
-        .label(label.clone())
-        .expanded(open)
-        .w_full()
-        .h(30.0)
-        .px(S8)
-        .gap(S6)
-        .center_y()
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .hover_group()
-        .on_press_tx(move |s: &mut Desktop, tx| s.toggle_run_files(run, turn, &toggle_key, tx))
-        .child(
-            icon(&ui::FILE_DIFF, ICON_SMALL)
-                .color(t.worktree)
-                .a11y_hidden(),
-        )
-        .child(text(label).font(t.small_medium).color(t.text).a11y_hidden())
-        .child(el().grow(1.0).min_w(0.0).a11y_hidden())
-        .child(open_diff)
-        .child(
-            icon(&ui::CHEVRON, ICON_SMALL)
-                .icon_rotation(if open {
-                    std::f32::consts::FRAC_PI_2
-                } else {
-                    0.0
-                })
-                .color(t.faint)
-                .group_color(t.text)
-                .a11y_hidden(),
-        );
-    let mut card = col()
-        .key(chip_key)
-        .w_full()
-        .radius(RADIUS_CONTROL)
-        .fill(t.chip_fill)
-        .border(HAIRLINE, t.hairline)
-        .child(header);
-    if open {
-        card = card
-            .child(ui::rule(t).key("changed-files-rule"))
-            .child(changed_files_list(s, end, t));
-    }
-    card
-}
-
-fn changed_files_list(s: &Desktop, end: &TurnEnd, t: &Theme) -> El {
-    let run = end.run;
-    let turn = end.turn;
-    if s.diff.loading_summaries.contains(&run) {
-        return row()
-            .key("changed-files-loading")
-            .w_full()
-            .px(S12)
-            .py(S8)
-            .gap(S8)
-            .center_y()
-            .child(ui::radar(ICON_SMALL, t.accent, t))
-            .child(text("Loading changed files…").font(t.small).color(t.muted));
-    }
-    let Some(files) = s.diff.run_summaries.get(&run) else {
-        return row()
-            .key("changed-files-empty")
-            .w_full()
-            .px(S12)
-            .py(S8)
-            .child(text("No file list available.").font(t.small).color(t.muted));
-    };
-    col().key("changed-files-list").w_full().py(S4).children(
-        files
-            .iter()
-            .take(6)
-            .enumerate()
-            .map(|(index, file)| changed_file_row(index, file, run, turn, t)),
-    )
-}
-
-fn changed_file_row(
-    index: usize,
-    file: &DiffFile,
-    run: viz_client::protocol::RunId,
-    turn: usize,
-    t: &Theme,
-) -> El {
-    let (letter, color) = diff_panel::change_badge(file.change, t);
-    let (dir, name) = split_path(&file.path);
-    let path = file.path.clone();
-    row()
-        .key(format!("changed-file-{index}"))
-        .role("button")
-        .label(format!("Inspect {}", file.path))
-        .w_full()
-        .h(Size::Small.height())
-        .px(S12)
-        .gap(S8)
-        .center_y()
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .hover_group()
-        .on_press_tx(move |s: &mut Desktop, tx| s.open_run_diff(run, turn, Some(path.clone()), tx))
-        .child(text(letter).font(t.mono_micro).color(color).a11y_hidden())
-        .child(
-            text(name.to_owned())
-                .font(t.mono_small)
-                .color(t.text)
-                .truncate()
-                .min_w(0.0)
-                .a11y_hidden(),
-        )
-        .children((!dir.is_empty()).then(|| {
-            text(dir.trim_end_matches('/').to_owned())
-                .font(t.mono_small)
-                .color(t.faint)
-                .truncate()
-                .shrink()
-                .min_w(0.0)
-                .a11y_hidden()
-        }))
-}
-
-fn assistant_actions(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
-    let mut actions = Vec::new();
-    if !end.answer.is_empty() {
-        let copied = end.answer.clone();
-        actions.push(action_chip(
-            "copy-answer",
-            &ui::COPY,
-            "Copy",
-            t.faint,
-            t.text,
-            move |_: &mut Desktop, tx| tx.copy(copied.clone()),
-            t,
-        ));
-    }
-    if let Some(thread) = s.selected
-        && s.connected()
-        && !s.busy()
-    {
-        let run = end.run;
-        let turn = end.turn;
-        let changed = end.changed_files;
-        actions.push(action_chip(
-            "fork-answer",
-            &ui::GIT_FORK,
-            "Fork",
-            t.faint,
-            t.text,
-            move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::End, false, tx),
-            t,
-        ));
-        if changed.is_some() {
-            actions.push(action_chip(
-                "fork-worktree",
-                &ui::GIT_BRANCH_PLUS,
-                "Fork worktree",
-                t.faint,
-                t.worktree,
-                move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::End, true, tx),
-                t,
-            ));
-            actions.push(action_chip(
-                "restore-checkpoint",
-                &ui::ROTATE_CCW,
-                "Restore checkpoint",
-                t.faint,
-                t.worktree,
-                move |s: &mut Desktop, _| {
-                    s.checkpoint = Some(CheckpointDialog::Restore {
-                        thread,
-                        run,
-                        turn,
-                        changed_files: changed,
-                    });
-                },
-                t,
-            ));
-        }
-    }
-    if actions.is_empty() {
-        return None;
-    }
-    Some(
-        row()
-            .key(format!("{}-actions", end.key))
-            .h(22.0)
-            .gap(S12)
-            .center_y()
-            .group_opacity(0.0, 1.0)
-            .children(actions),
-    )
-}
-
-/// Modal confirmation dialog for destructive checkpoint actions (Restore or
-/// Rewind).
-pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
-    let Some(action) = &s.checkpoint else {
-        return;
-    };
-    let (title, subject, detail, confirm_label, variant) = match action {
-        CheckpointDialog::Restore {
-            turn,
-            changed_files,
-            ..
-        } => (
-            "Restore working tree?",
-            format!("Before turn #{turn}"),
-            match changed_files {
-                Some(n) if *n > 0 => format!(
-                    "Resets tracked changes back to the checkpoint before turn #{turn} ({n} {} recorded). Transcript messages stay intact.",
-                    plural(*n, "file", "files")
-                ),
-                _ => format!(
-                    "Resets tracked changes back to the checkpoint before turn #{turn}. Transcript messages stay intact."
-                ),
-            },
-            "Restore files",
-            ButtonVariant::Warning,
-        ),
-        CheckpointDialog::Rewind { turn, .. } => (
-            "Rewind thread?",
-            format!("To turn #{turn}"),
-            "Restores the working tree and hides this turn and any later turns, placing the prompt back in the composer.".to_owned(),
-            "Rewind",
-            ButtonVariant::Warning,
-        ),
-    };
-    let buttons = ui::dialog_actions([
-        ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
-            .on_press(|s: &mut Desktop| s.checkpoint = None)
-            .build(&t.k),
-        ui::button(confirm_label, variant, Size::Default)
-            .on_press_tx(Desktop::confirm_checkpoint)
-            .build(&t.k),
-    ]);
-    ui::dialog("checkpoint", title, Some(&detail))
-        .subject(&subject)
-        .build(
-            |s: &mut Desktop| s.checkpoint = None,
-            ui::dialog_body(None, buttons),
-            t,
-            layer,
-        );
 }
 
 /// Assistant prose.

@@ -536,17 +536,6 @@
         "title": "DelegateTask",
         "type": "object",
         "properties": {
-          "worktree": {
-            "description": "Place a new child thread in a new linked worktree in the receiving\nenvironment.",
-            "anyOf": [
-              {
-                "$ref": "#/$defs/WorktreeRequest"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "parent": {
             "$ref": "#/$defs/ThreadId"
           },
@@ -619,26 +608,6 @@
           "attachmentIds"
         ],
         "$defs": {
-          "WorktreeRequest": {
-            "description": "How to provision a new linked worktree on the environment running the\nthread.",
-            "type": "object",
-            "properties": {
-              "baseRef": {
-                "description": "Local ref, remote-tracking ref or commit ID. Defaults to the source\ncheckout's HEAD.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "branch": {
-                "description": "New local branch name. Defaults to a unique name derived from the thread\ntitle.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            }
-          },
           "ThreadId": {
             "description": "A thread id.",
             "type": "integer",
@@ -956,12 +925,6 @@
             "description": "The current application state of a watched thread.",
             "type": "object",
             "properties": {
-              "historyRevision": {
-                "description": "Increases when a rewind invalidates cached transcript entries.",
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
-              },
               "status": {
                 "description": "Status of this thread.",
                 "$ref": "#/$defs/ThreadStatus"
@@ -1030,7 +993,6 @@
               }
             },
             "required": [
-              "historyRevision",
               "status",
               "harness",
               "cwd",
@@ -1594,17 +1556,6 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
-              "git": {
-                "description": "Git status for the project directory.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/GitSummary"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -1623,58 +1574,6 @@
               "name",
               "path",
               "createdAt"
-            ]
-          },
-          "GitSummary": {
-            "description": "Live Git status for a working directory.",
-            "type": "object",
-            "properties": {
-              "branch": {
-                "description": "Local branch, absent on a detached HEAD.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "head": {
-                "description": "Full Git object ID, absent before the initial commit.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "dirtyFiles": {
-                "description": "Number of paths with staged, unstaged or untracked changes.",
-                "type": "integer",
-                "format": "uint",
-                "minimum": 0
-              },
-              "ahead": {
-                "description": "Commits ahead of the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "behind": {
-                "description": "Commits behind the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "linkedWorktree": {
-                "description": "Whether the checkout is a linked worktree.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "dirtyFiles",
-              "linkedWorktree"
             ]
           }
         }
@@ -1819,28 +1718,6 @@
             "description": "A `threads.list` item.",
             "type": "object",
             "properties": {
-              "worktree": {
-                "description": "The worktree provisioned for this thread, if any.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/GitWorktree"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "git": {
-                "description": "Git status for the thread's working directory.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/GitSummary"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "id": {
                 "description": "Its id.",
                 "$ref": "#/$defs/ThreadId"
@@ -1927,76 +1804,6 @@
               "updatedAt",
               "unread",
               "pinned"
-            ]
-          },
-          "GitWorktree": {
-            "description": "A linked worktree provisioned by viz.",
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Absolute checkout path and identifier for removal.",
-                "type": "string"
-              },
-              "branch": {
-                "description": "Local branch at creation.",
-                "type": "string"
-              }
-            },
-            "required": [
-              "path",
-              "branch"
-            ]
-          },
-          "GitSummary": {
-            "description": "Live Git status for a working directory.",
-            "type": "object",
-            "properties": {
-              "branch": {
-                "description": "Local branch, absent on a detached HEAD.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "head": {
-                "description": "Full Git object ID, absent before the initial commit.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "dirtyFiles": {
-                "description": "Number of paths with staged, unstaged or untracked changes.",
-                "type": "integer",
-                "format": "uint",
-                "minimum": 0
-              },
-              "ahead": {
-                "description": "Commits ahead of the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "behind": {
-                "description": "Commits behind the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "linkedWorktree": {
-                "description": "Whether the checkout is a linked worktree.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "dirtyFiles",
-              "linkedWorktree"
             ]
           },
           "ThreadId": {
@@ -2202,11 +2009,6 @@
         "description": "Delete a thread.",
         "type": "object",
         "properties": {
-          "removeWorktree": {
-            "description": "Also remove the thread's worktree, if clean and unused by other threads.",
-            "type": "boolean",
-            "default": false
-          },
           "thread": {
             "description": "The thread to delete.",
             "$ref": "#/$defs/ThreadId"
@@ -2260,17 +2062,6 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
-              "git": {
-                "description": "Git status for the project directory.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/GitSummary"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -2289,58 +2080,6 @@
               "name",
               "path",
               "createdAt"
-            ]
-          },
-          "GitSummary": {
-            "description": "Live Git status for a working directory.",
-            "type": "object",
-            "properties": {
-              "branch": {
-                "description": "Local branch, absent on a detached HEAD.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "head": {
-                "description": "Full Git object ID, absent before the initial commit.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "dirtyFiles": {
-                "description": "Number of paths with staged, unstaged or untracked changes.",
-                "type": "integer",
-                "format": "uint",
-                "minimum": 0
-              },
-              "ahead": {
-                "description": "Commits ahead of the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "behind": {
-                "description": "Commits behind the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "linkedWorktree": {
-                "description": "Whether the checkout is a linked worktree.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "dirtyFiles",
-              "linkedWorktree"
             ]
           }
         }
@@ -2388,17 +2127,6 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
-              "git": {
-                "description": "Git status for the project directory.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/GitSummary"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -2417,58 +2145,6 @@
               "name",
               "path",
               "createdAt"
-            ]
-          },
-          "GitSummary": {
-            "description": "Live Git status for a working directory.",
-            "type": "object",
-            "properties": {
-              "branch": {
-                "description": "Local branch, absent on a detached HEAD.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "head": {
-                "description": "Full Git object ID, absent before the initial commit.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "dirtyFiles": {
-                "description": "Number of paths with staged, unstaged or untracked changes.",
-                "type": "integer",
-                "format": "uint",
-                "minimum": 0
-              },
-              "ahead": {
-                "description": "Commits ahead of the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "behind": {
-                "description": "Commits behind the locally known upstream.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
-              "linkedWorktree": {
-                "description": "Whether the checkout is a linked worktree.",
-                "type": "boolean"
-              }
-            },
-            "required": [
-              "dirtyFiles",
-              "linkedWorktree"
             ]
           }
         }
@@ -3061,17 +2737,6 @@
         "description": "`thread.launch` params.",
         "type": "object",
         "properties": {
-          "worktree": {
-            "description": "Place the thread in a new linked worktree.",
-            "anyOf": [
-              {
-                "$ref": "#/$defs/WorktreeRequest"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
           "title": {
             "type": [
               "string",
@@ -3131,26 +2796,6 @@
           }
         },
         "$defs": {
-          "WorktreeRequest": {
-            "description": "How to provision a new linked worktree on the environment running the\nthread.",
-            "type": "object",
-            "properties": {
-              "baseRef": {
-                "description": "Local ref, remote-tracking ref or commit ID. Defaults to the source\ncheckout's HEAD.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "branch": {
-                "description": "New local branch name. Defaults to a unique name derived from the thread\ntitle.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            }
-          },
           "Attachment": {
             "description": "A file attached to an input.",
             "type": "object",
@@ -3227,670 +2872,6 @@
             "minimum": 0
           }
         }
-      }
-    },
-    "run.restore": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "RestoreRun",
-        "description": "Restore the working tree to the start of a settled run.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "run": {
-            "$ref": "#/$defs/RunId"
-          }
-        },
-        "required": [
-          "thread",
-          "run"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "RunId": {
-            "description": "A run id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Empty",
-        "description": "Empty successful response or notification params.",
-        "type": "object"
-      }
-    },
-    "thread.rewind": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "RewindThread",
-        "description": "Restore the working tree and hide transcript entries starting with the\nselected run.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "run": {
-            "$ref": "#/$defs/RunId"
-          }
-        },
-        "required": [
-          "thread",
-          "run"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "RunId": {
-            "description": "A run id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Empty",
-        "description": "Empty successful response or notification params.",
-        "type": "object"
-      }
-    },
-    "thread.fork": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ForkThread",
-        "description": "Copy the transcript up to a settled run boundary into a new ACP thread.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "run": {
-            "$ref": "#/$defs/RunId"
-          },
-          "boundary": {
-            "$ref": "#/$defs/RunBoundary",
-            "default": "end"
-          },
-          "worktree": {
-            "description": "Omit to use the same working directory at its current filesystem state.",
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ForkWorktree"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "title": {
-            "description": "Defaults to the source title with a fork suffix.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "thread",
-          "run"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "RunId": {
-            "description": "A run id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "RunBoundary": {
-            "description": "Boundary of the run that determines the transcript and checkout snapshot.",
-            "oneOf": [
-              {
-                "description": "Exclude this run from the forked transcript.",
-                "type": "string",
-                "const": "start"
-              },
-              {
-                "description": "Include this run in the forked transcript.",
-                "type": "string",
-                "const": "end"
-              }
-            ]
-          },
-          "ForkWorktree": {
-            "description": "Start a new branch at the checkpoint commit in a fresh worktree.",
-            "type": "object",
-            "properties": {
-              "branch": {
-                "description": "Use the server's generated branch name when omitted.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            }
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Launched",
-        "description": "`thread.launch` result.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "description": "The new thread.",
-            "$ref": "#/$defs/ThreadId"
-          },
-          "run": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/RunId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          }
-        },
-        "required": [
-          "thread"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "RunId": {
-            "description": "A run id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      }
-    },
-    "run.diff": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "RunDiff",
-        "description": "Compare the working tree at the start and end of a run.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "run": {
-            "$ref": "#/$defs/RunId"
-          },
-          "summary": {
-            "description": "Omit the unified patch and return only paths and change kinds.",
-            "type": "boolean",
-            "default": false
-          }
-        },
-        "required": [
-          "thread",
-          "run"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "RunId": {
-            "description": "A run id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "GitDiff",
-        "description": "Changes between two snapshots of the working tree.",
-        "type": "object",
-        "properties": {
-          "files": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/GitDiffFile"
-            }
-          },
-          "patch": {
-            "description": "Unified diff, absent when only the summary was requested.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "files"
-        ],
-        "$defs": {
-          "GitDiffFile": {
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path relative to the repository root.",
-                "type": "string"
-              },
-              "change": {
-                "$ref": "#/$defs/GitChange"
-              }
-            },
-            "required": [
-              "path",
-              "change"
-            ]
-          },
-          "GitChange": {
-            "type": "string",
-            "enum": [
-              "added",
-              "deleted",
-              "modified",
-              "typeChanged"
-            ]
-          }
-        }
-      }
-    },
-    "thread.diff": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ThreadDiff",
-        "description": "Compare the first and latest completed checkpoint in a thread, or inspect\nits checkout.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "workingTree": {
-            "description": "Compare the staged, unstaged, and untracked files in the checkout to\nHEAD.",
-            "type": "boolean",
-            "default": false
-          },
-          "summary": {
-            "description": "Omit the unified patch and return only paths and change kinds.",
-            "type": "boolean",
-            "default": false
-          }
-        },
-        "required": [
-          "thread"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "GitDiff",
-        "description": "Changes between two snapshots of the working tree.",
-        "type": "object",
-        "properties": {
-          "files": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/GitDiffFile"
-            }
-          },
-          "patch": {
-            "description": "Unified diff, absent when only the summary was requested.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "files"
-        ],
-        "$defs": {
-          "GitDiffFile": {
-            "type": "object",
-            "properties": {
-              "path": {
-                "description": "Path relative to the repository root.",
-                "type": "string"
-              },
-              "change": {
-                "$ref": "#/$defs/GitChange"
-              }
-            },
-            "required": [
-              "path",
-              "change"
-            ]
-          },
-          "GitChange": {
-            "type": "string",
-            "enum": [
-              "added",
-              "deleted",
-              "modified",
-              "typeChanged"
-            ]
-          }
-        }
-      }
-    },
-    "git.commit": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "CommitGit",
-        "description": "Commit in the checkout bound to a thread.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "message": {
-            "type": "string"
-          },
-          "all": {
-            "description": "Stage all tracked and unignored files before committing. Otherwise\ncommit the staged index.",
-            "type": "boolean",
-            "default": false
-          }
-        },
-        "required": [
-          "thread",
-          "message"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "GitCommit",
-        "type": "object",
-        "properties": {
-          "head": {
-            "description": "Full Git object ID of the new commit.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "head"
-        ]
-      }
-    },
-    "git.push": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "PushGit",
-        "description": "Push the current local branch to a configured remote without force.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "remote": {
-            "description": "Defaults to the branch's upstream remote, or origin.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "thread"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "GitPush",
-        "type": "object",
-        "properties": {
-          "remote": {
-            "type": "string"
-          },
-          "reference": {
-            "description": "Full ref name updated on the remote.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "remote",
-          "reference"
-        ]
-      }
-    },
-    "git.branch.create": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "CreateGitBranch",
-        "description": "Create a local branch without changing the checkout.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "branch": {
-            "type": "string"
-          },
-          "baseRef": {
-            "description": "Defaults to the current HEAD.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "thread",
-          "branch"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "GitBranch",
-        "type": "object",
-        "properties": {
-          "reference": {
-            "description": "Full ref name, suitable for use as a worktree base.",
-            "type": "string"
-          },
-          "head": {
-            "description": "Full Git object ID at this ref.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "reference",
-          "head"
-        ]
-      }
-    },
-    "git.branches": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ListGitBranches",
-        "description": "List local and remote-tracking branches for a registered project.",
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "project"
-        ]
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "GitBranches",
-        "description": "Branches available as worktree bases.",
-        "type": "object",
-        "properties": {
-          "branches": {
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/GitBranch"
-            }
-          }
-        },
-        "required": [
-          "branches"
-        ],
-        "$defs": {
-          "GitBranch": {
-            "type": "object",
-            "properties": {
-              "reference": {
-                "description": "Full ref name, suitable for use as a worktree base.",
-                "type": "string"
-              },
-              "head": {
-                "description": "Full Git object ID at this ref.",
-                "type": "string"
-              }
-            },
-            "required": [
-              "reference",
-              "head"
-            ]
-          }
-        }
-      }
-    },
-    "git.worktree.create": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "CreateGitWorktree",
-        "description": "Provision a linked checkout from a registered project.",
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "string"
-          },
-          "worktree": {
-            "$ref": "#/$defs/WorktreeRequest"
-          }
-        },
-        "required": [
-          "project",
-          "worktree"
-        ],
-        "$defs": {
-          "WorktreeRequest": {
-            "description": "How to provision a new linked worktree on the environment running the\nthread.",
-            "type": "object",
-            "properties": {
-              "baseRef": {
-                "description": "Local ref, remote-tracking ref or commit ID. Defaults to the source\ncheckout's HEAD.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
-              "branch": {
-                "description": "New local branch name. Defaults to a unique name derived from the thread\ntitle.",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              }
-            }
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "GitWorktree",
-        "description": "A linked worktree provisioned by viz.",
-        "type": "object",
-        "properties": {
-          "path": {
-            "description": "Absolute checkout path and identifier for removal.",
-            "type": "string"
-          },
-          "branch": {
-            "description": "Local branch at creation.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "path",
-          "branch"
-        ]
-      }
-    },
-    "git.worktree.remove": {
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "RemoveGitWorktree",
-        "description": "Remove an unused, clean worktree created by viz. Its branch is kept.",
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "path"
-        ]
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Empty",
-        "description": "Empty successful response or notification params.",
-        "type": "object"
       }
     },
     "thread.send": {
@@ -4778,26 +3759,6 @@
           "RunEnd": {
             "type": "object",
             "properties": {
-              "run": {
-                "description": "Run identifier for checkpoint actions.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/RunId"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "changedFiles": {
-                "description": "Number of changed paths when both Git checkpoints were captured.",
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint",
-                "minimum": 0
-              },
               "stopReason": {
                 "type": [
                   "string",
@@ -4817,12 +3778,6 @@
                 ]
               }
             }
-          },
-          "RunId": {
-            "description": "A run id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
           }
         }
       }
@@ -5526,26 +4481,6 @@
       "RunEnd": {
         "type": "object",
         "properties": {
-          "run": {
-            "description": "Run identifier for checkpoint actions.",
-            "anyOf": [
-              {
-                "$ref": "#/$defs/RunId"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "changedFiles": {
-            "description": "Number of changed paths when both Git checkpoints were captured.",
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint",
-            "minimum": 0
-          },
           "stopReason": {
             "type": [
               "string",
@@ -5570,12 +4505,6 @@
         "description": "The current application state of a watched thread.",
         "type": "object",
         "properties": {
-          "historyRevision": {
-            "description": "Increases when a rewind invalidates cached transcript entries.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
           "status": {
             "description": "Status of this thread.",
             "$ref": "#/$defs/ThreadStatus"
@@ -5644,7 +4573,6 @@
           }
         },
         "required": [
-          "historyRevision",
           "status",
           "harness",
           "cwd",

@@ -126,9 +126,6 @@ impl std::fmt::Debug for Tasks {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct Delegate {
-    /// Provision a linked worktree for a new child in the receiving
-    /// environment.
-    worktree: Option<viz_client::protocol::WorktreeRequest>,
     environment: Option<String>,
     project: Option<String>,
     harness: Option<String>,
@@ -203,8 +200,6 @@ pub(crate) struct ProgressResult {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdmissionRequest<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    worktree: Option<&'a viz_client::protocol::WorktreeRequest>,
     task: &'a str,
     origin_environment: &'a str,
     parent: u64,
@@ -406,7 +401,6 @@ impl Tasks {
                 }
                 let id = Uuid::new_v4().to_string();
                 let payload = serde_json::to_string(&AdmissionRequest {
-                    worktree: input.worktree.as_ref(),
                     task: &id,
                     origin_environment: &self.peers.local,
                     parent,

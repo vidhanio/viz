@@ -3,18 +3,15 @@
 
 use viz_client::protocol::{
     Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
-    EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, GitChange, GitSummary,
-    GitWorktree, Harness, LiveText, LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue,
-    PlanEntry, PlanPriority, PlanStatus, Project, PromptAttachment, RunEnd, RunId, SearchHit,
-    SlashCommand, Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
-    ToolCallStatus, ToolDiff, ToolRecord, WorktreeRequest,
+    EntryData, EntryId, Environment, EnvironmentStatus, Harness, LiveText, LiveTextKind, LiveTurn,
+    OptionChoice, OptionKind, OptionValue, PlanEntry, PlanPriority, PlanStatus, Project,
+    PromptAttachment, RunEnd, SearchHit, SlashCommand, Task, TaskStatus, ThreadId, ThreadState,
+    ThreadStatus, ThreadSummary, ToolCallStatus, ToolDiff, ToolRecord,
 };
 
 use crate::{
     app::{Desktop, NewThread, Status},
-    composer,
-    diff_panel::{DiffFile, DiffScope},
-    palette, sidebar,
+    composer, palette, sidebar,
     thread::Thread,
     timeline,
 };
@@ -22,7 +19,6 @@ use crate::{
 type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
-    ("diff-panel", diff_panel),
     ("activity", activity),
     ("worklog", worklog),
     ("selectors", selectors),
@@ -45,7 +41,6 @@ pub const SCENES: &[Scene] = &[
     ("overflow", overflow),
     ("projects", projects),
     ("draft-project", draft_project),
-    ("draft-worktree", draft_worktree),
     ("environments", environments),
     ("offline", offline),
 ];
@@ -63,18 +58,10 @@ fn workspace(s: &mut Desktop) {
         status: EnvironmentStatus::Local,
     }];
     s.projects = [
-        ("Workbench", "/work/workbench", Some("main")),
-        ("Field notes", "/work/field-notes", Some("main")),
+        ("Workbench", "/work/workbench"),
+        ("Field notes", "/work/field-notes"),
     ]
-    .map(|(name, path, branch)| Project {
-        git: branch.map(|branch| GitSummary {
-            branch: Some(branch.into()),
-            head: Some("a1b2c3d4e5f6".into()),
-            dirty_files: 0,
-            ahead: Some(0),
-            behind: Some(0),
-            linked_worktree: false,
-        }),
+    .map(|(name, path)| Project {
         name: name.into(),
         path: path.into(),
         created_at: 0,
@@ -89,69 +76,6 @@ fn workspace(s: &mut Desktop) {
     s.loading = false;
     s.toggle("acp-1-write-1-activity");
     s.toggle("acp-1-write-1");
-}
-
-fn diff_panel(s: &mut Desktop) {
-    workspace(s);
-    let files = vec![
-        DiffFile {
-            path: "src/export.rs".into(),
-            change: GitChange::Modified,
-        },
-        DiffFile {
-            path: "src/line_ending.rs".into(),
-            change: GitChange::Added,
-        },
-    ];
-    let patch = "\
-diff --git a/src/export.rs b/src/export.rs
-index 4b12a8e..9f03c21 100644
---- a/src/export.rs
-+++ b/src/export.rs
-@@ -14,7 +14,11 @@ pub fn render_markdown(blocks: &[String], ending: LineEnding) -> Result<String>
-     if blocks.is_empty() {
-         return Ok(String::new());
-     }
--    let body = blocks.join(\"\\n\\n\");
--    Ok(body)
-+    let sep = ending.separator();
-+    let mut body = blocks.join(&format!(\"{sep}{sep}\"));
-+    if !body.ends_with(sep) {
-+        body.push_str(sep);
-+    }
-+    Ok(body)
- }
-diff --git a/src/line_ending.rs b/src/line_ending.rs
-new file mode 100644
-index 0000000..c7e1a02
---- /dev/null
-+++ b/src/line_ending.rs
-@@ -0,0 +1,11 @@
-+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-+pub enum LineEnding {
-+    Lf,
-+    Crlf,
-+}
-+
-+impl LineEnding {
-+    pub const fn separator(self) -> &'static str {
-+        match self {
-+            Self::Lf => \"\\n\",
-+            Self::Crlf => \"\\r\\n\",
-+        }
-+    }
-+}
-";
-    s.diff.apply_run_summary(RunId(11), files.clone());
-    s.toggle("e5-end-files");
-    s.diff.set_preview(
-        DiffScope::Run {
-            run: RunId(11),
-            turn: 1,
-        },
-        files,
-        patch,
-    );
 }
 
 fn list() -> Vec<ThreadSummary> {
@@ -202,30 +126,25 @@ fn list() -> Vec<ThreadSummary> {
         ),
         (4, "Draft release notes", None, None, Idle),
     ]
-    .map(|(id, title, parent, project, status)| {
-        let (worktree, git) = preview_git(id);
-        ThreadSummary {
-            git,
-            worktree,
-            id: ThreadId(id),
-            title: title.into(),
-            parent: parent.map(ThreadId),
-            parent_environment: None,
-            project: project.map(str::to_owned),
-            harness: preview_harness(id).0.into(),
-            harness_name: preview_harness(id).1.into(),
-            model: match id {
-                20 => Some("GPT-5.5".into()),
-                21 => Some("Claude Opus 4.7".into()),
-                _ => None,
-            },
-            thinking: parent.is_some().then(|| "high".into()),
-            status,
-            archived: false,
-            updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
-            unread: id == 9,
-            pinned: id == 4,
-        }
+    .map(|(id, title, parent, project, status)| ThreadSummary {
+        id: ThreadId(id),
+        title: title.into(),
+        parent: parent.map(ThreadId),
+        parent_environment: None,
+        project: project.map(str::to_owned),
+        harness: preview_harness(id).0.into(),
+        harness_name: preview_harness(id).1.into(),
+        model: match id {
+            20 => Some("GPT-5.5".into()),
+            21 => Some("Claude Opus 4.7".into()),
+            _ => None,
+        },
+        thinking: parent.is_some().then(|| "high".into()),
+        status,
+        archived: false,
+        updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
+        unread: id == 9,
+        pinned: id == 4,
     })
     .into()
 }
@@ -240,44 +159,8 @@ const fn preview_harness(id: u64) -> (&'static str, &'static str) {
     }
 }
 
-fn preview_git(id: u64) -> (Option<GitWorktree>, Option<GitSummary>) {
-    let worktree = (id == 10).then(|| GitWorktree {
-        path: "/work/.viz-worktrees/trim-spaces".into(),
-        branch: "wt/trim-spaces".into(),
-    });
-    let git = match id {
-        11 => Some(GitSummary {
-            branch: Some("feat/export-crlf".into()),
-            head: Some("a1b2c3d4e5f6".into()),
-            dirty_files: 3,
-            ahead: Some(2),
-            behind: Some(0),
-            linked_worktree: false,
-        }),
-        10 => Some(GitSummary {
-            branch: Some("wt/trim-spaces".into()),
-            head: Some("f6e5d4c3b2a1".into()),
-            dirty_files: 0,
-            ahead: Some(1),
-            behind: Some(0),
-            linked_worktree: true,
-        }),
-        9 | 7 => Some(GitSummary {
-            branch: Some("main".into()),
-            head: Some("112233445566".into()),
-            dirty_files: 0,
-            ahead: Some(0),
-            behind: Some(0),
-            linked_worktree: false,
-        }),
-        _ => None,
-    };
-    (worktree, git)
-}
-
 fn thread() -> ThreadState {
     ThreadState {
-        history_revision: 0,
         status: ThreadStatus::Idle,
         harness: "claude".into(),
         project: Some("/work/workbench".into()),
@@ -344,8 +227,6 @@ fn transcript(attachments: &[&str]) -> Thread {
                 )
             }),
             EntryData::Run(RunEnd {
-                run: Some(RunId(11)),
-                changed_files: Some(2),
                 stop_reason: Some("end_turn".into()),
                 error: None,
                 answer: Some(
@@ -467,8 +348,6 @@ fn worklog(s: &mut Desktop) {
                 text: "Task t-21 (Review line endings) on local thread 21 completed.\n\nCRLF survives the join; only the final newline was missing.".into(),
             },
             EntryData::Run(RunEnd {
-                    run: None,
-                    changed_files: None,
                 stop_reason: Some("cancelled".into()),
                 error: None,
                 answer: None,
@@ -803,7 +682,6 @@ fn subagent(s: &mut Desktop) {
 fn projects(s: &mut Desktop) {
     workspace(s);
     s.projects.push(Project {
-        git: None,
         name: "Release scripts".into(),
         path: "/work/release-scripts".into(),
         created_at: 0,
@@ -811,34 +689,10 @@ fn projects(s: &mut Desktop) {
     sidebar::preview_projects(s, &["/work/release-scripts"]);
 }
 
-/// A fresh thread with its project picker open and worktree mode toggled on.
+/// A fresh thread with its project picker open.
 fn draft_project(s: &mut Desktop) {
     new_agent(s);
-    if let Some(thread) = &mut s.new_thread {
-        thread.worktree = Some(WorktreeRequest {
-            base_ref: Some("refs/heads/main".into()),
-            branch: None,
-        });
-    }
-    s.branches.insert(
-        "/work/workbench".into(),
-        vec![
-            GitBranch {
-                reference: "refs/heads/main".into(),
-                head: "a1b2c3d4e5f6".into(),
-            },
-            GitBranch {
-                reference: "refs/heads/feat/export-crlf".into(),
-                head: "112233445566".into(),
-            },
-        ],
-    );
     s.open_picker = Some(timeline::DRAFT_PROJECT.into());
-}
-
-fn draft_worktree(s: &mut Desktop) {
-    draft_project(s);
-    s.open_picker = None;
 }
 
 /// Multiple configured environments with the sidebar footer picker open.

@@ -115,7 +115,7 @@ pub(super) async fn latest(db: &mut dyn Executor, thread: u64) -> Result<Option<
     store::require(db, thread).await?;
     row(
         db,
-        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1 AND hidden = 0 ORDER BY id DESC LIMIT 1",
+        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1 ORDER BY id DESC LIMIT 1",
         [thread.into()],
     )
     .await?
@@ -301,8 +301,6 @@ impl Settlement {
         Self {
             status: RunStatus::Failed,
             end: RunEnd {
-                run: None,
-                changed_files: None,
                 stop_reason: Some("error".into()),
                 error: Some(error),
                 answer: None,
@@ -314,8 +312,6 @@ impl Settlement {
         Self {
             status,
             end: RunEnd {
-                run: None,
-                changed_files: None,
                 stop_reason: Some(reason.into()),
                 error: error.map(str::to_owned),
                 answer: None,
@@ -328,7 +324,7 @@ pub(super) async fn settle(
     db: &mut dyn Executor,
     thread: u64,
     run: u64,
-    mut settlement: Settlement,
+    settlement: Settlement,
     unread: bool,
 ) -> Result<(), RpcError> {
     let status = match settlement.status {
@@ -338,7 +334,6 @@ pub(super) async fn settle(
         RunStatus::Interrupted => "interrupted",
         RunStatus::Queued | RunStatus::Running => unreachable!("settlement is terminal"),
     };
-    settlement.end.run = Some(RunId(run));
     let data = NewEntry::Run(settlement.end);
     let entry = store::append(db, thread, &data).await?;
     let NewEntry::Run(end) = data else {
@@ -370,7 +365,7 @@ async fn follow_up(db: &mut dyn Executor, thread: u64, run: u64) -> Result<(), R
         db,
         "WITH RECURSIVE lineage(id) AS (
             SELECT r.id FROM runs u JOIN runs r ON r.id = (
-                SELECT id FROM runs WHERE thread = u.thread AND kind = 'prompt' AND hidden = 0
+                SELECT id FROM runs WHERE thread = u.thread AND kind = 'prompt'
                     AND end_entry < u.prompt_entry ORDER BY end_entry DESC LIMIT 1
             ) WHERE u.id = ?2 AND u.thread = ?1 AND u.kind = 'unprompted'
                 AND u.status = 'completed' AND r.status = 'completed'

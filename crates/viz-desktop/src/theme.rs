@@ -201,8 +201,8 @@ pub struct Theme {
     pub on_accent: Color,
     /// Steer / send-now mode and extra-high effort accent (`base09`).
     pub steer: Color,
-    /// Worktree, checkpoint, and remote environment accent (`base0C`).
-    pub worktree: Color,
+    /// Remote environment accent (`base0C`).
+    pub remote: Color,
     /// Delegated sub-thread tree guide highlight (`base0E`).
     pub delegated: Color,
     /// Errors.
@@ -699,7 +699,7 @@ impl Theme {
             accent_text,
             on_accent,
             steer,
-            worktree: info,
+            remote: info,
             delegated,
             danger,
             on_danger,

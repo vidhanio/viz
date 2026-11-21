@@ -4,14 +4,12 @@ use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use viz_client::protocol::{
-    CommitGit, CreateGitBranch, CreateGitWorktree, DeleteThread, ForkThread, HarnessOptions,
-    LaunchThread, Launched, ListGitBranches, Method, PushGit, RemoveGitWorktree, RemoveProject,
-    RestoreRun, RewindThread, RunDiff, RunId, SendInput, SendMode, Sent, SteerQueuedInput,
-    ThreadDiff, ThreadId, WorktreeRequest,
+    DeleteThread, HarnessOptions, LaunchThread, Launched, Method, RemoveProject, RunId, SendInput,
+    SendMode, Sent, SteerQueuedInput, ThreadId,
 };
 
 use super::{
-    Workspace, attachments, git,
+    Workspace, attachments,
     runs::{self, NewRun, Place},
     runtime,
     sql::{exec, row, rows},
@@ -39,17 +37,6 @@ impl Workspace {
             | "project.update"
             | RemoveProject::NAME => self.project_call(method, params).await,
             LaunchThread::NAME => encode(self.launch(decode(params)?).await?),
-            ListGitBranches::NAME
-            | CreateGitWorktree::NAME
-            | RemoveGitWorktree::NAME
-            | RunDiff::NAME
-            | ThreadDiff::NAME
-            | RestoreRun::NAME
-            | RewindThread::NAME
-            | ForkThread::NAME => self.git_call(method, params).await,
-            CommitGit::NAME | PushGit::NAME | CreateGitBranch::NAME => {
-                self.git_action(method, params).await
-            }
             SendInput::NAME => {
                 let input: SendInput = decode(params)?;
                 if input.origin.is_some() {
@@ -96,7 +83,7 @@ impl Workspace {
             }
             DeleteThread::NAME => {
                 let input: DeleteThread = decode(params)?;
-                self.delete(input.thread.0, input.remove_worktree).await?;
+                self.delete(input.thread.0).await?;
                 Ok(json!({}))
             }
             "queue.remove" => {
@@ -166,21 +153,6 @@ impl Workspace {
                     self,
                 )
                 .await?;
-                let threads = tokio::task::spawn_blocking(move || {
-                    let mut summaries = std::collections::HashMap::new();
-                    threads
-                        .into_iter()
-                        .map(|(cwd, mut thread)| {
-                            let git = summaries
-                                .entry(cwd.clone())
-                                .or_insert_with(|| git::summary(Path::new(&cwd)));
-                            thread.git.clone_from(git);
-                            thread
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .await
-                .map_err(RpcError::internal)?;
                 Ok(json!({"threads":threads}))
             }
             "thread.entries" => {
@@ -232,22 +204,11 @@ impl Workspace {
         match method {
             "projects.list" => {
                 let projects = store::projects(&mut *self.db.lock().await).await?;
-                let projects = tokio::task::spawn_blocking(move || {
-                    projects
-                        .into_iter()
-                        .map(git::project_summary)
-                        .collect::<Vec<_>>()
-                })
-                .await
-                .map_err(RpcError::internal)?;
                 Ok(json!({"projects":projects}))
             }
             "project.read" => {
                 let ProjectKey { project } = decode(params)?;
                 let project = store::project(&mut *self.db.lock().await, &project).await?;
-                let project = tokio::task::spawn_blocking(move || git::project_summary(project))
-                    .await
-                    .map_err(RpcError::internal)?;
                 Ok(json!({"project":project}))
             }
             "project.create" => {
@@ -308,19 +269,6 @@ impl Workspace {
         let (harness, _) = self.harness(args.harness.as_deref())?;
         let cwd = self.cwd_for(&mut tx, args.project.as_deref()).await?;
         let attachments = attachments::decode(args.attachments)?;
-        let pending = if let Some(request) = args.worktree {
-            let title = args
-                .title
-                .as_deref()
-                .or(args.text.as_deref())
-                .unwrap_or("thread");
-            Some(
-                self.provision(&mut tx, &cwd, request, title.to_owned())
-                    .await?,
-            )
-        } else {
-            None
-        };
         let session = SavedSession {
             desired: args.options,
             selection: selection(args.model, args.thinking),
@@ -330,10 +278,7 @@ impl Workspace {
             &mut tx,
             &NewThread {
                 harness,
-                cwd: pending
-                    .as_ref()
-                    .map_or(store::path_text(&cwd)?, |p| p.checkout.path.as_str()),
-                worktree_branch: pending.as_ref().map(|p| p.checkout.branch.as_str()),
+                cwd: store::path_text(&cwd)?,
                 project: args.project.as_deref(),
                 parent: None,
                 parent_environment: None,
@@ -367,9 +312,6 @@ impl Workspace {
             .await?;
         }
         tx.commit().await?;
-        if let Some(pending) = pending {
-            pending.keep();
-        }
         self.kick(thread, run.is_none());
         drop(db);
         self.relist(thread);
@@ -503,25 +445,9 @@ impl Workspace {
         Ok(())
     }
 
-    async fn delete(&self, thread: u64, remove_worktree: bool) -> Result<(), RpcError> {
+    async fn delete(&self, thread: u64) -> Result<(), RpcError> {
         let driver = {
             let mut db = self.db.lock().await;
-            if remove_worktree {
-                let mut binding = row(
-                    &mut *db,
-                    "SELECT cwd, worktree_branch FROM threads WHERE id = ?1",
-                    [thread.into()],
-                )
-                .await?
-                .ok_or_else(|| store::missing(thread))?;
-                if binding.opt_str(1)?.is_some() {
-                    if row(&mut *db, "SELECT 1 FROM runs WHERE thread = ?1 AND status IN ('queued', 'running') LIMIT 1", [thread.into()]).await?.is_some() {
-                        return Err(RpcError::invalid("stop the thread before removing its worktree"));
-                    }
-                    self.remove_worktree(&mut *db, &binding.str(0)?, Some(thread))
-                        .await?;
-                }
-            }
             let count = exec(
                 &mut *db,
                 "DELETE FROM threads WHERE id = ?1",
@@ -579,15 +505,11 @@ impl Workspace {
             return Err(RpcError::invalid(format!("project already exists: {path}")));
         }
         self.changed(None);
-        let project = Project {
-            git: None,
+        Ok(Project {
             path: path.to_owned(),
             name,
             created_at,
-        };
-        tokio::task::spawn_blocking(move || git::project_summary(project))
-            .await
-            .map_err(RpcError::internal)
+        })
     }
 
     async fn remove_project(&self, project: &str) -> Result<(), RpcError> {
@@ -683,7 +605,7 @@ impl Workspace {
             return Err(RpcError::invalid("task text must not be empty"));
         }
         let decoded = attachments::decode(std::mem::take(&mut args.attachments))?;
-        let (thread, pending) = self.task_thread(&mut tx, &args).await?;
+        let thread = self.task_thread(&mut tx, &args).await?;
         let attachments = attachments::save(&mut tx, thread, decoded).await?;
         let run = runs::enqueue(
             &mut tx,
@@ -706,9 +628,6 @@ impl Workspace {
         )
         .await?;
         tx.commit().await?;
-        if let Some(pending) = pending {
-            pending.keep();
-        }
         self.kick(thread, false);
         drop(db);
         self.relist(thread);
@@ -719,7 +638,7 @@ impl Workspace {
         &self,
         db: &mut dyn toasty::Executor,
         args: &ReceiveTask,
-    ) -> Result<(u64, Option<git::Provisioned>), RpcError> {
+    ) -> Result<u64, RpcError> {
         if let Some(thread) = args.thread {
             let binding = store::binding(db, thread.get()).await?;
             if binding.parent.map(|id| id.0) != Some(args.parent.get())
@@ -741,13 +660,12 @@ impl Workspace {
                     .is_some_and(|requested| Some(requested) != binding.project.as_ref())
                 || args.target.model.is_some()
                 || args.target.thinking.is_some()
-                || args.target.worktree.is_some()
             {
                 return Err(RpcError::invalid(
-                    "existing task thread cannot change its harness, project, model, thinking, or worktree",
+                    "existing task thread cannot change its harness, project, model, or thinking",
                 ));
             }
-            return Ok((thread.get(), None));
+            return Ok(thread.get());
         }
         let inherited = if args.origin_environment == self.environment {
             Some(store::binding(db, args.parent.get()).await?)
@@ -778,20 +696,11 @@ impl Workspace {
             selection: selection(args.target.model.clone(), args.target.thinking.clone()),
             ..SavedSession::default()
         };
-        let pending = if let Some(request) = args.target.worktree.clone() {
-            Some(
-                self.provision(db, Path::new(cwd), request, args.text.clone())
-                    .await?,
-            )
-        } else {
-            None
-        };
-        let thread = store::create_thread(
+        store::create_thread(
             db,
             &NewThread {
                 harness,
-                cwd: pending.as_ref().map_or(cwd, |p| p.checkout.path.as_str()),
-                worktree_branch: pending.as_ref().map(|p| p.checkout.branch.as_str()),
+                cwd,
                 project,
                 parent: Some(args.parent.get()),
                 parent_environment: Some(&args.origin_environment),
@@ -799,8 +708,7 @@ impl Workspace {
                 session,
             },
         )
-        .await?;
-        Ok((thread, pending))
+        .await
     }
 
     async fn retract(&self, args: TaskKey) -> Result<Option<Received>, RpcError> {
@@ -961,7 +869,6 @@ struct UpdateQueue {
 
 #[derive(Deserialize)]
 struct Target {
-    worktree: Option<WorktreeRequest>,
     project: Option<String>,
     harness: Option<String>,
     model: Option<String>,

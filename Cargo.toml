@@ -27,7 +27,6 @@ fontique = { version = "0.12", default-features = false, features = [
 ] }
 futures-util = { version = "0.3", default-features = false }
 futures = "0.3"
-git2 = { version = "0.21", features = ["https", "ssh", "vendored-libgit2"] }
 jsonrpsee-types = "0.26"
 listenfd = "1"
 lucide-static-svg = "1.76"

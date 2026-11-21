@@ -451,7 +451,7 @@ fn task_row_text(
         line1 = line1.child(
             text(format!("@{environment}"))
                 .font(t.mono_micro)
-                .color(t.worktree)
+                .color(t.remote)
                 .a11y_hidden(),
         );
     }

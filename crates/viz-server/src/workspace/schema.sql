@@ -10,9 +10,6 @@ CREATE TABLE IF NOT EXISTS threads (
     user_title INTEGER NOT NULL,
     harness TEXT NOT NULL,
     cwd TEXT NOT NULL,
-    worktree_branch TEXT,
-    history_revision INTEGER NOT NULL DEFAULT 0,
-    history_seed TEXT NOT NULL DEFAULT '',
     project TEXT REFERENCES projects(path) ON DELETE SET NULL,
     parent INTEGER,
     parent_environment TEXT,
@@ -26,19 +23,13 @@ CREATE TABLE IF NOT EXISTS threads (
     setup_failed INTEGER NOT NULL DEFAULT 0
 ) STRICT;
 
-CREATE TABLE IF NOT EXISTS git_worktrees (
-    path TEXT PRIMARY KEY,
-    branch TEXT NOT NULL
-) STRICT;
-
 CREATE INDEX IF NOT EXISTS threads_project ON threads(project);
 
 CREATE TABLE IF NOT EXISTS entries (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     thread INTEGER NOT NULL REFERENCES threads(id) ON DELETE CASCADE,
     tool_session TEXT,
-    data TEXT NOT NULL,
-    hidden INTEGER NOT NULL DEFAULT 0
+    data TEXT NOT NULL
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS entries_thread ON entries(thread, id);
@@ -63,9 +54,6 @@ CREATE TABLE IF NOT EXISTS runs (
     end_entry INTEGER,
     answer TEXT,
     error TEXT,
-    checkpoint_start TEXT,
-    checkpoint_end TEXT,
-    hidden INTEGER NOT NULL DEFAULT 0,
     UNIQUE (thread, request_id)
 ) STRICT;
 
