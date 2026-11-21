@@ -1,7 +1,10 @@
 use std::{
     collections::HashSet,
     path::Path,
-    sync::{Arc, Mutex as SyncMutex},
+    sync::{
+        Arc, Mutex as SyncMutex,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -21,7 +24,8 @@ use super::{
 };
 use crate::{
     acp::{
-        Catalog, Desired, Outcome, Prompt, Session, SessionSnapshot, StopReason, stop_reason_name,
+        Catalog, Desired, Opened, Origin, Outcome, Prompt, Session, SessionSnapshot, StopReason,
+        stop_reason_name,
         transcript::{Output, Transcript},
     },
     wire::{LiveTurn, OptionValue, RpcError, RunEnd, RunId, RunStatus, ToolCallStatus},
@@ -30,12 +34,18 @@ use crate::{
 /// ACP sends no stop signal for idle output. Allow four seconds between
 /// updates once the continuation has no live tools.
 const CONTINUATION_QUIET: Duration = Duration::from_secs(4);
+/// How long a thread's harness process outlives its last run, when the
+/// session can be reopened; an idle process holds memory for nothing.
+const IDLE_SESSION: Duration = Duration::from_mins(10);
 
 pub(super) struct Driver {
     pub(super) session: Mutex<Option<Session>>,
     pub(super) lifetime: CancellationToken,
     phase: SyncMutex<Worker>,
     queued: Notify,
+    /// Counts the worker's starts, so a pending release can tell the thread
+    /// was used since it went idle.
+    starts: AtomicU64,
 }
 
 #[derive(Default)]
@@ -57,6 +67,7 @@ impl Driver {
             lifetime,
             phase: SyncMutex::default(),
             queued: Notify::new(),
+            starts: AtomicU64::new(0),
         }
     }
 
@@ -123,6 +134,7 @@ impl Workspace {
             return;
         }
         *slot = Worker::Scheduled;
+        driver.starts.fetch_add(1, Ordering::Relaxed);
         drop(slot);
         let workspace = Arc::clone(self);
         self.jobs.spawn(async move {
@@ -132,6 +144,31 @@ impl Workspace {
             }
         });
         drop(state);
+    }
+
+    /// Stops the thread's harness once the worker has stayed idle for
+    /// [`IDLE_SESSION`], if the harness can reopen the session; the next run
+    /// or configuration reopens it, as after a restart.
+    fn release_when_idle(&self, driver: &Arc<Driver>) {
+        let started = driver.starts.load(Ordering::Relaxed);
+        let driver = Arc::clone(driver);
+        self.jobs.spawn(async move {
+            tokio::select! {
+                () = driver.lifetime.cancelled() => return,
+                () = tokio::time::sleep(IDLE_SESSION) => {}
+            }
+            let mut slot = driver.session.lock().await;
+            let idle = matches!(
+                *driver.phase.lock().expect("worker phase mutex poisoned"),
+                Worker::Idle
+            );
+            if idle
+                && driver.starts.load(Ordering::Relaxed) == started
+                && slot.as_ref().is_some_and(Session::is_restorable)
+            {
+                slot.take();
+            }
+        });
     }
 
     async fn worker(
@@ -167,6 +204,7 @@ impl Workspace {
                     };
                 } else if !prepare {
                     *phase = Worker::Idle;
+                    self.release_when_idle(driver);
                     return Ok(());
                 }
                 drop(phase);
@@ -526,18 +564,30 @@ impl Workspace {
         slot.take();
         let (_, config) = self.harness(Some(&harness))?;
         let endpoint = self.mcp.endpoint(thread);
+        let origin = match (&session.session_id, &session.fork_of) {
+            (Some(id), _) => Origin::Saved(id),
+            (None, Some(source)) => Origin::Fork(source),
+            (None, None) => Origin::New,
+        };
         let running = tokio::select! {
             biased;
             () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
-            result = Session::open(config, Path::new(&cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
+            result = Session::open(config, Path::new(&cwd), origin, Some(&endpoint)) => result?,
         };
         if session.session_id.as_deref() != Some(running.id()) {
+            let mut db = self.db.lock().await;
+            let mut tx = db.transaction().await?;
             exec(
-                &mut *self.db.lock().await,
-                "UPDATE threads SET session = json_set(session, '$.session_id', ?2) WHERE id = ?1",
+                &mut tx,
+                "UPDATE threads SET session = json_remove(json_set(session, '$.session_id', ?2), '$.fork_of') WHERE id = ?1",
                 [thread.into(), running.id().into()],
             )
             .await?;
+            if running.opened() == Opened::Forked {
+                super::rewind::clear_seed(&mut tx, thread).await?;
+            }
+            tx.commit().await?;
+            drop(db);
         }
         let desired = tokio::select! {
             biased;

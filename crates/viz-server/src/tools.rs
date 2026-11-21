@@ -80,7 +80,7 @@ rpc_tools! {
     "run_diff", "run.diff", RunDiff, "Compare the Git working tree at the start and end of a run.";
     "run_restore", "run.restore", RestoreRun, "Restore the working tree of an idle thread to the selected run's start checkpoint.";
     "thread_rewind", "thread.rewind", RewindThread, "Restore the working tree and rewind the transcript of an idle thread.";
-    "thread_fork", "thread.fork", ForkThread, "Branch off a settled run boundary with a fresh ACP session and optional new worktree.";
+    "thread_fork", "thread.fork", ForkThread, "Branch off a settled run boundary into a new thread, optionally in a new worktree, keeping the conversation up to that boundary.";
     "thread_diff", "thread.diff", ThreadDiff, "Compare the first and latest complete Git checkpoints of a thread.";
     "thread_read", "thread.entries", ListEntries, "Read recent thread entries. Pass before for earlier entries.";
     "thread_state", "thread.state", ReadThreadState, "Read a thread's current state, ACP options, working directory, and queue.";

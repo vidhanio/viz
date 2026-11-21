@@ -48,6 +48,29 @@ const BATCH: Duration = Duration::from_millis(75);
 /// session.
 const CANCEL_GRACE: Duration = Duration::from_secs(2);
 
+/// The conversation [`Session::open`] starts from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Origin<'a> {
+    /// A new, empty conversation.
+    New,
+    /// The thread's saved session, by ID.
+    Saved(&'a str),
+    /// A copy of another session's conversation, by ID, where the harness can
+    /// fork; a new conversation otherwise.
+    Fork(&'a str),
+}
+
+/// The conversation a [`Session`] opened with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Opened {
+    /// `session/new`: empty, so it takes the configured defaults.
+    New,
+    /// `session/fork`: the source's conversation and options.
+    Forked,
+    /// `session/resume` or `session/load`: the thread's own conversation.
+    Restored,
+}
+
 /// The session state viz persists and shows, as last reported by the runner.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionSnapshot {
@@ -117,47 +140,69 @@ pub(crate) struct Session {
     idle: mpsc::UnboundedReceiver<SessionUpdate>,
     id: String,
     config: HarnessConfig,
-    /// Opened with `session/new`, so it takes the configured defaults.
-    fresh: bool,
+    opened: Opened,
+    /// A prompt was sent, so a new session is one the harness has saved.
+    prompted: bool,
     mcp: Option<McpEndpoint>,
     /// A failed or abandoned turn left the session in an unknown state.
     broken: bool,
 }
 
 impl Session {
-    /// Starts the harness in `cwd` and opens the thread's session:
-    /// `session/new` without a `saved_id`, else `session/resume` or
-    /// `session/load`. `mcp` gives the agent viz's tools.
+    /// Starts the harness in `cwd` and opens the thread's session from
+    /// `origin`: `session/new`, `session/resume` or `session/load`, or
+    /// `session/fork`, which falls back to `session/new` when the harness
+    /// cannot fork or the fork fails. `mcp` gives the agent viz's tools.
     ///
     /// Dropping the future stops the harness.
     pub(crate) async fn open(
         config: &HarnessConfig,
         cwd: &Path,
-        saved_id: Option<&str>,
+        origin: Origin<'_>,
         mcp: Option<&McpEndpoint>,
     ) -> Result<Self> {
+        let saved = match origin {
+            Origin::Saved(id) => Some(id.to_owned()),
+            Origin::New | Origin::Fork(_) => None,
+        };
         let state = Arc::new(Mutex::new(State {
-            session_id: saved_id.map(str::to_owned),
+            session_id: saved,
             ..State::default()
         }));
         let changes = Arc::new(watch::channel(()).0);
         let agent = Agent::start(config, cwd, update_sink(&state, &changes)).await?;
-        let servers = match mcp {
-            Some(endpoint) => vec![declaration(&agent, endpoint)?],
-            None => Vec::new(),
+        let servers = || -> Result<Vec<Value>> {
+            Ok(match mcp {
+                Some(endpoint) => vec![declaration(&agent, endpoint)?],
+                None => Vec::new(),
+            })
         };
-        let (session_id, options) = match saved_id {
-            None => {
-                let response = agent.new_session(cwd, servers).await?;
-                (response.session_id.0.to_string(), response.config_options)
-            }
-            Some(id) => (
-                id.to_owned(),
-                agent
-                    .restore_session(id, cwd, servers)
-                    .await?
-                    .config_options,
-            ),
+        let forked = match origin {
+            Origin::Fork(source) if agent.can_fork() => agent
+                .fork_session(source, cwd, servers()?)
+                .await
+                .inspect_err(|error| {
+                    tracing::warn!("ACP {} could not fork {source}: {error:#}", agent.label());
+                })
+                .ok(),
+            Origin::New | Origin::Saved(_) | Origin::Fork(_) => None,
+        };
+        let (session_id, options, opened) = if let Some(response) = forked {
+            (
+                response.session_id.0.to_string(),
+                response.config_options,
+                Opened::Forked,
+            )
+        } else if let Origin::Saved(id) = origin {
+            let response = agent.restore_session(id, cwd, servers()?).await?;
+            (id.to_owned(), response.config_options, Opened::Restored)
+        } else {
+            let response = agent.new_session(cwd, servers()?).await?;
+            (
+                response.session_id.0.to_string(),
+                response.config_options,
+                Opened::New,
+            )
         };
         let mut current = lock(&state);
         current.session_id = Some(session_id.clone());
@@ -174,10 +219,21 @@ impl Session {
             idle,
             id: session_id,
             config: config.clone(),
-            fresh: saved_id.is_none(),
+            opened,
+            prompted: false,
             mcp: mcp.cloned(),
             broken: false,
         })
+    }
+
+    pub(crate) const fn opened(&self) -> Opened {
+        self.opened
+    }
+
+    /// Whether stopping the harness now loses nothing: the harness can
+    /// reopen the session, and has saved it.
+    pub(crate) fn is_restorable(&self) -> bool {
+        self.agent.can_restore() && (self.opened != Opened::New || self.prompted)
     }
 
     /// The runner's ACP session ID, to persist so the thread reopens the same
@@ -229,7 +285,7 @@ impl Session {
         desired: &Desired,
         selection: Option<&Selection>,
     ) -> Result<Desired> {
-        let mut base = if self.fresh {
+        let mut base = if self.opened == Opened::New {
             defaults(&self.config, &self.options())
         } else {
             Desired::new()
@@ -252,7 +308,7 @@ impl Session {
         {
             self.set_option(id, value).await?;
         }
-        if self.fresh {
+        if self.opened == Opened::New {
             let mut with_defaults = defaults(&self.config, &self.options());
             with_defaults.extend(preferred);
             preferred = with_defaults;
@@ -352,6 +408,7 @@ impl Session {
             !input.cancel.is_cancelled(),
             "the turn was cancelled before it started"
         );
+        self.prompted = true;
         let receipts = Arc::new(Receipts::default());
         let mut transcript = Transcript::new(input.turn, Arc::clone(&receipts));
         let (sender, mut receiver) = mpsc::unbounded_channel();

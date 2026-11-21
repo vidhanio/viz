@@ -65,9 +65,11 @@ pub(crate) async fn catalog(
     Ok((options, changed.then_some(catalog)))
 }
 
-/// Stable ACP cannot fetch settings for an inactive model, so this asks a
-/// disposable, prompt-free session, after selecting `model`. Returns whether
-/// `catalog` changed.
+/// Learns `catalog` from a disposable process. Without a `model`, an agent
+/// with `session/options` reports the defaults without creating a session.
+/// Otherwise, since ACP cannot fetch settings for an inactive model, this asks
+/// a prompt-free session after selecting `model`, then deletes it. Returns
+/// whether `catalog` changed.
 async fn probe(
     config: &HarnessConfig,
     cwd: &Path,
@@ -86,6 +88,11 @@ async fn probe(
             })
         };
         let agent = Agent::start(config, cwd, sink).await?;
+        if model.is_none()
+            && let Some(options) = agent.session_options(cwd).await?
+        {
+            return Ok(merge(catalog, &normalize(options)));
+        }
         let response = agent.new_session(cwd, Vec::new()).await?;
         let session = response.session_id.0.to_string();
         let options = response.config_options.map_or_else(
@@ -99,7 +106,7 @@ async fn probe(
             normalize,
         );
         let result = select_model(&agent, &session, options, model, catalog).await;
-        if let Err(error) = agent.discard_session(&session).await {
+        if let Err(error) = agent.delete_session(&session).await {
             tracing::warn!("ACP {} catalog cleanup: {error:#}", agent.label());
         }
         result

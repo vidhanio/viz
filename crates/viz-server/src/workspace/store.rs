@@ -99,6 +99,9 @@ pub(super) async fn projects(db: &mut dyn Executor) -> Result<Vec<Project>, RpcE
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(super) struct SavedSession {
     pub(super) session_id: Option<String>,
+    /// The session a forked thread copies its conversation from, until its
+    /// own session opens.
+    pub(super) fork_of: Option<String>,
     pub(super) options: Vec<ConfigOption>,
     pub(super) commands: Vec<Command>,
     pub(super) desired: Desired,

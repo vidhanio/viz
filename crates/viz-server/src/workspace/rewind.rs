@@ -1,5 +1,5 @@
 //! Restore a Git snapshot and continue from a bounded transcript in a fresh ACP
-//! session.
+//! session, or fork the harness session where the boundary allows.
 
 use std::{
     collections::HashMap,
@@ -57,6 +57,10 @@ New user input:
         let source = args.thread.0;
         let binding = store::binding(&mut tx, source).await?;
         let boundary = boundary(&mut tx, source, args.run.0, args.boundary).await?;
+        let fork_of = match &binding.session.session_id {
+            Some(id) if is_latest(&mut tx, source, boundary.entry).await? => Some(id.clone()),
+            _ => None,
+        };
         let title = match args.title {
             Some(title) if title.trim().is_empty() => {
                 return Err(RpcError::invalid("thread title must not be empty"));
@@ -116,7 +120,10 @@ New user input:
                 worktree_branch: pending
                     .as_ref()
                     .map(|pending| pending.checkout.branch.as_str()),
-                session: fresh_session(binding.session),
+                session: SavedSession {
+                    fork_of,
+                    ..fresh_session(binding.session)
+                },
             },
         )
         .await?;
@@ -307,6 +314,21 @@ async fn boundary(
         RunBoundary::End => (record.u64(1)? + 1, record.opt_str(3)?),
     };
     Ok(Boundary { entry, checkpoint })
+}
+
+/// Whether nothing on `thread` follows `entry` and no run is pending, so the
+/// harness session holds exactly the conversation before the boundary and
+/// `session/fork` can copy it; the history seed covers every other boundary.
+async fn is_latest(db: &mut dyn Executor, thread: u64, entry: u64) -> Result<bool, RpcError> {
+    let record = row(
+        db,
+        "SELECT NOT EXISTS (SELECT 1 FROM entries WHERE thread = ?1 AND hidden = 0 AND id >= ?2)
+            AND NOT EXISTS (SELECT 1 FROM runs WHERE thread = ?1 AND status IN ('running', 'queued'))",
+        [thread.into(), entry.into()],
+    )
+    .await?
+    .ok_or_else(|| store::missing(thread))?;
+    Ok(record.u64(0)? == 1)
 }
 
 async fn transcript(

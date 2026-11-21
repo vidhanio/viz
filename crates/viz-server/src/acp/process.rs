@@ -1,9 +1,10 @@
 //! One ACP harness process and its connection.
 //!
 //! viz is the ACP client: it spawns the harness and speaks protocol version 1
-//! over stdio as newline-delimited JSON-RPC, with the SDK's typed schema. It
-//! advertises no `fs` or `terminal` capabilities, so agents use their own
-//! tools, and allows every permission request. One reader handles messages in
+//! over stdio as newline-delimited JSON-RPC, with the SDK's typed schema. Of
+//! the client capabilities it advertises only boolean config options: without
+//! `fs` or `terminal`, agents use their own tools. It allows every permission
+//! request that offers an allow option. One reader handles messages in
 //! arrival order, so every `session/update` sent before a response has been
 //! delivered by the time that response resolves.
 
@@ -20,8 +21,9 @@ use std::{
 };
 
 use agent_client_protocol::v1::schema::{
-    AgentCapabilities, InitializeResponse, LoadSessionResponse, NewSessionResponse,
-    PermissionOptionKind, PromptResponse, RequestPermissionRequest, SessionNotification,
+    AgentCapabilities, ForkSessionResponse, InitializeResponse, LoadSessionResponse,
+    NewSessionResponse, PermissionOptionKind, PromptResponse, RequestPermissionRequest,
+    SessionConfigOption, SessionNotification, SessionOptionsResponse,
     SetSessionConfigOptionResponse,
 };
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
@@ -240,7 +242,7 @@ impl Agent {
                 "initialize",
                 json!({
                     "protocolVersion": PROTOCOL_VERSION,
-                    "clientCapabilities": {},
+                    "clientCapabilities": { "session": { "configOptions": { "boolean": {} } } },
                     "clientInfo": { "name": "viz", "title": "viz", "version": env!("CARGO_PKG_VERSION") },
                 }),
             )
@@ -274,6 +276,16 @@ impl Agent {
         self.capabilities.prompt_capabilities.image
     }
 
+    /// Whether a saved session can be reopened with `session/resume` or
+    /// `session/load`.
+    pub(super) const fn can_restore(&self) -> bool {
+        self.capabilities.session_capabilities.resume.is_some() || self.capabilities.load_session
+    }
+
+    pub(super) const fn can_fork(&self) -> bool {
+        self.capabilities.session_capabilities.fork.is_some()
+    }
+
     pub(super) fn is_closed(&self) -> bool {
         self.connection.closed.is_cancelled()
     }
@@ -298,6 +310,18 @@ impl Agent {
             .await
     }
 
+    /// Opens a copy of session `source`'s conversation in `cwd`; the caller
+    /// checks [`Self::can_fork`] first.
+    pub(super) async fn fork_session(
+        &self,
+        source: &str,
+        cwd: &Path,
+        mcp: Vec<Value>,
+    ) -> Result<ForkSessionResponse> {
+        let params = json!({ "sessionId": source, "cwd": utf8(cwd)?, "mcpServers": mcp });
+        self.connection.request("session/fork", params).await
+    }
+
     /// Reopens a session: `session/resume` when offered (no history), else
     /// `session/load`, whose replay the caller discards.
     pub(super) async fn restore_session(
@@ -318,18 +342,30 @@ impl Agent {
         self.connection.request("session/load", params).await
     }
 
-    /// Deletes a disposable session where the agent can, else closes it.
-    pub(super) async fn discard_session(&self, id: &str) -> Result<()> {
-        let capabilities = &self.capabilities.session_capabilities;
-        let method = if capabilities.delete.is_some() {
-            "session/delete"
-        } else if capabilities.close.is_some() {
-            "session/close"
-        } else {
+    /// The options a new session in `cwd` would start with, without creating
+    /// one; `None` when the agent lacks `session/options`.
+    pub(super) async fn session_options(
+        &self,
+        cwd: &Path,
+    ) -> Result<Option<Vec<SessionConfigOption>>> {
+        if self.capabilities.session_capabilities.options.is_none() {
+            return Ok(None);
+        }
+        let response: SessionOptionsResponse = self
+            .connection
+            .request("session/options", json!({ "cwd": utf8(cwd)? }))
+            .await?;
+        Ok(Some(response.config_options.unwrap_or_default()))
+    }
+
+    /// Removes a disposable session from the agent's `session/list` where it
+    /// can; the process exit frees the rest.
+    pub(super) async fn delete_session(&self, id: &str) -> Result<()> {
+        if self.capabilities.session_capabilities.delete.is_none() {
             return Ok(());
-        };
+        }
         self.connection
-            .request::<Value>(method, json!({ "sessionId": id }))
+            .request::<Value>("session/delete", json!({ "sessionId": id }))
             .await
             .map(drop)
     }
@@ -516,12 +552,14 @@ fn answer(method: &str, params: Value, id: &Value) -> Value {
     })
 }
 
-/// Allows once if offered, else always; a request without an allow option is
-/// cancelled.
+/// Allows once if offered, else always. A request without an allow option is
+/// rejected through its own reject option, or cancelled when it has none.
 fn allow(request: &RequestPermissionRequest) -> Value {
     let option = [
         PermissionOptionKind::AllowOnce,
         PermissionOptionKind::AllowAlways,
+        PermissionOptionKind::RejectOnce,
+        PermissionOptionKind::RejectAlways,
     ]
     .iter()
     .find_map(|kind| request.options.iter().find(|option| option.kind == *kind));
