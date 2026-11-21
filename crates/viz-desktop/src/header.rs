@@ -7,12 +7,12 @@ use rune_kit::shell::Toolbar;
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadSummary};
 
 use crate::{
-    app::{Desktop, TITLE_TRAVEL, thread_title},
+    app::{Desktop, Switch, TITLE_ENTER_DELAY, TITLE_TRAVEL, thread_title},
     server::Command,
     sidebar,
     theme::{
         CARD_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, READING_INSET, S2, S4, S6, S8, S12,
-        S16, S32, S40, Size, TOOLBAR_PAD, Theme,
+        S16, S32, S40, Size, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
     },
     ui,
 };
@@ -43,17 +43,21 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         (None, Some(draft)) => format!("title-draft-{}", draft.id),
         (None, None) => "title-none".to_owned(),
     };
+    let mut entering = title(s, t)
+        .key(page)
+        .transition(s.switch.title_enter(TITLE_TRAVEL));
+    if s.switch != Switch::Cut {
+        entering = entering.enter_delay(TITLE_ENTER_DELAY);
+    }
     let title = row()
         .key("title-pane")
+        .h(TOOLBAR_HEIGHT)
+        .center_y()
         .min_w(0.0)
         .shrink()
         .clip_rounded(0.0)
-        .child_exit(s.switch.exit(TITLE_TRAVEL))
-        .child(
-            title(s, t)
-                .key(page)
-                .transition(s.switch.enter(TITLE_TRAVEL)),
-        );
+        .child_exit(s.switch.title_exit(TITLE_TRAVEL))
+        .child(entering);
     let title = if s.sidebar.is_open() {
         title.ml(READING_INSET - TOOLBAR_PAD)
     } else {

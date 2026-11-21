@@ -107,10 +107,17 @@ impl Default for Draft {
 
 /// How far the transcript travels when the open thread changes.
 pub const PANE_TRAVEL: f32 = crate::theme::S40;
-/// How far the toolbar title travels with it, inside its own clip.
-pub const TITLE_TRAVEL: f32 = crate::theme::S16;
+/// How far the toolbar title travels with it, inside its own clip: tall enough
+/// to clear one title line without overlapping the outgoing title.
+pub const TITLE_TRAVEL: f32 = crate::theme::S24;
+/// Delay before a new toolbar title starts fading in so the outgoing title
+/// clears first instead of colliding mid-slide.
+pub const TITLE_ENTER_DELAY: f32 = 0.08;
 /// The switch's springs: short and calm, without bounce.
-const SWITCH_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.24, 0.0), Spring::new(0.2, 0.0));
+const SWITCH_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.24, 0.0), Spring::new(0.18, 0.0));
+/// Faster exit on the toolbar title so old and new text never crossfade on top
+/// of one another.
+const TITLE_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.20, 0.0), Spring::new(0.10, 0.0));
 
 /// Which way the main pane moves when the open thread changes, decided by
 /// [`Desktop::show`] from where the two threads sit. Threads further down
@@ -149,23 +156,35 @@ impl Switch {
     /// The new pane's entrance, travelling `travel` points.
     pub fn enter(self, travel: f32) -> Transition {
         let (x, y) = self.from();
-        self.motion(x * travel, y * travel)
+        self.motion(x * travel, y * travel, SWITCH_SPRINGS)
     }
 
     /// The old pane's exit, for `El::child_exit`: away the way the new one
     /// came.
     pub fn exit(self, travel: f32) -> Transition {
         let (x, y) = self.from();
-        self.motion(-x * travel, -y * travel)
+        self.motion(-x * travel, -y * travel, SWITCH_SPRINGS)
     }
 
-    fn motion(self, x: f32, y: f32) -> Transition {
+    /// The new toolbar title's entrance, staggered behind the outgoing title.
+    pub fn title_enter(self, travel: f32) -> Transition {
+        let (x, y) = self.from();
+        self.motion(x * travel, y * travel, TITLE_SPRINGS)
+    }
+
+    /// The old toolbar title's fast exit so old and new text do not overlap.
+    pub fn title_exit(self, travel: f32) -> Transition {
+        let (x, y) = self.from();
+        self.motion(-x * travel, -y * travel, TITLE_SPRINGS)
+    }
+
+    fn motion(self, x: f32, y: f32, springs: SpringPair) -> Transition {
         if self == Self::Cut {
             return Transition::none();
         }
         Transition::offset(x, y)
             .combined(Transition::opacity())
-            .springs(SWITCH_SPRINGS)
+            .springs(springs)
     }
 }
 

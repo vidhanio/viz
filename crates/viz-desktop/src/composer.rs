@@ -88,6 +88,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .pb(TOOLBAR_INSET)
                 .gap(TOOLBAR_GAP)
                 .center_y()
+                .instant_changes()
                 .children(attach)
                 .child(settings::toolbar(s, t, layer).grow(1.0).shrink().min_w(0.0))
                 .child(send_button(s, t)),
@@ -159,7 +160,14 @@ fn queue(s: &Desktop, id: ThreadId, inputs: &[QueuedInput], t: &Theme) -> El {
 
 /// The composer's trailing action(s): Send when idle, or an outline Stop button
 /// while busy (with Queue beside it when the draft has something to send).
+/// Kept inside one stable `composer-actions` wrapper with instant changes so a
+/// busy-to-idle thread switch never leaves an exiting Send beside the new one.
 fn send_button(s: &Desktop, t: &Theme) -> El {
+    let mut actions = row()
+        .key("composer-actions")
+        .gap(TOOLBAR_GAP)
+        .center_y()
+        .instant_changes();
     if s.busy() {
         let stop = ui::icon_button(&ui::STOP, "Stop", IconButtonVariant::Neutral, Size::Default)
             .outline()
@@ -168,35 +176,33 @@ fn send_button(s: &Desktop, t: &Theme) -> El {
             .on_press_tx(Desktop::abort)
             .build(&t.k)
             .key("stop");
+        actions = actions.child(stop);
         if s.can_send() {
-            let queue = ui::icon_button(
+            actions = actions.child(
+                ui::icon_button(
+                    &ui::ARROW_UP,
+                    "Queue",
+                    IconButtonVariant::Submit,
+                    Size::Default,
+                )
+                .on_press_tx(Desktop::send_input)
+                .build(&t.k)
+                .key("send"),
+            );
+        }
+    } else {
+        actions = actions.child(
+            ui::icon_button(
                 &ui::ARROW_UP,
-                "Queue",
+                "Send",
                 IconButtonVariant::Submit,
                 Size::Default,
             )
+            .disabled(!s.can_send())
             .on_press_tx(Desktop::send_input)
             .build(&t.k)
-            .key("send");
-            row()
-                .key("composer-actions")
-                .gap(TOOLBAR_GAP)
-                .center_y()
-                .child(stop)
-                .child(queue)
-        } else {
-            stop
-        }
-    } else {
-        ui::icon_button(
-            &ui::ARROW_UP,
-            "Send",
-            IconButtonVariant::Submit,
-            Size::Default,
-        )
-        .disabled(!s.can_send())
-        .on_press_tx(Desktop::send_input)
-        .build(&t.k)
-        .key("send")
+            .key("send"),
+        );
     }
+    actions
 }
