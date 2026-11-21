@@ -298,6 +298,7 @@ impl<'a> Outline<'a> {
             };
             icon(ui::harness_icon(harness), ICON)
                 .color(ink)
+                .group_color(if thread.archived { t.muted } else { t.text })
                 .help(&thread.harness_name)
                 .a11y_hidden()
         };
@@ -540,16 +541,17 @@ fn environments(s: &Desktop, t: &Theme) -> El {
                 .gap(S8)
                 .center_y()
                 .fill(if selected {
-                    t.hover
+                    t.selected
                 } else {
                     Color::TRANSPARENT
                 })
-                .hover(t.hover)
+                .hover_group()
                 .child(ui::dot(color))
                 .child(
                     text(id.clone())
                         .font(t.small)
-                        .color(t.text)
+                        .color(if selected { t.text } else { t.muted })
+                        .group_color(t.text)
                         .truncate()
                         .shrink(),
                 )

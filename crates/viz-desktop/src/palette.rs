@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use rune::{El, Icon, Key, KeyEvent, ScrollSpec, Span, TextEdit, Tx, col, icon, rich, row, text};
+use rune::{
+    Color, El, Icon, Key, KeyEvent, ScrollSpec, Span, TextEdit, Tx, col, el, icon, rich, row, text,
+};
 use rune_kit::{Keybind, TextInput};
 use viz_client::protocol::{SearchHit, ThreadId, ThreadSummary};
 
@@ -10,7 +12,7 @@ use crate::{
     app::{Desktop, thread_title},
     server::{Command, ThreadChange},
     sidebar,
-    theme::{DIALOG_INSET, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
+    theme::{DIALOG_INSET, HAIRLINE, ICON, PALETTE_WIDTH, S2, S4, S8, S16, S24, S32, Size, Theme},
     ui,
 };
 
@@ -410,13 +412,23 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         ResultRow::Thread(thread) => (ui::harness_icon(&thread.harness), thread_title(thread)),
         ResultRow::Message(hit) => (&ui::SEARCH, s.title(hit.thread)),
     };
-    let label = text(title).font(t.ui).color(t.text).truncate();
+    let label = text(title)
+        .font(if active { t.ui_medium } else { t.ui })
+        .color(if active { t.text } else { t.muted })
+        .group_color(t.text)
+        .truncate();
     let labels = col().grow(1.0).shrink().min_w(0.0).child(label);
     let labels = if let ResultRow::Message(hit) = result {
         labels.child(snippet(&hit.snippet, t))
     } else {
         labels
     };
+    let indicator = el()
+        .w(S2)
+        .h(S16)
+        .radius(HAIRLINE)
+        .fill(if active { t.accent } else { Color::TRANSPARENT })
+        .a11y_hidden();
     let mut item = row()
         .key(choice.key())
         .role("option")
@@ -426,18 +438,22 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         .preserve_focus_on_press(true)
         .w_full()
         .min_h(S32)
-        .px(S8)
+        .pl(S4)
+        .pr(S8)
         .py(S4)
         .gap(S8)
         .center_y()
         .radius(Size::Default.radius())
-        .hover(t.hover)
-        .child(icon(glyph, ICON).color(t.muted).a11y_hidden())
+        .hover_group()
+        .child(indicator)
+        .child(
+            icon(glyph, ICON)
+                .color(if active { t.accent } else { t.muted })
+                .group_color(if active { t.accent } else { t.text })
+                .a11y_hidden(),
+        )
         .child(labels)
         .on_press_tx(move |s: &mut Desktop, tx| choice.choose(s, tx));
-    if active {
-        item = item.fill(t.selected);
-    }
     if let ResultRow::Command(command) = result
         && let Some(shortcut) = command.shortcut()
     {

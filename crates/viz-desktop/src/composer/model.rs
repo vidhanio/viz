@@ -6,8 +6,8 @@
 use std::{borrow::Cow, collections::HashMap};
 
 use rune::{
-    Align, Effect, El, Key, KeyEvent, MotionIntent, ScrollSpec, Side, Spring, SpringPair, TextEdit,
-    Transition, Tx, col, icon, row, text,
+    Align, Color, Effect, El, Key, KeyEvent, MotionIntent, ScrollSpec, Side, Spring, SpringPair,
+    TextEdit, Transition, Tx, col, el, icon, row, text,
 };
 use rune_kit::{TextInput, scrim};
 use viz_client::protocol::{
@@ -19,7 +19,7 @@ use crate::{
     app::Desktop,
     server::Command,
     theme::{
-        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, S4, S6, S8, S16, S24, Size,
+        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, S2, S4, S6, S8, S16, S24, Size,
         Theme,
     },
     ui,
@@ -422,6 +422,12 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         .model
         .map_or_else(String::new, |model| model.id.clone());
     let value = entry.value.to_owned();
+    let indicator = el()
+        .w(S2)
+        .h(S16)
+        .radius(HAIRLINE)
+        .fill(if active { t.accent } else { Color::TRANSPARENT })
+        .a11y_hidden();
     let mut item = row()
         .key(row_key(entry.value))
         .role("option")
@@ -432,16 +438,19 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         .preserve_focus_on_press(true)
         .w_full()
         .h(Size::Default.height())
-        .px(S8)
+        .pl(S4)
+        .pr(S8)
         .gap(S8)
         .center_y()
         .radius(Size::Default.radius())
-        .hover(t.hover)
+        .hover_group()
         .on_press_tx(move |s: &mut Desktop, tx| choose_model(s, tx, owner, &id, &value))
+        .child(indicator)
         .child(
             text(entry.label)
-                .font(t.ui)
-                .color(t.text)
+                .font(if active || current { t.ui_medium } else { t.ui })
+                .color(if active || current { t.text } else { t.muted })
+                .group_color(t.text)
                 .min_w(0.0)
                 .shrink()
                 .truncate()
@@ -453,6 +462,7 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
             text(detail)
                 .font(t.mono_small)
                 .color(t.faint)
+                .group_color(t.muted)
                 .min_w(0.0)
                 .shrink()
                 .truncate()
@@ -461,15 +471,12 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         }))
         .child(
             icon(&ui::CHECK, ICON_SMALL)
-                .color(t.muted)
+                .color(if current { t.accent } else { t.muted })
                 .opacity(if current { 1.0 } else { 0.0 })
                 .a11y_hidden(),
         );
     if let Some(detail) = entry.detail {
         item = item.description(detail);
-    }
-    if active {
-        item = item.fill(t.selected);
     }
     item
 }
@@ -514,12 +521,8 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
                 .h(Size::Small.height())
                 .center()
                 .radius(Size::Small.radius())
-                .fill(if on {
-                    t.selected
-                } else {
-                    rune::Color::TRANSPARENT
-                })
-                .hover(if on { t.selected } else { t.hover })
+                .fill(if on { t.selected } else { Color::TRANSPARENT })
+                .hover_group()
                 .focusable(true)
                 .focus_selected(on)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
@@ -532,6 +535,7 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
                     text(label)
                         .font(t.ui_medium)
                         .color(if on { t.text } else { t.muted })
+                        .group_color(t.text)
                         .a11y_hidden(),
                 ),
         );

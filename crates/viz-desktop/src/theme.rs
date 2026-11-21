@@ -172,7 +172,7 @@ pub struct Theme {
     pub group: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
-    /// Hover wash on rows.
+    /// Hover wash on rows (transparent: hover feedback is ink only).
     pub hover: Color,
     /// The quiet wash behind my messages.
     pub mine: Color,
@@ -422,7 +422,6 @@ impl Theme {
         let tint = |step: f32| {
             interactive.alpha(reach(bg, interactive, step).max(reach(surface, interactive, step)))
         };
-        let hover = tint(0.026);
         let pressed = tint(0.040);
         let selected = tint(0.055);
         let raised = over(bg, wash, reach(bg, wash, 0.05));
@@ -509,7 +508,7 @@ impl Theme {
             border_base: hairline,
             border_strong: rule,
             border_focus: accent,
-            hover,
+            hover: Color::TRANSPARENT,
             pressed,
             contrast_hover: bg.alpha(0.10),
             contrast_pressed: bg.alpha(0.20),
@@ -526,10 +525,10 @@ impl Theme {
             info: state(info),
             surface_base: raised,
             surface_weak: surface,
-            surface_hover: hover,
+            surface_hover: Color::TRANSPARENT,
             surface_raised: surface,
             surface_raised_base: surface,
-            surface_raised_hover: raised,
+            surface_raised_hover: surface,
             surface_float: text,
             surface_disabled: raised,
             border_weak: hairline,
@@ -630,8 +629,8 @@ impl Theme {
         let mut overlay_kit = k.clone();
         overlay_kit.c.layer_01 = overlay;
         overlay_kit.c.surface_raised = overlay;
-        overlay_kit.c.surface_raised_hover =
-            over(overlay, interactive, reach(overlay, interactive, 0.04));
+        overlay_kit.c.hover = accent.alpha(if dark { 0.16 } else { 0.12 });
+        overlay_kit.c.surface_raised_hover = overlay;
         overlay_kit.c.std_border = Color::TRANSPARENT;
         Self {
             shell,
@@ -639,7 +638,7 @@ impl Theme {
             surface,
             group: overlay,
             hairline,
-            hover,
+            hover: Color::TRANSPARENT,
             mine: raised,
             text,
             muted,

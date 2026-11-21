@@ -155,7 +155,7 @@ fn previous_toggle(count: usize, shown: bool, t: &Theme) -> El {
         .gap(S8)
         .center_y()
         .radius(Size::Default.radius())
-        .hover(t.hover)
+        .hover_group()
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .on_press(|s: &mut Desktop| s.toggle(PREVIOUS))
@@ -168,10 +168,20 @@ fn previous_toggle(count: usize, shown: bool, t: &Theme) -> El {
                 },
                 ICON_SMALL,
             )
-            .color(t.faint),
+            .color(t.faint)
+            .group_color(t.text),
         )
-        .child(ui::section("Previous tasks", t).grow(1.0))
-        .child(text(count.to_string()).font(t.mono_small).color(t.faint))
+        .child(
+            ui::section("Previous tasks", t)
+                .group_color(t.text)
+                .grow(1.0),
+        )
+        .child(
+            text(count.to_string())
+                .font(t.mono_small)
+                .color(t.faint)
+                .group_color(t.text),
+        )
 }
 
 /// Identity for older timeline entries that have no durable task.
@@ -283,7 +293,7 @@ fn task_row(task: &Task, desktop: &Desktop, t: &Theme) -> El {
             .role("link")
             .label(task.title.clone())
             .focusable(true)
-            .hover(t.hover)
+            .hover_group()
             .on_press_tx(move |s: &mut Desktop, tx| {
                 s.open_in_environment(environment.clone(), Some(thread), tx);
             });

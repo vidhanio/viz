@@ -6,15 +6,15 @@ use std::borrow::Cow;
 
 use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
 use rune_kit::{
-    Button, ButtonVariant, IconButton, IconButtonVariant, Keybind, Loader, Menu, MenuItem,
-    Placement, PopupList, Select, SelectAppearance, TextInput,
+    ButtonVariant, IconButtonVariant, Keybind, Kit, Loader, Menu, MenuItem, Placement, PopupList,
+    TextInput,
 };
 use viz_client::protocol::ThreadStatus;
 
 use crate::theme::{
     CARD_INSET, CARD_WIDTH, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH, HAIRLINE, ICON,
-    ICON_SMALL, RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, Size,
-    TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
+    ICON_SMALL, RADIUS_CARD, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16,
+    Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -29,8 +29,354 @@ pub const SIDEBAR_SHORTCUT: &str = if cfg!(target_os = "macos") {
     "Ctrl+B"
 };
 
+type PressHandler = Box<dyn FnOnce(El) -> El>;
+
+/// A text button whose hover feedback is ink only, with neutral disabled
+/// submit styling.
+pub struct Button {
+    label: String,
+    variant: ButtonVariant,
+    size: Size,
+    icon: Option<&'static Icon>,
+    disabled: bool,
+    press: Option<PressHandler>,
+}
+
+struct ButtonStyle {
+    fill: Color,
+    border: Option<Color>,
+    rest: Color,
+    hover: Color,
+    press: Color,
+}
+
+fn button_style(variant: ButtonVariant, disabled: bool, k: &Kit) -> ButtonStyle {
+    let c = &k.c;
+    match variant {
+        ButtonVariant::Submit if disabled => ButtonStyle {
+            fill: c.bg_button_neutral,
+            border: None,
+            rest: c.text_faint,
+            hover: c.text_faint,
+            press: Color::TRANSPARENT,
+        },
+        ButtonVariant::Submit => ButtonStyle {
+            fill: c.bg_icon_button_contrast,
+            border: None,
+            rest: c.submit_fg,
+            hover: c.submit_fg,
+            press: k.on(c.contrast_pressed, c.bg_icon_button_contrast),
+        },
+        ButtonVariant::Outline => ButtonStyle {
+            fill: Color::TRANSPARENT,
+            border: Some(c.border_muted),
+            rest: c.text_base,
+            hover: c.text_strong,
+            press: c.pressed,
+        },
+        ButtonVariant::Danger => ButtonStyle {
+            fill: c.bg_button_neutral,
+            border: None,
+            rest: c.danger.fg,
+            hover: c.danger.fg,
+            press: c.pressed,
+        },
+        ButtonVariant::Warning => ButtonStyle {
+            fill: c.bg_button_neutral,
+            border: None,
+            rest: c.warning.fg,
+            hover: c.warning.fg,
+            press: c.pressed,
+        },
+        ButtonVariant::GhostMuted => ButtonStyle {
+            fill: Color::TRANSPARENT,
+            border: None,
+            rest: c.text_muted,
+            hover: c.text_base,
+            press: Color::TRANSPARENT,
+        },
+        ButtonVariant::GhostFaint => ButtonStyle {
+            fill: Color::TRANSPARENT,
+            border: None,
+            rest: c.text_faint,
+            hover: c.text_base,
+            press: Color::TRANSPARENT,
+        },
+        ButtonVariant::Ghost => ButtonStyle {
+            fill: Color::TRANSPARENT,
+            border: None,
+            rest: c.text_base,
+            hover: c.text_strong,
+            press: Color::TRANSPARENT,
+        },
+        ButtonVariant::Contrast => ButtonStyle {
+            fill: c.bg_contrast,
+            border: None,
+            rest: c.text_contrast,
+            hover: c.text_contrast,
+            press: k.on(c.contrast_pressed, c.bg_contrast),
+        },
+        ButtonVariant::Neutral | ButtonVariant::Loading => ButtonStyle {
+            fill: c.bg_button_neutral,
+            border: None,
+            rest: c.text_base,
+            hover: c.text_strong,
+            press: c.pressed,
+        },
+    }
+}
+
+fn icon_button_style(
+    variant: IconButtonVariant,
+    disabled: bool,
+    active: bool,
+    k: &Kit,
+) -> ButtonStyle {
+    let c = &k.c;
+    match variant {
+        IconButtonVariant::Submit | IconButtonVariant::Contrast if disabled => ButtonStyle {
+            fill: c.bg_button_neutral,
+            border: None,
+            rest: c.icon_faint,
+            hover: c.icon_faint,
+            press: Color::TRANSPARENT,
+        },
+        IconButtonVariant::Submit | IconButtonVariant::Contrast => ButtonStyle {
+            fill: c.bg_icon_button_contrast,
+            border: None,
+            rest: c.submit_icon,
+            hover: c.submit_icon,
+            press: k.on(c.contrast_pressed, c.bg_icon_button_contrast),
+        },
+        IconButtonVariant::Neutral => ButtonStyle {
+            fill: c.bg_button_neutral,
+            border: None,
+            rest: c.icon_base,
+            hover: c.std_icon_strong,
+            press: c.pressed,
+        },
+        IconButtonVariant::Ghost if active => ButtonStyle {
+            fill: c.pressed,
+            border: Some(c.border_base),
+            rest: c.icon_base,
+            hover: c.std_icon_strong,
+            press: Color::TRANSPARENT,
+        },
+        IconButtonVariant::GhostMuted if active => ButtonStyle {
+            fill: c.pressed,
+            border: Some(c.border_base),
+            rest: c.icon_accent,
+            hover: c.icon_accent,
+            press: Color::TRANSPARENT,
+        },
+        IconButtonVariant::Ghost => ButtonStyle {
+            fill: Color::TRANSPARENT,
+            border: None,
+            rest: c.icon_base,
+            hover: c.std_icon_strong,
+            press: Color::TRANSPARENT,
+        },
+        IconButtonVariant::GhostMuted => ButtonStyle {
+            fill: Color::TRANSPARENT,
+            border: None,
+            rest: c.icon_muted,
+            hover: c.icon_base,
+            press: Color::TRANSPARENT,
+        },
+    }
+}
+
+impl Button {
+    pub const fn icon(mut self, glyph: &'static Icon) -> Self {
+        self.icon = Some(glyph);
+        self
+    }
+
+    pub const fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub fn on_press<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
+        self.press = Some(Box::new(move |el| el.on_press(f)));
+        self
+    }
+
+    pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.press = Some(Box::new(move |el| el.on_press_tx(f)));
+        self
+    }
+
+    pub fn build(self, k: &Kit) -> El {
+        let px = match self.size {
+            Size::Small | Size::Default => S12,
+            Size::Large => S16,
+        };
+        let font = if matches!(self.variant, ButtonVariant::GhostMuted) {
+            k.ty.ui
+        } else {
+            k.ty.ui_medium
+        };
+        let style = button_style(self.variant, self.disabled, k);
+        let mut el = row()
+            .role("button")
+            .label(&self.label)
+            .h(self.size.height())
+            .px(px)
+            .gap(S6)
+            .center()
+            .radius(self.size.radius())
+            .fill(style.fill)
+            .disabled(self.disabled)
+            .focusable(!self.disabled)
+            .focus_ring(HAIRLINE, S2, k.c.border_focus);
+        if let Some(border) = style.border {
+            el = el.border(HAIRLINE, border);
+        }
+        if !self.disabled {
+            el = el.hover_group().press_color(style.hover);
+            if style.press.a > 0.0 {
+                el = el.press(style.press);
+            }
+        }
+        if let Some(glyph) = self.icon {
+            let mut mark = icon(glyph, ICON)
+                .key("icon")
+                .color(style.rest)
+                .a11y_hidden();
+            if !self.disabled {
+                mark = mark.group_color(style.hover);
+            }
+            el = el.child(mark);
+        }
+        let mut label = text(self.label)
+            .key("label")
+            .font(font)
+            .color(style.rest)
+            .a11y_hidden();
+        if !self.disabled {
+            label = label.group_color(style.hover);
+        }
+        el = el.child(label);
+        if self.disabled && !matches!(self.variant, ButtonVariant::Submit) {
+            el = el.layer_opacity(0.45);
+        }
+        if !self.disabled
+            && let Some(press) = self.press
+        {
+            el = press(el);
+        }
+        el
+    }
+}
+
+/// A square icon button whose hover feedback is ink only, with neutral
+/// disabled submit styling and a distinct active state when expanded.
+pub struct IconButton {
+    glyph: &'static Icon,
+    label: String,
+    variant: IconButtonVariant,
+    size: Size,
+    disabled: bool,
+    expanded: Option<bool>,
+    shortcut: Option<String>,
+    press: Option<PressHandler>,
+}
+
+impl IconButton {
+    pub const fn disabled(mut self, disabled: bool) -> Self {
+        self.disabled = disabled;
+        self
+    }
+
+    pub const fn expanded(mut self, on: bool) -> Self {
+        self.expanded = Some(on);
+        self
+    }
+
+    pub fn shortcut(mut self, shortcut: impl Into<String>) -> Self {
+        self.shortcut = Some(shortcut.into());
+        self
+    }
+
+    pub fn on_press<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
+        self.press = Some(Box::new(move |el| el.on_press(f)));
+        self
+    }
+
+    pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.press = Some(Box::new(move |el| el.on_press_tx(f)));
+        self
+    }
+
+    pub fn build(self, k: &Kit) -> El {
+        let side = self.size.height();
+        let active = self.expanded == Some(true) && !self.disabled;
+        let style = icon_button_style(self.variant, self.disabled, active, k);
+        let tip = match &self.shortcut {
+            Some(shortcut) if !shortcut.is_empty() => format!("{}  {shortcut}", self.label),
+            _ => self.label.clone(),
+        };
+        let mut el = row()
+            .role("button")
+            .label(&self.label)
+            .help(tip)
+            .size(side, side)
+            .center()
+            .radius(self.size.radius())
+            .fill(style.fill)
+            .disabled(self.disabled)
+            .focusable(!self.disabled)
+            .focus_ring(HAIRLINE, -HAIRLINE, k.c.border_focus);
+        if let Some(shortcut) = self.shortcut.filter(|s| !s.is_empty()) {
+            el = el.shortcut_hint(shortcut);
+        }
+        if let Some(open) = self.expanded {
+            el = el.expanded(open);
+        }
+        if let Some(border) = style.border {
+            el = el.border(HAIRLINE, border);
+        }
+        if !self.disabled {
+            el = el.hover_group().press_color(style.hover);
+            if style.press.a > 0.0 {
+                el = el.press(style.press);
+            }
+        }
+        let mut glyph = icon(self.glyph, ICON)
+            .key("icon")
+            .color(style.rest)
+            .a11y_hidden();
+        if !self.disabled {
+            glyph = glyph.group_color(style.hover);
+        }
+        el = el.child(glyph);
+        if self.disabled
+            && !matches!(
+                self.variant,
+                IconButtonVariant::Submit | IconButtonVariant::Contrast
+            )
+        {
+            el = el.layer_opacity(0.45);
+        }
+        if !self.disabled
+            && let Some(press) = self.press
+        {
+            el = press(el);
+        }
+        el
+    }
+}
+
 pub fn button(label: impl Into<String>, variant: ButtonVariant, size: Size) -> Button {
-    Button::new(label).variant(variant).control_size(size.kit())
+    Button {
+        label: label.into(),
+        variant,
+        size,
+        icon: None,
+        disabled: false,
+        press: None,
+    }
 }
 
 pub fn icon_button(
@@ -39,10 +385,16 @@ pub fn icon_button(
     variant: IconButtonVariant,
     size: Size,
 ) -> IconButton {
-    IconButton::new(glyph)
-        .variant(variant)
-        .label(label)
-        .control_size(size.kit())
+    IconButton {
+        glyph,
+        label: label.into(),
+        variant,
+        size,
+        disabled: false,
+        expanded: None,
+        shortcut: None,
+        press: None,
+    }
 }
 
 pub fn kbd(key: &str, t: &Theme) -> El {
@@ -209,9 +561,11 @@ impl TreeLine<'_> {
         } else {
             self.ink
         };
+        let hover_color = if self.dim { t.muted } else { t.text };
         let title = text(self.label)
             .font(if self.strong { t.ui_medium } else { t.ui })
             .color(color)
+            .group_color(hover_color)
             .truncate()
             .help_when_truncated(self.label);
         let labels = col()
@@ -248,8 +602,7 @@ impl TreeLine<'_> {
             } else {
                 Color::TRANSPARENT
             })
-            .hover(if self.selected { t.selected } else { t.hover })
-            .hover_group_focus()
+            .hover_group()
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .children(leading.map(|mark| lead(mark, TREE_ROW)))
@@ -308,16 +661,7 @@ pub fn select_trigger(
     max_w: f32,
     t: &Theme,
 ) -> El {
-    Select::new(id, &[] as &[&str])
-        .appearance(SelectAppearance::Inline)
-        .label(name)
-        .placeholder(name)
-        .current(current)
-        .open(open)
-        .trigger(&t.k)
-        .h(Size::Default.height())
-        .max_w(max_w)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+    inline_trigger(id, name, current, None, open, Some(max_w), t)
 }
 
 /// An inline select led by a harness icon. Size to the display name and
@@ -330,37 +674,69 @@ pub fn marked_trigger(
     open: bool,
     t: &Theme,
 ) -> El {
+    inline_trigger(id, name, Some(current), Some(mark), open, None, t)
+}
+
+fn inline_trigger(
+    id: &str,
+    name: &str,
+    current: Option<&str>,
+    mark: Option<&'static Icon>,
+    open: bool,
+    max_w: Option<f32>,
+    t: &Theme,
+) -> El {
     let chevron = if open { &CHEVRON_UP } else { &CHEVRON_OPEN };
-    let trigger = row()
+    let label = current.unwrap_or(name);
+    let rest_text = if current.is_some() || open {
+        t.text
+    } else {
+        t.muted
+    };
+    let rest_icon = if open { t.text } else { t.muted };
+    let mut trigger = row()
         .key(format!("{id}-trigger"))
         .role("combobox")
         .label(name)
-        .a11y_value(current)
         .expanded(open)
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
         .h(Size::Default.height())
-        .pl(S6)
+        .pl(if mark.is_some() { S6 } else { S8 })
         .pr(S4)
         .gap(S4)
         .center_y()
         .radius(Size::Default.radius())
-        .child(icon(mark, ICON).color(t.muted).a11y_hidden())
+        .children(mark.map(|glyph| {
+            icon(glyph, ICON)
+                .color(rest_icon)
+                .group_color(t.text)
+                .a11y_hidden()
+        }))
         .child(
-            text(current)
+            text(label)
                 .font(t.ui_medium)
-                .color(t.text)
+                .color(rest_text)
+                .group_color(t.text)
                 .min_w(0.0)
                 .shrink()
                 .truncate()
                 .a11y_hidden(),
         )
-        .child(icon(chevron, ICON).color(t.muted).a11y_hidden());
-    if open {
-        trigger.fill(t.hover)
-    } else {
-        trigger.hover(t.hover)
+        .child(
+            icon(chevron, ICON)
+                .color(rest_icon)
+                .group_color(t.text)
+                .a11y_hidden(),
+        );
+    if let Some(current) = current {
+        trigger = trigger.a11y_value(current);
     }
+    if let Some(max_w) = max_w {
+        trigger = trigger.max_w(max_w);
+    }
+    trigger
 }
 
 /// The combobox trigger is separate from its menu: server ids can differ even
