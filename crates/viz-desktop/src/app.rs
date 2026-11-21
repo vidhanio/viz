@@ -12,15 +12,16 @@ use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
     Attachment, ConfigOption, Environment, GitBranch, Harness, LaunchThread, OptionValue, Project,
-    RunId, SendInput, SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
-    WorktreeRequest,
+    RunBoundary, RunId, SendInput, SendMode, Task, ThreadId, ThreadState, ThreadStatus,
+    ThreadSummary, WorktreeRequest,
 };
 
 use crate::{
     attachments::{self, Loaded, Source, Target as AttachmentTarget},
     composer::{Completion, ModelMenu},
+    diff_panel::{DiffPanel, DiffScope},
     palette::Palette,
-    server::{Command, ThreadChange},
+    server::{Command, GitCommand, ThreadChange},
     sidebar::Navigation,
     thread::Thread,
 };
@@ -99,6 +100,26 @@ pub struct EditingQueued {
     pub thread: ThreadId,
     pub run: RunId,
     saved_draft: String,
+}
+
+/// Pending destructive checkpoint action awaiting user confirmation.
+#[derive(Debug, Clone)]
+pub enum CheckpointDialog {
+    /// Restore the working tree to the start of `run` without touching history.
+    Restore {
+        thread: ThreadId,
+        run: RunId,
+        turn: usize,
+        changed_files: Option<usize>,
+    },
+    /// Restore the working tree and rewind history back before `run`, loading
+    /// `prompt_text` back into the composer.
+    Rewind {
+        thread: ThreadId,
+        run: RunId,
+        turn: usize,
+        prompt_text: String,
+    },
 }
 
 #[derive(Debug)]
@@ -245,6 +266,10 @@ pub struct Desktop {
     pub completion: Completion,
     pub model_menu: ModelMenu,
     pub open_picker: Option<String>,
+    /// Right-side diff panel and per-turn diff summaries.
+    pub diff: DiffPanel,
+    /// Pending restore or rewind confirmation dialog.
+    pub checkpoint: Option<CheckpointDialog>,
     pub navigation: Navigation,
     /// The sidebar's width and whether it's open.
     pub sidebar: PaneState,
@@ -300,6 +325,8 @@ impl Desktop {
             completion: Completion::default(),
             model_menu: ModelMenu::default(),
             open_picker: None,
+            diff: DiffPanel::default(),
+            checkpoint: None,
             navigation: Navigation::default(),
             sidebar: PaneState::new(256.0).range(220.0, 384.0),
             palette: Palette::default(),
@@ -476,6 +503,8 @@ impl Desktop {
         self.editing_queued = None;
         self.completion.reset();
         self.open_picker = None;
+        self.diff.reset();
+        self.checkpoint = None;
     }
 
     /// Applies a reset or appends committed ACP activity to the current
@@ -1157,6 +1186,147 @@ impl Desktop {
         if !self.expanded.remove(key) {
             self.expanded.insert(key.to_owned());
         }
+    }
+
+    /// Toggles the right-side diff panel for the active thread (`⌘D` /
+    /// `Ctrl+D`).
+    pub fn toggle_diff_panel(&mut self, tx: &mut Tx) {
+        if self.selected.is_none() {
+            return;
+        }
+        if self.diff.open {
+            self.diff.open = false;
+        } else {
+            self.open_thread_diff(tx);
+        }
+    }
+
+    /// Opens the diff panel scoped to all recorded changes in the open thread.
+    pub fn open_thread_diff(&mut self, tx: &mut Tx) {
+        let Some(thread) = self.selected else {
+            return;
+        };
+        self.diff.begin_load(DiffScope::Thread, None);
+        if self.connected() {
+            self.send(Command::Git(GitCommand::ThreadDiff { thread }), tx);
+        }
+    }
+
+    /// Opens the diff panel scoped to a single settled run, optionally jumping
+    /// to `jump_file`.
+    pub fn open_run_diff(
+        &mut self,
+        run: RunId,
+        turn: usize,
+        jump_file: Option<String>,
+        tx: &mut Tx,
+    ) {
+        let Some(thread) = self.selected else {
+            return;
+        };
+        let scope = DiffScope::Run { run, turn };
+        self.diff.begin_load(scope, jump_file);
+        if self.connected() {
+            self.send(
+                Command::Git(GitCommand::RunDiff {
+                    thread,
+                    run,
+                    turn,
+                    summary: false,
+                }),
+                tx,
+            );
+        }
+    }
+
+    /// Expands or collapses an inline `"Changed N files"` chip, fetching the
+    /// run's file summary on first open.
+    pub fn toggle_run_files(&mut self, run: RunId, turn: usize, key: &str, tx: &mut Tx) {
+        if self.expanded.remove(key) {
+            return;
+        }
+        self.expanded.insert(key.to_owned());
+        if self.diff.run_summaries.contains_key(&run) || self.diff.loading_summaries.contains(&run)
+        {
+            return;
+        }
+        if let Some(thread) = self.selected
+            && self.connected()
+        {
+            self.diff.loading_summaries.insert(run);
+            self.send(
+                Command::Git(GitCommand::RunDiff {
+                    thread,
+                    run,
+                    turn,
+                    summary: true,
+                }),
+                tx,
+            );
+        }
+    }
+
+    /// Executes the pending restore or rewind dialog after user confirmation.
+    pub fn confirm_checkpoint(&mut self, tx: &mut Tx) {
+        let Some(action) = self.checkpoint.take() else {
+            return;
+        };
+        let command = match action {
+            CheckpointDialog::Restore { thread, run, .. } => {
+                Command::Git(GitCommand::RestoreRun { thread, run })
+            }
+            CheckpointDialog::Rewind {
+                thread,
+                run,
+                prompt_text,
+                ..
+            } => Command::Git(GitCommand::RewindThread {
+                thread,
+                run,
+                prompt_text,
+            }),
+        };
+        self.send(command, tx);
+    }
+
+    /// Forks the open thread at `run`'s `boundary`, optionally inside a new
+    /// linked worktree.
+    pub fn fork_run(&mut self, run: RunId, boundary: RunBoundary, worktree: bool, tx: &mut Tx) {
+        let Some(thread) = self.selected else {
+            return;
+        };
+        if !self.connected() || self.busy() {
+            return;
+        }
+        self.send(
+            Command::Git(GitCommand::ForkThread {
+                thread,
+                run,
+                boundary,
+                worktree,
+            }),
+            tx,
+        );
+    }
+
+    /// Completes a rewind by putting the rewound prompt back in the composer.
+    pub fn rewound(&mut self, thread: ThreadId, prompt_text: &str, tx: &mut Tx) {
+        if self.selected != Some(thread) {
+            return;
+        }
+        self.diff.reset();
+        if !prompt_text.is_empty() {
+            self.draft = TextEdit::new(prompt_text);
+            self.draft.focused = true;
+            tx.focus("draft", false);
+        }
+        self.toast(tx, "Rewound thread", None);
+    }
+
+    /// Switches to a newly forked thread.
+    pub fn forked(&mut self, thread: ThreadId, tx: &mut Tx) {
+        self.select(thread, tx);
+        self.toast(tx, "Forked thread", None);
     }
 }
 

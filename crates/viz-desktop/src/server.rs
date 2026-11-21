@@ -12,8 +12,9 @@ use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
-        HarnessOptions, LaunchThread, ListEnvironments, ListGitBranches, ListTasks, Notification,
-        OptionValue, RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SendInput, SendMode,
+        ForkThread, ForkWorktree, HarnessOptions, LaunchThread, ListEnvironments, ListGitBranches,
+        ListTasks, Notification, OptionValue, RemoveProject, RemoveQueuedInput, RestoreRun,
+        RewindThread, RunBoundary, RunDiff, RunId, SearchFiles, SendInput, SendMode, ThreadDiff,
         ThreadId, UpdateProject, UpdateQueuedInput, UpdateThread,
     },
 };
@@ -21,6 +22,7 @@ use viz_client::{
 use crate::{
     app::{Desktop, Status},
     attachments::{Source, Target as AttachmentTarget},
+    diff_panel::{DiffFile, DiffScope},
 };
 
 /// How long to wait between connection attempts.
@@ -61,6 +63,7 @@ pub enum Command {
     Abort(ThreadId),
     Project(ProjectChange),
     ListBranches(String),
+    Git(GitCommand),
     SearchFiles {
         thread: ThreadId,
         request: u64,
@@ -123,6 +126,35 @@ pub enum ProjectChange {
     Add(String),
     Rename { id: String, name: String },
     Remove(String),
+}
+
+/// Diff inspection and checkpoint commands backed by the server's Git layer.
+#[derive(Debug)]
+pub enum GitCommand {
+    ThreadDiff {
+        thread: ThreadId,
+    },
+    RunDiff {
+        thread: ThreadId,
+        run: RunId,
+        turn: usize,
+        summary: bool,
+    },
+    RestoreRun {
+        thread: ThreadId,
+        run: RunId,
+    },
+    RewindThread {
+        thread: ThreadId,
+        run: RunId,
+        prompt_text: String,
+    },
+    ForkThread {
+        thread: ThreadId,
+        run: RunId,
+        boundary: RunBoundary,
+        worktree: bool,
+    },
 }
 
 /// Starts the connection thread. `first` hears once the first connection
@@ -266,6 +298,30 @@ fn offline(
             });
         }
         Command::SearchFiles { .. } | Command::ListBranches(_) => {}
+        Command::Git(GitCommand::ThreadDiff { thread }) => {
+            ui.update(move |s, _| {
+                if s.selected == Some(thread) {
+                    s.diff.apply_error(DiffScope::Thread, "Offline".into());
+                }
+            });
+        }
+        Command::Git(GitCommand::RunDiff {
+            thread,
+            run,
+            turn,
+            summary,
+        }) => {
+            ui.update(move |s, _| {
+                if s.selected == Some(thread) {
+                    if summary {
+                        s.diff.clear_run_summary_loading(run);
+                    } else {
+                        s.diff
+                            .apply_error(DiffScope::Run { run, turn }, "Offline".into());
+                    }
+                }
+            });
+        }
         Command::SearchThreads { request, .. } => {
             ui.update(move |s, _| s.palette.set_hits(request, Err("Offline".into())));
         }
@@ -439,6 +495,7 @@ impl Session<'_> {
                 self.list_branches(project);
                 Ok(())
             }
+            Command::Git(git) => self.on_git(git).await,
             Command::SearchFiles {
                 thread,
                 request,
@@ -743,6 +800,135 @@ impl Session<'_> {
                     && let Ok(listed) = result
                 {
                     s.branches.insert(project, listed.branches);
+                }
+            });
+        });
+    }
+
+    async fn on_git(&self, command: GitCommand) -> viz_client::Result<()> {
+        match command {
+            GitCommand::ThreadDiff { thread } => self.load_thread_diff(thread),
+            GitCommand::RunDiff {
+                thread,
+                run,
+                turn,
+                summary,
+            } => self.load_run_diff(thread, run, turn, summary),
+            GitCommand::RestoreRun { thread, run } => {
+                self.client.request(&RestoreRun { thread, run }).await?;
+                self.ui.update(move |s, tx| {
+                    if s.selected == Some(thread) {
+                        s.toast(tx, "Restored working tree", None);
+                        if s.diff.open {
+                            s.open_thread_diff(tx);
+                        }
+                    }
+                });
+            }
+            GitCommand::RewindThread {
+                thread,
+                run,
+                prompt_text,
+            } => {
+                self.client.request(&RewindThread { thread, run }).await?;
+                self.ui
+                    .update(move |s, tx| s.rewound(thread, &prompt_text, tx));
+            }
+            GitCommand::ForkThread {
+                thread,
+                run,
+                boundary,
+                worktree,
+            } => {
+                let launched = self
+                    .client
+                    .request(&ForkThread {
+                        thread,
+                        run,
+                        boundary,
+                        worktree: worktree.then_some(ForkWorktree { branch: None }),
+                        title: None,
+                    })
+                    .await?;
+                self.ui.update(move |s, tx| s.forked(launched.thread, tx));
+            }
+        }
+        Ok(())
+    }
+
+    fn load_thread_diff(&self, thread: ThreadId) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let result = client
+                .request(&ThreadDiff {
+                    thread,
+                    summary: false,
+                })
+                .await;
+            ui.update(move |s, tx| {
+                if s.selected != Some(thread) {
+                    return;
+                }
+                match result {
+                    Ok(diff) => {
+                        let files = diff
+                            .files
+                            .into_iter()
+                            .map(|file| DiffFile {
+                                path: file.path,
+                                change: file.change,
+                            })
+                            .collect();
+                        s.diff
+                            .apply_diff(DiffScope::Thread, files, diff.patch.as_deref(), tx);
+                    }
+                    Err(error) => s.diff.apply_error(DiffScope::Thread, error.to_string()),
+                }
+            });
+        });
+    }
+
+    fn load_run_diff(&self, thread: ThreadId, run: RunId, turn: usize, summary: bool) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let result = client
+                .request(&RunDiff {
+                    thread,
+                    run,
+                    summary,
+                })
+                .await;
+            ui.update(move |s, tx| {
+                if s.selected != Some(thread) {
+                    return;
+                }
+                let scope = DiffScope::Run { run, turn };
+                match result {
+                    Ok(diff) => {
+                        let files: Vec<DiffFile> = diff
+                            .files
+                            .into_iter()
+                            .map(|file| DiffFile {
+                                path: file.path,
+                                change: file.change,
+                            })
+                            .collect();
+                        if summary {
+                            s.diff.apply_run_summary(run, files);
+                        } else {
+                            s.diff.apply_diff(scope, files, diff.patch.as_deref(), tx);
+                        }
+                    }
+                    Err(error) => {
+                        if summary {
+                            s.diff.clear_run_summary_loading(run);
+                            s.toast(tx, "Couldn’t load changed files", Some(error.to_string()));
+                        } else {
+                            s.diff.apply_error(scope, error.to_string());
+                        }
+                    }
                 }
             });
         });

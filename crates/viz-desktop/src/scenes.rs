@@ -3,16 +3,18 @@
 
 use viz_client::protocol::{
     Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
-    EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, GitSummary, GitWorktree,
-    Harness, LiveText, LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue, PlanEntry,
-    PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, RunEnd, RunId, SearchHit,
-    SlashCommand, Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, GitChange, GitSummary,
+    GitWorktree, Harness, LiveText, LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue,
+    PlanEntry, PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, RunEnd, RunId,
+    SearchHit, SlashCommand, Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
     ToolCallStatus, ToolDiff, ToolRecord, WorktreeRequest,
 };
 
 use crate::{
     app::{Desktop, NewThread, Status},
-    composer, palette, sidebar,
+    composer,
+    diff_panel::{DiffFile, DiffScope},
+    palette, sidebar,
     thread::Thread,
     timeline,
 };
@@ -20,6 +22,7 @@ use crate::{
 type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
+    ("diff-panel", diff_panel),
     ("activity", activity),
     ("worklog", worklog),
     ("selectors", selectors),
@@ -87,6 +90,69 @@ fn workspace(s: &mut Desktop) {
     s.loading = false;
     s.toggle("acp-1-write-1-activity");
     s.toggle("acp-1-write-1");
+}
+
+fn diff_panel(s: &mut Desktop) {
+    workspace(s);
+    let files = vec![
+        DiffFile {
+            path: "src/export.rs".into(),
+            change: GitChange::Modified,
+        },
+        DiffFile {
+            path: "src/line_ending.rs".into(),
+            change: GitChange::Added,
+        },
+    ];
+    let patch = "\
+diff --git a/src/export.rs b/src/export.rs
+index 4b12a8e..9f03c21 100644
+--- a/src/export.rs
++++ b/src/export.rs
+@@ -14,7 +14,11 @@ pub fn render_markdown(blocks: &[String], ending: LineEnding) -> Result<String>
+     if blocks.is_empty() {
+         return Ok(String::new());
+     }
+-    let body = blocks.join(\"\\n\\n\");
+-    Ok(body)
++    let sep = ending.separator();
++    let mut body = blocks.join(&format!(\"{sep}{sep}\"));
++    if !body.ends_with(sep) {
++        body.push_str(sep);
++    }
++    Ok(body)
+ }
+diff --git a/src/line_ending.rs b/src/line_ending.rs
+new file mode 100644
+index 0000000..c7e1a02
+--- /dev/null
++++ b/src/line_ending.rs
+@@ -0,0 +1,11 @@
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum LineEnding {
++    Lf,
++    Crlf,
++}
++
++impl LineEnding {
++    pub const fn separator(self) -> &'static str {
++        match self {
++            Self::Lf => \"\\n\",
++            Self::Crlf => \"\\r\\n\",
++        }
++    }
++}
+";
+    s.diff.apply_run_summary(RunId(11), files.clone());
+    s.toggle("e5-end-files");
+    s.diff.set_preview(
+        DiffScope::Run {
+            run: RunId(11),
+            turn: 1,
+        },
+        files,
+        patch,
+    );
 }
 
 fn list() -> Vec<ThreadSummary> {
@@ -279,11 +345,14 @@ fn transcript(attachments: &[&str]) -> Thread {
                 )
             }),
             EntryData::Run(RunEnd {
-                run: None,
-                changed_files: None,
+                run: Some(RunId(11)),
+                changed_files: Some(2),
                 stop_reason: Some("end_turn".into()),
                 error: None,
-                answer: None,
+                answer: Some(
+                    "The export drops the final newline when it joins blocks. I’ll fix that at the boundary."
+                        .into(),
+                ),
             }),
         ],
         Some(EntryId(1)),

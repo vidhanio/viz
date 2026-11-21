@@ -34,6 +34,7 @@ mod app;
 mod attachments;
 mod composer;
 mod config;
+mod diff_panel;
 mod header;
 mod palette;
 mod scenes;
@@ -47,7 +48,7 @@ mod ui;
 use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
-use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col, el};
+use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col, el, row};
 use rune_kit::{
     ToastRegion,
     shell::{SidebarToggle, SplitView},
@@ -72,8 +73,9 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let dock = composer::composer(s, t, &mut overlays);
     let mut reading = el()
         .key("reading-pane")
-        .w_full()
         .grow(1.0)
+        .min_w(0.0)
+        .h_full()
         .min_h(0.0)
         .child(timeline::timeline(s, t, &mut overlays).pin(
             Some(0.0),
@@ -86,13 +88,22 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
             .child(ui::horizon_scrim(t).pin(Some(0.0), None, Some(0.0), Some(0.0)))
             .child(dock.pin(Some(0.0), None, Some(0.0), Some(0.0)));
     }
+    let mut main_body = row()
+        .key("main-body")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .child(reading);
+    if let Some(panel) = diff_panel::docked(s, t) {
+        main_body = main_body.child(panel);
+    }
     let main = col()
         .key("main")
         .w_full()
         .h_full()
         .min_h(0.0)
         .child(ui::rule(t).key("header-rule"))
-        .child(reading);
+        .child(main_body);
     let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
         ui::drag_guard("sidebar-drag-guard")
             .pin(
@@ -106,7 +117,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let titlebar_inset = cx.titlebar_inset();
     let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
     let split = split
-        .toolbar(header::toolbar(s, t))
+        .toolbar(header::toolbar(s, t, &mut overlays))
         .titlebar_inset(titlebar_inset)
         .frame_inset(0.0)
         .toolbar_in_panel()
@@ -137,6 +148,8 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         split
     };
     sidebar::overlays(s, t, &mut overlays);
+    diff_panel::sheet(s, t, &mut overlays);
+    timeline::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
     overlays.extend(toasts(s, t));
     rune_kit::root(split, overlays)
@@ -191,6 +204,10 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if ev.is_command('n') {
         s.create_here(tx);
+        return true;
+    }
+    if ev.is_command('d') && s.selected.is_some() {
+        s.toggle_diff_panel(tx);
         return true;
     }
     if ev.is_command('.') && s.busy() {

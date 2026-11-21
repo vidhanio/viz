@@ -1242,6 +1242,18 @@ lucide! {
     GIT_BRANCH_PLUS = GitBranchPlus;
     /// Linked git worktree checkout.
     FOLDER_GIT_2 = FolderGit2;
+    /// File diff / changed files indicator.
+    FILE_DIFF = FileDiff;
+    /// Unified diff mode.
+    ROWS_2 = Rows2;
+    /// Split side-by-side diff mode.
+    COLUMNS_2 = Columns2;
+    /// Rewind conversation to a prompt checkpoint.
+    UNDO_2 = Undo2;
+    /// Fork conversation from a checkpoint.
+    GIT_FORK = GitFork;
+    /// Restore working tree to a checkpoint.
+    ROTATE_CCW = RotateCcw;
     THREAD = MessageSquare;
     STOP = Square;
     SIDEBAR = PanelLeft;

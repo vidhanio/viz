@@ -4,8 +4,8 @@ use std::borrow::Cow;
 
 use serde_json::Value;
 use viz_client::protocol::{
-    Entry, EntryData, EntryId, LiveTextKind, LiveTurn, PlanStatus, ThreadId, ToolCallStatus,
-    ToolDiff, ToolRecord,
+    Entry, EntryData, EntryId, LiveTextKind, LiveTurn, PlanStatus, RunEnd, RunId, ThreadId,
+    ToolCallStatus, ToolDiff, ToolRecord,
 };
 
 /// Longest tool-call summary, in characters.
@@ -24,6 +24,8 @@ pub struct Thread {
     /// Exclusive cursor for the next page of older entries.
     pub before: Option<EntryId>,
     plan: Option<usize>,
+    turn_user: Option<usize>,
+    settled_turns: usize,
     ended_run: bool,
     acp_turn: Option<String>,
     acp_start: usize,
@@ -68,6 +70,8 @@ pub enum Item {
         /// Why.
         text: String,
     },
+    /// A settled run boundary with checkpoint metadata and copyable reply text.
+    TurnEnd(TurnEnd),
 }
 
 /// Something I wrote. Single-user: every input is mine, whichever client or
@@ -80,6 +84,26 @@ pub struct User {
     pub text: String,
     /// Names of the stored attachments carried by this prompt.
     pub attachments: Vec<String>,
+    /// Settled run started by this prompt, once its run-end entry arrives.
+    pub run: Option<RunId>,
+    /// 1-based settled turn index, paired with [`User::run`].
+    pub turn: Option<usize>,
+}
+
+/// A settled run boundary: carries checkpoint id, changed-file count, and the
+/// assistant prose produced in that run for quick copy/fork/restore actions.
+#[derive(Debug, Clone)]
+pub struct TurnEnd {
+    /// Stable element key.
+    pub key: String,
+    /// Wire run identifier for diff, fork, and restore calls.
+    pub run: RunId,
+    /// 1-based settled turn number in this transcript view.
+    pub turn: usize,
+    /// Number of changed files recorded between start and end checkpoints.
+    pub changed_files: Option<usize>,
+    /// Assistant prose produced in this turn, for one-click copy.
+    pub answer: String,
 }
 
 /// A delegated task's outcome, from the server's delivery text: `Task <id>
@@ -124,6 +148,7 @@ impl Item {
             Self::User(user) => &user.key,
             Self::Tool(tool) => &tool.key,
             Self::TaskResult(result) => &result.key,
+            Self::TurnEnd(end) => &end.key,
             Self::Text { key, .. }
             | Self::Thinking { key, .. }
             | Self::Plan { key, .. }
@@ -268,20 +293,28 @@ impl Thread {
             EntryData::Prompt {
                 text, attachments, ..
             } => {
-                if !text.trim().is_empty() || !attachments.is_empty() {
+                let user_index = if !text.trim().is_empty() || !attachments.is_empty() {
+                    let index = self.items.len();
                     self.items.push(Item::User(User {
                         key: format!("e{id}-0"),
                         text: text.clone(),
                         attachments: attachments.iter().map(|file| file.name.clone()).collect(),
+                        run: None,
+                        turn: None,
                     }));
-                }
+                    Some(index)
+                } else {
+                    None
+                };
                 self.start(*id);
+                self.turn_user = user_index;
             }
             EntryData::Continued => {
                 self.items.push(Item::Continued {
                     key: format!("e{id}"),
                 });
                 self.start(*id);
+                self.turn_user = None;
             }
             EntryData::TaskResult { task, text } => {
                 self.items.push(Item::TaskResult(TaskResult::parse(
@@ -290,6 +323,7 @@ impl Thread {
                     text,
                 )));
                 self.start(*id);
+                self.turn_user = None;
             }
             EntryData::Text { text, key } => self.commit_text(key, text, false),
             EntryData::Thought { text, key } => self.commit_text(key, text, true),
@@ -324,40 +358,72 @@ impl Thread {
                     });
                 }
             }
-            EntryData::Run(end) => {
-                for item in &mut self.items[self.acp_start..] {
-                    if let Item::Tool(tool) = item
-                        && matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
-                    {
-                        tool.status = ToolStatus::Abandoned;
-                    }
-                }
-                self.acp_turn = None;
-                self.ended_run = true;
-                self.plan = None;
-                if let Some(text) = &end.error {
-                    self.items.push(Item::Notice {
-                        key: format!("e{id}"),
-                        text: text.clone(),
-                    });
-                } else if let Some(reason) = end
-                    .stop_reason
-                    .as_deref()
-                    .filter(|reason| *reason != "end_turn")
+            EntryData::Run(end) => self.finish_run(*id, end),
+        }
+    }
+
+    fn finish_run(&mut self, id: EntryId, end: &RunEnd) {
+        let mut prose_parts = Vec::new();
+        for item in &mut self.items[self.acp_start..] {
+            match item {
+                Item::Tool(tool)
+                    if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running) =>
                 {
-                    let text = match reason {
-                        "cancelled" => "Stopped".to_owned(),
-                        "max_tokens" => "Reached the token limit".to_owned(),
-                        "max_turn_requests" => "Reached the request limit for this run".to_owned(),
-                        "refusal" => "The agent declined to continue".to_owned(),
-                        _ => format!("Run ended: {}", reason.replace('_', " ")),
-                    };
-                    self.items.push(Item::TurnStatus {
-                        key: format!("e{id}"),
-                        text,
-                    });
+                    tool.status = ToolStatus::Abandoned;
                 }
+                Item::Text { text, .. } if !text.trim().is_empty() => {
+                    prose_parts.push(text.clone());
+                }
+                _ => {}
             }
+        }
+        self.acp_turn = None;
+        self.ended_run = true;
+        self.plan = None;
+        let user_index = self.turn_user.take();
+        if let Some(text) = &end.error {
+            self.items.push(Item::Notice {
+                key: format!("e{id}"),
+                text: text.clone(),
+            });
+        } else if let Some(reason) = end
+            .stop_reason
+            .as_deref()
+            .filter(|reason| *reason != "end_turn")
+        {
+            let text = match reason {
+                "cancelled" => "Stopped".to_owned(),
+                "max_tokens" => "Reached the token limit".to_owned(),
+                "max_turn_requests" => "Reached the request limit for this run".to_owned(),
+                "refusal" => "The agent declined to continue".to_owned(),
+                _ => format!("Run ended: {}", reason.replace('_', " ")),
+            };
+            self.items.push(Item::TurnStatus {
+                key: format!("e{id}"),
+                text,
+            });
+        }
+        if let Some(run) = end.run {
+            self.settled_turns += 1;
+            let turn = self.settled_turns;
+            if let Some(index) = user_index
+                && let Some(Item::User(user)) = self.items.get_mut(index)
+            {
+                user.run = Some(run);
+                user.turn = Some(turn);
+            }
+            let answer = if prose_parts.is_empty() {
+                end.answer.clone().unwrap_or_default()
+            } else {
+                prose_parts.join("\n\n")
+            };
+            self.items.push(Item::TurnEnd(TurnEnd {
+                key: format!("e{id}-end"),
+                run,
+                turn,
+                changed_files: end.changed_files,
+                answer,
+            }));
         }
     }
 

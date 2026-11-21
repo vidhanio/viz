@@ -20,16 +20,18 @@ use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
     diff::{FileDiff, LineKind},
 };
-use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
+use viz_client::protocol::{RunBoundary, Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use crate::{
-    app::{Desktop, NewThread, PANE_TRAVEL, Status},
-    attachments, composer, header, sidebar,
+    app::{CheckpointDialog, Desktop, NewThread, PANE_TRAVEL, Status},
+    attachments, composer,
+    diff_panel::{self, DiffFile},
+    header, sidebar,
     theme::{
-        self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, S2, S4, S8, S12, S16,
-        S20, S24, S32, Size, Theme,
+        self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL,
+        RADIUS_INNER, S2, S4, S6, S8, S12, S16, S20, S24, S32, Size, Theme,
     },
-    thread::{Item, PlanStep, TaskResult, Tool, ToolStatus, User, is_command},
+    thread::{Item, PlanStep, TaskResult, Tool, ToolStatus, TurnEnd, User, is_command},
     ui::{self, Card},
 };
 
@@ -211,7 +213,7 @@ fn items<'a>(
     let mut items = items;
     while let Some((item, streaming)) = items.next() {
         match item {
-            Item::User(user) => rows.push(Kind::Mine, mine(user, t)),
+            Item::User(user) => rows.push(Kind::Mine, mine(s, user, t)),
             Item::Text { key, text } => rows.push(Kind::Prose, prose(key, text, streaming, t)),
             Item::Thinking { .. } | Item::Tool(_) => {
                 let count = items
@@ -245,6 +247,11 @@ fn items<'a>(
             ),
             Item::TaskResult(result) => rows.push(Kind::Activity, task_result(s, result, t)),
             Item::Notice { key, text } => rows.push(Kind::Notice, notice(key, text, t)),
+            Item::TurnEnd(end) => {
+                if let Some(el) = turn_end(s, end, t) {
+                    rows.push(Kind::Activity, el);
+                }
+            }
         }
     }
 }
@@ -1113,9 +1120,10 @@ fn shortcuts(keys: &[(&str, &str)], t: &Theme) -> El {
         }))
 }
 
-/// A user message: a bubble on a neutral surface at the right of the column.
+/// A user message: a bubble on a neutral surface at the right of the column,
+/// with a quiet hover-revealed footer for Copy, Rewind, and Fork.
 /// It hugs short text and wraps long text at [`BUBBLE_FRAC`] of the column.
-fn mine(user: &User, t: &Theme) -> El {
+fn mine(s: &Desktop, user: &User, t: &Theme) -> El {
     let mut message = Card::Message
         .build(t)
         .key(&user.key)
@@ -1145,12 +1153,423 @@ fn mine(user: &User, t: &Theme) -> El {
                 })),
         );
     }
+    let footer = user_actions(s, user, t);
     row()
         .key(format!("{}-row", user.key))
         .w_full()
         .justify_end()
+        .hover_group()
         .child(el().w_frac(1.0 - BUBBLE_FRAC))
-        .child(col().min_w(0.0).shrink().child(message))
+        .child(
+            col()
+                .min_w(0.0)
+                .shrink()
+                .items_end()
+                .gap(S2)
+                .child(message)
+                .children(footer),
+        )
+}
+
+fn user_actions(s: &Desktop, user: &User, t: &Theme) -> Option<El> {
+    let mut actions = Vec::new();
+    if !user.text.is_empty() {
+        let copied = user.text.clone();
+        actions.push(action_chip(
+            "copy-user",
+            &ui::COPY,
+            "Copy",
+            t.faint,
+            t.text,
+            move |_: &mut Desktop, tx| tx.copy(copied.clone()),
+            t,
+        ));
+    }
+    if let (Some(thread), Some(run), Some(turn)) = (s.selected, user.run, user.turn)
+        && s.connected()
+        && !s.busy()
+    {
+        let prompt_text = user.text.clone();
+        actions.push(action_chip(
+            "rewind-user",
+            &ui::UNDO_2,
+            "Rewind",
+            t.faint,
+            t.warning,
+            move |s: &mut Desktop, _| {
+                s.checkpoint = Some(CheckpointDialog::Rewind {
+                    thread,
+                    run,
+                    turn,
+                    prompt_text: prompt_text.clone(),
+                });
+            },
+            t,
+        ));
+        actions.push(action_chip(
+            "fork-user",
+            &ui::GIT_FORK,
+            "Fork",
+            t.faint,
+            t.text,
+            move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::Start, false, tx),
+            t,
+        ));
+    }
+    if actions.is_empty() {
+        return None;
+    }
+    Some(
+        row()
+            .key(format!("{}-actions", user.key))
+            .h(22.0)
+            .gap(S8)
+            .center_y()
+            .px(S4)
+            .group_opacity(0.0, 1.0)
+            .children(actions),
+    )
+}
+
+fn action_chip(
+    key: &str,
+    glyph: &'static Icon,
+    label: &'static str,
+    rest: rune::Color,
+    hover: rune::Color,
+    on_press: impl Fn(&mut Desktop, &mut Tx) + 'static,
+    t: &Theme,
+) -> El {
+    row()
+        .key(key.to_owned())
+        .role("button")
+        .label(label)
+        .h(22.0)
+        .gap(S4)
+        .center_y()
+        .radius(RADIUS_INNER)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_alone()
+        .hover_group()
+        .press_scale(0.97)
+        .on_press_tx(on_press)
+        .child(
+            icon(glyph, ICON_SMALL)
+                .color(rest)
+                .group_color(hover)
+                .a11y_hidden(),
+        )
+        .child(
+            text(label)
+                .font(t.small)
+                .color(rest)
+                .group_color(hover)
+                .a11y_hidden(),
+        )
+}
+
+/// Per-turn changed-files summary chip and quiet hover-revealed checkpoint
+/// actions (`Copy`, `Fork`, `Fork worktree`, `Restore`).
+fn turn_end(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
+    let changed = end.changed_files.filter(|&count| count > 0);
+    let chip = changed.map(|count| changed_files_chip(s, end, count, t));
+    let footer = assistant_actions(s, end, t);
+    if chip.is_none() && footer.is_none() {
+        return None;
+    }
+    Some(
+        col()
+            .key(end.key.clone())
+            .w_full()
+            .gap(S4)
+            .hover_group()
+            .children(chip)
+            .children(footer),
+    )
+}
+
+fn changed_files_chip(s: &Desktop, end: &TurnEnd, count: usize, t: &Theme) -> El {
+    let run = end.run;
+    let turn = end.turn;
+    let chip_key = format!("{}-files", end.key);
+    let open = s.expanded.contains(&chip_key);
+    let toggle_key = chip_key.clone();
+    let label = format!("Changed {count} {}", plural(count, "file", "files"));
+    let open_diff = row()
+        .key(format!("{chip_key}-open"))
+        .role("button")
+        .label("Open diff")
+        .h(Size::Small.height())
+        .px(S6)
+        .gap(S4)
+        .center_y()
+        .radius(RADIUS_INNER)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_alone()
+        .hover_group()
+        .press_scale(0.97)
+        .on_press_tx(move |s: &mut Desktop, tx| s.open_run_diff(run, turn, None, tx))
+        .child(
+            text("Open diff")
+                .font(t.small_medium)
+                .color(t.muted)
+                .group_color(t.accent_text)
+                .a11y_hidden(),
+        )
+        .child(
+            icon(&ui::ARROW_UP_RIGHT, ICON_SMALL)
+                .color(t.muted)
+                .group_color(t.accent_text)
+                .a11y_hidden(),
+        );
+    let header = row()
+        .key(format!("{chip_key}-head"))
+        .role("button")
+        .label(label.clone())
+        .expanded(open)
+        .w_full()
+        .h(30.0)
+        .px(S8)
+        .gap(S6)
+        .center_y()
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
+        .on_press_tx(move |s: &mut Desktop, tx| s.toggle_run_files(run, turn, &toggle_key, tx))
+        .child(
+            icon(&ui::FILE_DIFF, ICON_SMALL)
+                .color(t.worktree)
+                .a11y_hidden(),
+        )
+        .child(text(label).font(t.small_medium).color(t.text).a11y_hidden())
+        .child(el().grow(1.0).min_w(0.0).a11y_hidden())
+        .child(open_diff)
+        .child(
+            icon(&ui::CHEVRON, ICON_SMALL)
+                .icon_rotation(if open {
+                    std::f32::consts::FRAC_PI_2
+                } else {
+                    0.0
+                })
+                .color(t.faint)
+                .group_color(t.text)
+                .a11y_hidden(),
+        );
+    let mut card = col()
+        .key(chip_key)
+        .w_full()
+        .radius(RADIUS_CONTROL)
+        .continuous_corners()
+        .fill(t.chip_fill)
+        .border(HAIRLINE, t.hairline)
+        .child(header);
+    if open {
+        card = card
+            .child(ui::rule(t).key("changed-files-rule"))
+            .child(changed_files_list(s, end, t));
+    }
+    card
+}
+
+fn changed_files_list(s: &Desktop, end: &TurnEnd, t: &Theme) -> El {
+    let run = end.run;
+    let turn = end.turn;
+    if s.diff.loading_summaries.contains(&run) {
+        return row()
+            .key("changed-files-loading")
+            .w_full()
+            .px(S12)
+            .py(S8)
+            .gap(S8)
+            .center_y()
+            .child(ui::radar(ICON_SMALL, t.accent, t))
+            .child(text("Loading changed files…").font(t.small).color(t.muted));
+    }
+    let Some(files) = s.diff.run_summaries.get(&run) else {
+        return row()
+            .key("changed-files-empty")
+            .w_full()
+            .px(S12)
+            .py(S8)
+            .child(text("No file list available.").font(t.small).color(t.muted));
+    };
+    col().key("changed-files-list").w_full().py(S4).children(
+        files
+            .iter()
+            .enumerate()
+            .map(|(index, file)| changed_file_row(index, file, run, turn, t)),
+    )
+}
+
+fn changed_file_row(
+    index: usize,
+    file: &DiffFile,
+    run: viz_client::protocol::RunId,
+    turn: usize,
+    t: &Theme,
+) -> El {
+    let (letter, color) = diff_panel::change_badge(file.change, t);
+    let (dir, name) = split_path(&file.path);
+    let path = file.path.clone();
+    row()
+        .key(format!("changed-file-{index}"))
+        .role("button")
+        .label(format!("Inspect {}", file.path))
+        .w_full()
+        .h(Size::Small.height())
+        .px(S12)
+        .gap(S8)
+        .center_y()
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
+        .on_press_tx(move |s: &mut Desktop, tx| s.open_run_diff(run, turn, Some(path.clone()), tx))
+        .child(text(letter).font(t.mono_micro).color(color).a11y_hidden())
+        .child(
+            text(name.to_owned())
+                .font(t.mono_small)
+                .color(t.text)
+                .truncate()
+                .min_w(0.0)
+                .a11y_hidden(),
+        )
+        .children((!dir.is_empty()).then(|| {
+            text(dir.trim_end_matches('/').to_owned())
+                .font(t.mono_small)
+                .color(t.faint)
+                .truncate()
+                .shrink()
+                .min_w(0.0)
+                .a11y_hidden()
+        }))
+}
+
+fn assistant_actions(s: &Desktop, end: &TurnEnd, t: &Theme) -> Option<El> {
+    let mut actions = Vec::new();
+    if !end.answer.is_empty() {
+        let copied = end.answer.clone();
+        actions.push(action_chip(
+            "copy-answer",
+            &ui::COPY,
+            "Copy",
+            t.faint,
+            t.text,
+            move |_: &mut Desktop, tx| tx.copy(copied.clone()),
+            t,
+        ));
+    }
+    if let Some(thread) = s.selected
+        && s.connected()
+        && !s.busy()
+    {
+        let run = end.run;
+        let turn = end.turn;
+        let changed = end.changed_files;
+        actions.push(action_chip(
+            "fork-answer",
+            &ui::GIT_FORK,
+            "Fork",
+            t.faint,
+            t.text,
+            move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::End, false, tx),
+            t,
+        ));
+        if s.project().is_some_and(|project| project.git.is_some()) {
+            actions.push(action_chip(
+                "fork-worktree",
+                &ui::GIT_BRANCH_PLUS,
+                "Fork worktree",
+                t.faint,
+                t.worktree,
+                move |s: &mut Desktop, tx| s.fork_run(run, RunBoundary::End, true, tx),
+                t,
+            ));
+        }
+        if changed.is_some() {
+            actions.push(action_chip(
+                "restore-checkpoint",
+                &ui::ROTATE_CCW,
+                "Restore",
+                t.faint,
+                t.worktree,
+                move |s: &mut Desktop, _| {
+                    s.checkpoint = Some(CheckpointDialog::Restore {
+                        thread,
+                        run,
+                        turn,
+                        changed_files: changed,
+                    });
+                },
+                t,
+            ));
+        }
+    }
+    if actions.is_empty() {
+        return None;
+    }
+    Some(
+        row()
+            .key(format!("{}-actions", end.key))
+            .h(22.0)
+            .gap(S12)
+            .center_y()
+            .group_opacity(0.0, 1.0)
+            .children(actions),
+    )
+}
+
+/// Modal confirmation dialog for destructive checkpoint actions (Restore or
+/// Rewind).
+pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
+    let Some(action) = &s.checkpoint else {
+        return;
+    };
+    let (title, subject, detail, confirm_label, variant) = match action {
+        CheckpointDialog::Restore {
+            turn,
+            changed_files,
+            ..
+        } => (
+            "Restore working tree?",
+            format!("Before turn #{turn}"),
+            match changed_files {
+                Some(n) if *n > 0 => format!(
+                    "Resets tracked changes back to the checkpoint before turn #{turn} ({n} {} recorded). Transcript messages stay intact.",
+                    plural(*n, "file", "files")
+                ),
+                _ => format!(
+                    "Resets tracked changes back to the checkpoint before turn #{turn}. Transcript messages stay intact."
+                ),
+            },
+            "Restore files",
+            ButtonVariant::Warning,
+        ),
+        CheckpointDialog::Rewind { turn, .. } => (
+            "Rewind thread?",
+            format!("To turn #{turn}"),
+            "Restores the working tree and hides this turn and any later turns, placing the prompt back in the composer.".to_owned(),
+            "Rewind",
+            ButtonVariant::Warning,
+        ),
+    };
+    let buttons = ui::dialog_actions([
+        ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
+            .on_press(|s: &mut Desktop| s.checkpoint = None)
+            .build(&t.k),
+        ui::button(confirm_label, variant, Size::Default)
+            .on_press_tx(Desktop::confirm_checkpoint)
+            .build(&t.k),
+    ]);
+    ui::dialog("checkpoint", title, Some(&detail))
+        .subject(&subject)
+        .build(
+            |s: &mut Desktop| s.checkpoint = None,
+            ui::dialog_body(None, buttons),
+            t,
+            layer,
+        );
 }
 
 /// Assistant prose.
