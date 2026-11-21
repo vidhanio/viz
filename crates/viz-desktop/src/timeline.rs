@@ -818,6 +818,7 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .gap(S8)
         .items_center()
         .child(draft_project(s, thread, t, layer))
+        .children(draft_worktree_controls(s, thread, t, layer))
         .children(choose_harness.then(|| {
             text("Choose a harness below.")
                 .font(t.ui)
@@ -826,6 +827,188 @@ fn thread_hint(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .align(rune::Align::Center)
         }))
         .child(shortcuts(&[("K", "Commands")], t))
+}
+
+const DRAFT_BASE_BRANCH: &str = "draft-base-branch";
+
+/// Local vs Worktree toggle and base-branch selector shown on a fresh draft
+/// when its chosen project is a Git repository.
+fn draft_worktree_controls(
+    s: &Desktop,
+    thread: &NewThread,
+    t: &Theme,
+    layer: &mut Vec<El>,
+) -> Option<El> {
+    let project = s.project()?;
+    let git = project.git.as_ref()?;
+    let worktree = thread.worktree.as_ref();
+    let active = worktree.is_some();
+    let mode_chip = row()
+        .key("draft-worktree-toggle")
+        .role("switch")
+        .label("New linked worktree")
+        .checked(active)
+        .help(if active {
+            "Starts on a fresh branch in an isolated Git worktree"
+        } else {
+            "Runs directly in the project checkout (click for an isolated worktree)"
+        })
+        .h(Size::Small.height())
+        .px(S8)
+        .gap(S4)
+        .center_y()
+        .radius(theme::RADIUS_CONTROL)
+        .continuous_corners()
+        .fill(if active {
+            t.worktree.alpha(0.14)
+        } else {
+            t.chip_fill
+        })
+        .border(
+            HAIRLINE,
+            if active {
+                t.worktree.alpha(0.45)
+            } else {
+                t.hairline
+            },
+        )
+        .disabled(thread.sending)
+        .focusable(!thread.sending)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
+        .press_scale(0.97)
+        .on_press_tx(Desktop::toggle_draft_worktree)
+        .child(
+            icon(
+                if active {
+                    &ui::FOLDER_GIT_2
+                } else {
+                    &ui::GIT_BRANCH
+                },
+                ICON_SMALL,
+            )
+            .color(if active { t.worktree } else { t.muted })
+            .group_color(if active { t.worktree } else { t.text })
+            .a11y_hidden(),
+        )
+        .child(
+            text(if active {
+                "New worktree"
+            } else {
+                "Local checkout"
+            })
+            .font(t.small_medium)
+            .color(if active { t.worktree } else { t.muted })
+            .group_color(if active { t.worktree } else { t.text })
+            .a11y_hidden(),
+        );
+    let mut strip = row()
+        .key("draft-git-controls")
+        .gap(S8)
+        .center_y()
+        .child(mode_chip);
+    if let Some(req) = worktree {
+        strip = strip.child(draft_base_branch_picker(
+            s,
+            project,
+            git,
+            req,
+            thread.sending,
+            t,
+            layer,
+        ));
+    }
+    Some(strip)
+}
+
+fn draft_base_branch_picker(
+    s: &Desktop,
+    project: &viz_client::protocol::Project,
+    git: &viz_client::protocol::GitSummary,
+    req: &viz_client::protocol::WorktreeRequest,
+    sending: bool,
+    t: &Theme,
+    layer: &mut Vec<El>,
+) -> El {
+    let current_base = req
+        .base_ref
+        .as_deref()
+        .map(short_ref)
+        .or(git.branch.as_deref())
+        .unwrap_or("HEAD");
+    let open = s.open_picker.as_deref() == Some(DRAFT_BASE_BRANCH) && !sending;
+    let path = project.path.clone();
+    let trigger = ui::select_trigger(
+        DRAFT_BASE_BRANCH,
+        "Base branch",
+        Some(&format!("from {current_base}")),
+        open,
+        ui::PICKER_TRIGGER_MAX,
+        t,
+    )
+    .on_press_tx(move |s: &mut Desktop, tx| {
+        if s.open_picker.as_deref() == Some(DRAFT_BASE_BRANCH) {
+            s.open_picker = None;
+        } else {
+            s.open_picker = Some(DRAFT_BASE_BRANCH.to_owned());
+            s.load_branches(&path, tx);
+        }
+    });
+    let mut menu = Menu::new(format!("{DRAFT_BASE_BRANCH}-picker"))
+        .placement(Placement::Bottom)
+        .min_width(ui::MENU_WIDTH)
+        .open(open)
+        .on_close(|s: &mut Desktop| s.open_picker = None)
+        .trigger(trigger);
+    if open {
+        let is_default = req.base_ref.is_none();
+        menu = menu.item(
+            MenuItem::new(format!(
+                "Current HEAD ({})",
+                git.branch.as_deref().unwrap_or("detached")
+            ))
+            .checked(is_default)
+            .on_select_tx(|s: &mut Desktop, tx| {
+                s.open_picker = None;
+                tx.focus("draft", false);
+                if let Some(wt) = s.new_thread.as_mut().and_then(|t| t.worktree.as_mut()) {
+                    wt.base_ref = None;
+                }
+            }),
+        );
+        if let Some(branches) = s.branches.get(&project.path)
+            && !branches.is_empty()
+        {
+            menu = menu.separator();
+            menu = ui::menu_items(
+                menu,
+                branches.iter().map(|branch| {
+                    let reference = branch.reference.clone();
+                    let picked = req.base_ref.as_deref() == Some(reference.as_str());
+                    MenuItem::new(short_ref(&reference))
+                        .icon(&ui::GIT_BRANCH)
+                        .checked(picked)
+                        .on_select_tx(move |s: &mut Desktop, tx| {
+                            s.open_picker = None;
+                            tx.focus("draft", false);
+                            if let Some(wt) =
+                                s.new_thread.as_mut().and_then(|t| t.worktree.as_mut())
+                            {
+                                wt.base_ref = Some(reference.clone());
+                            }
+                        })
+                }),
+            );
+        }
+    }
+    menu.build(&t.overlay, layer)
+}
+
+fn short_ref(reference: &str) -> &str {
+    reference
+        .strip_prefix("refs/heads/")
+        .or_else(|| reference.strip_prefix("refs/remotes/"))
+        .unwrap_or(reference)
 }
 
 /// The `open_picker` value of a draft's project picker.
@@ -868,6 +1051,16 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
                     tx.focus("draft", false);
                     if let Some(thread) = &mut s.new_thread {
                         thread.project.clone_from(&id);
+                        if id.as_deref().is_none_or(|path| {
+                            !s.projects.iter().any(|p| p.path == path && p.git.is_some())
+                        }) {
+                            thread.worktree = None;
+                        } else if thread.worktree.is_some()
+                            && let Some(path) = &id
+                        {
+                            let path = path.clone();
+                            s.load_branches(&path, tx);
+                        }
                     }
                 })
         };

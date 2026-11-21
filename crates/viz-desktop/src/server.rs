@@ -12,9 +12,9 @@ use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
-        HarnessOptions, LaunchThread, ListEnvironments, ListTasks, Notification, OptionValue,
-        RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SendInput, SendMode, ThreadId,
-        UpdateProject, UpdateQueuedInput, UpdateThread,
+        HarnessOptions, LaunchThread, ListEnvironments, ListGitBranches, ListTasks, Notification,
+        OptionValue, RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SendInput, SendMode,
+        ThreadId, UpdateProject, UpdateQueuedInput, UpdateThread,
     },
 };
 
@@ -60,6 +60,7 @@ pub enum Command {
     },
     Abort(ThreadId),
     Project(ProjectChange),
+    ListBranches(String),
     SearchFiles {
         thread: ThreadId,
         request: u64,
@@ -264,7 +265,7 @@ fn offline(
                 s.toast(tx, "Offline", None);
             });
         }
-        Command::SearchFiles { .. } => {}
+        Command::SearchFiles { .. } | Command::ListBranches(_) => {}
         Command::SearchThreads { request, .. } => {
             ui.update(move |s, _| s.palette.set_hits(request, Err("Offline".into())));
         }
@@ -434,6 +435,10 @@ impl Session<'_> {
             }
             Command::Abort(id) => self.client.stop_thread(id).await,
             Command::Project(change) => self.project(change).await,
+            Command::ListBranches(project) => {
+                self.list_branches(project);
+                Ok(())
+            }
             Command::SearchFiles {
                 thread,
                 request,
@@ -721,6 +726,26 @@ impl Session<'_> {
                     .await
             }
         }
+    }
+
+    fn list_branches(&self, project: String) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        let environment = Arc::clone(&self.environment);
+        tokio::spawn(async move {
+            let result = client
+                .request(&ListGitBranches {
+                    project: project.clone(),
+                })
+                .await;
+            ui.update(move |s, _| {
+                if s.environment.as_deref() == Some(environment.as_ref())
+                    && let Ok(listed) = result
+                {
+                    s.branches.insert(project, listed.branches);
+                }
+            });
+        });
     }
 
     fn search(&self, thread: ThreadId, request: u64, query: String) {

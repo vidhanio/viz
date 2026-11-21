@@ -332,39 +332,7 @@ impl<'a> Outline<'a> {
         let auto_open = !self.query.is_empty() || self.has_active_or_selected_child(id);
         let show_kids =
             !kids.is_empty() && (auto_open || !s.navigation.collapsed_parents.contains(&id));
-        let rest = ui::status(thread.status, selected, t)
-            .or_else(|| {
-                thread.unread.then(|| {
-                    ui::dot(t.accent)
-                        .role("status")
-                        .label("Unread")
-                        .help("Unread")
-                })
-            })
-            .or_else(|| {
-                (!kids.is_empty() && !show_kids).then(|| {
-                    row()
-                        .key("child-count")
-                        .role("button")
-                        .label(format!("Show {} delegated tasks", kids.len()))
-                        .help("Expand delegated tasks")
-                        .px(S4)
-                        .h(18.0)
-                        .center()
-                        .radius(RADIUS_INNER)
-                        .hover_alone()
-                        .on_press(move |s: &mut Desktop| s.navigation.toggle_parent(id))
-                        .child(
-                            text(kids.len().to_string())
-                                .font(t.mono_micro)
-                                .color(t.delegated),
-                        )
-                })
-            })
-            .or_else(|| {
-                theme::relative_age(thread.updated_at, self.now)
-                    .map(|age| text(age).font(t.mono_micro).color(t.faint).a11y_hidden())
-            });
+        let rest = self.thread_rest_slot(thread, selected, kids.len(), show_kids, t);
         let menu = actions::thread_menu(s, thread, &key, t, layer);
         let place = detail.then(|| {
             thread
@@ -373,6 +341,7 @@ impl<'a> Outline<'a> {
                 .and_then(|id| s.projects.iter().find(|p| p.path == id))
                 .map_or("No project", |project| project.name.as_str())
         });
+        let meta = thread_meta(thread, place, t);
         let mark = {
             let harness = &thread.harness;
             let ink = if thread.archived {
@@ -398,7 +367,12 @@ impl<'a> Outline<'a> {
             selected,
             ink,
         }
-        .build(Some(mark), ui::trailing(rest, Some(menu), menu_open), t)
+        .build_with_meta(
+            Some(mark),
+            meta,
+            ui::trailing(rest, Some(menu), menu_open),
+            t,
+        )
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
         if thread.unread {
             node = node.description("Unread");
@@ -420,6 +394,50 @@ impl<'a> Outline<'a> {
             branch = branch.children(self.child_rows(kids, 1, active_tree, t));
         }
         branch
+    }
+
+    fn thread_rest_slot(
+        &self,
+        thread: &ThreadSummary,
+        selected: bool,
+        kid_count: usize,
+        show_kids: bool,
+        t: &Theme,
+    ) -> Option<El> {
+        let id = thread.id;
+        ui::status(thread.status, selected, t)
+            .or_else(|| {
+                thread.unread.then(|| {
+                    ui::dot(t.accent)
+                        .role("status")
+                        .label("Unread")
+                        .help("Unread")
+                })
+            })
+            .or_else(|| {
+                (kid_count > 0 && !show_kids).then(|| {
+                    row()
+                        .key("child-count")
+                        .role("button")
+                        .label(format!("Show {kid_count} delegated tasks"))
+                        .help("Expand delegated tasks")
+                        .px(S4)
+                        .h(18.0)
+                        .center()
+                        .radius(RADIUS_INNER)
+                        .hover_alone()
+                        .on_press(move |s: &mut Desktop| s.navigation.toggle_parent(id))
+                        .child(
+                            text(kid_count.to_string())
+                                .font(t.mono_micro)
+                                .color(t.delegated),
+                        )
+                })
+            })
+            .or_else(|| {
+                theme::relative_age(thread.updated_at, self.now)
+                    .map(|age| text(age).font(t.mono_micro).color(t.faint).a11y_hidden())
+            })
     }
 
     fn child_rows(
@@ -567,12 +585,39 @@ impl<'a> Outline<'a> {
         .build(&t.k)
         .key("project-new-thread")
         .hover_alone();
+        let wt_id = project.path.clone();
+        let add_worktree = project.git.is_some().then(|| {
+            let enabled = s.connected() && s.new_thread.is_none();
+            row()
+                .key("project-new-worktree")
+                .role("button")
+                .label(format!("New worktree thread in {}", project.name))
+                .help(format!("New worktree thread in {}", project.name))
+                .size(Size::Small.height(), Size::Small.height())
+                .center()
+                .radius(Size::Small.radius())
+                .continuous_corners()
+                .disabled(!enabled)
+                .focusable(enabled)
+                .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+                .hover_group()
+                .hover_alone()
+                .press_scale(0.95)
+                .on_press_tx(move |s: &mut Desktop, tx| s.create_in_project_worktree(&wt_id, tx))
+                .child(
+                    icon(&ui::GIT_BRANCH_PLUS, ICON_SMALL + S2)
+                        .color(t.muted)
+                        .group_color(t.worktree)
+                        .a11y_hidden(),
+                )
+        });
         let menu = actions::project_menu(s, project, &key, t, layer);
         let trailing_actions = row()
             .gap(S2)
             .center_y()
             .group_opacity(if menu_open { 1.0 } else { 0.0 }, 1.0)
             .child(add_thread)
+            .children(add_worktree)
             .child(menu);
         let mut node = TreeLine {
             key: &key,
@@ -606,6 +651,74 @@ impl<'a> Outline<'a> {
         }
         branch
     }
+}
+
+/// Metadata micro-line under a sidebar thread title: project name (in Recent
+/// mode), branch or linked worktree badge, and dirty file count when present.
+fn thread_meta(thread: &ThreadSummary, place: Option<&str>, t: &Theme) -> Option<El> {
+    let is_worktree =
+        thread.worktree.is_some() || thread.git.as_ref().is_some_and(|git| git.linked_worktree);
+    let branch = thread
+        .worktree
+        .as_ref()
+        .map(|wt| wt.branch.as_str())
+        .or_else(|| thread.git.as_ref().and_then(|git| git.branch.as_deref()));
+    let dirty = thread
+        .git
+        .as_ref()
+        .map(|git| git.dirty_files)
+        .filter(|&count| count > 0);
+    if place.is_none() && branch.is_none() && dirty.is_none() {
+        return None;
+    }
+    let mut line = row().w_full().min_w(0.0).gap(S4).center_y();
+    if let Some(place) = place {
+        line = line.child(
+            text(place)
+                .font(t.small)
+                .color(t.faint)
+                .shrink()
+                .truncate()
+                .help_when_truncated(place),
+        );
+        if branch.is_some() {
+            line = line.child(text("·").font(t.small).color(t.faint).a11y_hidden());
+        }
+    }
+    if let Some(branch) = branch {
+        let (glyph, ink) = if is_worktree {
+            (&ui::FOLDER_GIT_2, t.worktree)
+        } else {
+            (&ui::GIT_BRANCH, t.faint)
+        };
+        line = line
+            .child(icon(glyph, 11.0).color(ink).a11y_hidden())
+            .child(
+                text(branch)
+                    .font(t.mono_micro)
+                    .color(if is_worktree {
+                        t.worktree.alpha(0.9)
+                    } else {
+                        t.faint
+                    })
+                    .grow(1.0)
+                    .shrink()
+                    .min_w(0.0)
+                    .truncate()
+                    .help_when_truncated(branch),
+            );
+    } else {
+        line = line.child(rune::spacer());
+    }
+    if let Some(count) = dirty {
+        line = line.child(
+            text(format!("•{count}"))
+                .font(t.mono_micro)
+                .color(t.warning)
+                .a11y_hidden(),
+        );
+    }
+    Some(line)
 }
 
 /// Vector L-elbow (last child) or T-junction (middle child) tree guide.
@@ -754,6 +867,37 @@ pub fn preview_projects(s: &mut Desktop, collapsed: &[&str]) {
 /// The leading sidebar actions. Rune-kit puts the sidebar toggle at the other
 /// end.
 pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
+    let has_git = s.projects.iter().any(|project| project.git.is_some());
+    let worktree_enabled = s.connected() && s.new_thread.is_none() && has_git;
+    let worktree = row()
+        .key("new-worktree-thread")
+        .role("button")
+        .label("New thread in worktree")
+        .help(format!(
+            "New thread in worktree  {}",
+            if cfg!(target_os = "macos") {
+                "⌘⇧N"
+            } else {
+                "Ctrl+Shift+N"
+            }
+        ))
+        .size(Size::Default.height(), Size::Default.height())
+        .center()
+        .radius(Size::Default.radius())
+        .continuous_corners()
+        .disabled(!worktree_enabled)
+        .focusable(worktree_enabled)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover_group()
+        .press_scale(0.97)
+        .layer_opacity(if worktree_enabled { 1.0 } else { 0.45 })
+        .on_press_tx(Desktop::create_in_worktree)
+        .child(
+            icon(&ui::GIT_BRANCH_PLUS, ICON)
+                .color(t.muted)
+                .group_color(t.worktree)
+                .a11y_hidden(),
+        );
     let add = ui::icon_button(
         &ui::FOLDER_PLUS,
         "Add project",
@@ -768,6 +912,7 @@ pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
         .key("sidebar-header-buttons")
         .gap(theme::S4)
         .child(new_thread_button(s, t))
+        .child(worktree)
         .child(add)
 }
 

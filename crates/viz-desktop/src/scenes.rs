@@ -3,10 +3,11 @@
 
 use viz_client::protocol::{
     Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
-    EntryData, EntryId, Environment, EnvironmentStatus, Harness, LiveText, LiveTextKind, LiveTurn,
-    OptionChoice, OptionKind, OptionValue, PlanEntry, PlanPriority, PlanStatus, Project,
-    PromptAttachment, QueuedInput, RunEnd, RunId, SearchHit, SlashCommand, Task, TaskStatus,
-    ThreadId, ThreadState, ThreadStatus, ThreadSummary, ToolCallStatus, ToolDiff, ToolRecord,
+    EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, GitSummary, GitWorktree,
+    Harness, LiveText, LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue, PlanEntry,
+    PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, RunEnd, RunId, SearchHit,
+    SlashCommand, Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    ToolCallStatus, ToolDiff, ToolRecord, WorktreeRequest,
 };
 
 use crate::{
@@ -60,11 +61,18 @@ fn workspace(s: &mut Desktop) {
         status: EnvironmentStatus::Local,
     }];
     s.projects = [
-        ("Workbench", "/work/workbench"),
-        ("Field notes", "/work/field-notes"),
+        ("Workbench", "/work/workbench", Some("main")),
+        ("Field notes", "/work/field-notes", Some("main")),
     ]
-    .map(|(name, path)| Project {
-        git: None,
+    .map(|(name, path, branch)| Project {
+        git: branch.map(|branch| GitSummary {
+            branch: Some(branch.into()),
+            head: Some("a1b2c3d4e5f6".into()),
+            dirty_files: 0,
+            ahead: Some(0),
+            behind: Some(0),
+            linked_worktree: false,
+        }),
         name: name.into(),
         path: path.into(),
         created_at: 0,
@@ -129,27 +137,30 @@ fn list() -> Vec<ThreadSummary> {
         ),
         (4, "Draft release notes", None, None, Idle),
     ]
-    .map(|(id, title, parent, project, status)| ThreadSummary {
-        git: None,
-        worktree: None,
-        id: ThreadId(id),
-        title: title.into(),
-        parent: parent.map(ThreadId),
-        parent_environment: None,
-        project: project.map(str::to_owned),
-        harness: preview_harness(id).0.into(),
-        harness_name: preview_harness(id).1.into(),
-        model: match id {
-            20 => Some("GPT-5.5".into()),
-            21 => Some("Claude Opus 4.7".into()),
-            _ => None,
-        },
-        thinking: parent.is_some().then(|| "high".into()),
-        status,
-        archived: false,
-        updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
-        unread: id == 9,
-        pinned: id == 4,
+    .map(|(id, title, parent, project, status)| {
+        let (worktree, git) = preview_git(id);
+        ThreadSummary {
+            git,
+            worktree,
+            id: ThreadId(id),
+            title: title.into(),
+            parent: parent.map(ThreadId),
+            parent_environment: None,
+            project: project.map(str::to_owned),
+            harness: preview_harness(id).0.into(),
+            harness_name: preview_harness(id).1.into(),
+            model: match id {
+                20 => Some("GPT-5.5".into()),
+                21 => Some("Claude Opus 4.7".into()),
+                _ => None,
+            },
+            thinking: parent.is_some().then(|| "high".into()),
+            status,
+            archived: false,
+            updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
+            unread: id == 9,
+            pinned: id == 4,
+        }
     })
     .into()
 }
@@ -162,6 +173,41 @@ const fn preview_harness(id: u64) -> (&'static str, &'static str) {
         4 | 10 => ("pi", "Pi"),
         _ => ("agy", "Google Antigravity"),
     }
+}
+
+fn preview_git(id: u64) -> (Option<GitWorktree>, Option<GitSummary>) {
+    let worktree = (id == 10).then(|| GitWorktree {
+        path: "/work/.viz-worktrees/trim-spaces".into(),
+        branch: "wt/trim-spaces".into(),
+    });
+    let git = match id {
+        11 => Some(GitSummary {
+            branch: Some("feat/export-crlf".into()),
+            head: Some("a1b2c3d4e5f6".into()),
+            dirty_files: 3,
+            ahead: Some(2),
+            behind: Some(0),
+            linked_worktree: false,
+        }),
+        10 => Some(GitSummary {
+            branch: Some("wt/trim-spaces".into()),
+            head: Some("f6e5d4c3b2a1".into()),
+            dirty_files: 0,
+            ahead: Some(1),
+            behind: Some(0),
+            linked_worktree: true,
+        }),
+        9 | 7 => Some(GitSummary {
+            branch: Some("main".into()),
+            head: Some("112233445566".into()),
+            dirty_files: 0,
+            ahead: Some(0),
+            behind: Some(0),
+            linked_worktree: false,
+        }),
+        _ => None,
+    };
+    (worktree, git)
 }
 
 fn thread() -> ThreadState {
@@ -696,9 +742,28 @@ fn projects(s: &mut Desktop) {
     sidebar::preview_projects(s, &["/work/release-scripts"]);
 }
 
-/// A fresh thread with its project picker open.
+/// A fresh thread with its project picker open and worktree mode toggled on.
 fn draft_project(s: &mut Desktop) {
     new_agent(s);
+    if let Some(thread) = &mut s.new_thread {
+        thread.worktree = Some(WorktreeRequest {
+            base_ref: Some("refs/heads/main".into()),
+            branch: None,
+        });
+    }
+    s.branches.insert(
+        "/work/workbench".into(),
+        vec![
+            GitBranch {
+                reference: "refs/heads/main".into(),
+                head: "a1b2c3d4e5f6".into(),
+            },
+            GitBranch {
+                reference: "refs/heads/feat/export-crlf".into(),
+                head: "112233445566".into(),
+            },
+        ],
+    );
     s.open_picker = Some(timeline::DRAFT_PROJECT.into());
 }
 

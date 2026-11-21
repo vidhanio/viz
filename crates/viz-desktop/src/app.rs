@@ -11,8 +11,9 @@ use rune::{Spring, SpringPair, TextEdit, Transition, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
-    Attachment, ConfigOption, Environment, Harness, LaunchThread, OptionValue, Project, RunId,
-    SendInput, SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    Attachment, ConfigOption, Environment, GitBranch, Harness, LaunchThread, OptionValue, Project,
+    RunId, SendInput, SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    WorktreeRequest,
 };
 
 use crate::{
@@ -212,6 +213,9 @@ pub struct Desktop {
     /// Every thread as the server lists it, titles included.
     pub threads: Vec<ThreadSummary>,
     pub projects: Vec<Project>,
+    /// Cached Git branches per project path, fetched on demand for worktree
+    /// base selection.
+    pub branches: HashMap<String, Vec<GitBranch>>,
     pub harnesses: Vec<Harness>,
     /// The thread in the main pane.
     pub selected: Option<ThreadId>,
@@ -274,6 +278,7 @@ impl Desktop {
             tasks: Vec::new(),
             threads: Vec::new(),
             projects: Vec::new(),
+            branches: HashMap::new(),
             harnesses: Vec::new(),
             selected: None,
             thread: Thread::default(),
@@ -611,11 +616,71 @@ impl Desktop {
         self.prepare_thread(thread, tx);
     }
 
+    /// Prepares a worktree draft in the open thread’s Git project (or the
+    /// first Git project if none is selected).
+    pub fn create_in_worktree(&mut self, tx: &mut Tx) {
+        let project = self
+            .project()
+            .filter(|project| project.git.is_some())
+            .or_else(|| self.projects.iter().find(|project| project.git.is_some()));
+        let mut thread = NewThread::new(self.next_draft, project);
+        if project.is_some() {
+            thread.worktree = Some(WorktreeRequest::default());
+        }
+        self.prepare_thread(thread, tx);
+    }
+
     /// Open a draft for a project without creating its server session.
     pub fn create_in_project(&mut self, id: &str, tx: &mut Tx) {
         if let Some(project) = self.projects.iter().find(|project| project.path == id) {
             let thread = NewThread::new(self.next_draft, Some(project));
             self.prepare_thread(thread, tx);
+        }
+    }
+
+    /// Open a linked-worktree draft for a Git project.
+    pub fn create_in_project_worktree(&mut self, id: &str, tx: &mut Tx) {
+        if let Some(project) = self.projects.iter().find(|project| project.path == id) {
+            let mut thread = NewThread::new(self.next_draft, Some(project));
+            if project.git.is_some() {
+                thread.worktree = Some(WorktreeRequest::default());
+            }
+            self.prepare_thread(thread, tx);
+        }
+    }
+
+    /// Requests the branch catalog for `project` when it is a Git repository.
+    pub fn load_branches(&mut self, project: &str, tx: &mut Tx) {
+        if self.connected()
+            && self
+                .projects
+                .iter()
+                .any(|item| item.path == project && item.git.is_some())
+        {
+            self.send(Command::ListBranches(project.to_owned()), tx);
+        }
+    }
+
+    /// Toggles the open draft between local checkout and a new linked worktree.
+    pub fn toggle_draft_worktree(&mut self, tx: &mut Tx) {
+        let can_worktree = self.project().is_some_and(|project| project.git.is_some());
+        if !can_worktree {
+            return;
+        }
+        let Some(thread) = &mut self.new_thread else {
+            return;
+        };
+        if thread.sending {
+            return;
+        }
+        let project = thread.project.clone();
+        if thread.worktree.is_some() {
+            thread.worktree = None;
+        } else {
+            thread.worktree = Some(WorktreeRequest::default());
+            if let Some(path) = project {
+                self.load_branches(&path, tx);
+            }
         }
     }
 
@@ -643,10 +708,18 @@ impl Desktop {
         }
         self.next_draft += 1;
         thread.loading_choices = self.send(Command::LoadDraft(thread.id), tx);
+        let load_project = thread
+            .worktree
+            .is_some()
+            .then(|| thread.project.clone())
+            .flatten();
         self.switch = Switch::Fade;
         self.clear_selection();
         self.send(Command::ClearSelection, tx);
         self.new_thread = Some(thread);
+        if let Some(path) = load_project {
+            self.load_branches(&path, tx);
+        }
         self.update_title(tx);
         tx.focus("draft", false);
     }
@@ -775,6 +848,7 @@ impl Desktop {
         self.forward.clear();
         self.threads.clear();
         self.projects.clear();
+        self.branches.clear();
         self.harnesses.clear();
         self.tasks.clear();
         self.navigation.dismiss_overlays();

@@ -659,6 +659,12 @@ pub struct TreeLine<'a> {
 
 impl TreeLine<'_> {
     pub fn build(self, leading: Option<El>, slot: El, t: &Theme) -> El {
+        self.build_with_meta(leading, None, slot, t)
+    }
+
+    /// Like [`Self::build`], replacing the plain text `detail` line with a
+    /// custom metadata element (e.g. project + branch/worktree/dirty badges).
+    pub fn build_with_meta(self, leading: Option<El>, meta: Option<El>, slot: El, t: &Theme) -> El {
         let color = if self.dim {
             t.faint
         } else if self.selected || self.strong {
@@ -673,24 +679,24 @@ impl TreeLine<'_> {
             .group_color(hover_color)
             .truncate()
             .help_when_truncated(self.label);
+        let second = meta.or_else(|| {
+            self.detail.map(|detail| {
+                text(detail)
+                    .font(t.small)
+                    .color(t.faint)
+                    .truncate()
+                    .help_when_truncated(detail)
+            })
+        });
+        let has_second = second.is_some();
         let labels = col()
             .min_w(0.0)
             .shrink()
             .grow(1.0)
             .a11y_hidden()
             .child(title)
-            .children(self.detail.map(|detail| {
-                text(detail)
-                    .font(t.small)
-                    .color(t.faint)
-                    .truncate()
-                    .help_when_truncated(detail)
-            }));
-        let height = if self.detail.is_some() {
-            TREE_ROW_TALL
-        } else {
-            TREE_ROW
-        };
+            .children(second);
+        let height = if has_second { TREE_ROW_TALL } else { TREE_ROW };
         let mut line = row()
             .key(self.key)
             .role("treeitem")
@@ -1230,6 +1236,12 @@ lucide! {
     SERVER = Server;
     /// Environment picker chevron pair.
     CHEVRONS_UP_DOWN = ChevronsUpDown;
+    /// Local git branch.
+    GIT_BRANCH = GitBranch;
+    /// New thread in a git worktree.
+    GIT_BRANCH_PLUS = GitBranchPlus;
+    /// Linked git worktree checkout.
+    FOLDER_GIT_2 = FolderGit2;
     THREAD = MessageSquare;
     STOP = Square;
     SIDEBAR = PanelLeft;

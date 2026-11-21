@@ -174,6 +174,10 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.sidebar.toggle();
         return true;
     }
+    if ev.is_command('n') && ev.mods.shift && !ev.mods.alt {
+        s.create_in_worktree(tx);
+        return true;
+    }
     if ev.mods.shift || ev.mods.alt {
         return false;
     }
