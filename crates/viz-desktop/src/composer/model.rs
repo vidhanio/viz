@@ -1,6 +1,7 @@
 //! The model picker: one menu for the runner's model and its thinking level.
 //! The trigger names both. The menu groups models by provider and ends with
-//! the selected model's thinking levels. Search matches both display names
+//! the selected model's thinking levels in a fixed-height footer so loading or
+//! switching models never shifts the layout. Search matches both display names
 //! and IDs; arrows move the highlight, and Enter chooses the model.
 
 use std::{borrow::Cow, collections::HashMap};
@@ -19,8 +20,8 @@ use crate::{
     app::Desktop,
     server::Command,
     theme::{
-        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, OVERLAY_BLUR, RADIUS_CONTROL,
-        RADIUS_DECK, S2, S4, S6, S8, S16, S24, Size, Theme,
+        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, RADIUS_CARD, RADIUS_CONTROL, S2,
+        S4, S6, S8, S16, S24, Size, Theme,
     },
     ui,
 };
@@ -30,7 +31,49 @@ const KEY: &str = "model";
 const FIELD: &str = "model-query";
 const LIST: &str = "model-list";
 
-/// The open menu's search, keyboard highlight and pending thinking choice.
+/// Visual tier for a thinking/effort choice, distinguishing `Xhigh` and `Max`
+/// with their own icons.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Effort {
+    Off,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl Effort {
+    fn classify(value: &str, name: &str, index: usize, total: usize) -> Self {
+        let lower_val = value.to_ascii_lowercase();
+        let lower_name = name.to_ascii_lowercase();
+        let has = |needle: &str| lower_val.contains(needle) || lower_name.contains(needle);
+        let exact = |needle: &str| lower_val == needle || lower_name == needle;
+        if exact("none") || exact("off") || exact("disabled") {
+            Self::Off
+        } else if has("xhigh") || has("x-high") || has("extra-high") || has("extra high") {
+            Self::Xhigh
+        } else if exact("max") || has("maximum") || has("ultra") || lower_val.ends_with("max") {
+            Self::Max
+        } else if has("min") || has("low") {
+            Self::Low
+        } else if has("high") {
+            Self::High
+        } else if has("med") || has("default") || has("auto") || total <= 1 {
+            Self::Medium
+        } else {
+            match ((index * 3) / total.max(1) + 1).min(3) {
+                0 => Self::Off,
+                1 => Self::Low,
+                2 => Self::Medium,
+                _ => Self::High,
+            }
+        }
+    }
+}
+
+/// The open menu's search, keyboard highlight, pending thinking choice, and
+/// loading state while a newly selected model's thinking levels arrive.
 #[derive(Debug, Default)]
 pub struct ModelMenu {
     query: TextEdit,
@@ -41,6 +84,16 @@ pub struct ModelMenu {
     /// the menu closes or the model changes: a session's runner reports a
     /// level back only once it has applied it.
     chosen: Option<(String, String)>,
+    /// Model value whose thinking levels are currently being fetched from the
+    /// server.
+    loading_levels: Option<String>,
+}
+
+impl ModelMenu {
+    /// Clears any pending thinking-levels load once fresh options arrive.
+    pub fn clear_loading(&mut self) {
+        self.loading_levels = None;
+    }
 }
 
 /// A session's or draft's model option and the thinking levels of the model
@@ -186,18 +239,17 @@ impl<'a> Picker<'a> {
         let model = self.model_label();
         let level = self.effort();
         match (model, level) {
-            (Some(model), Some((_, level, _, _))) => Cow::Owned(format!("{model} · {level}")),
+            (Some(model), Some((_, level, _))) => Cow::Owned(format!("{model} · {level}")),
             (Some(model), None) => Cow::Borrowed(model),
-            (None, Some((levels, level, _, _))) => {
+            (None, Some((levels, level, _))) => {
                 Cow::Owned(format!("{} · {level}", ui::sentence_label(levels.name())))
             }
             (None, None) => Cow::Borrowed("Model"),
         }
     }
 
-    /// Selected thinking level plus how many of the three effort bars should
-    /// light up (and whether it is the top tier).
-    fn effort(&self) -> Option<(Levels<'a>, Cow<'a, str>, usize, bool)> {
+    /// Selected thinking level plus its visual [`Effort`] tier.
+    fn effort(&self) -> Option<(Levels<'a>, Cow<'a, str>, Effort)> {
         let levels = self.levels?;
         let value = levels.value(self.target)?;
         let label = levels.label(value);
@@ -207,38 +259,45 @@ impl<'a> Picker<'a> {
             .iter()
             .position(|(choice, _)| *choice == value)
             .unwrap_or(0);
-        let lower = value.to_ascii_lowercase();
-        let bars = if matches!(lower.as_str(), "none" | "off" | "disabled") {
-            0
-        } else if lower.contains("min") || lower.contains("low") {
-            1
-        } else if lower.contains("high") || lower.contains("max") {
-            3
-        } else if lower.contains("med")
-            || lower.contains("default")
-            || lower.contains("auto")
-            || total <= 1
-        {
-            2
-        } else {
-            ((index * 3) / total + 1).min(3)
-        };
-        let high = bars == 3 && total > 2;
-        Some((levels, label, bars, high))
+        let effort = Effort::classify(value, label.as_ref(), index, total);
+        Some((levels, label, effort))
     }
 }
 
-/// Three vertical signal bars indicating the active thinking/effort level.
-fn effort_glyph(bars: usize, high: bool, t: &Theme) -> El {
-    let lit = if high { t.steer } else { t.text };
-    row().gap(1.5).items_end().h(10.0).a11y_hidden().children(
-        [4.0, 7.0, 10.0].into_iter().enumerate().map(|(i, height)| {
-            el().w(S2)
-                .h(height)
-                .radius(HAIRLINE)
-                .fill(if i < bars { lit } else { t.hairline })
-        }),
-    )
+/// Signal bars for `Off`..`High`, lightning bolt for `Xhigh`, and flame for
+/// `Max`.
+fn effort_glyph(effort: Effort, on_accent: bool, t: &Theme) -> El {
+    match effort {
+        Effort::Xhigh => icon(&ui::ZAP, ICON_SMALL)
+            .color(if on_accent { t.on_accent } else { t.steer })
+            .a11y_hidden(),
+        Effort::Max => icon(&ui::FLAME, ICON_SMALL)
+            .color(if on_accent { t.on_accent } else { t.danger })
+            .a11y_hidden(),
+        Effort::Off | Effort::Low | Effort::Medium | Effort::High => {
+            let bars = match effort {
+                Effort::Off => 0,
+                Effort::Low => 1,
+                Effort::Medium => 2,
+                Effort::High => 3,
+                Effort::Xhigh | Effort::Max => unreachable!(),
+            };
+            let lit = if on_accent { t.on_accent } else { t.text };
+            let dim = if on_accent {
+                t.on_accent.alpha(0.35)
+            } else {
+                t.hairline
+            };
+            row().gap(1.5).items_end().h(10.0).a11y_hidden().children(
+                [4.0, 7.0, 10.0].into_iter().enumerate().map(|(i, height)| {
+                    el().w(S2)
+                        .h(height)
+                        .radius(HAIRLINE)
+                        .fill(if i < bars { lit } else { dim })
+                }),
+            )
+        }
+    }
 }
 
 /// The trigger and the menu while it is open.
@@ -254,7 +313,6 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
         .role("combobox")
         .label("Model")
         .a11y_value(full_label.as_ref())
-        .help(full_label)
         .expanded(open)
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
@@ -266,13 +324,11 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
         .center_y()
         .max_w(ui::MODEL_TRIGGER_MAX)
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .on_press_tx(move |s: &mut Desktop, tx| {
             if settings::is_open(s, KEY) {
                 close(s);
                 return;
             }
-            tx.instant();
             s.open_picker = Some(KEY.to_owned());
             s.model_menu = ModelMenu::default();
             tx.focus_when_shown(FIELD, false);
@@ -288,10 +344,11 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
                 .min_w(0.0)
                 .shrink()
                 .truncate()
+                .help_when_truncated(model_name)
                 .a11y_hidden(),
         );
     }
-    if let Some((levels, effort_label, bars, high)) = effort {
+    if let Some((levels, effort_label, tier)) = effort {
         if model_text.is_some() {
             trigger = trigger.child(text("·").font(t.ui).color(t.faint).a11y_hidden());
         } else {
@@ -302,7 +359,7 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
                     .a11y_hidden(),
             );
         }
-        trigger = trigger.child(effort_glyph(bars, high, t)).child(
+        trigger = trigger.child(effort_glyph(tier, false, t)).child(
             text(effort_label)
                 .font(t.ui)
                 .color(if open { t.text } else { t.muted })
@@ -320,6 +377,8 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
     }
     trigger = trigger.child(
         icon(&ui::CHEVRON_OPEN, ICON_SMALL)
+            .key("chevron")
+            .animated_changes()
             .icon_rotation(if open { std::f32::consts::PI } else { 0.0 })
             .color(rest_icon)
             .group_color(t.text)
@@ -397,40 +456,29 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
     let k = &t.overlay;
     let max_width = s.window_width - S16;
     let model_parts = picker.model.map(|model| models(s, picker, model, t));
-    let show_thinking = model_parts
-        .as_ref()
-        .is_none_or(|(_, _, current_visible)| *current_visible);
-    let thinking = picker
-        .levels
-        .filter(|_| show_thinking)
-        .map(|levels| thinking(s, picker, levels, t));
-    let width = thinking
-        .as_ref()
-        .map_or(MODEL_MENU_WIDTH, |(_, width)| *width);
+    let loading_levels = s.model_menu.loading_levels.is_some();
     let mut body = col()
         .key("model-menu")
         .role("dialog")
         .label("Model")
-        .w(width.max(MODEL_MENU_WIDTH).min(max_width))
+        .w(MODEL_MENU_WIDTH.min(max_width))
         .min_h(0.0)
-        .radius(RADIUS_DECK)
-        .continuous_corners()
-        .backdrop_blur(OVERLAY_BLUR)
-        .fill(t.overlay_glass)
-        .border_gradient(HAIRLINE, t.rim_top, t.rim_bottom)
+        .radius(RADIUS_CARD)
+        .fill(k.c.layer_01)
+        .border(HAIRLINE, t.hairline)
         .focus_return(format!("{KEY}-trigger"))
         .modal(true, close);
-    if let Some((field, list, _)) = model_parts {
+    if let Some((field, list)) = model_parts {
         body = body
             .child(row().w_full().px(S4).pt(S4).instant_changes().child(field))
             .child(ui::rule(t))
             .child(list);
     }
-    if let Some((section, _)) = thinking {
+    if picker.model.is_some() || picker.levels.is_some() {
         if picker.model.is_some() {
             body = body.child(ui::rule(t));
         }
-        body = body.child(section);
+        body = body.child(thinking_section(s, picker, loading_levels, t));
     }
     layer.push(scrim("model-scrim", close));
     let fade = Transition {
@@ -439,9 +487,7 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
         springs: SpringPair::new(rune::tok::motion::INSTANT, Spring::new(0.25, 0.0)),
         ..Transition::identity()
     };
-    let body = k
-        .shadow_layers(&k.elevation.floating)
-        .fold(body, El::box_shadow)
+    let body = body
         .anchored_fit(format!("{KEY}-trigger"), Side::Top, Align::Start, S6)
         .transition(fade)
         .motion_intent(MotionIntent::CUT)
@@ -449,9 +495,8 @@ fn menu(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Vec<El>) {
     layer.push(body);
 }
 
-/// The search field, matching models grouped by provider, and whether the
-/// committed model is among the visible matches.
-fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> (El, El, bool) {
+/// The search field and matching models grouped by provider.
+fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> (El, El) {
     let current = picker.model_value();
     let groups = groups(model, &s.model_menu.query.text);
     let values: Vec<String> = groups
@@ -544,7 +589,7 @@ fn models(s: &Desktop, picker: &Picker<'_>, model: &ConfigOption, t: &Theme) -> 
         })
         .build(&t.overlay)
         .key(FIELD);
-    (field, list, current_visible)
+    (field, list)
 }
 
 fn row_key(value: &str) -> String {
@@ -557,12 +602,6 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         .model
         .map_or_else(String::new, |model| model.id.clone());
     let value = entry.value.to_owned();
-    let indicator = el()
-        .w(S2)
-        .h(S16)
-        .radius(HAIRLINE)
-        .fill(if active { t.accent } else { Color::TRANSPARENT })
-        .a11y_hidden();
     let mut item = row()
         .key(row_key(entry.value))
         .role("option")
@@ -573,20 +612,17 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         .preserve_focus_on_press(true)
         .w_full()
         .h(Size::Default.height())
-        .pl(S4)
-        .pr(S8)
+        .px(S8)
         .gap(S8)
         .center_y()
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .fill(if active {
-            t.accent_veil
+            t.selected
         } else {
             Color::TRANSPARENT
         })
         .hover_group()
         .on_press_tx(move |s: &mut Desktop, tx| choose_model(s, tx, owner, &id, &value))
-        .child(indicator)
         .child(
             text(entry.label)
                 .font(if active || current { t.ui_medium } else { t.ui })
@@ -622,9 +658,50 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
     item
 }
 
-/// Keep all tiers on one line. The menu grows to fit their labels without
-/// depending on the active tier, and the row scrolls if the window is narrower.
-fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> (El, f32) {
+/// Fixed-height thinking footer: shows a loading row while fetching a model's
+/// thinking levels, a quiet placeholder when a model has none, or filled tier
+/// chips on one line. Keeping its height constant prevents layout jumps.
+fn thinking_section(s: &Desktop, picker: &Picker<'_>, loading: bool, t: &Theme) -> El {
+    let heading = picker.levels.map_or(Cow::Borrowed("Thinking"), |levels| {
+        ui::sentence_label(levels.name())
+    });
+    let content = if loading {
+        row()
+            .key("levels-loading")
+            .w_full()
+            .h(Size::Small.height())
+            .gap(S6)
+            .center_y()
+            .child(ui::spinner(t))
+            .child(text("Loading levels…").font(t.small).color(t.faint))
+    } else if let Some(levels) = picker.levels {
+        thinking_chips(s, picker, levels, &heading, t)
+    } else {
+        row()
+            .key("levels-empty")
+            .w_full()
+            .h(Size::Small.height())
+            .center_y()
+            .child(text("No thinking levels").font(t.small).color(t.faint))
+    };
+    col()
+        .key("model-thinking")
+        .w_full()
+        .px(S8)
+        .pt(S6)
+        .pb(S8)
+        .gap(S4)
+        .child(ui::section(&heading, t))
+        .child(content)
+}
+
+fn thinking_chips(
+    s: &Desktop,
+    picker: &Picker<'_>,
+    levels: Levels<'_>,
+    name: &str,
+    t: &Theme,
+) -> El {
     let id = levels.id();
     let selected = s
         .model_menu
@@ -634,21 +711,21 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
         .map(|(_, value)| value.as_str())
         .or_else(|| levels.value(picker.target));
     let owner = picker.target.owner();
-    let name = ui::sentence_label(levels.name());
+    let choices: Vec<_> = levels.choices().collect();
+    let total = choices.len().max(1);
     let mut chips = row()
         .key("levels")
         .role("radiogroup")
-        .label(name.as_ref())
+        .label(name)
         .w_full()
+        .h(Size::Small.height())
         .gap(S4)
         .focus_group()
         .scroll_x();
-    let mut width = S16 - S4;
-    for (value, choice) in levels.choices() {
+    for (index, (value, choice)) in choices.into_iter().enumerate() {
         let on = selected == Some(value);
         let label = levels.choice_label(value, choice);
-        let chip_width = rune::text::measure(&label, &[], t.ui_medium, None).0.ceil() + S16;
-        width += chip_width + S4;
+        let tier = Effort::classify(value, label.as_ref(), index, total);
         let key = format!("level-{value}");
         let id = id.to_owned();
         let value = value.to_owned();
@@ -658,17 +735,12 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
                 .role("radio")
                 .label(label.as_ref())
                 .checked(on)
-                .w(chip_width)
                 .h(Size::Small.height())
+                .px(S8)
+                .gap(S4)
                 .center()
                 .radius(Size::Small.radius())
-                .continuous_corners()
-                .fill(if on {
-                    t.accent_veil
-                } else {
-                    Color::TRANSPARENT
-                })
-                .border(HAIRLINE, if on { t.accent } else { Color::TRANSPARENT })
+                .fill(if on { t.accent } else { Color::TRANSPARENT })
                 .hover_group()
                 .press_scale(0.97)
                 .focusable(true)
@@ -679,39 +751,17 @@ fn thinking(s: &Desktop, picker: &Picker<'_>, levels: Levels<'_>, t: &Theme) -> 
                         set_level(s, tx, owner, &id, &value);
                     }
                 })
+                .child(effort_glyph(tier, on, t))
                 .child(
                     text(label)
-                        .font(t.ui_medium)
-                        .color(if on { t.accent_text } else { t.muted })
-                        .group_color(t.text)
+                        .font(t.small_medium)
+                        .color(if on { t.on_accent } else { t.muted })
+                        .group_color(if on { t.on_accent } else { t.text })
                         .a11y_hidden(),
                 ),
         );
     }
-    let header = row()
-        .w_full()
-        .gap(S8)
-        .center_y()
-        .child(ui::section(&name, t))
-        .child(rune::spacer())
-        .children(picker.model_label().map(|model| {
-            text(model)
-                .font(t.small)
-                .color(t.faint)
-                .min_w(0.0)
-                .shrink()
-                .truncate()
-        }));
-    let section = col()
-        .key("model-thinking")
-        .w_full()
-        .px(S8)
-        .pt(S6)
-        .pb(S8)
-        .gap(S4)
-        .child(header)
-        .child(chips);
-    (section, width)
+    chips
 }
 
 /// Chooses thinking level `value` for option `id`, and shows it while the
@@ -793,6 +843,7 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
                     .any(|option| option.id == id && option.value != chosen)
             });
             if changed {
+                s.model_menu.loading_levels = Some(value.to_owned());
                 settings::apply(s, tx, owner, id.to_owned(), chosen);
             }
             return;
@@ -824,6 +875,7 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
         thread.options.remove(&level);
     }
     if let Some(harness) = fetch {
+        s.model_menu.loading_levels = Some(value.to_owned());
         s.send(
             Command::HarnessOptions {
                 harness,
@@ -831,6 +883,8 @@ fn choose_model(s: &mut Desktop, tx: &mut Tx, owner: Owner, id: &str, value: &st
             },
             tx,
         );
+    } else {
+        s.model_menu.loading_levels = None;
     }
 }
 

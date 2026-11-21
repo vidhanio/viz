@@ -11,10 +11,10 @@ use rune_kit::{
 use viz_client::protocol::ThreadStatus;
 
 use crate::theme::{
-    CARD_INSET, CARD_WIDTH, DECK_INSET, DECK_OVERLAP, DIALOG_INSET, DIALOG_WIDTH, DOCK_BLUR, DOT,
-    EMPTY_WIDTH, HAIRLINE, HORIZON_HEIGHT, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_COMPOSER,
-    RADIUS_CONTROL, RADIUS_DECK, RADIUS_INNER, READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6,
-    S8, S12, S16, S20, Size, TRAILING, TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
+    CARD_INSET, CARD_WIDTH, DECK_INSET, DECK_OVERLAP, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH,
+    HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_DECK, READING_INSET,
+    READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16, Size, TRAILING, TREE_ROW, TREE_ROW_TALL,
+    TREE_STEP, Theme,
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -166,18 +166,18 @@ fn icon_button_style(
             press: c.pressed,
         },
         IconButtonVariant::Ghost if active => ButtonStyle {
-            fill: c.pressed,
-            border: Some(c.border_base),
+            fill: c.bg_button_neutral,
+            border: None,
             rest: c.icon_base,
             hover: c.std_icon_strong,
-            press: Color::TRANSPARENT,
+            press: c.pressed,
         },
         IconButtonVariant::GhostMuted if active => ButtonStyle {
-            fill: c.pressed,
-            border: Some(c.border_base),
-            rest: c.icon_accent,
-            hover: c.icon_accent,
-            press: Color::TRANSPARENT,
+            fill: c.bg_accent,
+            border: None,
+            rest: c.submit_icon,
+            hover: c.submit_icon,
+            press: k.on(c.contrast_pressed, c.bg_accent),
         },
         IconButtonVariant::Ghost => ButtonStyle {
             fill: Color::TRANSPARENT,
@@ -236,7 +236,6 @@ impl Button {
             .gap(S6)
             .center()
             .radius(self.size.radius())
-            .continuous_corners()
             .fill(style.fill)
             .disabled(self.disabled)
             .focusable(!self.disabled)
@@ -335,7 +334,6 @@ impl IconButton {
             .size(side, side)
             .center()
             .radius(self.size.radius())
-            .continuous_corners()
             .fill(style.fill)
             .disabled(self.disabled)
             .focusable(!self.disabled)
@@ -429,47 +427,18 @@ pub fn lead(mark: El, line: f32) -> El {
     el().size(ICON, line).center().child(mark).a11y_hidden()
 }
 
-/// A frosted deck tucked behind the top edge of the surface beneath it, with
-/// inset horizontal width, top-lit rim, and a cast seam gradient along the
-/// tuck edge.
-pub fn tucked_deck(key: impl Into<String>, order: i16, fill: Color, blur: f32, t: &Theme) -> El {
-    let seam = el()
-        .key("deck-seam")
-        .pin(Some(0.0), None, Some(0.0), Some(DECK_OVERLAP - S2))
-        .h(10.0)
-        .linear_gradient(
-            std::f32::consts::PI,
-            [(0.0, Color::TRANSPARENT), (1.0, t.seam_shadow)],
-        )
-        .a11y_hidden();
+/// A flat deck tucked behind the top edge of the composer below it, with inset
+/// horizontal width and a crisp hairline border.
+pub fn tucked_deck(key: impl Into<String>, order: i16, fill: Color, t: &Theme) -> El {
     col()
         .key(key)
         .paint_order(order)
         .mx(DECK_INSET)
         .mb(-DECK_OVERLAP)
-        .pb(DECK_OVERLAP + S4)
+        .pb(DECK_OVERLAP)
         .corners([RADIUS_DECK, RADIUS_DECK, 0.0, 0.0])
-        .continuous_corners()
-        .backdrop_blur(blur)
         .fill(fill)
-        .border_gradient(HAIRLINE, t.rim_top_subtle, t.hairline)
-        .box_shadow(t.shadow_deck)
-        .child(seam)
-}
-
-/// Default frosted backdrop blur for tucked docks and the queue drawer.
-pub const fn dock_blur() -> f32 {
-    DOCK_BLUR
-}
-
-/// A pointer-transparent bottom horizon scrim pinned beneath the floating
-/// composer stack so scrolling transcript content fades gently into the canvas.
-pub fn horizon_scrim(t: &Theme) -> El {
-    el().key("horizon-scrim")
-        .w_full()
-        .h(HORIZON_HEIGHT)
-        .linear_gradient(std::f32::consts::PI, t.horizon_stops)
-        .a11y_hidden()
+        .border(HAIRLINE, t.hairline)
 }
 
 /// The centered reading column's frame; its parent owns the vertical spacing.
@@ -506,19 +475,13 @@ impl Card {
             Self::Surface => col()
                 .w_full()
                 .radius(RADIUS_CARD)
-                .continuous_corners()
                 .fill(t.surface)
                 .border(HAIRLINE, t.hairline),
             Self::Outline => col()
                 .w_full()
                 .radius(RADIUS_CARD)
-                .continuous_corners()
                 .border(HAIRLINE, t.hairline),
-            Self::Message => col()
-                .w_full()
-                .radius(RADIUS_COMPOSER)
-                .continuous_corners()
-                .fill(t.mine),
+            Self::Message => col().w_full().radius(RADIUS_CARD).fill(t.mine),
         }
     }
 
@@ -569,33 +532,16 @@ pub fn spinner(t: &Theme) -> El {
     radar(ICON_SMALL, t.accent, t)
 }
 
-/// A harness brand mark framed in a continuous-corner squircle medallion; an
-/// active thread or task adds a quiet accent halo.
-pub fn medallion(harness: Option<(&str, &str)>, active: bool, t: &Theme) -> El {
-    let glyph = icon(
-        harness.map_or(&HARNESS, |(id, _)| harness_icon(id)),
-        ICON_SMALL,
-    )
-    .color(if active { t.text } else { t.muted })
-    .a11y_hidden();
-    let mut box_el = el()
-        .size(S20, S20)
-        .center()
-        .radius(RADIUS_INNER)
-        .continuous_corners()
-        .fill(t.chip_fill)
-        .border(HAIRLINE, if active { t.accent_veil } else { t.hairline })
-        .child(glyph);
-    if active {
-        box_el = box_el.radial_gradient(
-            [0.5, 0.5],
-            [S16, S16],
-            [(0.0, t.accent_veil), (1.0, Color::TRANSPARENT)],
-        );
-    }
+/// A flat monochrome harness mark.
+pub fn harness_mark(harness: Option<(&str, &str)>, active: bool, t: &Theme) -> El {
+    let glyph = icon(harness.map_or(&HARNESS, |(id, _)| harness_icon(id)), ICON).color(if active {
+        t.text
+    } else {
+        t.muted
+    });
     match harness {
-        Some((_, name)) => box_el.help(name),
-        None => box_el.a11y_hidden(),
+        Some((_, name)) => glyph.help(name),
+        None => glyph.a11y_hidden(),
     }
 }
 
@@ -708,26 +654,14 @@ impl TreeLine<'_> {
             .gap(S8)
             .center_y()
             .radius(RADIUS_CONTROL)
-            .continuous_corners()
             .fill(if self.selected {
-                t.accent_veil
+                t.selected
             } else {
                 Color::TRANSPARENT
             })
             .hover_group()
             .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent);
-        if self.selected {
-            line = line.child(
-                el().key("selected-rail")
-                    .pin(Some(S2), Some((height - S16) / 2.0), None, None)
-                    .size(2.5, S16)
-                    .radius(1.25)
-                    .fill(t.accent)
-                    .a11y_hidden(),
-            );
-        }
-        line = line
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .children(leading.map(|mark| lead(mark, TREE_ROW)))
             .child(labels)
             .child(slot);
@@ -830,7 +764,6 @@ fn inline_trigger(
         .gap(S4)
         .center_y()
         .radius(Size::Default.radius())
-        .continuous_corners()
         .children(mark.map(|glyph| {
             icon(glyph, ICON)
                 .color(rest_icon)
@@ -849,6 +782,8 @@ fn inline_trigger(
         )
         .child(
             icon(&CHEVRON_OPEN, ICON_SMALL)
+                .key("chevron")
+                .animated_changes()
                 .icon_rotation(if open { std::f32::consts::PI } else { 0.0 })
                 .color(rest_icon)
                 .group_color(t.text)
@@ -1206,18 +1141,14 @@ lucide! {
     COMPOSE = SquarePen;
     /// Send.
     ARROW_UP = ArrowUp;
-    /// Move down / reorder down.
-    ARROW_DOWN = ArrowDown;
-    /// Queue a follow-up input.
-    LIST_PLUS = ListPlus;
     /// Steer or send immediately into an active turn.
     CORNER_UP_RIGHT = CornerUpRight;
     /// Open delegated task thread.
     ARROW_UP_RIGHT = ArrowUpRight;
-    /// Queued message clock.
-    CLOCK = Clock;
-    /// Edit queued message.
-    PENCIL = Pencil;
+    /// Extra-high thinking tier.
+    ZAP = Zap;
+    /// Maximum thinking tier.
+    FLAME = Flame;
     /// Delegated work.
     AGENT = Workflow;
     BRAIN = Brain;
@@ -1378,13 +1309,13 @@ pub fn sentence_label(label: &str) -> Cow<'_, str> {
     }
 }
 
-/// Spell out the extra-high tier even when a runner only reports its ID.
+/// Normalize the extra-high tier label to `Xhigh`.
 pub fn thinking_label(label: &str) -> Cow<'_, str> {
-    if ["xhigh", "x-high", "extra-high"]
+    if ["xhigh", "x-high", "extra-high", "extra high"]
         .iter()
         .any(|id| label.eq_ignore_ascii_case(id))
     {
-        Cow::Borrowed("Extra high")
+        Cow::Borrowed("Xhigh")
     } else {
         sentence_label(label)
     }

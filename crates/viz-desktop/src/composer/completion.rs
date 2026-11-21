@@ -1,17 +1,15 @@
 use std::{ops::Range, time::Duration};
 
 use rune::{
-    Color, El, Key, KeyEvent, ScrollSpec, Spring, SpringPair, TextEdit, Transition, Tx, col, el,
-    icon, row, text,
+    Color, El, Key, KeyEvent, ScrollSpec, Spring, SpringPair, TextEdit, Transition, Tx, col, icon,
+    row, text,
 };
 use viz_client::protocol::SlashCommand;
 
 use crate::{
     app::Desktop,
     server::Command,
-    theme::{
-        HAIRLINE, ICON_SMALL, OVERLAY_BLUR, RADIUS_CONTROL, S2, S4, S6, S8, S12, S16, S32, Theme,
-    },
+    theme::{ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, S12, S16, S32, Theme},
     ui,
 };
 
@@ -278,7 +276,7 @@ pub(super) fn drawer(s: &Desktop, t: &Theme) -> Option<El> {
             Spring::new(0.10, 0.0),
         ));
     Some(
-        ui::tucked_deck(POPUP, 25, t.overlay_glass, OVERLAY_BLUR, t)
+        ui::tucked_deck(POPUP, 25, t.overlay.c.layer_01, t)
             .role("group")
             .label(heading)
             .transition(motion)
@@ -291,16 +289,6 @@ pub(super) fn drawer(s: &Desktop, t: &Theme) -> Option<El> {
 fn slash_row(command: &SlashCommand, index: usize, highlighted: bool, t: &Theme) -> El {
     let id = command.name.clone();
     let label = format!("/{}", command.name);
-    let indicator = el()
-        .w(S2)
-        .h(S16)
-        .radius(HAIRLINE)
-        .fill(if highlighted {
-            t.accent
-        } else {
-            Color::TRANSPARENT
-        })
-        .a11y_hidden();
     row()
         .key(format!("slash-{}", command.name))
         .role("option")
@@ -310,20 +298,17 @@ fn slash_row(command: &SlashCommand, index: usize, highlighted: bool, t: &Theme)
         .preserve_focus_on_press(true)
         .w_full()
         .h(S32)
-        .pl(S4)
-        .pr(S8)
+        .px(S8)
         .gap(S8)
         .center_y()
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .fill(if highlighted {
-            t.accent_veil
+            t.selected
         } else {
             Color::TRANSPARENT
         })
         .on_hover(move |s: &mut Desktop| s.completion.highlighted = index)
         .on_press_tx(move |s: &mut Desktop, tx| choose(s, &id, tx))
-        .child(indicator)
         .child(
             text(&label)
                 .font(t.mono)
@@ -356,16 +341,6 @@ fn file_row(path: &str, index: usize, highlighted: bool, t: &Theme) -> El {
         Some((dir, name)) if !name.is_empty() => (Some(dir), name),
         _ => (None, path),
     };
-    let indicator = el()
-        .w(S2)
-        .h(S16)
-        .radius(HAIRLINE)
-        .fill(if highlighted {
-            t.accent
-        } else {
-            Color::TRANSPARENT
-        })
-        .a11y_hidden();
     row()
         .key(format!("file-{path}"))
         .role("option")
@@ -374,20 +349,17 @@ fn file_row(path: &str, index: usize, highlighted: bool, t: &Theme) -> El {
         .preserve_focus_on_press(true)
         .w_full()
         .h(S32)
-        .pl(S4)
-        .pr(S8)
+        .px(S8)
         .gap(S6)
         .center_y()
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .fill(if highlighted {
-            t.accent_veil
+            t.selected
         } else {
             Color::TRANSPARENT
         })
         .on_hover(move |s: &mut Desktop| s.completion.highlighted = index)
         .on_press_tx(move |s: &mut Desktop, tx| choose(s, &chosen, tx))
-        .child(indicator)
         .child(
             icon(&ui::FILE, ICON_SMALL + 1.0)
                 .color(if highlighted { t.accent_text } else { t.muted })

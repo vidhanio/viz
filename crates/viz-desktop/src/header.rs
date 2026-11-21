@@ -109,17 +109,11 @@ fn branch_menu(
         .role("button")
         .label(format!("Branch {branch_label}"))
         .expanded(open)
-        .help(if linked {
-            "Linked Git worktree details"
-        } else {
-            "Git branch details"
-        })
         .h(Size::Default.height())
         .px(S8)
         .gap(S4)
         .center_y()
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .hover_group()
@@ -244,28 +238,25 @@ fn diff_toggle_button(s: &Desktop, git: &GitSummary, t: &Theme) -> El {
         .gap(S4)
         .center_y()
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .hover_group()
         .press_scale(0.97)
         .on_press_tx(Desktop::toggle_diff_panel);
     if active {
-        chip = chip
-            .fill(t.accent_veil)
-            .border(HAIRLINE, t.accent.alpha(0.35));
+        chip = chip.fill(t.accent);
     }
     chip.child(
         icon(&ui::FILE_DIFF, ICON_SMALL)
-            .color(if active { t.accent_text } else { t.muted })
-            .group_color(if active { t.accent_text } else { t.text })
+            .color(if active { t.on_accent } else { t.muted })
+            .group_color(if active { t.on_accent } else { t.text })
             .a11y_hidden(),
     )
     .child(
         text(label)
             .font(t.small_medium)
-            .color(if active { t.accent_text } else { t.muted })
-            .group_color(if active { t.accent_text } else { t.text })
+            .color(if active { t.on_accent } else { t.muted })
+            .group_color(if active { t.on_accent } else { t.text })
             .a11y_hidden(),
     )
 }
@@ -318,7 +309,6 @@ fn thread_identity(thread: &ThreadSummary, preview: Option<El>, t: &Theme) -> El
         icon(ui::harness_icon(&thread.harness), ICON)
             .color(t.muted)
             .group_color(t.text)
-            .help(&thread.harness_name)
             .a11y_hidden(),
         preview,
         t,
@@ -383,13 +373,13 @@ fn title(s: &Desktop, t: &Theme) -> El {
                     .active_harness(&s.harnesses)
                     .map(|runner| (runner.id.as_str(), runner.name.as_str()));
                 group
-                    .child(ui::medallion(harness, false, t))
+                    .child(ui::harness_mark(harness, false, t))
                     .child(title_text("New thread", t))
             },
         );
     };
     let thread = s.summary(id);
-    let mark = ui::medallion(
+    let mark = ui::harness_mark(
         thread.map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
         s.busy(),
         t,
@@ -443,7 +433,7 @@ fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Them
                 .min_w(0.0)
                 .truncate()
                 .shrink()
-                .help(label)
+                .help_when_truncated(label)
                 .a11y_hidden(),
         )
 }

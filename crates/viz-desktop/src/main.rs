@@ -19,12 +19,12 @@
 //!   end of the composer toolbar.
 //! - Copy: short, plain, sentence case; labels name the thing, buttons name the
 //!   action. Show display names, never wire IDs.
-//! - Visuals come from `theme.rs` tokens and `ui` components. Shared scales and
-//!   columns are tokens; a component-specific cap may be a named module
-//!   constant on the 4-pt grid. Icons are Lucide, with harness marks and the
-//!   onboarding prism as brand marks. The composer and its drawers use frosted
-//!   glass over the transcript. Hover lifts the ink, and semantic accents
-//!   distinguish selection, steering, worktrees and delegation.
+//! - Visuals come from `theme.rs` tokens and `ui` components, derived strictly
+//!   from the configured base16 scheme in a flat, sans-serif style with crisp
+//!   hairline borders and no blur, glow, or drop shadows. Icons are Lucide plus
+//!   monochrome harness marks. Hover lifts the ink, active controls use filled
+//!   states, and semantic accents distinguish selection, steering, worktrees,
+//!   and delegation.
 //! - Motion: changing threads moves the transcript and toolbar title, never the
 //!   composer: vertically by sidebar order, horizontally into a delegated task
 //!   (left) and back out (right); short springs without bounce.
@@ -49,7 +49,7 @@ mod ui;
 use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
-use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col, el, row};
+use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col, row};
 use rune_kit::{
     ToastRegion,
     shell::{SidebarToggle, SplitView},
@@ -70,24 +70,18 @@ const HEADLESS_CONNECT_WAIT: Duration = Duration::from_secs(5);
 
 fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let t = Theme::get(cx.system_dark());
+    cx.help_look(t.help_look());
     let mut overlays = Vec::new();
     let dock = composer::composer(s, t, &mut overlays);
-    let mut reading = el()
+    let mut reading = col()
         .key("reading-pane")
         .grow(1.0)
         .min_w(0.0)
         .h_full()
         .min_h(0.0)
-        .child(timeline::timeline(s, t, &mut overlays).pin(
-            Some(0.0),
-            Some(0.0),
-            Some(0.0),
-            Some(0.0),
-        ));
+        .child(timeline::timeline(s, t, &mut overlays));
     if let Some(dock) = dock {
-        reading = reading
-            .child(ui::horizon_scrim(t).pin(Some(0.0), None, Some(0.0), Some(0.0)))
-            .child(dock.pin(Some(0.0), None, Some(0.0), Some(0.0)));
+        reading = reading.child(dock);
     }
     let mut main_body = row()
         .key("main-body")
@@ -183,20 +177,6 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if s.palette.is_open() {
         return false;
-    }
-    if ev.key == rune::Key::Escape
-        && !ev.mods.shift
-        && !ev.mods.alt
-        && !ev.mods.cmd
-        && !ev.mods.ctrl
-        && s.editing_queued.is_some()
-        && s.checkpoint.is_none()
-        && s.open_picker.is_none()
-        && !s.navigation.has_overlay()
-        && (!s.diff.open || diff_panel::docked_width(s).is_some())
-    {
-        s.cancel_edit_queued(tx);
-        return true;
     }
     if ev.is_command('b') && !ev.mods.shift && !ev.mods.alt {
         s.sidebar.toggle();
@@ -343,8 +323,7 @@ fn main() {
         }
         desktop
     })
-    .on_focus(Desktop::set_focus)
-    .on_modifiers(Desktop::set_modifiers);
+    .on_focus(Desktop::set_focus);
     if let Some(detail) = theme_error {
         app.handle()
             .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));

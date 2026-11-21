@@ -30,27 +30,8 @@ const ROW_MIN_HEIGHT: f32 = 44.0;
 const PROGRESS_WIDTH: f32 = 44.0;
 /// Number of settled tasks shown directly before folding the rest.
 const RECENT_SETTLED: usize = 2;
-/// Small harness medallion side length inside the collapsed overlap stack.
-const STACK_MEDALLION: f32 = 18.0;
 
-/// Extra bottom clearance for the scrolling transcript when the Tasks Dock is
-/// mounted.
-pub fn clearance(s: &Desktop) -> f32 {
-    let Some(parent) = s.selected else {
-        return 0.0;
-    };
-    let count = s.tasks.iter().filter(|task| task.parent == parent).count();
-    if count == 0 {
-        return 0.0;
-    }
-    if s.expanded.contains(DOCK_KEY) {
-        224.0
-    } else {
-        BAR_HEIGHT + S4
-    }
-}
-
-/// Renders the persistent Tasks Dock tucked above the queue/composer, when the
+/// Renders the persistent Tasks Dock tucked above the composer, when the
 /// selected thread has at least one delegated task.
 pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
     let parent = s.selected?;
@@ -96,17 +77,11 @@ pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
             Spring::new(0.15, 0.0),
         ));
     Some(
-        ui::tucked_deck(
-            format!("tasks-dock-{parent}"),
-            10,
-            t.dock_glass,
-            ui::dock_blur(),
-            t,
-        )
-        .role("group")
-        .label("Tasks")
-        .transition(motion)
-        .child(body),
+        ui::tucked_deck(format!("tasks-dock-{parent}"), 10, t.surface, t)
+            .role("group")
+            .label("Tasks")
+            .transition(motion)
+            .child(body),
     )
 }
 
@@ -165,22 +140,11 @@ fn collapsed_bar(
 }
 
 fn medallion_stack(s: &Desktop, tasks: &[&Task], t: &Theme) -> El {
-    let mut stack = row().center_y().a11y_hidden();
-    for (index, task) in tasks.iter().take(3).enumerate() {
+    let mut stack = row().gap(S4).center_y().a11y_hidden();
+    for task in tasks.iter().take(3) {
         let child = child_summary(s, task);
         let glyph = child.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
-        let mut badge = el()
-            .size(STACK_MEDALLION, STACK_MEDALLION)
-            .center()
-            .radius(RADIUS_INNER - 1.0)
-            .continuous_corners()
-            .fill(t.chip_fill)
-            .border(1.5, t.surface)
-            .child(icon(glyph, 10.0).color(t.muted));
-        if index > 0 {
-            badge = badge.ml(-5.0);
-        }
-        stack = stack.child(badge);
+        stack = stack.child(icon(glyph, ICON_SMALL).color(t.muted));
     }
     stack
 }
@@ -413,7 +377,7 @@ fn task_row(s: &Desktop, task: &Task, t: &Theme) -> El {
         .gap(S8)
         .center_y()
         .child(el().w(14.0).center().child(mark).a11y_hidden())
-        .child(ui::medallion(
+        .child(ui::harness_mark(
             harness,
             task.status == TaskStatus::Running,
             t,
@@ -558,9 +522,7 @@ fn task_row_trailing(
                 .size(S24, S24)
                 .center()
                 .radius(RADIUS_INNER)
-                .continuous_corners()
                 .hover_group()
-                .hover_alone()
                 .press_scale(0.95)
                 .focusable(true)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
@@ -587,9 +549,7 @@ fn stop_all_button(ids: Vec<String>, t: &Theme) -> El {
         .size(S24, S24)
         .center()
         .radius(RADIUS_INNER)
-        .continuous_corners()
         .hover_group()
-        .hover_alone()
         .press_scale(0.95)
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)

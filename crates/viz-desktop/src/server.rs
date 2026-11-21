@@ -13,9 +13,8 @@ use viz_client::{
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, Entry, EntryId,
         ForkThread, ForkWorktree, HarnessOptions, LaunchThread, ListEnvironments, ListGitBranches,
-        ListTasks, Notification, OptionValue, RemoveProject, RemoveQueuedInput, RestoreRun,
-        RewindThread, RunBoundary, RunDiff, RunId, SearchFiles, SendInput, SteerQueuedInput,
-        ThreadDiff, ThreadId, UpdateProject, UpdateQueuedInput, UpdateThread,
+        ListTasks, Notification, OptionValue, RemoveProject, RestoreRun, RewindThread, RunBoundary,
+        RunDiff, RunId, SearchFiles, SendInput, ThreadDiff, ThreadId, UpdateProject, UpdateThread,
     },
 };
 
@@ -77,21 +76,6 @@ pub enum Command {
         thread: ThreadId,
         before: EntryId,
     },
-    RemoveQueued {
-        thread: ThreadId,
-        run: RunId,
-    },
-    EditQueued {
-        thread: ThreadId,
-        run: RunId,
-        text: String,
-    },
-    MoveQueued {
-        thread: ThreadId,
-        run: RunId,
-        before: Option<RunId>,
-    },
-    SteerQueued(SteerQueuedInput),
     Attach {
         scope: u64,
         target: AttachmentTarget,
@@ -510,20 +494,6 @@ impl Session<'_> {
                 Ok(())
             }
             Command::LoadEarlier { thread, before } => self.load_earlier(thread, before).await,
-            Command::RemoveQueued { thread, run } => {
-                self.client
-                    .remove_queued_input(&RemoveQueuedInput { thread, run })
-                    .await
-            }
-            Command::EditQueued { thread, run, text } => {
-                self.update_queued(thread, run, Some(&text), None).await
-            }
-            Command::MoveQueued {
-                thread,
-                run,
-                before,
-            } => self.update_queued(thread, run, None, Some(before)).await,
-            Command::SteerQueued(input) => self.client.request(&input).await.map(drop),
             Command::Notify { title, body } => {
                 requests::notify(&title, body);
                 Ok(())
@@ -584,28 +554,6 @@ impl Session<'_> {
             self.ui.update(move |s, _| s.restore_message(send_input));
         }
         result.map(drop)
-    }
-
-    #[expect(
-        clippy::option_option,
-        reason = "mirrors wire UpdateQueuedInput::before patch semantics"
-    )]
-    async fn update_queued(
-        &self,
-        thread: ThreadId,
-        run: RunId,
-        text: Option<&str>,
-        before: Option<Option<RunId>>,
-    ) -> viz_client::Result<()> {
-        self.client
-            .request(&UpdateQueuedInput {
-                thread,
-                run,
-                text,
-                before,
-            })
-            .await
-            .map(drop)
     }
 
     fn load_draft(&self, id: u64) {

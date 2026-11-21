@@ -5,8 +5,8 @@ use viz_client::protocol::{
     Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
     EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, GitChange, GitSummary,
     GitWorktree, Harness, LiveText, LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue,
-    PlanEntry, PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, RunEnd, RunId,
-    SearchHit, SlashCommand, Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    PlanEntry, PlanPriority, PlanStatus, Project, PromptAttachment, RunEnd, RunId, SearchHit,
+    SlashCommand, Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
     ToolCallStatus, ToolDiff, ToolRecord, WorktreeRequest,
 };
 
@@ -32,8 +32,6 @@ pub const SCENES: &[Scene] = &[
     ("palette", palette),
     ("palette-open", palette_open),
     ("attachments", attachments),
-    ("queue", queue),
-    ("queue-edit", queue_edit),
     ("slash", slash),
     ("mentions", mentions),
     ("empty", empty),
@@ -598,6 +596,7 @@ fn options() -> Vec<ConfigOption> {
                 ("medium", "medium"),
                 ("high", "high"),
                 ("xhigh", "xhigh"),
+                ("max", "max"),
             ],
         ),
         ConfigOption {
@@ -901,34 +900,6 @@ fn overflow(s: &mut Desktop) {
          kept the previous version on disk",
     );
     s.preview_toast("Offline", "The server disconnected.");
-}
-
-fn queue(s: &mut Desktop) {
-    workspace(s);
-    s.draft = rune::TextEdit::new("Also preserve trailing blank lines");
-    s.draft.focused = true;
-    if let Some(state) = &mut s.state {
-        state.status = ThreadStatus::Working;
-        state.usage = Some(viz_client::protocol::ContextUsage {
-            used: 840_000,
-            size: 1_000_000,
-        });
-        state.queue = [
-            (31, "Also handle CRLF line endings"),
-            (32, "Then add a note to the changelog about the export fix"),
-        ]
-        .map(|(run, text)| QueuedInput {
-            run: RunId(run),
-            text: text.into(),
-            attachment_count: u64::from(run == 32),
-        })
-        .into();
-    }
-}
-
-fn queue_edit(s: &mut Desktop) {
-    queue(s);
-    s.preview_edit_queued(THREAD, RunId(31), "Also handle CRLF line endings");
 }
 
 fn slash(s: &mut Desktop) {

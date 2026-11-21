@@ -11,9 +11,9 @@
 //! - Type: `small` 11.5/16, `ui` 13/20, `body` 14.5/23, `title` 15/22, `mono`
 //!   12/18 (see [`Theme`]).
 //! - Rules: one [`HAIRLINE`], `Theme::hairline` ink.
-//! - Overlays (menus, popovers, dialogs, the palette, toasts): a fill one step
-//!   above what they float over, a [`HAIRLINE`] outline, and a soft two-layer
-//!   shadow, all from [`Theme::overlay`].
+//! - Overlays (menus, popovers, dialogs, the palette, toasts): a flat fill one
+//!   step above what they sit over with a crisp [`HAIRLINE`] outline, all from
+//!   [`Theme::overlay`].
 //! - Sidebar: rows fill from [`SIDEBAR_PAD`]; every label, icon and section
 //!   title starts at [`SIDEBAR_INSET`] plus [`TREE_STEP`] per depth; every row
 //!   ends in a [`TRAILING`]-wide slot centered under the sidebar toggle.
@@ -25,7 +25,7 @@ mod scheme;
 
 use std::sync::OnceLock;
 
-use rune::{Color, Family, Shadow, TextStyle};
+use rune::{Color, HelpLook, Shadow, TextStyle};
 use rune_kit::{
     Kit, MarkdownStyle, Palette, PaletteFocus, PaletteSeed, StateColors,
     syntax::{Syntax, SyntaxTheme},
@@ -70,29 +70,19 @@ pub const ICON_SMALL: f32 = 12.0;
 pub const ICON: f32 = 16.0;
 pub const DOT: f32 = 6.0;
 
-/// Chips, harness medallions, key caps and other marks inside a control.
+/// Chips, key caps and other marks inside a control.
 pub const RADIUS_INNER: f32 = S6;
 /// Controls, rows, attachment chips, buttons.
-pub const RADIUS_CONTROL: f32 = S8;
-/// Cards, tool output, popovers.
+pub const RADIUS_CONTROL: f32 = S6;
+/// Cards, tool output, composer, decks, popovers.
 pub const RADIUS_CARD: f32 = S8;
-/// Popovers, frosted menus, and tucked deck corners.
-pub const RADIUS_DECK: f32 = S12;
-/// Main composer card and user message bubbles.
-pub const RADIUS_COMPOSER: f32 = S16;
+/// Tucked deck top corners.
+pub const RADIUS_DECK: f32 = S8;
 
 /// Left and right inset of tucked drawers inside `READING_WIDTH`.
 pub const DECK_INSET: f32 = S12;
 /// Negative bottom overlap tucking each deck behind the surface below it.
-pub const DECK_OVERLAP: f32 = 14.0;
-/// Height of the bottom horizon scrim under the floating composer stack.
-pub const HORIZON_HEIGHT: f32 = 88.0;
-/// Frosted backdrop blur sigma for the floating composer card.
-pub const GLASS_BLUR: f32 = 14.0;
-/// Frosted backdrop blur sigma for tucked docks and the queue drawer.
-pub const DOCK_BLUR: f32 = 12.0;
-/// Frosted backdrop blur sigma for popovers and completion drawers.
-pub const OVERLAY_BLUR: f32 = 16.0;
+pub const DECK_OVERLAP: f32 = 8.0;
 
 /// The shell's title band: the toolbar and the sidebar's header row.
 pub const TOOLBAR_HEIGHT: f32 = rune_kit::shell::TOOLBAR_HEIGHT;
@@ -127,8 +117,9 @@ pub const DIALOG_WIDTH: f32 = 400.0;
 /// Floating cards anchored to a control: the Agents card.
 pub const CARD_WIDTH: f32 = 320.0;
 pub const PALETTE_WIDTH: f32 = 560.0;
-/// Minimum model picker width; long thinking tier rows can make it wider.
-pub const MODEL_MENU_WIDTH: f32 = 360.0;
+/// Fixed model picker width; wide enough for all thinking tier chips without
+/// resizing as levels load.
+pub const MODEL_MENU_WIDTH: f32 = 420.0;
 /// The model list's height before it scrolls: eight rows and a heading.
 pub const MODEL_LIST_HEIGHT: f32 = S32 * 9.0;
 /// Empty states sit this far down the transcript.
@@ -185,30 +176,17 @@ pub struct Theme {
     /// fill with a hairline outline and shadow; `overlay.c.layer_01` fills
     /// dialogs and toasts.
     pub overlay: Kit,
-    /// Cards on the main pane (expanded tool output, code) and sidebar ground.
+    /// Cards on the main pane (composer, expanded tool output, code) and
+    /// sidebar ground (`base01`).
     pub surface: Color,
-    /// Recessed fill for medallions, chips, and quiet controls.
+    /// Recessed fill for chips and quiet controls.
     pub chip_fill: Color,
-    /// Translucent frosted fill for the floating composer card.
-    pub glass: Color,
-    /// Translucent frosted fill for tucked drawers (tasks dock, message queue).
-    pub dock_glass: Color,
-    /// Translucent frosted fill for overlays, model picker, and menus.
-    pub overlay_glass: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
-    /// Top-lit border gradient start on elevated surfaces.
-    pub rim_top: Color,
-    /// Subtle top-lit rim on tucked drawers behind the composer.
-    pub rim_top_subtle: Color,
-    /// Top-lit border gradient end on elevated surfaces.
-    pub rim_bottom: Color,
-    /// Focused border rim color.
-    pub rim_focus: Color,
-    /// Soft cast seam shadow under the composer card onto tucked decks.
-    pub seam_shadow: Color,
     /// The quiet wash behind my messages.
     pub mine: Color,
+    /// Flat base16 selection highlight for active rows, tabs, and options.
+    pub selected: Color,
     /// Body text.
     pub text: Color,
     /// Secondary text.
@@ -221,9 +199,7 @@ pub struct Theme {
     pub accent_text: Color,
     /// High-contrast ink on filled accent controls.
     pub on_accent: Color,
-    /// Accent veil behind selected rows and active menu options.
-    pub accent_veil: Color,
-    /// Steer / send-now mode and high-effort accent (`base09`).
+    /// Steer / send-now mode and extra-high effort accent (`base09`).
     pub steer: Color,
     /// Worktree, checkpoint, and remote environment accent (`base0C`).
     pub worktree: Color,
@@ -242,15 +218,6 @@ pub struct Theme {
     pub added: Color,
     /// A removed line's wash in a diff.
     pub removed: Color,
-    /// Multi-layer elevation for the floating composer card (inset sheen +
-    /// ambient drop).
-    pub shadow_composer: [Shadow; 3],
-    /// Ambient elevation for tucked decks (tasks dock, message queue).
-    pub shadow_deck: Shadow,
-    /// Soft outer focus aura on the focused composer card.
-    pub shadow_focus: Shadow,
-    /// Vertical gradient stops for the bottom horizon scrim.
-    pub horizon_stops: [(f32, Color); 4],
     /// Code colors: Markdown fences.
     pub syntax: SyntaxTheme,
     /// Interface text, 13 on 20.
@@ -265,10 +232,6 @@ pub struct Theme {
     pub body: TextStyle,
     /// Titles: the toolbar, empty states, dialogs, 14 semibold on 20.
     pub title: TextStyle,
-    /// Editorial serif display headline for empty states, 24 on 30.
-    pub display: TextStyle,
-    /// Italic editorial serif display accent, 24 on 30.
-    pub display_italic: TextStyle,
     /// Tool rows and code, 12 on 18, tabular numerals.
     pub mono: TextStyle,
     /// Small mono for durations and counts, 11.5 on 16, tabular numerals.
@@ -483,9 +446,10 @@ impl Theme {
             interactive.alpha(reach(bg, interactive, step).max(reach(surface, interactive, step)))
         };
         let selected = tint(0.055);
+        let pressed = tint(0.045);
         let raised = over(bg, wash, reach(bg, wash, if dark { 0.038 } else { 0.032 }));
         let chip_fill = if dark {
-            over(surface, wash, 0.35)
+            over(surface, wash, 0.30)
         } else {
             over(bg, surface, 0.65)
         };
@@ -528,7 +492,6 @@ impl Theme {
         let faint = legible(b[0x3], 4.5);
         let accent = legible(b[0xD], 3.0);
         let accent_text = legible(b[0xD], 4.5);
-        let accent_veil = accent.alpha(if dark { 0.11 } else { 0.085 });
         let steer = legible(b[0x9], 4.5);
         let on_fill = |fill: Color| {
             [bg, b[0x7], lightest, darkest]
@@ -545,107 +508,6 @@ impl Theme {
             legible(b[0xE], 4.5),
         );
         let on_danger = on_fill(danger);
-        let glass_base = if dark {
-            over(surface, wash, reach(surface, wash, 0.035))
-        } else {
-            lightest
-        };
-        let glass = glass_base.alpha(if dark { 0.82 } else { 0.86 });
-        let dock_glass = surface.alpha(if dark { 0.78 } else { 0.84 });
-        let overlay_glass = overlay.alpha(if dark { 0.88 } else { 0.92 });
-        let rim_top = if dark {
-            lightest.alpha(0.14)
-        } else {
-            darkest.alpha(0.08)
-        };
-        let rim_top_subtle = if dark {
-            lightest.alpha(0.09)
-        } else {
-            darkest.alpha(0.06)
-        };
-        let rim_bottom = if dark {
-            lightest.alpha(0.05)
-        } else {
-            darkest.alpha(0.13)
-        };
-        let rim_focus = accent.alpha(if dark { 0.40 } else { 0.48 });
-        let seam_shadow = darkest.alpha(if dark { 0.28 } else { 0.08 });
-        let shadow_deck = if dark {
-            Shadow {
-                y: S4,
-                blur: S16,
-                color: Color::BLACK.alpha(0.24),
-                ..Shadow::default()
-            }
-        } else {
-            Shadow {
-                y: S2,
-                blur: 10.0,
-                color: Color::BLACK.alpha(0.05),
-                ..Shadow::default()
-            }
-        };
-        let sheen = if dark {
-            lightest.alpha(0.06)
-        } else {
-            lightest.alpha(0.70)
-        };
-        let shadow_composer = if dark {
-            [
-                Shadow {
-                    y: 1.0,
-                    blur: 0.0,
-                    color: sheen,
-                    inset: true,
-                    ..Shadow::default()
-                },
-                Shadow {
-                    y: 2.0,
-                    blur: 6.0,
-                    color: Color::BLACK.alpha(0.26),
-                    ..Shadow::default()
-                },
-                Shadow {
-                    y: 12.0,
-                    blur: 32.0,
-                    color: Color::BLACK.alpha(0.40),
-                    ..Shadow::default()
-                },
-            ]
-        } else {
-            [
-                Shadow {
-                    y: 1.0,
-                    blur: 0.0,
-                    color: sheen,
-                    inset: true,
-                    ..Shadow::default()
-                },
-                Shadow {
-                    y: 1.0,
-                    blur: 3.0,
-                    color: Color::BLACK.alpha(0.05),
-                    ..Shadow::default()
-                },
-                Shadow {
-                    y: 8.0,
-                    blur: 24.0,
-                    color: Color::BLACK.alpha(0.07),
-                    ..Shadow::default()
-                },
-            ]
-        };
-        let shadow_focus = Shadow {
-            blur: S12,
-            color: accent.alpha(0.08),
-            ..Shadow::default()
-        };
-        let horizon_stops = [
-            (0.0, bg.alpha(0.0)),
-            (0.35, bg.alpha(0.32)),
-            (0.68, bg.alpha(0.76)),
-            (1.0, bg.alpha(0.95)),
-        ];
         let mut k = Kit::from_palette_focus(
             PaletteSeed {
                 bg,
@@ -697,7 +559,7 @@ impl Theme {
             border_strong: rule,
             border_focus: accent,
             hover: Color::TRANSPARENT,
-            pressed: Color::TRANSPARENT,
+            pressed,
             contrast_hover: bg.alpha(0.10),
             contrast_pressed: bg.alpha(0.20),
             scrim: darkest.alpha(if dark { 0.5 } else { 0.3 }),
@@ -788,13 +650,6 @@ impl Theme {
             .mono()
             .lh(14.0)
             .features("'tnum' 1");
-        let display = TextStyle::new(24.0, 400.0)
-            .family(Family::Named(
-                "\"New York\", \"Iowan Old Style\", \"Charter\", \"Georgia\", \"DejaVu Serif\", serif",
-            ))
-            .lh(30.0)
-            .tracking(-0.35);
-        let display_italic = display.italic().tracking(-0.25);
         k.ty.ui = ui;
         k.ty.ui_medium = medium(ui);
         k.ty.ui_compact = ui.lh(small.line_height);
@@ -809,27 +664,10 @@ impl Theme {
         k.radius.md = Size::Default.radius();
         k.radius.lg = Size::Default.radius();
         k.radius.xl = Size::Large.radius();
-        let shade = |a: f32| Color::BLACK.alpha(if dark { a * 2.4 } else { a });
-        let lift = |near: f32, far: (f32, f32)| {
-            vec![
-                Shadow {
-                    y: 1.0,
-                    blur: 3.0,
-                    color: shade(near),
-                    ..Shadow::default()
-                },
-                Shadow {
-                    y: far.0,
-                    blur: far.1,
-                    color: shade(0.10),
-                    ..Shadow::default()
-                },
-            ]
-        };
         k.elevation = rune_kit::Elevation::default();
-        k.elevation.floating = lift(0.08, (S6, S24));
-        k.elevation.md = k.elevation.floating.clone();
-        k.elevation.overlay = lift(0.10, (S16, S48));
+        k.elevation.floating = Vec::new();
+        k.elevation.md = Vec::new();
+        k.elevation.overlay = Vec::new();
         let mut shell = k.clone();
         shell.radius.lg = 0.0;
         let ring = Shadow {
@@ -840,34 +678,26 @@ impl Theme {
         let mut overlay_kit = k.clone();
         overlay_kit.c.layer_01 = overlay;
         overlay_kit.c.surface_raised = overlay;
-        overlay_kit.c.hover = accent_veil;
+        overlay_kit.c.hover = selected;
         overlay_kit.c.surface_raised_hover = Color::TRANSPARENT;
         overlay_kit.c.std_border = Color::TRANSPARENT;
-        overlay_kit.elevation.floating.insert(0, ring);
-        overlay_kit.elevation.md.insert(0, ring);
-        overlay_kit.elevation.overlay.insert(0, ring);
+        overlay_kit.elevation.floating = vec![ring];
+        overlay_kit.elevation.md = vec![ring];
+        overlay_kit.elevation.overlay = vec![ring];
         Self {
             shell,
             overlay: overlay_kit,
             surface,
             chip_fill,
-            glass,
-            dock_glass,
-            overlay_glass,
             hairline,
-            rim_top,
-            rim_top_subtle,
-            rim_bottom,
-            rim_focus,
-            seam_shadow,
             mine: raised,
+            selected,
             text,
             muted,
             faint,
             accent,
             accent_text,
             on_accent,
-            accent_veil,
             steer,
             worktree: info,
             delegated,
@@ -877,10 +707,6 @@ impl Theme {
             warning,
             added: success.alpha(if dark { 0.12 } else { 0.10 }),
             removed: danger.alpha(if dark { 0.12 } else { 0.10 }),
-            shadow_composer,
-            shadow_deck,
-            shadow_focus,
-            horizon_stops,
             syntax,
             ui,
             ui_medium: medium(ui),
@@ -888,13 +714,24 @@ impl Theme {
             small_medium: medium(small),
             body,
             title: TextStyle::new(14.0, 600.0).lh(20.0).tracking(-0.18),
-            display,
-            display_italic,
             mono,
             mono_small,
             mono_micro,
             k,
         }
+    }
+
+    /// Flat base16 tooltip appearance passed to `Cx::help_look`.
+    pub fn help_look(&self) -> HelpLook {
+        HelpLook::system(self.k.dark)
+            .fill(self.overlay.c.layer_01)
+            .ink(self.text)
+            .ring(HAIRLINE, self.hairline)
+            .radius(Size::Small.radius())
+            .padding(S8, S4)
+            .font(self.small)
+            .keycaps(self.surface, self.muted, self.mono_micro, false)
+            .shadows([])
     }
 
     /// Assistant prose: the message type, code blocks on `surface`.

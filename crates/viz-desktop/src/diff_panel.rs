@@ -8,7 +8,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rune::{Color, Cursor, El, Phase, ScrollSpec, Shadow, Tx, col, el, icon, row, text};
+use rune::{Color, Cursor, El, Phase, ScrollSpec, Tx, col, el, icon, row, text};
 use rune_kit::{
     ButtonVariant, IconButtonVariant,
     diff::{DiffMode, DiffState, DiffView, parse},
@@ -17,10 +17,7 @@ use viz_client::protocol::{GitChange, RunId};
 
 use crate::{
     app::Desktop,
-    theme::{
-        HAIRLINE, ICON_SMALL, OVERLAY_BLUR, RADIUS_INNER, S2, S4, S6, S8, S12, Size,
-        TOOLBAR_HEIGHT, Theme,
-    },
+    theme::{HAIRLINE, ICON_SMALL, RADIUS_INNER, S2, S4, S6, S8, S12, Size, TOOLBAR_HEIGHT, Theme},
     ui,
 };
 
@@ -287,17 +284,8 @@ pub fn sheet(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .w(width)
         .h_full()
         .min_h(0.0)
-        .fill(t.overlay_glass)
-        .backdrop_blur(OVERLAY_BLUR)
+        .fill(t.overlay.c.layer_01)
         .border(HAIRLINE, t.hairline)
-        .box_shadow(Shadow {
-            x: -6.0,
-            y: 0.0,
-            blur: 24.0,
-            spread: 0.0,
-            color: Color::BLACK.alpha(if t.k.dark { 0.36 } else { 0.14 }),
-            inset: false,
-        })
         .modal(true, |s: &mut Desktop| s.diff.open = false)
         .child(panel_content(s, t).pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0)));
     layer.push(
@@ -432,13 +420,20 @@ fn scope_tab(
     on_press: impl Fn(&mut Desktop, &mut Tx) + 'static,
     t: &Theme,
 ) -> El {
-    let mut tab = col()
+    row()
         .key(key.to_owned())
         .role("tab")
         .label(label.to_owned())
         .checked(active)
-        .h(TOOLBAR_HEIGHT)
-        .justify_center()
+        .h(Size::Small.height())
+        .px(S8)
+        .center()
+        .radius(Size::Small.radius())
+        .fill(if active {
+            t.selected
+        } else {
+            Color::TRANSPARENT
+        })
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .hover_group()
@@ -449,18 +444,7 @@ fn scope_tab(
                 .color(if active { t.text } else { t.muted })
                 .group_color(t.text)
                 .a11y_hidden(),
-        );
-    if active {
-        tab = tab.child(
-            el().key("diff-tab-rail")
-                .pin(Some(0.0), None, Some(0.0), Some(0.0))
-                .h(S2)
-                .radius(HAIRLINE)
-                .fill(t.accent)
-                .a11y_hidden(),
-        );
-    }
-    tab
+        )
 }
 
 fn file_strip(s: &Desktop, t: &Theme) -> Option<El> {
@@ -480,7 +464,7 @@ fn file_strip(s: &Desktop, t: &Theme) -> Option<El> {
             .find(|entry| entry.path == path)
             .map_or(GitChange::Modified, |entry| entry.change);
         let (letter, color) = change_badge(change, t);
-        row()
+        let mut chip = row()
             .key(format!("diff-jump-{index}"))
             .role("button")
             .label(format!("Jump to {path}"))
@@ -490,29 +474,28 @@ fn file_strip(s: &Desktop, t: &Theme) -> Option<El> {
             .gap(S4)
             .center_y()
             .radius(RADIUS_INNER)
-            .continuous_corners()
-            .fill(if active { t.accent_veil } else { t.chip_fill })
-            .border(
-                HAIRLINE,
-                if active {
-                    t.accent.alpha(0.35)
-                } else {
-                    t.hairline
-                },
-            )
+            .fill(if active { t.accent } else { t.chip_fill })
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .hover_group()
             .press_scale(0.97)
-            .on_press_tx(move |s: &mut Desktop, tx| s.diff.view.scroll_to_file(index, tx))
-            .child(text(letter).font(t.mono_micro).color(color).a11y_hidden())
-            .child(
-                text(name.to_owned())
-                    .font(t.mono_small)
-                    .color(if active { t.text } else { t.muted })
-                    .group_color(t.text)
-                    .a11y_hidden(),
-            )
+            .on_press_tx(move |s: &mut Desktop, tx| s.diff.view.scroll_to_file(index, tx));
+        if !active {
+            chip = chip.border(HAIRLINE, t.hairline);
+        }
+        chip.child(
+            text(letter)
+                .font(t.mono_micro)
+                .color(if active { t.on_accent } else { color })
+                .a11y_hidden(),
+        )
+        .child(
+            text(name.to_owned())
+                .font(t.mono_small)
+                .color(if active { t.on_accent } else { t.muted })
+                .group_color(if active { t.on_accent } else { t.text })
+                .a11y_hidden(),
+        )
     });
     Some(
         row()
@@ -564,7 +547,7 @@ fn body(s: &Desktop, t: &Theme) -> El {
                         .align(rune::Align::Center),
                 )
                 .child(
-                    ui::button("Retry", ButtonVariant::Outline, Size::Small)
+                    ui::button("Retry", ButtonVariant::Neutral, Size::Small)
                         .on_press_tx(move |s: &mut Desktop, tx| match scope {
                             DiffScope::Thread => s.open_thread_diff(tx),
                             DiffScope::WorkingTree => s.open_working_tree_diff(tx),

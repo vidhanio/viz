@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use rune::{
-    Color, El, Icon, Key, KeyEvent, ScrollSpec, Span, TextEdit, Tx, col, el, icon, rich, row, text,
+    Color, El, Icon, Key, KeyEvent, ScrollSpec, Span, TextEdit, Tx, col, icon, rich, row, text,
 };
 use rune_kit::{Keybind, TextInput};
 use viz_client::protocol::{SearchHit, ThreadId, ThreadSummary};
@@ -12,7 +12,7 @@ use crate::{
     app::{Desktop, thread_title},
     server::{Command, ThreadChange},
     sidebar,
-    theme::{DIALOG_INSET, HAIRLINE, ICON, PALETTE_WIDTH, S2, S4, S8, S16, S24, S32, Size, Theme},
+    theme::{DIALOG_INSET, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
     ui,
 };
 
@@ -428,12 +428,6 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
     } else {
         labels
     };
-    let indicator = el()
-        .w(S2)
-        .h(S16)
-        .radius(HAIRLINE)
-        .fill(if active { t.accent } else { Color::TRANSPARENT })
-        .a11y_hidden();
     let mut item = row()
         .key(choice.key())
         .role("option")
@@ -443,14 +437,17 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         .preserve_focus_on_press(true)
         .w_full()
         .min_h(S32)
-        .pl(S4)
-        .pr(S8)
+        .px(S8)
         .py(S4)
         .gap(S8)
         .center_y()
         .radius(Size::Default.radius())
+        .fill(if active {
+            t.selected
+        } else {
+            Color::TRANSPARENT
+        })
         .hover_group()
-        .child(indicator)
         .child(
             icon(glyph, ICON)
                 .color(if active { t.accent_text } else { t.muted })

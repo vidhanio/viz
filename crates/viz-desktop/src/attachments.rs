@@ -192,10 +192,8 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
                     .gap(S6)
                     .center_y()
                     .radius(RADIUS_CONTROL)
-                    .continuous_corners()
                     .fill(t.chip_fill)
                     .border(HAIRLINE, t.hairline)
-                    .help(&attachment.name)
                     .child(
                         icon(&ui::FILE_READ, ICON_SMALL)
                             .color(t.muted)
@@ -207,7 +205,8 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
                             .color(t.text)
                             .max_w(CHIP_NAME_MAX)
                             .shrink()
-                            .truncate(),
+                            .truncate()
+                            .help_when_truncated(&attachment.name),
                     )
                     .children(
                         size_label.map(|label| {
@@ -263,10 +262,15 @@ pub fn chip(name: &str, t: &Theme) -> El {
         .min_w(0.0)
         .shrink()
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .fill(t.chip_fill)
         .border(HAIRLINE, t.hairline)
-        .help(name)
         .child(icon(&ui::FILE_READ, ICON_SMALL).color(t.muted))
-        .child(text(name).font(t.small).color(t.text).shrink().truncate())
+        .child(
+            text(name)
+                .font(t.small)
+                .color(t.text)
+                .shrink()
+                .truncate()
+                .help_when_truncated(name),
+        )
 }

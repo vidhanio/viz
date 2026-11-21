@@ -33,19 +33,6 @@ const TOAST_MAX: usize = 3;
 /// The window's size on launch, in points; headless renders use it too.
 pub const WINDOW_SIZE: (f32, f32) = (1240.0, 760.0);
 
-/// Whether only the platform's primary shortcut modifier (`⌘` on macOS, `Ctrl`
-/// elsewhere) is held.
-pub const fn primary_mod_only(mods: rune::Mods) -> bool {
-    if mods.shift || mods.alt {
-        return false;
-    }
-    if cfg!(target_os = "macos") {
-        mods.cmd && !mods.ctrl
-    } else {
-        (mods.cmd || mods.ctrl) && !mods.logo
-    }
-}
-
 /// The server connection, as the sidebar footer shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -119,14 +106,6 @@ impl NewThread {
                 .map_or(runner.default, |id| id == runner.id)
         })
     }
-}
-
-/// A queued input currently loaded into the composer for editing.
-#[derive(Debug, Clone)]
-pub struct EditingQueued {
-    pub thread: ThreadId,
-    pub run: RunId,
-    saved_draft: TextEdit,
 }
 
 /// Pending destructive checkpoint action awaiting user confirmation.
@@ -281,12 +260,6 @@ pub struct Desktop {
     pub expanded: HashSet<String>,
     /// The composer's text.
     pub draft: TextEdit,
-    /// Default delivery mode when sending while a turn is active.
-    pub send_mode: SendMode,
-    /// Modifier keys currently held down in the window.
-    modifiers: rune::Mods,
-    /// Queued input currently being edited in the composer, if any.
-    pub editing_queued: Option<EditingQueued>,
     pub attachments: Vec<Attachment>,
     attachment_reads: HashSet<AttachmentTarget>,
     environment_epoch: u64,
@@ -344,9 +317,6 @@ impl Desktop {
             next_draft: 0,
             expanded: HashSet::new(),
             draft,
-            send_mode: SendMode::Queue,
-            modifiers: rune::Mods::default(),
-            editing_queued: None,
             attachments: Vec::new(),
             attachment_reads: HashSet::new(),
             environment_epoch: 0,
@@ -441,9 +411,6 @@ impl Desktop {
     /// The window gained or lost focus; coming back reads the open thread.
     pub fn set_focus(&mut self, focused: bool, tx: &mut Tx) {
         self.focused = focused;
-        if !focused {
-            self.modifiers = rune::Mods::default();
-        }
         if focused
             && self.connected()
             && let Some(id) = self
@@ -452,12 +419,6 @@ impl Desktop {
         {
             self.send(Command::Update(id, ThreadChange::Unread(false)), tx);
         }
-    }
-
-    /// Updates live modifier state used to preview and flip Queue/Steer send
-    /// actions while the primary shortcut modifier is held.
-    pub const fn set_modifiers(&mut self, mods: rune::Mods, _tx: &mut Tx) {
-        self.modifiers = mods;
     }
 
     /// Shows `thread`, loading until its view arrives.
@@ -519,7 +480,6 @@ impl Desktop {
     }
 
     fn save_draft(&mut self) {
-        self.restore_queue_draft();
         let edit = mem::replace(&mut self.draft, TextEdit::new(""));
         let attachments = mem::take(&mut self.attachments);
         if let Some(id) = self.selected.take()
@@ -540,7 +500,6 @@ impl Desktop {
         self.history_loading = false;
         self.state = None;
         self.expanded.clear();
-        self.editing_queued = None;
         self.completion.reset();
         self.open_picker = None;
         self.diff.reset();
@@ -575,13 +534,9 @@ impl Desktop {
             return;
         }
         let status_changed = self.state.as_ref().map(|prev| prev.status) != Some(state.status);
-        if let Some(editing) = &self.editing_queued
-            && (editing.thread != id || !state.queue.iter().any(|item| item.run == editing.run))
-        {
-            self.restore_queue_draft();
-        }
         self.thread.sync_acp(state.live.as_ref());
         self.state = Some(state);
+        self.model_menu.clear_loading();
         if status_changed {
             self.update_title(tx);
         }
@@ -837,6 +792,7 @@ impl Desktop {
         {
             runner.options = options;
         }
+        self.model_menu.clear_loading();
     }
 
     pub fn created(&mut self, draft: u64, id: ThreadId, tx: &mut Tx) {
@@ -960,7 +916,7 @@ impl Desktop {
     }
 
     fn attachment_target(&self) -> Option<AttachmentTarget> {
-        if !self.connected() || self.editing_queued.is_some() {
+        if !self.connected() {
             return None;
         }
         if let Some(thread) = &self.new_thread {
@@ -1046,114 +1002,9 @@ impl Desktop {
             && (!self.draft.text.trim().is_empty() || !self.attachments.is_empty())
     }
 
-    /// Toggles the default busy-turn delivery mode between Queue and Steer.
-    pub const fn toggle_send_mode(&mut self) {
-        self.send_mode = match self.send_mode {
-            SendMode::Queue => SendMode::Steer,
-            SendMode::Steer => SendMode::Queue,
-        };
-    }
-
-    /// Whether the primary shortcut modifier is held to flip Queue and Steer.
-    pub const fn flip_send_mode(&self) -> bool {
-        primary_mod_only(self.modifiers)
-    }
-
-    /// Busy-turn delivery mode currently in effect, flipping the default while
-    /// the primary shortcut modifier is held.
-    pub const fn effective_send_mode(&self) -> SendMode {
-        if self.flip_send_mode() {
-            match self.send_mode {
-                SendMode::Queue => SendMode::Steer,
-                SendMode::Steer => SendMode::Queue,
-            }
-        } else {
-            self.send_mode
-        }
-    }
-
-    /// Loads a queued input into the composer and keeps the unsent draft.
-    pub fn start_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str, tx: &mut Tx) {
-        self.preview_edit_queued(thread, run, body);
-        self.completion.reset();
-        tx.focus("draft", false);
-    }
-
-    /// Loads queue-edit mode, including for previews with no input transaction.
-    pub fn preview_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str) {
-        let mut edit = TextEdit::new(body);
-        edit.focused = true;
-        let previous = mem::replace(&mut self.draft, edit);
-        let saved_draft = self
-            .editing_queued
-            .take()
-            .map_or(previous, |editing| editing.saved_draft);
-        self.editing_queued = Some(EditingQueued {
-            thread,
-            run,
-            saved_draft,
-        });
-    }
-
-    fn restore_queue_draft(&mut self) {
-        if let Some(editing) = self.editing_queued.take() {
-            let focused = self.draft.focused;
-            self.draft = editing.saved_draft;
-            self.draft.focused = focused;
-            self.completion.reset();
-        }
-    }
-
-    /// Leaves queue-edit mode and restores the draft saved before editing.
-    pub fn cancel_edit_queued(&mut self, tx: &mut Tx) {
-        self.restore_queue_draft();
-        self.draft.focused = true;
-        tx.focus("draft", false);
-    }
-
-    /// Whether the queued input still exists and has text or attachments.
-    pub fn can_save_queued(&self) -> bool {
-        self.connected()
-            && self.editing_queued.as_ref().is_some_and(|editing| {
-                self.state.as_ref().is_some_and(|state| {
-                    state.queue.iter().any(|item| {
-                        item.run == editing.run
-                            && (!self.draft.text.trim().is_empty() || item.attachment_count > 0)
-                    })
-                })
-            })
-    }
-
-    /// Saves the edited queued message via `queue.update` and restores the
-    /// prior draft.
-    pub fn save_edit_queued(&mut self, tx: &mut Tx) {
-        if self.can_save_queued()
-            && let Some(editing) = &self.editing_queued
-            && self.send(
-                Command::EditQueued {
-                    thread: editing.thread,
-                    run: editing.run,
-                    text: self.draft.text.clone(),
-                },
-                tx,
-            )
-        {
-            self.cancel_edit_queued(tx);
-        }
-    }
-
-    /// Creates a draft's session on first send, or sends to an existing thread.
+    /// Creates a draft's session on first send, or sends to an existing thread
+    /// (steering at the next safe step when a turn is active).
     pub fn send_input(&mut self, tx: &mut Tx) {
-        if self.editing_queued.is_some() {
-            self.save_edit_queued(tx);
-            return;
-        }
-        self.send_input_with_mode(None, tx);
-    }
-
-    /// Like [`Desktop::send_input`], optionally overriding the busy-turn
-    /// delivery mode (e.g. `Cmd/Ctrl+Enter` flipping Queue and Steer).
-    pub fn send_input_with_mode(&mut self, override_mode: Option<SendMode>, tx: &mut Tx) {
         if !self.can_send() {
             return;
         }
@@ -1172,9 +1023,7 @@ impl Desktop {
                 },
             }
         } else if let Some(thread) = self.selected {
-            let mode = self
-                .busy()
-                .then(|| override_mode.unwrap_or_else(|| self.effective_send_mode()));
+            let mode = self.busy().then_some(SendMode::Steer);
             Command::SendInput(SendInput {
                 thread,
                 text: self.draft.text.clone(),

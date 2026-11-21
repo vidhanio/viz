@@ -83,10 +83,6 @@ impl Navigation {
         self.edit = None;
     }
 
-    pub(crate) const fn has_overlay(&self) -> bool {
-        self.env_menu || self.menu.is_some() || self.edit.is_some()
-    }
-
     /// Takes the sidebar's mode and collapsed projects from
     /// `$XDG_STATE_HOME/viz/desktop.json` and keeps them there from now on.
     /// A missing or unreadable file leaves the defaults.
@@ -358,7 +354,6 @@ impl<'a> Outline<'a> {
             icon(ui::harness_icon(harness), ICON)
                 .color(ink)
                 .group_color(if thread.archived { t.muted } else { t.text })
-                .help(&thread.harness_name)
                 .a11y_hidden()
         };
         let mut node = TreeLine {
@@ -429,7 +424,6 @@ impl<'a> Outline<'a> {
                         .h(18.0)
                         .center()
                         .radius(RADIUS_INNER)
-                        .hover_alone()
                         .on_press(move |s: &mut Desktop| s.navigation.toggle_parent(id))
                         .child(
                             text(kid_count.to_string())
@@ -499,7 +493,7 @@ impl<'a> Outline<'a> {
         };
         let title = thread_title(child);
         let indent = f32::from(depth.saturating_sub(1)).mul_add(TREE_STEP, ROW_INSET);
-        let mut row_el = row()
+        row()
             .key(format!("thread-{id}"))
             .role("treeitem")
             .label(title)
@@ -511,33 +505,20 @@ impl<'a> Outline<'a> {
             .gap(S6)
             .center_y()
             .radius(RADIUS_CONTROL)
-            .continuous_corners()
             .fill(if selected {
-                t.accent_veil
+                t.selected
             } else {
                 Color::TRANSPARENT
             })
             .hover_group()
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
-        if selected {
-            row_el = row_el.child(
-                el().key("selected-rail")
-                    .pin(Some(S2), Some((TREE_ROW_CHILD - 14.0) / 2.0), None, None)
-                    .size(2.5, 14.0)
-                    .radius(1.25)
-                    .fill(t.accent)
-                    .a11y_hidden(),
-            );
-        }
-        row_el
+            .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx))
             .child(elbow)
             .child(
                 icon(ui::harness_icon(&child.harness), ICON_SMALL + 1.0)
                     .color(if selected { t.text } else { t.faint })
                     .group_color(t.muted)
-                    .help(&child.harness_name)
                     .a11y_hidden(),
             )
             .child(
@@ -587,8 +568,7 @@ impl<'a> Outline<'a> {
         .disabled(!s.connected() || s.new_thread.is_some())
         .on_press_tx(move |s: &mut Desktop, tx| s.create_in_project(&new_id, tx))
         .build(&t.k)
-        .key("project-new-thread")
-        .hover_alone();
+        .key("project-new-thread");
         let wt_id = project.path.clone();
         let add_worktree = project.git.is_some().then(|| {
             let enabled = s.connected() && s.new_thread.is_none();
@@ -600,12 +580,10 @@ impl<'a> Outline<'a> {
                 .size(Size::Small.height(), Size::Small.height())
                 .center()
                 .radius(Size::Small.radius())
-                .continuous_corners()
                 .disabled(!enabled)
                 .focusable(enabled)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
                 .hover_group()
-                .hover_alone()
                 .press_scale(0.95)
                 .on_press_tx(move |s: &mut Desktop, tx| s.create_in_project_worktree(&wt_id, tx))
                 .child(
@@ -888,7 +866,6 @@ pub fn header_buttons(s: &Desktop, t: &Theme) -> El {
         .size(Size::Default.height(), Size::Default.height())
         .center()
         .radius(Size::Default.radius())
-        .continuous_corners()
         .disabled(!worktree_enabled)
         .focusable(worktree_enabled)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
@@ -1049,15 +1026,20 @@ fn empty_note(s: &Desktop, query: &str, t: &Theme) -> Option<El> {
 fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
     let tab = |mode: Mode, label: &'static str| {
         let active = mode == current;
-        col()
+        row()
             .key(mode.name())
             .role("radio")
             .label(label)
             .checked(active)
-            .h(theme::TREE_ROW)
+            .h(Size::Small.height())
             .px(S8)
             .center()
             .radius(Size::Small.radius())
+            .fill(if active {
+                t.selected
+            } else {
+                Color::TRANSPARENT
+            })
             .hover_group()
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
@@ -1068,15 +1050,6 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
                     .group_color(t.text)
                     .a11y_hidden(),
             )
-            .children(active.then(|| {
-                el().key("mode-rail")
-                    .matched("sidebar-mode-rail")
-                    .pin(Some(S8), None, Some(S8), Some(0.0))
-                    .h(S2)
-                    .radius(HAIRLINE)
-                    .fill(t.accent)
-                    .a11y_hidden()
-            }))
     };
     row()
         .key("sidebar-mode")
@@ -1086,7 +1059,7 @@ fn mode_switch(current: Mode, archived: El, t: &Theme) -> El {
         .h(theme::TREE_ROW)
         .mt(theme::S12)
         .mb(theme::S4)
-        .gap(theme::S2)
+        .gap(theme::S4)
         .center_y()
         .child(tab(Mode::Recent, "Recent"))
         .child(tab(Mode::Projects, "Projects"))
@@ -1212,7 +1185,6 @@ fn environment_footer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .gap(S6)
         .center_y()
         .radius(RADIUS_CONTROL)
-        .continuous_corners()
         .on_press(|s: &mut Desktop| s.navigation.env_menu = !s.navigation.env_menu)
         .child(ui::dot(color))
         .child(
