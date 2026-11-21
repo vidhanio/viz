@@ -519,10 +519,18 @@ final class Server {
     return try JSONDecoder().decode(VizProtocol.Launched.self, from: data).thread
   }
 
-  func diff(thread: Int, run: Int? = nil, summary: Bool = false) async throws -> VizProtocol.GitDiff
-  {
+  func diff(
+    thread: Int,
+    run: Int? = nil,
+    workingTree: Bool = false,
+    summary: Bool = false
+  ) async throws -> VizProtocol.GitDiff {
     var params: [String: Any] = ["thread": thread, "summary": summary]
-    if let run { params["run"] = run }
+    if let run {
+      params["run"] = run
+    } else if workingTree {
+      params["workingTree"] = true
+    }
     let data = try await call(run == nil ? "thread.diff" : "run.diff", params: params)
     return try JSONDecoder().decode(VizProtocol.GitDiff.self, from: data)
   }

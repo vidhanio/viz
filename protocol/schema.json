@@ -3532,7 +3532,7 @@
           "thread": {
             "$ref": "#/$defs/ThreadId"
           },
-          "working_tree": {
+          "workingTree": {
             "description": "Compare the staged, unstaged, and untracked files in the checkout to\nHEAD.",
             "type": "boolean",
             "default": false

@@ -342,6 +342,7 @@ pub struct RunDiff {
 /// Compare the first and latest completed checkpoint in a thread, or inspect
 /// its checkout.
 #[derive(Debug, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 pub struct ThreadDiff {
     pub thread: ThreadId,
     /// Compare the staged, unstaged, and untracked files in the checkout to
