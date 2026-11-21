@@ -34,7 +34,7 @@ Roadmap and open work. Check items off in the same change that lands them.
 - [x] Configurable dark and light base16 schemes and Home Manager Stylix integration.
 - [x] Harness icons and configured harness display names; full model and thinking labels, inline thinking buttons, and animated model search.
 - [x] Show the official Google Antigravity mark for the `agy` harness.
-- [x] Grouped timeline activity and persistent task panel; stream reasoning and running commands.
+- [x] Compact, grouped timeline activity with readable tool output, streaming reasoning and commands, and task cards with status and result previews.
 - [x] Use ACP titles and context-window reports when the runner sends them.
 - [ ] Settings UI for desktop preferences in `desktop.toml`
 - [ ] Tray, global shortcut to summon

@@ -24,7 +24,7 @@ Out of scope until a job above needs it: git (diffs, checkpoints, worktrees, com
 
 - **Layout.** Sidebar and thread. A thread with delegated tasks keeps their panel at the top right. Menus, palette, dialogs and toasts are temporary overlays.
 - **Sidebar.** New thread on the left, close sidebar on the right. Select the environment above the sidebar list. Two list modes: _Recent_ (threads newest first, project under each title) and _Projects_ (collapsible projects, threads newest first). Task status belongs in the task panel and timeline.
-- **Activity.** Group reasoning and consecutive tools behind a plain-language summary. While a command runs, show it without making the user open the group. Expanded rows show readable command output and changes, not RPC payloads.
+- **Activity.** Keep reasoning, tools, and delegated tasks in compact groups. Show running commands without opening the group. Expand only to show readable output, changes, or the reasoning trace. Show context use beside the composer options, not in the thread header.
 - **Copy.** Short, plain, sentence case. No exclamation marks, filler or marketing. Labels name the thing; buttons name the action. Use display names for models, providers and thinking levels, not their wire IDs.
 
 ## Design system (desktop)

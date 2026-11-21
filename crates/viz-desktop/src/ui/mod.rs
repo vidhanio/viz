@@ -720,6 +720,7 @@ lucide! {
     ARROW_UP = ArrowUp;
     /// Delegated work.
     AGENT = Workflow;
+    BRAIN = Brain;
     CHEVRON = ChevronRight;
     CHEVRON_OPEN = ChevronDown;
     CHEVRON_UP = ChevronUp;

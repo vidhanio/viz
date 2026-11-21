@@ -19,6 +19,7 @@ use crate::{
 type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
+    ("activity", activity),
     ("selectors", selectors),
     ("model-search", model_search),
     ("new-agent", new_agent),
@@ -229,6 +230,36 @@ fn transcript(attachments: &[&str]) -> Thread {
     )
 }
 
+/// An expanded work log with an empty search, padded reasoning and terminal
+/// output.
+fn activity(s: &mut Desktop) {
+    workspace(s);
+    s.thread = preview_thread(
+        [
+            prompt("Check the sample exports."),
+            EntryData::Tool(ToolRecord {
+                input: Some(r#"{"query":"export newline conventions"}"#.into()),
+                ..preview_tool("search-1", "Search", "search", ToolCallStatus::Completed)
+            }),
+            EntryData::Thought {
+                key: "1:0".into(),
+                text: "\n\n**Compare the output.** The only meaningful difference should be the final newline.\n\n\n\n".into(),
+            },
+            EntryData::Tool(ToolRecord {
+                input: Some(r#"{"command":"wc -l old.md new.md"}"#.into()),
+                output: Some(
+                    "Created At: 2026-11-20T19:51:26-05:00\nCompleted At: 2026-11-20T19:51:31-05:00\nCommand exited with code 0.\n\nCommand output:\n    42 old.md\n    43 new.md\n    85 total\n".into(),
+                ),
+                ..preview_tool("run-1", "Check line counts", "execute", ToolCallStatus::Completed)
+            }),
+            response("The updated export preserves the final newline."),
+        ],
+        None,
+    );
+    s.toggle("acp-1-search-1-activity");
+    s.toggle("acp-1-run-1");
+}
+
 /// The model picker open on the session's model.
 fn selectors(s: &mut Desktop) {
     workspace(s);
@@ -429,7 +460,8 @@ fn subagents(s: &mut Desktop) {
         status,
         reachable: true,
         title: title.into(),
-        result: None,
+        result: (status == TaskStatus::Completed)
+            .then(|| "CRLF survives the join; only the final newline was missing.".into()),
         error: None,
     })
     .into();
@@ -470,7 +502,7 @@ fn subagent(s: &mut Desktop) {
     state.status = ThreadStatus::Working;
     state.usage = Some(viz_client::protocol::ContextUsage {
         used: 34_817,
-        size: 200_000,
+        size: 1_000_000,
     });
     state.live = Some(LiveTurn {
         turn: "1".into(),

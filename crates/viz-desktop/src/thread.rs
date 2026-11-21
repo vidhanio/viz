@@ -1,5 +1,7 @@
 //! Renderable transcript and live ACP activity.
 
+use std::borrow::Cow;
+
 use serde_json::Value;
 use viz_client::protocol::{
     Entry, EntryData, EntryId, LiveTextKind, LiveTurn, PlanStatus, ThreadId, ToolCallStatus,
@@ -8,8 +10,8 @@ use viz_client::protocol::{
 
 /// Longest tool-call summary, in characters.
 const SUMMARY_CHARS: usize = 96;
-/// Longest tool argument listing an expanded row shows, in characters.
-const ARGUMENTS_CHARS: usize = 4_000;
+/// Longest command text shown in a tooltip, in characters.
+const COMMAND_CHARS: usize = 4_000;
 /// Longest tool output an expanded row shows, in characters (its tail for
 /// running output, its head for a result).
 const OUTPUT_CHARS: usize = 6_000;
@@ -114,21 +116,25 @@ pub struct Tool {
     pub name: String,
     /// One-line summary of the arguments.
     pub summary: String,
-    /// Recognized human-readable details, never a serialized arguments object.
+    /// Recognized command text, never a serialized arguments object.
     pub input: Option<String>,
     pub timeout_ms: Option<u64>,
     pub started_at: Option<i64>,
     /// Progress.
     pub status: ToolStatus,
-    /// The result text, or running output, capped.
+    /// Exit status reported by a recognized terminal envelope.
+    pub exit_code: Option<i32>,
+    /// Display-ready result text or running output, capped.
     pub output: String,
+    /// The task confirmed by a viz delegation receipt, even if it is still
+    /// queued.
+    pub task_id: Option<String>,
     /// The thread a subagent call delegated to.
     pub child: Option<ThreadId>,
     pub child_environment: Option<String>,
     /// The viz tool an ACP call ran.
     pub viz: Option<String>,
     pub diffs: Vec<ToolDiff>,
-    pub locations: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -357,23 +363,36 @@ impl Tool {
                 .or(record.name.as_deref()),
         }
         .unwrap_or("tool");
+        let command = is_command(name);
         let arguments = record
             .input
             .as_deref()
             .and_then(|input| serde_json::from_str(input).ok());
         let (summary, mut input, timeout_ms) = tool_input(name, arguments.as_ref());
-        if input.is_none() && is_command(name) {
+        if input.is_none() && command {
             let plain = record
                 .input
                 .as_deref()
                 .filter(|text| arguments.is_none() && !text.trim_start().starts_with(['{', '[']));
             input = plain
                 .or_else(|| record.title.strip_prefix("$ "))
-                .map(|text| cap_head(text, ARGUMENTS_CHARS));
+                .map(|text| cap_head(text, COMMAND_CHARS));
         }
+        let output = record.output.as_deref().unwrap_or_default();
+        let delegation = record.viz.as_deref() == Some("delegate_task");
+        let (output, exit_code) = if command || delegation {
+            antigravity_output(output, record.status).unwrap_or((output, None))
+        } else {
+            (output, None)
+        };
+        let preserve_output = command || matches!(name, "read" | "read_file");
+        let (output, task_id) = readable_output(output, preserve_output, delegation);
         let status = match record.status {
             ToolCallStatus::Pending => ToolStatus::Pending,
             ToolCallStatus::InProgress => ToolStatus::Running,
+            ToolCallStatus::Completed if exit_code.is_some_and(|code| code != 0) => {
+                ToolStatus::Failed
+            }
             ToolCallStatus::Completed => ToolStatus::Done,
             ToolCallStatus::Failed => ToolStatus::Failed,
         };
@@ -403,24 +422,134 @@ impl Tool {
             timeout_ms,
             started_at: record.started_at,
             status,
-            output: record.output.as_deref().map_or_else(String::new, |output| {
-                if matches!(status, ToolStatus::Running | ToolStatus::Pending) {
-                    cap_tail(output.trim_end(), OUTPUT_CHARS)
-                } else {
-                    cap_head(output.trim_end(), OUTPUT_CHARS)
-                }
-            }),
+            exit_code,
+            output: cap_output(output, status),
+            task_id,
             child: record.child,
             child_environment: record.child_environment.clone(),
             viz: record.viz.clone(),
             diffs: record.diffs.clone(),
-            locations: record.locations.clone(),
         }
     }
 }
 
 pub fn is_command(name: &str) -> bool {
     matches!(name, "bash" | "execute" | "shell" | "terminal")
+}
+
+/// Antigravity sends the model-facing terminal envelope as ACP content:
+/// <https://github.com/google-antigravity/antigravity-cli/issues/1506>
+fn antigravity_output(output: &str, status: ToolCallStatus) -> Option<(&str, Option<i32>)> {
+    let (timestamp, rest) = output_line(output.strip_prefix("Created At: ")?);
+    if !terminal_timestamp(timestamp) {
+        return None;
+    }
+    let (line, tail) = output_line(rest);
+    let rest = if line
+        .strip_prefix("Completed At: ")
+        .is_some_and(terminal_timestamp)
+    {
+        tail
+    } else {
+        rest
+    };
+    let rest = rest.trim_start_matches(['\n', '\r']);
+    let (line, tail) = output_line(rest);
+    let exit_code = line
+        .strip_prefix("Command exited with code ")
+        .and_then(|code| code.strip_suffix('.'))
+        .and_then(|code| code.parse().ok());
+    let rest = if exit_code.is_some() {
+        tail.trim_start_matches(['\n', '\r'])
+    } else {
+        rest
+    };
+    let (heading, body) = output_line(rest);
+    if heading == "Command output:" {
+        return Some((body, exit_code));
+    }
+    let unfinished = matches!(status, ToolCallStatus::Pending | ToolCallStatus::InProgress);
+    (rest.is_empty() && (exit_code.is_some() || unfinished)).then_some(("", exit_code))
+}
+
+fn output_line(text: &str) -> (&str, &str) {
+    let (line, rest) = text.split_once('\n').unwrap_or((text, ""));
+    (line.strip_suffix('\r').unwrap_or(line), rest)
+}
+
+fn terminal_timestamp(timestamp: &str) -> bool {
+    let Some((date_time, zone)) = timestamp.split_at_checked(19) else {
+        return false;
+    };
+    let matches_format = |text: &str, shape: &[u8]| {
+        text.len() == shape.len()
+            && text
+                .bytes()
+                .zip(shape)
+                .all(|(byte, &expected)| match expected {
+                    b'#' => byte.is_ascii_digit(),
+                    _ => byte == expected,
+                })
+    };
+    matches_format(date_time, b"####-##-##T##:##:##")
+        && (zone == "Z"
+            || zone
+                .strip_prefix(['+', '-'])
+                .is_some_and(|offset| matches_format(offset, b"##:##")))
+}
+
+/// Keep prose and known result fields, not opaque RPC objects. A confirmed
+/// delegation can get its task ID from the same result before it is hidden.
+fn readable_output(
+    output: &str,
+    preserve_output: bool,
+    delegation: bool,
+) -> (Cow<'_, str>, Option<String>) {
+    if (preserve_output && !delegation) || !output.trim_start().starts_with(['{', '[']) {
+        return (Cow::Borrowed(output), None);
+    }
+    let mut parsed = serde_json::from_str::<Value>(output);
+    let task_id = if delegation {
+        let id = parsed
+            .as_mut()
+            .ok()
+            .and_then(|value| value.get_mut("task")?.get_mut("id"));
+        match id.map(Value::take) {
+            Some(Value::String(id)) => Some(id),
+            _ => None,
+        }
+    } else {
+        None
+    };
+    let text = if preserve_output {
+        Cow::Borrowed(output)
+    } else {
+        match parsed {
+            Ok(value) => Cow::Owned(json_text(value).unwrap_or_default()),
+            // The server can truncate an otherwise valid JSON result.
+            Err(error) if error.is_eof() => Cow::Borrowed(""),
+            Err(_) => Cow::Borrowed(output),
+        }
+    };
+    (text, task_id)
+}
+
+fn json_text(value: Value) -> Option<String> {
+    match value {
+        Value::String(text) => (!text.trim().is_empty()).then_some(text),
+        Value::Object(mut fields) => ["text", "message", "error", "output", "content"]
+            .into_iter()
+            .find_map(|key| fields.remove(key).and_then(json_text)),
+        Value::Array(items) => items
+            .into_iter()
+            .filter_map(json_text)
+            .reduce(|mut text, next| {
+                text.push('\n');
+                text.push_str(&next);
+                text
+            }),
+        _ => None,
+    }
 }
 
 /// Project tool-specific fields out of ACP arguments. Unknown
@@ -430,19 +559,25 @@ fn tool_input(name: &str, arguments: Option<&Value>) -> (String, Option<String>,
         return (String::new(), None, None);
     };
     let field = |keys: &[&str]| keys.iter().find_map(|key| str_at(args, key));
-    let command = field(&["command", "cmd"]).or_else(|| {
-        if is_command(name) {
-            args.as_str()
-        } else {
-            None
-        }
-    });
+    let command = if is_command(name) {
+        field(&[
+            "command",
+            "cmd",
+            "CommandLine",
+            "commandLine",
+            "command_line",
+        ])
+        .or_else(|| args.as_str())
+    } else {
+        None
+    };
     let summary = command
         .or_else(|| {
             field(&[
                 "path",
                 "file_path",
                 "filePath",
+                "absolute_path",
                 "task",
                 "query",
                 "pattern",
@@ -454,18 +589,7 @@ fn tool_input(name: &str, arguments: Option<&Value>) -> (String, Option<String>,
         .filter(|text| !text.starts_with("xd://mcp__viz_"))
         .or_else(|| args.as_str())
         .map_or_else(String::new, |text| first_line(text, SUMMARY_CHARS));
-    let input = command
-        .or_else(|| {
-            if matches!(
-                name,
-                "write" | "create" | "edit" | "apply_patch" | "write_file" | "edit_file"
-            ) {
-                field(&["content", "patch", "newText", "new_string"])
-            } else {
-                None
-            }
-        })
-        .map(|text| cap_head(text, ARGUMENTS_CHARS));
+    let input = command.map(|text| cap_head(text, COMMAND_CHARS));
     let millis = |key| args.get(key).and_then(Value::as_u64);
     let timeout = millis("timeout_ms")
         .or_else(|| millis("timeoutMs"))
@@ -494,17 +618,28 @@ fn cap_head(text: &str, max: usize) -> String {
     }
 }
 
-/// `text`'s last `max` characters, with an ellipsis if it was longer.
-fn cap_tail(text: &str, max: usize) -> String {
-    let count = text.chars().count();
-    if count <= max {
-        return text.to_owned();
+fn cap_output(text: Cow<'_, str>, status: ToolStatus) -> String {
+    let live = matches!(status, ToolStatus::Running | ToolStatus::Pending);
+    let cut = if live {
+        text.char_indices()
+            .rev()
+            .nth(OUTPUT_CHARS)
+            .map(|(cut, ch)| cut + ch.len_utf8())
+    } else {
+        text.char_indices().nth(OUTPUT_CHARS).map(|(cut, _)| cut)
+    };
+    let Some(cut) = cut else {
+        return text.into_owned();
+    };
+    match text {
+        Cow::Borrowed(text) if live => format!("…{}", &text[cut..]),
+        Cow::Borrowed(text) => format!("{}…", &text[..cut]),
+        Cow::Owned(mut text) => {
+            let range = if live { 0..cut } else { cut..text.len() };
+            text.replace_range(range, "…");
+            text
+        }
     }
-    let start = text
-        .char_indices()
-        .nth(count - max)
-        .map_or(0, |(start, _)| start);
-    format!("…{}", &text[start..])
 }
 
 fn str_at<'a>(value: &'a Value, name: &str) -> Option<&'a str> {

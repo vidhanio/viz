@@ -1,12 +1,12 @@
-use rune::{El, Tx, row};
-use rune_kit::MenuItem;
-use viz_client::protocol::{ConfigOption, OptionKind, OptionValue, ThreadId};
+use rune::{El, Tx, row, text};
+use rune_kit::{MenuItem, ProgressCircle};
+use viz_client::protocol::{ConfigOption, ContextUsage, OptionKind, OptionValue, ThreadId};
 
 use super::{draft, model};
 use crate::{
     app::{Desktop, NewThread},
     server::Command,
-    theme::{S2, Size, Theme},
+    theme::{self, ICON_SMALL, S2, S4, S8, Size, Theme},
     ui,
 };
 
@@ -40,7 +40,7 @@ pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     if !s.connected() {
         return bar;
     }
-    let (bar, target, options) = if let Some(thread) = &s.new_thread {
+    let (bar, target, options, usage) = if let Some(thread) = &s.new_thread {
         let bar = draft::toolbar(s, thread, bar, t, layer);
         let Some(harness) = thread
             .active_harness(&s.harnesses)
@@ -48,13 +48,71 @@ pub(super) fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         else {
             return bar;
         };
-        (bar, Options::Draft(thread), harness.options.as_slice())
+        (
+            bar,
+            Options::Draft(thread),
+            harness.options.as_slice(),
+            None,
+        )
     } else if let Some((thread, state)) = s.selected.zip(s.state.as_ref()) {
-        (bar, Options::Thread(thread), state.options.as_slice())
+        (
+            bar,
+            Options::Thread(thread),
+            state.options.as_slice(),
+            state.usage.as_ref(),
+        )
     } else {
         return bar;
     };
     session_options(s, t, layer, bar, target, options)
+        .children(usage.and_then(|usage| context_usage(usage, t)))
+}
+
+fn context_usage(usage: &ContextUsage, t: &Theme) -> Option<El> {
+    if usage.size == 0 {
+        return None;
+    }
+    let label = format!("Context: {} of {} tokens", usage.used, usage.size);
+    let used = compact_tokens(usage.used);
+    let total = compact_tokens(usage.size);
+    Some(
+        row()
+            .key("context-usage")
+            .center_y()
+            .gap(S4)
+            .ml(S8)
+            .role("group")
+            .label(&label)
+            .help(label)
+            .child(
+                ProgressCircle::new(theme::fraction(usage.used, usage.size))
+                    .size(ICON_SMALL)
+                    .build(&t.k)
+                    .a11y_hidden(),
+            )
+            .child(
+                text(format!("{used}/{total}"))
+                    .font(t.small)
+                    .color(t.muted)
+                    .a11y_hidden(),
+            ),
+    )
+}
+
+/// Round to one decimal, promoting a rounded 1000k to 1m.
+fn compact_tokens(count: u64) -> String {
+    let (unit, suffix) = match count {
+        0..1_000 => return count.to_string(),
+        1_000..999_950 => (1_000, 'k'),
+        _ => (1_000_000, 'm'),
+    };
+    let step = unit / 10;
+    let tenths = count / step + u64::from(count % step >= step / 2);
+    let whole = tenths / 10;
+    match tenths % 10 {
+        0 => format!("{whole}{suffix}"),
+        digit => format!("{whole}.{digit}{suffix}"),
+    }
 }
 
 fn session_options(

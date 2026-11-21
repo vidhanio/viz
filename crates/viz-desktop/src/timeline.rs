@@ -1,16 +1,15 @@
 //! Transcript, activity, plan checklists, expandable tool records and
 //! subagent cards, in the reading column.
 //!
-//! Every activity row (tools, reasoning, progress, the working line) shares
-//! one layout: a glyph at the card inset, its label one icon step in, so
-//! activity lines up with the text inside cards above and below it.
+//! Activity shares a narrow icon column. Details are only shown when there
+//! is something to read, and a running command stays visible in a folded burst.
 
 use rune::{El, LoopSpec, ScrollSpec, Span, Transition, Tx, col, el, icon, rich, row, text};
 use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
     diff::{FileDiff, LineKind},
 };
-use viz_client::protocol::ThreadStatus;
+use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use crate::{
     app::{Desktop, NewThread, Status},
@@ -148,6 +147,17 @@ const fn is_activity(item: &Item) -> bool {
     matches!(item, Item::Tool(_) | Item::Thinking { .. })
 }
 
+/// A single tool has its own disclosure; it doesn't need a second fold.
+fn single_tool(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    match subagent_call(tool) {
+        Some(Call::Spawn) if spawned(tool) => subagent_link(s, tool, t),
+        Some(call) if call != Call::Spawn && tool.status != ToolStatus::Failed => {
+            subagent_row(s, tool, call, t)
+        }
+        _ => tool_row(s, tool, t),
+    }
+}
+
 fn items<'a>(
     s: &Desktop,
     items: impl Iterator<Item = (&'a Item, bool)> + Clone,
@@ -164,8 +174,15 @@ fn items<'a>(
                     .clone()
                     .take_while(|(item, _)| is_activity(item))
                     .count();
-                let burst = std::iter::once((item, streaming)).chain(items.clone().take(count));
-                rows.push(Kind::Activity, activity_group(s, item.key(), &burst, t));
+                let activity = match item {
+                    Item::Tool(tool) if count == 0 => single_tool(s, tool, t),
+                    _ => {
+                        let burst =
+                            std::iter::once((item, streaming)).chain(items.clone().take(count));
+                        activity_group(s, item.key(), &burst, t)
+                    }
+                };
+                rows.push(Kind::Activity, activity);
                 for _ in 0..count {
                     items.next();
                 }
@@ -187,6 +204,82 @@ fn items<'a>(
     }
 }
 
+/// What an activity burst holds, for its folded heading.
+struct Tally<'a> {
+    thinking: bool,
+    tools: usize,
+    spawns: usize,
+    agents: [usize; Agent::COUNT],
+    failures: usize,
+    last_thought: Option<&'a str>,
+    active_tool: Option<&'a Tool>,
+}
+
+impl<'a> Tally<'a> {
+    fn of(s: &Desktop, burst: impl Iterator<Item = (&'a Item, bool)>) -> Self {
+        let mut tally = Self {
+            thinking: false,
+            tools: 0,
+            spawns: 0,
+            agents: [0; Agent::COUNT],
+            failures: 0,
+            last_thought: None,
+            active_tool: None,
+        };
+        for (item, streaming) in burst {
+            match item {
+                Item::Thinking { text, .. } => {
+                    tally.thinking |= streaming;
+                    let text = text.trim();
+                    if !text.is_empty() {
+                        tally.last_thought = Some(text);
+                    }
+                }
+                Item::Tool(tool) if spawned(tool) => {
+                    tally.spawns += 1;
+                    tally.agents[Agent::of(s, tool, delegated_task(s, tool)).index()] += 1;
+                }
+                Item::Tool(tool) => {
+                    tally.tools += 1;
+                    tally.failures += usize::from(tool.status == ToolStatus::Failed);
+                    if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running) {
+                        tally.active_tool = Some(tool);
+                    }
+                }
+                _ => {}
+            }
+        }
+        tally
+    }
+
+    const fn only_thought(&self) -> bool {
+        self.tools == 0 && self.spawns == 0
+    }
+
+    fn label(&self) -> String {
+        match (self.tools, self.spawns) {
+            (0, 0) => if self.thinking { "Thinking" } else { "Thought" }.to_owned(),
+            (0, n) => format!("Delegated {n} {}", plural(n, "task", "tasks")),
+            (n, 0) => format!("Called {n} {}", plural(n, "tool", "tools")),
+            (tools, agents) => format!(
+                "Called {tools} {}, delegated {agents} {}",
+                plural(tools, "tool", "tools"),
+                plural(agents, "task", "tasks")
+            ),
+        }
+    }
+
+    fn mark(&self) -> &'static rune::Icon {
+        if self.only_thought() {
+            &ui::BRAIN
+        } else if self.tools == 0 {
+            &ui::AGENT
+        } else {
+            &ui::WRENCH
+        }
+    }
+}
+
 fn activity_group<'a>(
     s: &Desktop,
     first: &str,
@@ -195,99 +288,124 @@ fn activity_group<'a>(
 ) -> El {
     let key = format!("{first}-activity");
     let open = s.expanded.contains(&key);
-    let mut tool_count = 0;
-    let mut spawn_count = 0;
-    let mut active_agents = 0;
-    let mut thinking = false;
-    let mut active_tool = None;
-    for (item, streaming) in burst.clone() {
-        match item {
-            Item::Thinking { .. } => thinking |= streaming,
-            Item::Tool(tool) if spawned(tool) => {
-                spawn_count += 1;
-                active_agents += usize::from(Agent::of(s, tool) == Agent::Working);
-            }
-            Item::Tool(tool) => {
-                tool_count += 1;
-                if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running) {
-                    active_tool = Some(tool);
-                }
-            }
-            _ => {}
-        }
-    }
-    let label = match (tool_count, spawn_count) {
-        (0, 0) => if thinking { "Thinking" } else { "Thought" }.to_owned(),
-        (0, n) => format!("Delegated {n} {}", plural(n, "task", "tasks")),
-        (n, 0) => format!("Called {n} {}", plural(n, "tool", "tools")),
-        (tools, agents) => format!(
-            "Called {tools} {}, delegated {agents} {}",
-            plural(tools, "tool", "tools"),
-            plural(agents, "task", "tasks")
-        ),
+    let tally = Tally::of(s, burst.clone());
+    let Tally {
+        thinking,
+        spawns: spawn_count,
+        failures,
+        last_thought,
+        active_tool,
+        ..
+    } = tally;
+    let only_thought = tally.only_thought();
+    let can_open = !only_thought || last_thought.is_some();
+    let label = tally.label();
+    let mark = tally.mark();
+    let mut heading = if can_open {
+        disclosure(&key, mark, open, t)
+    } else {
+        activity("header", icon(mark, ICON_SMALL).color(t.muted))
     };
-    let mut heading = disclosure(&key, open, t).label(label.clone()).child(
+    heading = heading.label(label.clone()).child(
         text(label)
             .font(t.ui_medium)
+            .color(t.text)
+            .truncate()
+            .shrink(),
+    );
+    let preview = if can_open {
+        last_thought
+            .filter(|_| !open && (only_thought || thinking))
+            .and_then(|thought| thought.lines().next())
+    } else {
+        (!thinking).then_some("Reasoning hidden")
+    };
+    heading = heading.child(
+        text(preview.unwrap_or_default())
+            .font(t.ui)
             .color(t.muted)
             .grow(1.0)
+            .min_w(0.0)
             .shrink()
             .truncate(),
     );
     if spawn_count > 0 {
-        let agents = burst.clone().filter_map(|(item, _)| match item {
-            Item::Tool(tool) if spawned(tool) => local_child(s, tool),
+        let marks = burst.clone().filter_map(|(item, _)| match item {
+            Item::Tool(tool) if spawned(tool) => {
+                Some(local_child(s, tool, delegated_task(s, tool)))
+            }
             _ => None,
         });
-        heading = heading.child(agent_marks(agents, spawn_count, t));
+        heading = heading.child(agent_marks(marks, spawn_count, t));
     }
-    if active_agents > 0 {
+    if let Some(status) = Agent::summary(&tally.agents) {
         heading = heading.child(
-            text(format!("{active_agents} running"))
+            text(status)
                 .font(t.small)
-                .color(t.muted),
+                .color(t.muted)
+                .shrink()
+                .truncate(),
         );
-    } else if thinking {
+    }
+    if failures > 0 {
+        heading = heading.child(
+            text(format!("{failures} failed"))
+                .font(t.small)
+                .color(t.danger),
+        );
+    }
+    if thinking {
         heading = heading.child(ui::spinner(t));
     }
-    let mut group = col().key(key).w_full().child(heading);
-    if open {
-        let mut details = col().key("details").w_full().pl(S8).gap(S2);
-        let first_spawn = burst.clone().find_map(|(item, _)| match item {
-            Item::Tool(tool) if spawned(tool) => Some(tool.key.as_str()),
-            _ => None,
-        });
-        for (item, streaming) in burst.clone() {
-            match item {
-                Item::Thinking { key, text } => {
-                    details = details.child(thought(key, text, streaming, t));
-                }
-                Item::Tool(tool) if spawned(tool) => {
-                    if first_spawn == Some(tool.key.as_str()) {
-                        let agents = burst.clone().filter_map(|(item, _)| match item {
-                            Item::Tool(tool) if spawned(tool) => Some(tool.as_ref()),
-                            _ => None,
-                        });
-                        details = details.child(agent_stack(s, agents, spawn_count, t));
-                    }
-                }
-                Item::Tool(tool) => {
-                    details = details.child(match subagent_call(tool) {
-                        Some(call) if call != Call::Spawn && tool.status != ToolStatus::Failed => {
-                            subagent_row(s, tool, call, t)
-                        }
-                        _ => tool_row(s, tool, t),
-                    });
-                }
-                _ => {}
-            }
-        }
-        group = group.child(details);
+    let mut group = col()
+        .key(key)
+        .w_full()
+        .child(heading.children(can_open.then(|| chevron(open, t))));
+    if can_open && open {
+        group = group.child(activity_details(s, burst, t));
     } else if let Some(tool) = active_tool {
         // Keep the current command visible even when the burst is folded.
-        group = group.child(tool_row(s, tool, t).ml(S8));
+        group = group.child(single_tool(s, tool, t).ml(S8));
     }
     group
+}
+
+/// An open activity group: reasoning, tools, and runs of delegated tasks.
+fn activity_details<'a>(
+    s: &Desktop,
+    burst: &(impl Iterator<Item = (&'a Item, bool)> + Clone),
+    t: &Theme,
+) -> El {
+    let mut details = col().key("details").w_full().pl(S8).gap(S2);
+    let mut entries = burst.clone().peekable();
+    while let Some((item, streaming)) = entries.next() {
+        match item {
+            Item::Thinking { key, text } => {
+                let text = text.trim();
+                if !text.is_empty() {
+                    details = details.child(thought(key, text, streaming, t));
+                }
+            }
+            Item::Tool(tool) if spawned(tool) => {
+                let others = std::iter::from_fn(|| match entries.peek() {
+                    Some((Item::Tool(tool), _)) if spawned(tool) => {
+                        let tool = tool.as_ref();
+                        entries.next();
+                        Some(tool)
+                    }
+                    _ => None,
+                });
+                details = details.child(agent_stack(
+                    s,
+                    std::iter::once(tool.as_ref()).chain(others),
+                    t,
+                ));
+            }
+            Item::Tool(tool) => details = details.child(single_tool(s, tool, t)),
+            _ => {}
+        }
+    }
+    details
 }
 
 const fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str {
@@ -295,9 +413,7 @@ const fn plural(n: usize, one: &'static str, many: &'static str) -> &'static str
 }
 
 fn spawned(tool: &Tool) -> bool {
-    tool.child.is_some()
-        && subagent_call(tool) == Some(Call::Spawn)
-        && tool.status != ToolStatus::Failed
+    subagent_call(tool) == Some(Call::Spawn) && tool.status != ToolStatus::Failed
 }
 
 /// An activity row: a glyph at the card inset, then the label.
@@ -314,26 +430,28 @@ fn activity(key: &str, mark: El) -> El {
 }
 
 /// An activity row that opens and closes on press.
-fn disclosure(key: &str, open: bool, t: &Theme) -> El {
+fn disclosure(key: &str, mark: &'static rune::Icon, open: bool, t: &Theme) -> El {
     let toggle = key.to_owned();
-    activity(
-        "header",
-        icon(
-            if open {
-                &ui::CHEVRON_OPEN
-            } else {
-                &ui::CHEVRON
-            },
-            ICON_SMALL,
-        )
-        .color(t.faint),
+    activity("header", icon(mark, ICON_SMALL).color(t.muted))
+        .role("button")
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .hover(t.hover)
+        .on_press(move |s: &mut Desktop| s.toggle(&toggle))
+}
+
+fn chevron(open: bool, t: &Theme) -> El {
+    icon(
+        if open {
+            &ui::CHEVRON_OPEN
+        } else {
+            &ui::CHEVRON
+        },
+        ICON_SMALL,
     )
-    .role("button")
-    .expanded(open)
-    .focusable(true)
-    .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-    .hover(t.hover)
-    .on_press(move |s: &mut Desktop| s.toggle(&toggle))
+    .color(t.faint)
+    .a11y_hidden()
 }
 
 /// The streamed answer’s caret, or a quiet line while the run has not emitted
@@ -603,29 +721,33 @@ fn prose(key: &str, source: &str, streaming: bool, t: &Theme) -> El {
         .w_full()
 }
 
-/// Render reasoning directly inside an open activity burst.
+/// Keep the trace in the work-log lane without a second heading or the
+/// runner's leading/trailing blank lines.
 fn thought(key: &str, thought: &str, streaming: bool, t: &Theme) -> El {
-    let label = if streaming { "Thinking" } else { "Thought" };
-    col()
+    row()
         .key(key.to_owned())
         .w_full()
-        .pl(ACTIVITY_TEXT)
-        .pr(CARD_INSET)
+        .px(CARD_INSET)
         .py(S4)
-        .gap(S4)
-        .child(ui::section(label, t))
+        .gap(S8)
+        .items_start()
+        .role("group")
+        .label(if streaming { "Thinking" } else { "Thought" })
+        .child(ui::lead(
+            icon(&ui::BRAIN, ICON_SMALL).color(t.faint),
+            t.ui.line_height,
+        ))
         .child(
-            text(if thought.trim().is_empty() {
-                "Reasoning hidden"
-            } else {
-                thought
-            })
-            .w_full()
-            .font(t.ui)
-            .color(t.muted)
-            .wrap()
-            .selectable(true)
-            .selection_color(t.k.selection()),
+            Markdown::new(thought.to_owned())
+                .style(t.markdown().body_font(t.ui).text(t.muted).link(t.text))
+                .streaming(streaming)
+                .selectable(true)
+                .on_link_tx(|_: &mut Desktop, url: &str, tx: &mut Tx| {
+                    _ = tx.open_url(url);
+                })
+                .build(&t.k)
+                .grow(1.0)
+                .min_w(0.0),
         )
 }
 
@@ -675,47 +797,57 @@ fn meta(tool: &Tool, now: i64, t: &Theme) -> Option<El> {
         ToolStatus::Running => Some(ui::spinner(t)),
         ToolStatus::Pending => Some(faint("Pending".to_owned())),
         ToolStatus::Abandoned => Some(faint("Stopped".to_owned())),
-        ToolStatus::Failed => Some(text("Failed").font(t.small).color(t.danger)),
+        ToolStatus::Failed => Some(
+            text(
+                tool.exit_code
+                    .filter(|&code| code != 0)
+                    .map_or_else(|| "Failed".to_owned(), |code| format!("Exit {code}")),
+            )
+            .font(t.small)
+            .color(t.danger),
+        ),
         ToolStatus::Done => None,
     }
 }
 
 fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
-    let open = s.expanded.contains(&tool.key);
+    let expandable = !tool.output.is_empty() || !tool.diffs.is_empty();
+    let open = expandable && s.expanded.contains(&tool.key);
     let (mark, verb) = tool_mark(tool);
+    let command = is_command(&tool.name);
     let detail = tool.summary.as_str();
-    let key = tool.key.clone();
-    let header = activity("tool", icon(mark, ICON_SMALL).color(t.muted))
-        .role("button")
+    let mut summary = text(detail)
+        .font(if command { t.mono } else { t.ui })
+        .color(t.muted)
+        .min_w(0.0)
+        .truncate()
+        .grow(1.0)
+        .shrink();
+    if let Some(full_command) = tool
+        .input
+        .as_deref()
+        .filter(|input| command && *input != detail)
+    {
+        summary = summary.help(full_command);
+    } else {
+        summary = summary.help_when_truncated(detail);
+    }
+    let mut header = activity("tool", icon(mark, ICON_SMALL).color(t.muted))
         .label(format!("{verb} {detail}"))
-        .expanded(open)
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .hover(t.hover)
-        .on_press(move |s: &mut Desktop| s.toggle(&key))
         .child(text(verb).font(t.ui_medium).color(t.text))
-        .child(
-            text(detail)
-                .font(t.mono)
-                .color(t.muted)
-                .min_w(0.0)
-                .truncate()
-                .grow(1.0)
-                .shrink()
-                .help_when_truncated(detail),
-        )
-        .children(meta(tool, s.tool_clock, t))
-        .child(
-            icon(
-                if open {
-                    &ui::CHEVRON_OPEN
-                } else {
-                    &ui::CHEVRON
-                },
-                ICON_SMALL,
-            )
-            .color(t.faint),
-        );
+        .child(summary)
+        .children(meta(tool, s.tool_clock, t));
+    if expandable {
+        let key = tool.key.clone();
+        header = header
+            .role("button")
+            .expanded(open)
+            .focusable(true)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            .hover(t.hover)
+            .on_press(move |s: &mut Desktop| s.toggle(&key))
+            .child(chevron(open, t));
+    }
     let mut stack = col().key(tool.key.clone()).w_full().child(header);
     if open {
         stack = stack.child(output(tool, t));
@@ -723,44 +855,21 @@ fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     stack
 }
 
-/// Hide opaque RPC results; command and read output may legitimately contain
-/// JSON files or JSON printed by a shell.
 fn output(tool: &Tool, t: &Theme) -> El {
-    let mut inner = col().key("inner").w_full().gap(S12).padding(CARD_INSET);
-    let command = is_command(&tool.name);
-    let source = matches!(tool.name.as_str(), "read" | "read_file");
-    let result = tool.output.trim();
-    let structured = !command && !source && result.starts_with(['{', '[']);
-    let readable = structured
-        .then(|| serde_json::from_str::<serde_json::Value>(result).ok())
-        .flatten();
-    let result = if structured {
-        readable
-            .as_ref()
-            .and_then(|record| {
-                ["text", "message", "error", "output"]
-                    .iter()
-                    .find_map(|key| record.get(key).and_then(serde_json::Value::as_str))
-            })
-            .unwrap_or_default()
-    } else {
-        result
-    };
-    if let Some(input) = &tool.input
-        && (command || tool.diffs.is_empty())
-    {
-        inner = inner.child(code_section(
-            if command { "Command" } else { "Content" },
-            input,
-            t,
-        ));
-    }
-    if !result.is_empty() {
-        inner = inner.child(code_section("Output", result, t));
-    }
-    let show_locations = tool.summary.is_empty() && !tool.locations.is_empty();
-    if show_locations {
-        inner = inner.child(code_section("Files", &tool.locations.join("\n"), t));
+    let mut inner = col().key("inner").w_full().gap(S8).px(S12).py(S8);
+    if !tool.output.is_empty() {
+        let literal = is_command(&tool.name) || matches!(tool.name.as_str(), "read" | "read_file");
+        inner = inner.child(if literal {
+            ui::code(&tool.output, t)
+        } else {
+            text(&tool.output)
+                .w_full()
+                .font(t.ui)
+                .color(t.text)
+                .wrap_anywhere()
+                .selectable(true)
+                .selection_color(t.k.selection())
+        });
     }
     if !tool.diffs.is_empty() {
         inner = inner.child(rune::memo(
@@ -769,37 +878,23 @@ fn output(tool: &Tool, t: &Theme) -> El {
             || diff_sections(tool, t),
         ));
     }
-    if tool.input.is_none() && result.is_empty() && !show_locations && tool.diffs.is_empty() {
-        inner = inner.child(ui::section(
-            if matches!(tool.status, ToolStatus::Running | ToolStatus::Pending) {
-                "Waiting for output"
-            } else {
-                "No output"
-            },
-            t,
-        ));
-    }
-    Card::Surface
-        .frame(t)
-        .key("body")
-        .mt(S4)
-        .mb(S8)
-        .max_h(BLOCK_HEIGHT)
-        .min_h(0.0)
-        .clip_rounded(theme::RADIUS_CARD)
-        .scroll(ScrollSpec {
-            stick_bottom: tool.status == ToolStatus::Running,
-        })
-        .child(inner)
-}
-
-fn code_section(label: &'static str, body: &str, t: &Theme) -> El {
     col()
-        .key(label)
-        .gap(S4)
+        .key("body")
         .w_full()
-        .child(ui::section(label, t))
-        .child(ui::code(body, t))
+        .pl(ACTIVITY_TEXT)
+        .pr(CARD_INSET)
+        .pb(S4)
+        .child(
+            Card::Surface
+                .frame(t)
+                .max_h(BLOCK_HEIGHT)
+                .min_h(0.0)
+                .clip_rounded(theme::RADIUS_CARD)
+                .scroll(ScrollSpec {
+                    stick_bottom: tool.status == ToolStatus::Running,
+                })
+                .child(inner),
+        )
 }
 
 fn diff_sections(tool: &Tool, t: &Theme) -> El {
@@ -934,12 +1029,42 @@ fn subagent_call(tool: &Tool) -> Option<Call> {
     }
 }
 
-fn local_child<'a>(s: &'a Desktop, tool: &Tool) -> Option<&'a viz_client::protocol::ThreadSummary> {
-    tool.child_environment
-        .as_ref()
-        .is_none_or(|environment| s.environment.as_ref() == Some(environment))
-        .then(|| tool.child.and_then(|id| s.summary(id)))
+fn child_link<'a>(tool: &'a Tool, task: Option<&'a Task>) -> Option<(ThreadId, Option<&'a str>)> {
+    task.and_then(|task| {
+        task.thread
+            .map(|child| (child, Some(task.environment.as_str())))
+    })
+    .or_else(|| {
+        tool.child
+            .map(|child| (child, tool.child_environment.as_deref()))
+    })
+}
+
+fn local_child<'a>(s: &'a Desktop, tool: &Tool, task: Option<&Task>) -> Option<&'a ThreadSummary> {
+    let (child, environment) = child_link(tool, task)?;
+    environment
+        .is_none_or(|environment| s.environment.as_deref() == Some(environment))
+        .then(|| s.summary(child))
         .flatten()
+}
+
+fn delegated_task<'a>(s: &'a Desktop, tool: &Tool) -> Option<&'a Task> {
+    if let Some(id) = &tool.task_id {
+        return s
+            .tasks
+            .iter()
+            .find(|task| task.id == *id && Some(task.parent) == s.selected);
+    }
+    let child = tool.child?;
+    let environment = tool
+        .child_environment
+        .as_deref()
+        .or(s.environment.as_deref());
+    s.tasks.iter().find(|task| {
+        Some(task.parent) == s.selected
+            && task.thread == Some(child)
+            && Some(task.environment.as_str()) == environment
+    })
 }
 
 fn open_child(
@@ -955,11 +1080,16 @@ fn open_child(
     }
 }
 
-/// A subagent's title: its thread's, or the call's summary.
-fn subagent_title<'a>(s: &'a Desktop, tool: &'a Tool) -> &'a str {
-    local_child(s, tool)
+/// Prefer the child's title over the initial task title or the call summary.
+fn subagent_title<'a>(
+    tool: &'a Tool,
+    task: Option<&'a Task>,
+    child: Option<&'a ThreadSummary>,
+) -> &'a str {
+    child
         .map(|summary| summary.title.as_str())
         .filter(|title| !title.is_empty())
+        .or_else(|| task.map(|task| task.title.as_str()))
         .unwrap_or(&tool.summary)
 }
 
@@ -967,51 +1097,107 @@ fn subagent_title<'a>(s: &'a Desktop, tool: &'a Tool) -> &'a str {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Agent {
     Working,
+    Queued,
     Done,
     Failed,
     Stopped,
+    Unreachable,
 }
 
 impl Agent {
-    fn of(s: &Desktop, tool: &Tool) -> Self {
-        let status = local_child(s, tool).map(|thread| thread.status);
+    const ALL: [Self; 6] = [
+        Self::Working,
+        Self::Queued,
+        Self::Done,
+        Self::Failed,
+        Self::Stopped,
+        Self::Unreachable,
+    ];
+    const COUNT: usize = Self::ALL.len();
+
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    fn of(s: &Desktop, tool: &Tool, task: Option<&Task>) -> Self {
+        if let Some(task) = task {
+            if !task.reachable {
+                return Self::Unreachable;
+            }
+            return match task.status {
+                TaskStatus::Running => Self::Working,
+                TaskStatus::Queued => Self::Queued,
+                TaskStatus::Completed => Self::Done,
+                TaskStatus::Failed => Self::Failed,
+                TaskStatus::Cancelled => Self::Stopped,
+            };
+        }
+        let status = local_child(s, tool, None).map(|thread| thread.status);
         match (status, tool.status) {
-            (Some(ThreadStatus::Working), _)
-            | (None, ToolStatus::Running | ToolStatus::Pending) => Self::Working,
+            (Some(ThreadStatus::Working), _) | (None, ToolStatus::Running) => Self::Working,
             (Some(ThreadStatus::Failed), _) | (None, ToolStatus::Failed) => Self::Failed,
             (None, ToolStatus::Abandoned) => Self::Stopped,
+            (None, ToolStatus::Pending) => Self::Queued,
+            (None, ToolStatus::Done) if tool.child.is_none() => Self::Queued,
             _ => Self::Done,
         }
     }
 
+    fn summary(counts: &[usize; Self::COUNT]) -> Option<String> {
+        use std::fmt::Write as _;
+
+        let mut result = String::new();
+        for (agent, &count) in Self::ALL.iter().zip(counts) {
+            if count == 0 {
+                continue;
+            }
+            let word = match agent {
+                Self::Working => "running",
+                Self::Queued => "queued",
+                Self::Done => "done",
+                Self::Failed => "failed",
+                Self::Stopped => "stopped",
+                Self::Unreachable => "unreachable",
+            };
+            if !result.is_empty() {
+                result.push_str(" · ");
+            }
+            _ = write!(result, "{count} {word}");
+        }
+        (!result.is_empty()).then_some(result)
+    }
+
     const fn word(self) -> &'static str {
         match self {
-            Self::Working => "Working",
+            Self::Working => "Running",
+            Self::Queued => "Queued",
             Self::Done => "Done",
             Self::Failed => "Failed",
             Self::Stopped => "Stopped",
+            Self::Unreachable => "Unreachable",
         }
     }
 
     fn mark(self, t: &Theme) -> El {
         match self {
             Self::Working => ui::spinner(t),
+            Self::Queued => ui::dot(t.muted),
             Self::Done => ui::dot(t.success),
             Self::Failed => ui::dot(t.danger),
-            Self::Stopped => ui::dot(t.faint),
+            Self::Stopped | Self::Unreachable => ui::dot(t.faint),
         }
     }
 }
 
 fn agent_marks<'a>(
-    agents: impl Iterator<Item = &'a viz_client::protocol::ThreadSummary>,
+    agents: impl Iterator<Item = Option<&'a ThreadSummary>>,
     total: usize,
     t: &Theme,
 ) -> El {
     const MARKS: usize = 3;
     let mut stack = row().center_y().a11y_hidden();
     for thread in agents.take(MARKS) {
-        let mark = ui::harness_icon(&thread.harness);
+        let mark = thread.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
         stack = stack.child(
             el().size(S24, S24)
                 .ml(-S4)
@@ -1033,45 +1219,60 @@ fn agent_marks<'a>(
 }
 
 fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
-    let title = subagent_title(s, tool);
-    let agent = Agent::of(s, tool);
-    let thread = local_child(s, tool);
-    let identity = thread.map_or_else(
+    let task = delegated_task(s, tool);
+    let thread = local_child(s, tool, task);
+    let title = subagent_title(tool, task, thread);
+    let title = if title.is_empty() {
+        "Delegated task"
+    } else {
+        title
+    };
+    let agent = Agent::of(s, tool, task);
+    let identity = task.map_or_else(
         || {
-            row()
-                .gap(S8)
-                .grow(1.0)
-                .shrink()
-                .min_w(0.0)
-                .center_y()
-                .child(icon(&ui::AGENT, ICON).color(t.muted))
-                .child(
-                    text(title)
-                        .font(t.ui_medium)
-                        .color(t.text)
-                        .truncate()
+            thread.map_or_else(
+                || {
+                    row()
+                        .gap(S8)
+                        .grow(1.0)
+                        .shrink()
                         .min_w(0.0)
-                        .shrink(),
-                )
+                        .center_y()
+                        .child(icon(&ui::AGENT, ICON).color(t.muted))
+                        .child(
+                            text(title)
+                                .font(t.ui_medium)
+                                .color(t.text)
+                                .truncate()
+                                .min_w(0.0)
+                                .shrink(),
+                        )
+                },
+                |thread| header::agent_identity(thread, t),
+            )
         },
-        |thread| header::agent_identity(thread, t),
+        |task| header::task_identity(task, thread, t),
     );
     let mut link = row()
         .key(tool.key.clone())
-        .role("link")
         .label(title)
         .description(agent.word())
         .w_full()
-        .h(S40)
+        .min_h(S40)
+        .py(S2)
         .px(S8)
         .gap(S8)
         .center_y()
         .radius(Size::Default.radius())
         .child(identity)
-        .child(agent.mark(t));
-    if let Some(child) = tool.child {
-        let environment = tool.child_environment.clone();
+        .child(agent.mark(t))
+        .child(text(agent.word()).font(t.small).color(t.muted));
+    if let Some((child, environment)) =
+        child_link(tool, task).filter(|_| task.is_none_or(|task| task.reachable))
+    {
+        let environment = environment.map(str::to_owned);
         link = link
+            .role("link")
             .hover(t.hover)
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
@@ -1083,22 +1284,16 @@ fn subagent_link(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     link
 }
 
-fn agent_stack<'a>(
-    s: &Desktop,
-    tools: impl Iterator<Item = &'a Tool>,
-    count: usize,
-    t: &Theme,
-) -> El {
-    let mut stack = col()
-        .key("subagent-stack")
+fn agent_stack<'a>(s: &Desktop, tools: impl Iterator<Item = &'a Tool>, t: &Theme) -> El {
+    let mut tools = tools.peekable();
+    let key = tools.peek().map_or("tasks", |tool| tool.key.as_str());
+    col()
+        .key(format!("{key}-stack"))
         .w_full()
         .radius(theme::RADIUS_CARD)
         .fill(t.surface)
-        .padding(S4);
-    if count > 1 {
-        stack = stack.child(ui::section(&format!("{count} tasks"), t).px(S8).py(S4));
-    }
-    stack.children(tools.map(|tool| subagent_link(s, tool, t)))
+        .padding(S4)
+        .children(tools.map(|tool| subagent_link(s, tool, t)))
 }
 
 /// Talking to, reading, listing or stopping a subagent: one activity row
@@ -1111,28 +1306,32 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
         Call::List => "Listed tasks",
         Call::Cancel => "Stopped",
     };
-    let name = (call != Call::List).then(|| subagent_title(s, tool).to_owned());
-    let failed = tool.status == ToolStatus::Failed;
-    let label = name
-        .as_ref()
-        .map_or_else(|| verb.to_owned(), |name| format!("{verb} {name}"));
-    let mut line = activity(
-        &tool.key,
-        icon(&ui::AGENT, ICON_SMALL).color(if failed { t.danger } else { t.faint }),
-    )
-    .role("link")
-    .label(label)
-    .child(text(verb).font(t.ui).color(t.muted))
-    .children(name.map(|name| {
-        text(name)
-            .key("title")
-            .font(t.ui)
-            .color(t.text)
-            .truncate()
-            .grow(1.0)
-            .shrink()
-    }));
-    if call == Call::List {
+    let task = delegated_task(s, tool);
+    let thread = local_child(s, tool, task);
+    let mark = thread.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
+    let name = (tool.child.is_some() || task.is_some())
+        .then(|| subagent_title(tool, task, thread))
+        .filter(|title| !title.is_empty());
+    let verb = match (call, name) {
+        (Call::Read, None) => "Checked thread activity",
+        (Call::Message, None) => "Sent a message",
+        (Call::Cancel, None) => "Stopped a task",
+        _ => verb,
+    };
+    let label = name.map_or_else(|| verb.to_owned(), |name| format!("{verb} {name}"));
+    let mut line = activity(&tool.key, icon(mark, ICON_SMALL).color(t.muted))
+        .label(label)
+        .child(text(verb).font(t.ui).color(t.muted))
+        .children(name.map(|name| {
+            text(name)
+                .key("title")
+                .font(t.ui)
+                .color(t.text)
+                .truncate()
+                .grow(1.0)
+                .shrink()
+        }));
+    if name.is_none() {
         line = line.child(el().grow(1.0).a11y_hidden());
     }
     if let Some(meta) = meta(tool, s.tool_clock, t) {
@@ -1140,7 +1339,8 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
     }
     let environment = tool.child_environment.clone();
     match tool.child {
-        Some(child) => line
+        Some(child) if task.is_none_or(|task| task.reachable) => line
+            .role("link")
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .help("Open thread")
@@ -1148,7 +1348,7 @@ fn subagent_row(s: &Desktop, tool: &Tool, call: Call, t: &Theme) -> El {
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 open_child(s, child, environment.as_deref(), tx);
             }),
-        None => line,
+        _ => line,
     }
 }
 

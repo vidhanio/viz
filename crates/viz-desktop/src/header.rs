@@ -1,7 +1,9 @@
 //! Thread toolbar and the persistent task panel.
 
+use std::borrow::Cow;
+
 use rune::{El, ScrollSpec, Transition, col, el, icon, row, text};
-use rune_kit::{ProgressCircle, shell::Toolbar};
+use rune_kit::shell::Toolbar;
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadSummary};
 
 use crate::{
@@ -38,9 +40,7 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         toolbar = toolbar.leading(sidebar::new_thread_button(s, t));
         title(s, t)
     };
-    toolbar
-        .leading(title)
-        .trailing(metadata(s, t).mr(READING_INSET - TOOLBAR_PAD))
+    toolbar.leading(title)
 }
 
 /// The panel and its horizontal reserve. In small windows it gets its own
@@ -157,29 +157,67 @@ fn previous_toggle(count: usize, shown: bool, t: &Theme) -> El {
         .child(text(count.to_string()).font(t.mono_small).color(t.faint))
 }
 
-/// The same identity block in the panel and the timeline. Use reported model
-/// and effort, never the defaults for that harness.
+/// Identity for older timeline entries that have no durable task.
 pub fn agent_identity(thread: &ThreadSummary, t: &Theme) -> El {
+    thread_identity(thread, None, t)
+}
+
+/// Identity shared by durable task rows in the panel and the timeline.
+pub fn task_identity(task: &Task, child: Option<&ThreadSummary>, t: &Theme) -> El {
+    // Durable outcomes are the run's answer or error, not the tool response
+    // envelope.
+    let preview = task
+        .error
+        .as_deref()
+        .and_then(first_line)
+        .or_else(|| task.result.as_deref().and_then(first_line))
+        .map(|line| text(line).font(t.small).color(t.muted).truncate());
+    if let Some(thread) = child {
+        thread_identity(thread, preview, t)
+    } else {
+        identity(
+            &task.title,
+            &task.environment,
+            icon(&ui::AGENT, ICON).color(t.muted).a11y_hidden(),
+            preview,
+            t,
+        )
+    }
+}
+
+fn first_line(outcome: &str) -> Option<&str> {
+    outcome.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+fn thread_identity(thread: &ThreadSummary, preview: Option<El>, t: &Theme) -> El {
     let label = thread_title(thread);
     let thinking = thread.thinking.as_deref().map(ui::thinking_label);
     let detail = match (thread.model.as_deref(), thinking) {
-        (Some(model), Some(thinking)) => Some(format!("{model} · {thinking}")),
-        (Some(model), None) => Some(model.to_owned()),
-        (None, Some(thinking)) => Some(thinking.into_owned()),
-        (None, None) => Some(thread.harness_name.clone()),
+        (Some(model), Some(thinking)) => Cow::Owned(format!("{model} · {thinking}")),
+        (Some(model), None) => Cow::Borrowed(model),
+        (None, Some(thinking)) => thinking,
+        (None, None) => Cow::Borrowed(thread.harness_name.as_str()),
     };
+    identity(
+        label,
+        &detail,
+        icon(ui::harness_icon(&thread.harness), ICON)
+            .color(t.muted)
+            .help(&thread.harness_name)
+            .a11y_hidden(),
+        preview,
+        t,
+    )
+}
+
+fn identity(label: &str, detail: &str, avatar: El, preview: Option<El>, t: &Theme) -> El {
     row()
         .grow(1.0)
         .shrink()
         .min_w(0.0)
         .center_y()
         .gap(S8)
-        .child(
-            icon(ui::harness_icon(&thread.harness), ICON)
-                .color(t.muted)
-                .help(thread.harness_name.clone())
-                .a11y_hidden(),
-        )
+        .child(avatar)
         .child(
             col()
                 .grow(1.0)
@@ -192,13 +230,14 @@ pub fn agent_identity(thread: &ThreadSummary, t: &Theme) -> El {
                         .truncate()
                         .help_when_truncated(label),
                 )
-                .children(detail.map(|detail| {
-                    text(detail.clone())
+                .child(
+                    text(detail)
                         .font(t.small)
                         .color(t.muted)
                         .truncate()
-                        .help_when_truncated(detail)
-                })),
+                        .help_when_truncated(detail),
+                )
+                .children(preview),
         )
 }
 
@@ -220,29 +259,7 @@ fn task_row(task: &Task, desktop: &Desktop, t: &Theme) -> El {
         .thread
         .filter(|_| desktop.environment.as_deref() == Some(task.environment.as_str()))
         .and_then(|thread| desktop.summary(thread));
-    let mut detail = child.map_or_else(
-        || {
-            row()
-                .grow(1.0)
-                .min_w(0.0)
-                .center_y()
-                .gap(S8)
-                .child(icon(&ui::AGENT, ICON).color(t.muted).a11y_hidden())
-                .child(
-                    col()
-                        .grow(1.0)
-                        .min_w(0.0)
-                        .child(text(&task.title).font(t.ui_medium).color(t.text).truncate())
-                        .child(
-                            text(&task.environment)
-                                .font(t.small)
-                                .color(t.muted)
-                                .truncate(),
-                        ),
-                )
-        },
-        |thread| agent_identity(thread, t),
-    );
+    let mut detail = task_identity(task, child, t);
     if task.reachable
         && let Some(thread) = task.thread
     {
@@ -265,7 +282,8 @@ fn task_row(task: &Task, desktop: &Desktop, t: &Theme) -> El {
                 .or(task.result.as_deref())
                 .unwrap_or(state),
         )
-        .h(S40)
+        .min_h(S40)
+        .py(S2)
         .px(S8)
         .gap(S8)
         .center_y()
@@ -389,38 +407,4 @@ fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Them
                 .help(label)
                 .a11y_hidden(),
         )
-}
-
-fn metadata(s: &Desktop, t: &Theme) -> El {
-    let mut metadata = row().key("header-metadata").gap(S8).center_y();
-    if let Some(state) = &s.state {
-        if let Some(usage) = &state.usage
-            && usage.size > 0
-        {
-            let fraction = crate::theme::fraction(usage.used, usage.size);
-            let percent = format!("{:.0}%", fraction * 100.0);
-            let label = format!(
-                "Context: {} / {} tokens ({percent})",
-                usage.used, usage.size
-            );
-            metadata = metadata.child(
-                row()
-                    .center_y()
-                    .gap(S4)
-                    .label(label.clone())
-                    .help(label)
-                    .child(
-                        ProgressCircle::new(fraction)
-                            .size(ICON_SMALL)
-                            .build(&t.k)
-                            .a11y_hidden(),
-                    )
-                    .child(text(percent).font(t.small).color(t.muted).a11y_hidden()),
-            );
-        }
-        if let Some(mark) = ui::status(state.status, t) {
-            metadata = metadata.child(mark.key("header-status"));
-        }
-    }
-    metadata
 }
