@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use git2::{DiffFormat, DiffOptions, ErrorCode, IndexAddOption, Repository, Tree};
+use git2::{Commit, DiffFormat, DiffOptions, ErrorCode, IndexAddOption, Repository, Tree};
 use viz_client::protocol::{GitDiff, GitDiffFile};
 
 use super::{
@@ -76,7 +76,9 @@ impl Workspace {
             let end = checkpoint.start.trim_end_matches("/start").to_owned() + "/end";
             let after = capture(&repo, &end)?;
             let before = load_tree(&repo, &checkpoint.start)?;
-            let diff = repo.diff_tree_to_tree(Some(&before), Some(&after), None)?;
+            let mut options = DiffOptions::new();
+            options.include_typechange(true);
+            let diff = repo.diff_tree_to_tree(Some(&before), Some(&after), Some(&mut options))?;
             Ok::<_, RpcError>((end, diff.deltas().len()))
         })
         .await
@@ -145,19 +147,34 @@ pub(super) fn load_tree<'repo>(
     repo.find_reference(reference)?.peel_to_tree()
 }
 
-/// Like t3code's Git checkpoint driver, use a disposable index to include
-/// untracked paths and keep HEAD and the staged index intact. The libgit2
-/// index wrapper owns in-memory changes and only writes objects here.
 pub(super) fn working_tree(repo: &Repository) -> Result<Tree<'_>, git2::Error> {
+    snapshot(repo, head_commit(repo)?.as_ref())
+}
+
+fn head_commit(repo: &Repository) -> Result<Option<Commit<'_>>, git2::Error> {
+    match repo.head() {
+        Ok(head) => head.peel_to_commit().map(Some),
+        Err(error) if error.code() == ErrorCode::UnbornBranch => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// Like t3code's `GitVcsDriver.captureCheckpoint`, stage in a disposable
+/// index to include untracked files while preserving HEAD and the real index.
+fn snapshot<'repo>(
+    repo: &'repo Repository,
+    parent: Option<&Commit<'_>>,
+) -> Result<Tree<'repo>, git2::Error> {
+    const INDEX_STAGE_MASK: u16 = 0x3000;
     let mut index = repo.index()?;
     let staged: Vec<_> = index
         .iter()
-        .filter(|entry| entry.flags & 0x3000 == 0)
+        .filter(|entry| entry.flags & INDEX_STAGE_MASK == 0)
         .collect();
-    match repo.head() {
-        Ok(head) => index.read_tree(&head.peel_to_tree()?)?,
-        Err(error) if error.code() == ErrorCode::UnbornBranch => index.clear()?,
-        Err(error) => return Err(error),
+    if let Some(parent) = parent {
+        index.read_tree(&parent.tree()?)?;
+    } else {
+        index.clear()?;
     }
     for entry in staged {
         index.add(&entry)?;
@@ -168,13 +185,9 @@ pub(super) fn working_tree(repo: &Repository) -> Result<Tree<'_>, git2::Error> {
 }
 
 fn capture<'repo>(repo: &'repo Repository, reference: &str) -> Result<Tree<'repo>, git2::Error> {
-    let tree = working_tree(repo)?;
+    let parent = head_commit(repo)?;
+    let tree = snapshot(repo, parent.as_ref())?;
     let signature = git2::Signature::now("viz", "viz@localhost")?;
-    let parent = match repo.head() {
-        Ok(head) => Some(head.peel_to_commit()?),
-        Err(error) if error.code() == ErrorCode::UnbornBranch => None,
-        Err(error) => return Err(error),
-    };
     let parents: Vec<_> = parent.iter().collect();
     repo.commit(
         Some(reference),

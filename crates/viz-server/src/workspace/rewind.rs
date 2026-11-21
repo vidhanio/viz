@@ -122,18 +122,23 @@ New user input:
         let entries = transcript(&mut tx, source, boundary.entry).await?;
         let seed = history_seed(entries.iter().rev());
         for mut data in entries {
-            if let NewEntry::Run(end) = &mut data {
-                end.run = None;
+            match &mut data {
+                NewEntry::Run(end) => end.run = None,
+                NewEntry::Prompt { attachments, .. } => {
+                    for attachment in attachments {
+                        exec(
+                            &mut tx,
+                            "INSERT INTO attachments (thread, id, name, mime, data)
+                            SELECT ?2, id, name, mime, data FROM attachments WHERE thread = ?1 AND id = ?3
+                            ON CONFLICT DO NOTHING",
+                            [source.into(), new.into(), attachment.id.as_str().into()],
+                        ).await?;
+                    }
+                }
+                _ => {}
             }
             store::append(&mut tx, new, &data).await?;
         }
-        exec(
-            &mut tx,
-            "INSERT INTO attachments (thread, id, name, mime, data)
-            SELECT ?2, id, name, mime, data FROM attachments WHERE thread = ?1",
-            [source.into(), new.into()],
-        )
-        .await?;
         set_history_seed(&mut tx, new, seed).await?;
         tx.commit().await?;
         if let Some(pending) = pending {
@@ -156,20 +161,23 @@ New user input:
         let mut tx = db.transaction().await?;
         let binding = store::binding(&mut tx, thread).await?;
         let boundary = boundary(&mut tx, thread, run, RunBoundary::Start).await?;
-        let checkpoint = boundary
-            .checkpoint
-            .ok_or_else(|| RpcError::not_found("no Git start checkpoint for this run"))?;
-        let last = row(
+        let checkpoints = rows(
             &mut tx,
-            "SELECT checkpoint_end FROM runs WHERE thread = ?1 AND hidden = 0
-            AND end_entry IS NOT NULL ORDER BY end_entry DESC LIMIT 1",
-            [thread.into()],
+            "SELECT checkpoint_start, checkpoint_end FROM runs
+            WHERE thread = ?1 AND hidden = 0 AND prompt_entry >= ?2 AND end_entry IS NOT NULL
+            ORDER BY end_entry",
+            [thread.into(), boundary.entry.into()],
         )
         .await?
-        .map(|mut record| record.opt_str(0))
-        .transpose()?
-        .flatten()
-        .ok_or_else(|| RpcError::not_found("the latest run has no end checkpoint"))?;
+        .map(|mut record| {
+            let (Some(start), Some(end)) = (record.opt_str(0)?, record.opt_str(1)?) else {
+                return Err(RpcError::not_found(
+                    "a run in the restore range has no complete Git checkpoint",
+                ));
+            };
+            Ok((start, end))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
         let neighbors = rows(
             &mut tx,
             "SELECT DISTINCT t.cwd FROM threads t JOIN runs r ON r.thread = t.id
@@ -189,10 +197,6 @@ New user input:
         } else {
             String::new()
         };
-        let cwd = PathBuf::from(&binding.cwd);
-        tokio::task::spawn_blocking(move || restore_files(&cwd, &checkpoint, &last, &neighbors))
-            .await
-            .map_err(RpcError::internal)??;
         if rewind {
             let session = store::json(&fresh_session(binding.session))?;
             exec(
@@ -211,6 +215,10 @@ New user input:
                 history_revision = history_revision + 1, setup_failed = 0, updated_at = ?4 WHERE id = ?1",
                 [thread.into(), session.into(), seed.into(), store::now().into()]).await?;
         }
+        let cwd = PathBuf::from(&binding.cwd);
+        tokio::task::spawn_blocking(move || restore_files(&cwd, &checkpoints, &neighbors))
+            .await
+            .map_err(RpcError::internal)??;
         tx.commit().await?;
         if rewind {
             slot.take();
@@ -327,8 +335,7 @@ fn history_seed<'a>(entries: impl Iterator<Item = &'a NewEntry>) -> String {
 
 fn restore_files(
     cwd: &Path,
-    reference: &str,
-    last: &str,
+    checkpoints: &[(String, String)],
     neighbors: &[String],
 ) -> Result<(), RpcError> {
     let repo = git::open(cwd)?;
@@ -341,11 +348,7 @@ fn restore_files(
             "another run is active in this checkout or changed it after the selected boundary",
         ));
     }
-    let statuses = repo.statuses(Some(
-        StatusOptions::new()
-            .include_ignored(true)
-            .recurse_ignored_dirs(true),
-    ))?;
+    let statuses = repo.statuses(Some(StatusOptions::new().include_ignored(true)))?;
     let staged = Status::INDEX_NEW
         | Status::INDEX_MODIFIED
         | Status::INDEX_DELETED
@@ -357,6 +360,7 @@ fn restore_files(
             "the checkout contains staged changes or conflicts",
         ));
     }
+    let (reference, last) = checked_range(&repo, checkpoints)?;
     let previous = repo.find_reference(last)?.peel_to_commit()?;
     let head = repo.head().ok().and_then(|head| head.target());
     if head != previous.parent_ids().next() {
@@ -387,6 +391,34 @@ fn restore_files(
         return Err(error);
     }
     Ok(())
+}
+
+/// A gap between one run's end and the next run's start belongs to the
+/// checkout outside either run. Refuse to cross it when restoring.
+fn checked_range<'a>(
+    repo: &Repository,
+    checkpoints: &'a [(String, String)],
+) -> Result<(&'a str, &'a str), RpcError> {
+    let Some((first, _)) = checkpoints.first() else {
+        return Err(RpcError::not_found(
+            "no Git checkpoints in the restore range",
+        ));
+    };
+    for pair in checkpoints.windows(2) {
+        let previous = repo.find_reference(&pair[0].1)?.peel_to_commit()?;
+        let next = repo.find_reference(&pair[1].0)?.peel_to_commit()?;
+        if previous.tree_id() != next.tree_id()
+            || previous.parent_ids().next() != next.parent_ids().next()
+        {
+            return Err(RpcError::invalid(
+                "the checkout changed between runs in the restore range",
+            ));
+        }
+    }
+    let (_, last) = checkpoints
+        .last()
+        .expect("checked nonempty checkpoint range");
+    Ok((first, last))
 }
 
 fn changes(
