@@ -542,13 +542,13 @@ pub struct TreeLine<'a> {
     /// A quiet second line; the row grows to `TREE_ROW_TALL`.
     pub detail: Option<&'a str>,
     pub depth: u16,
-    /// Unread: the medium weight in full ink.
+    /// Unread: full ink.
     pub strong: bool,
     /// Archived: faint.
     pub dim: bool,
     pub selected: bool,
     /// The label's ink at rest: `muted` for most rows, `text` for a project's
-    /// header, quieter for the threads inside it.
+    /// header.
     pub ink: Color,
 }
 
@@ -563,7 +563,7 @@ impl TreeLine<'_> {
         };
         let hover_color = if self.dim { t.muted } else { t.text };
         let title = text(self.label)
-            .font(if self.strong { t.ui_medium } else { t.ui })
+            .font(if self.selected { t.ui_medium } else { t.ui })
             .color(color)
             .group_color(hover_color)
             .truncate()

@@ -398,7 +398,7 @@ fn snippet(marked: &str, t: &Theme) -> El {
         if marker == "\u{1}" {
             start = Some(body.len());
         } else if let Some(start) = start.take().filter(|&start| start < body.len()) {
-            spans.push(Span::new(start, body.len()).bold().color(t.accent));
+            spans.push(Span::new(start, body.len()).bold().color(t.accent_text));
         }
     }
     body.extend(marked[previous..].chars().map(one_line));
@@ -448,8 +448,8 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         .child(indicator)
         .child(
             icon(glyph, ICON)
-                .color(if active { t.accent } else { t.muted })
-                .group_color(if active { t.accent } else { t.text })
+                .color(if active { t.accent_text } else { t.muted })
+                .group_color(if active { t.accent_text } else { t.text })
                 .a11y_hidden(),
         )
         .child(labels)

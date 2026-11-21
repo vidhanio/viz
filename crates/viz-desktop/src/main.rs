@@ -21,8 +21,8 @@
 //!   columns are tokens; a component-specific cap may be a named module
 //!   constant on the 4-pt grid. Icons are Lucide (harnesses may use their
 //!   official marks); never draw custom ones. Surfaces are flat, separated by
-//!   hairlines and fills; only overlays get a shadow. One accent, for the
-//!   primary action, focus and selection.
+//!   hairlines and fills; overlays also take a hairline outline and shadow. One
+//!   accent, for the primary action, focus and selection.
 //! - Motion: changing threads moves the transcript and toolbar title, never the
 //!   composer: vertically by sidebar order, horizontally into a delegated task
 //!   (left) and back out (right); short springs without bounce.

@@ -6,13 +6,14 @@
 //! - Controls: [`Size`] — small 24, default 28, large 36 points tall, each with
 //!   its radius (6, 6, 8). Cards round at [`RADIUS_CARD`], chips at
 //!   [`RADIUS_INNER`].
-//! - Icons: 12, 16 and 20 points; status dots are [`DOT`].
-//! - Type: `small` 11.5/16, `ui` 13/20, `title` 14/20, `body` 14.5/23, `mono`
+//! - Icons: 12 and 16 points ([`ICON_SMALL`], [`ICON`]); status dots are
+//!   [`DOT`].
+//! - Type: `small` 11.5/16, `ui` 13/20, `body` 14.5/23, `title` 15/22, `mono`
 //!   12/18 (see [`Theme`]).
 //! - Rules: one [`HAIRLINE`], `Theme::hairline` ink.
-//! - Overlays (menus, popovers, dialogs, the palette, toasts): no outline; a
-//!   fill one step above what they float over and a soft two-layer shadow, both
-//!   from [`Theme::overlay`].
+//! - Overlays (menus, popovers, dialogs, the palette, toasts): a fill one step
+//!   above what they float over, a [`HAIRLINE`] outline, and a soft two-layer
+//!   shadow, all from [`Theme::overlay`].
 //! - Sidebar: rows fill from [`SIDEBAR_PAD`]; every label, icon and section
 //!   title starts at [`SIDEBAR_INSET`] plus [`TREE_STEP`] per depth; every row
 //!   ends in a [`TRAILING`]-wide slot centered under the sidebar toggle.
@@ -162,13 +163,14 @@ pub struct Theme {
     /// `k` with square main-pane corners, for the shell: the main pane sits
     /// flush against the sidebar and the window's edges, not in a card.
     pub shell: Kit,
-    /// `k` for overlays (menus, popovers, the completion list): borderless,
-    /// on their own fill; `overlay.c.layer_01` fills dialogs and toasts.
+    /// `k` for overlays (menus, popovers, the completion list): on their own
+    /// fill with a hairline outline and shadow; `overlay.c.layer_01` fills
+    /// dialogs and toasts.
     pub overlay: Kit,
     /// Cards on the main pane (composer, expanded tool output, code).
     pub surface: Color,
     /// A group's fill on the sidebar (a project and its threads): one step
-    /// above `surface`, as overlays sit, so it reads without an outline.
+    /// from `surface`, so it reads without an outline.
     pub group: Color,
     /// One-pixel rules and outlines.
     pub hairline: Color,
@@ -182,8 +184,10 @@ pub struct Theme {
     pub muted: Color,
     /// Tertiary text: hints, durations, argument summaries.
     pub faint: Color,
-    /// The one accent.
+    /// The one accent (buttons, focus rings, indicators).
     pub accent: Color,
+    /// The accent at text contrast (>= 4.5:1) for links and highlighted copy.
+    pub accent_text: Color,
     /// The open thread's row.
     pub selected: Color,
     /// Errors.
@@ -209,7 +213,7 @@ pub struct Theme {
     pub small_medium: TextStyle,
     /// Message text, 14.5 on 23.
     pub body: TextStyle,
-    /// Titles: the toolbar, empty states, 14 semibold on 20.
+    /// Titles: the toolbar, empty states, dialogs, 15 semibold on 22.
     pub title: TextStyle,
     /// Tool rows and code, 12 on 18.
     pub mono: TextStyle,
@@ -433,21 +437,44 @@ impl Theme {
         } else {
             lightest
         };
+        let group = if dark || (overlay.to_oklab()[0] - surface.to_oklab()[0]).abs() >= 0.035 {
+            overlay
+        } else {
+            over(surface, wash, reach(surface, wash, 0.032))
+        };
         let surfaces = [
             bg,
             surface,
             raised,
             overlay,
+            group,
             over(bg, interactive, selected.a),
             over(surface, interactive, selected.a),
             over(overlay, interactive, selected.a),
+            over(group, interactive, selected.a),
         ];
         let legible = |c: Color, min: f32| legible(c, &surfaces, dark, min);
         let text = legible(b[0x5], 5.5);
-        let strong = legible(b[0x6], 5.5);
+        let chroma = |c: Color| {
+            let [_, a, ch_b, _] = c.to_oklab();
+            a.hypot(ch_b)
+        };
+        let strong_base = if chroma(b[0x6]) > 0.04 {
+            let [l, a, ch_b, _] = text.to_oklab();
+            Color::from_oklab([
+                (l + if dark { 0.08 } else { -0.08 }).clamp(0.0, 1.0),
+                a,
+                ch_b,
+                1.0,
+            ])
+        } else {
+            b[0x6]
+        };
+        let strong = legible(strong_base, 5.5);
         let muted = legible(b[0x4], 5.2);
         let faint = legible(b[0x3], 4.5);
         let accent = legible(b[0xD], 3.0);
+        let accent_text = legible(b[0xD], 4.5);
         let on_accent = [bg, b[0x7], lightest, darkest]
             .into_iter()
             .max_by(|x, y| contrast(*x, accent).total_cmp(&contrast(*y, accent)))
@@ -497,13 +524,13 @@ impl Theme {
             text_faint: faint,
             text_inverse: bg,
             text_contrast: bg,
-            text_accent: accent,
+            text_accent: accent_text,
             icon_base: text,
             icon_muted: muted,
             icon_faint: faint,
             icon_inverse: bg,
             icon_contrast: bg,
-            icon_accent: accent,
+            icon_accent: accent_text,
             border_muted: hairline,
             border_base: hairline,
             border_strong: rule,
@@ -626,17 +653,25 @@ impl Theme {
         k.elevation.overlay = lift(0.10, (S16, S48));
         let mut shell = k.clone();
         shell.radius.lg = 0.0;
+        let ring = Shadow {
+            spread: HAIRLINE,
+            color: hairline,
+            ..Shadow::default()
+        };
         let mut overlay_kit = k.clone();
         overlay_kit.c.layer_01 = overlay;
         overlay_kit.c.surface_raised = overlay;
         overlay_kit.c.hover = accent.alpha(if dark { 0.16 } else { 0.12 });
         overlay_kit.c.surface_raised_hover = overlay;
         overlay_kit.c.std_border = Color::TRANSPARENT;
+        overlay_kit.elevation.floating.insert(0, ring);
+        overlay_kit.elevation.md.insert(0, ring);
+        overlay_kit.elevation.overlay.insert(0, ring);
         Self {
             shell,
             overlay: overlay_kit,
             surface,
-            group: overlay,
+            group,
             hairline,
             hover: Color::TRANSPARENT,
             mine: raised,
@@ -644,6 +679,7 @@ impl Theme {
             muted,
             faint,
             accent,
+            accent_text,
             selected,
             danger,
             success,
@@ -656,7 +692,7 @@ impl Theme {
             small,
             small_medium: medium(small),
             body,
-            title: TextStyle::new(14.0, 600.0).lh(20.0),
+            title: TextStyle::new(15.0, 600.0).lh(22.0),
             mono,
             mono_small: TextStyle::new(11.5, 400.0).mono().lh(16.0),
             k,
@@ -667,7 +703,7 @@ impl Theme {
     pub fn markdown(&self) -> MarkdownStyle {
         let heading = |size: f32, lh: f32| TextStyle {
             size,
-            weight: 620.0,
+            weight: 600.0,
             line_height: lh,
             ..self.body
         };
@@ -687,8 +723,8 @@ impl Theme {
             .code_margin(S12, S16)
             .quote_rule(self.hairline)
             .rule(self.hairline)
-            .link(self.text)
-            .strong_weight(620.0)
+            .link(self.accent_text)
+            .strong_weight(600.0)
             .list(S24, S6)
     }
 }

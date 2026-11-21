@@ -471,7 +471,7 @@ fn model_row(picker: &Picker<'_>, entry: &Entry<'_>, active: bool, current: bool
         }))
         .child(
             icon(&ui::CHECK, ICON_SMALL)
-                .color(if current { t.accent } else { t.muted })
+                .color(if current { t.accent_text } else { t.muted })
                 .opacity(if current { 1.0 } else { 0.0 })
                 .a11y_hidden(),
         );

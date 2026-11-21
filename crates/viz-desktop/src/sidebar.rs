@@ -375,10 +375,11 @@ impl<'a> Outline<'a> {
             .fill(t.group)
             .child(node);
         if let Some(threads) = self.projects.get(project.path.as_str()).filter(|_| open) {
-            branch = branch.children(threads.iter().map(|thread| {
-                self.thread(thread, t.muted.mix(t.faint, 0.5), false, t, layer)
-                    .level(2)
-            }));
+            branch = branch.children(
+                threads
+                    .iter()
+                    .map(|thread| self.thread(thread, t.muted, false, t, layer).level(2)),
+            );
         }
         branch
     }
