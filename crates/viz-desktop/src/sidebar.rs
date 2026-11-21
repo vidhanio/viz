@@ -83,6 +83,10 @@ impl Navigation {
         self.edit = None;
     }
 
+    pub(crate) const fn has_overlay(&self) -> bool {
+        self.env_menu || self.menu.is_some() || self.edit.is_some()
+    }
+
     /// Takes the sidebar's mode and collapsed projects from
     /// `$XDG_STATE_HOME/viz/desktop.json` and keeps them there from now on.
     /// A missing or unreadable file leaves the defaults.

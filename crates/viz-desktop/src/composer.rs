@@ -102,16 +102,9 @@ fn on_draft_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.cancel_edit_queued(tx);
         return true;
     }
-    let primary_mod = if cfg!(target_os = "macos") {
-        ev.mods.cmd && !ev.mods.ctrl
-    } else {
-        ev.mods.ctrl && !ev.mods.cmd
-    };
     if s.editing_queued.is_none()
         && s.busy()
-        && primary_mod
-        && !ev.mods.shift
-        && !ev.mods.alt
+        && crate::app::primary_mod_only(ev.mods)
         && ev.key == Key::Enter
     {
         let flipped = match s.send_mode {
@@ -151,7 +144,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .placeholder(placeholder, t.faint)
         .on_edit(|s: &mut Desktop| &mut s.draft)
         .on_input_paste(attachments::paste)
-        .on_key(on_draft_key)
+        .on_input_key(on_draft_key)
         .on_submit(Desktop::send_input);
     let attach = (!editing && (s.new_thread.is_some() || s.state.is_some()))
         .then(|| attachments::button(s, t));
@@ -290,20 +283,21 @@ fn edit_banner(s: &Desktop, t: &Theme) -> El {
 /// Inline ink toggle for switching the busy-turn delivery default between
 /// Queue and Steer.
 fn mode_toggle(mode: SendMode, t: &Theme) -> El {
+    let flip = ui::shortcut("↵");
     let (glyph, label, rest, hover, tip) = match mode {
         SendMode::Queue => (
             &ui::LIST_PLUS,
             "Queue",
             t.muted,
             t.text,
-            "Default while busy: Queue (click for Steer)",
+            format!("Default while busy: Queue (click for Steer; {flip} flips)"),
         ),
         SendMode::Steer => (
             &ui::CORNER_UP_RIGHT,
             "Steer",
             t.steer,
             t.steer,
-            "Default while busy: Steer (click for Queue)",
+            format!("Default while busy: Steer (click for Queue; {flip} flips)"),
         ),
     };
     row()
@@ -784,7 +778,7 @@ fn queue_icon_action(
 /// `composer-actions` wrapper with instant changes so a busy-to-idle thread
 /// switch never leaves an exiting button beside the new one.
 fn send_button(s: &Desktop, t: &Theme) -> El {
-    let mut actions = row()
+    let actions = row()
         .key("composer-actions")
         .gap(S6)
         .center_y()
@@ -811,75 +805,97 @@ fn send_button(s: &Desktop, t: &Theme) -> El {
         return actions.child(save);
     }
     if s.busy() {
-        if s.can_send() {
-            let stop_ring = row()
-                .key("stop")
-                .role("button")
-                .label("Stop")
-                .help(format!("Stop  {}", ui::shortcut(".")))
-                .shortcut_hint(ui::shortcut("."))
-                .size(SECONDARY_CIRCLE, SECONDARY_CIRCLE)
-                .center()
-                .radius(SECONDARY_CIRCLE / 2.0)
-                .border(HAIRLINE, t.danger.alpha(0.45))
-                .disabled(!s.connected())
-                .focusable(s.connected())
-                .focus_ring(HAIRLINE, S2, t.accent)
-                .hover_group()
-                .press_scale(0.93)
-                .on_press_tx(Desktop::abort)
-                .child(
-                    el().size(STOP_GLYPH, STOP_GLYPH)
-                        .radius(S2)
-                        .fill(t.danger)
-                        .a11y_hidden(),
-                );
-            let (glyph, label, fill) = match s.send_mode {
-                SendMode::Queue => (&ui::LIST_PLUS, "Queue message", t.accent),
-                SendMode::Steer => (&ui::CORNER_UP_RIGHT, "Steer active turn", t.steer),
-            };
-            let dispatch = circle_action("send", label, glyph, fill, t.on_accent, true, t)
-                .on_press_tx(Desktop::send_input);
-            actions = actions.child(stop_ring).child(dispatch);
-        } else {
-            let stop = row()
-                .key("send")
-                .role("button")
-                .label("Stop")
-                .help(format!("Stop  {}", ui::shortcut(".")))
-                .shortcut_hint(ui::shortcut("."))
-                .size(PRIMARY_CIRCLE, PRIMARY_CIRCLE)
-                .center()
-                .radius(PRIMARY_CIRCLE / 2.0)
-                .fill(t.danger)
-                .disabled(!s.connected())
-                .focusable(s.connected())
-                .focus_ring(HAIRLINE, S2, t.accent)
-                .hover_group()
-                .press_scale(0.93)
-                .on_press_tx(Desktop::abort)
-                .child(
-                    el().size(STOP_GLYPH, STOP_GLYPH)
-                        .radius(S2)
-                        .fill(t.on_danger)
-                        .a11y_hidden(),
-                );
-            actions = actions.child(stop);
-        }
-    } else {
-        let enabled = s.can_send();
-        let (fill, ink) = if enabled {
-            (t.accent, t.on_accent)
-        } else {
-            (t.text.alpha(0.08), t.faint)
-        };
-        let mut send = circle_action("send", "Send", &ui::ARROW_UP, fill, ink, enabled, t);
-        if enabled {
-            send = send.on_press_tx(Desktop::send_input);
-        }
-        actions = actions.child(send);
+        return busy_actions(actions, s, t);
     }
-    actions
+    let enabled = s.can_send();
+    let (fill, ink) = if enabled {
+        (t.accent, t.on_accent)
+    } else {
+        (t.text.alpha(0.08), t.faint)
+    };
+    let mut send = circle_action("send", "Send", &ui::ARROW_UP, fill, ink, enabled, t);
+    if enabled {
+        send = send.on_press_tx(Desktop::send_input);
+    }
+    actions.child(send)
+}
+
+fn busy_actions(actions: El, s: &Desktop, t: &Theme) -> El {
+    if !s.can_send() {
+        let stop = row()
+            .key("send")
+            .role("button")
+            .label("Stop")
+            .help(format!("Stop  {}", ui::shortcut(".")))
+            .shortcut_hint(ui::shortcut("."))
+            .size(PRIMARY_CIRCLE, PRIMARY_CIRCLE)
+            .center()
+            .radius(PRIMARY_CIRCLE / 2.0)
+            .fill(t.danger)
+            .disabled(!s.connected())
+            .focusable(s.connected())
+            .focus_ring(HAIRLINE, S2, t.accent)
+            .hover_group()
+            .press_scale(0.93)
+            .on_press_tx(Desktop::abort)
+            .child(
+                el().size(STOP_GLYPH, STOP_GLYPH)
+                    .radius(S2)
+                    .fill(t.on_danger)
+                    .a11y_hidden(),
+            );
+        return actions.child(stop);
+    }
+    let stop_ring = row()
+        .key("stop")
+        .role("button")
+        .label("Stop")
+        .help(format!("Stop  {}", ui::shortcut(".")))
+        .shortcut_hint(ui::shortcut("."))
+        .size(SECONDARY_CIRCLE, SECONDARY_CIRCLE)
+        .center()
+        .radius(SECONDARY_CIRCLE / 2.0)
+        .border(HAIRLINE, t.danger.alpha(0.45))
+        .disabled(!s.connected())
+        .focusable(s.connected())
+        .focus_ring(HAIRLINE, S2, t.accent)
+        .hover_group()
+        .press_scale(0.93)
+        .on_press_tx(Desktop::abort)
+        .child(
+            el().size(STOP_GLYPH, STOP_GLYPH)
+                .radius(S2)
+                .fill(t.danger)
+                .a11y_hidden(),
+        );
+    let flip = ui::shortcut("↵");
+    let flipped = s.flip_send_mode();
+    let (glyph, label, help, fill) = match s.effective_send_mode() {
+        SendMode::Queue => (
+            &ui::LIST_PLUS,
+            "Queue message",
+            if flipped {
+                "Queue message".to_owned()
+            } else {
+                format!("Queue message  ({flip} to steer)")
+            },
+            t.accent,
+        ),
+        SendMode::Steer => (
+            &ui::CORNER_UP_RIGHT,
+            "Steer active turn",
+            if flipped {
+                "Steer active turn".to_owned()
+            } else {
+                format!("Steer active turn  ({flip} to queue)")
+            },
+            t.steer,
+        ),
+    };
+    let dispatch = circle_action("send", label, glyph, fill, t.on_accent, true, t)
+        .help(help)
+        .on_press_tx(Desktop::send_input);
+    actions.child(stop_ring).child(dispatch)
 }
 
 fn circle_action(

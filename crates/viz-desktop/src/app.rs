@@ -33,6 +33,19 @@ const TOAST_MAX: usize = 3;
 /// The window's size on launch, in points; headless renders use it too.
 pub const WINDOW_SIZE: (f32, f32) = (1240.0, 760.0);
 
+/// Whether only the platform's primary shortcut modifier (`⌘` on macOS, `Ctrl`
+/// elsewhere) is held.
+pub const fn primary_mod_only(mods: rune::Mods) -> bool {
+    if mods.shift || mods.alt {
+        return false;
+    }
+    if cfg!(target_os = "macos") {
+        mods.cmd && !mods.ctrl
+    } else {
+        (mods.cmd || mods.ctrl) && !mods.logo
+    }
+}
+
 /// The server connection, as the sidebar footer shows it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -270,6 +283,8 @@ pub struct Desktop {
     pub draft: TextEdit,
     /// Default delivery mode when sending while a turn is active.
     pub send_mode: SendMode,
+    /// Modifier keys currently held down in the window.
+    modifiers: rune::Mods,
     /// Queued input currently being edited in the composer, if any.
     pub editing_queued: Option<EditingQueued>,
     pub attachments: Vec<Attachment>,
@@ -330,6 +345,7 @@ impl Desktop {
             expanded: HashSet::new(),
             draft,
             send_mode: SendMode::Queue,
+            modifiers: rune::Mods::default(),
             editing_queued: None,
             attachments: Vec::new(),
             attachment_reads: HashSet::new(),
@@ -425,6 +441,9 @@ impl Desktop {
     /// The window gained or lost focus; coming back reads the open thread.
     pub fn set_focus(&mut self, focused: bool, tx: &mut Tx) {
         self.focused = focused;
+        if !focused {
+            self.modifiers = rune::Mods::default();
+        }
         if focused
             && self.connected()
             && let Some(id) = self
@@ -433,6 +452,12 @@ impl Desktop {
         {
             self.send(Command::Update(id, ThreadChange::Unread(false)), tx);
         }
+    }
+
+    /// Updates live modifier state used to preview and flip Queue/Steer send
+    /// actions while the primary shortcut modifier is held.
+    pub const fn set_modifiers(&mut self, mods: rune::Mods, _tx: &mut Tx) {
+        self.modifiers = mods;
     }
 
     /// Shows `thread`, loading until its view arrives.
@@ -1029,6 +1054,24 @@ impl Desktop {
         };
     }
 
+    /// Whether the primary shortcut modifier is held to flip Queue and Steer.
+    pub const fn flip_send_mode(&self) -> bool {
+        primary_mod_only(self.modifiers)
+    }
+
+    /// Busy-turn delivery mode currently in effect, flipping the default while
+    /// the primary shortcut modifier is held.
+    pub const fn effective_send_mode(&self) -> SendMode {
+        if self.flip_send_mode() {
+            match self.send_mode {
+                SendMode::Queue => SendMode::Steer,
+                SendMode::Steer => SendMode::Queue,
+            }
+        } else {
+            self.send_mode
+        }
+    }
+
     /// Loads a queued input into the composer and keeps the unsent draft.
     pub fn start_edit_queued(&mut self, thread: ThreadId, run: RunId, body: &str, tx: &mut Tx) {
         self.preview_edit_queued(thread, run, body);
@@ -1129,7 +1172,9 @@ impl Desktop {
                 },
             }
         } else if let Some(thread) = self.selected {
-            let mode = self.busy().then(|| override_mode.unwrap_or(self.send_mode));
+            let mode = self
+                .busy()
+                .then(|| override_mode.unwrap_or_else(|| self.effective_send_mode()));
             Command::SendInput(SendInput {
                 thread,
                 text: self.draft.text.clone(),

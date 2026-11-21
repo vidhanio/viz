@@ -184,6 +184,20 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if s.palette.is_open() {
         return false;
     }
+    if ev.key == rune::Key::Escape
+        && !ev.mods.shift
+        && !ev.mods.alt
+        && !ev.mods.cmd
+        && !ev.mods.ctrl
+        && s.editing_queued.is_some()
+        && s.checkpoint.is_none()
+        && s.open_picker.is_none()
+        && !s.navigation.has_overlay()
+        && (!s.diff.open || diff_panel::docked_width(s).is_some())
+    {
+        s.cancel_edit_queued(tx);
+        return true;
+    }
     if ev.is_command('b') && !ev.mods.shift && !ev.mods.alt {
         s.sidebar.toggle();
         return true;
@@ -329,7 +343,8 @@ fn main() {
         }
         desktop
     })
-    .on_focus(Desktop::set_focus);
+    .on_focus(Desktop::set_focus)
+    .on_modifiers(Desktop::set_modifiers);
     if let Some(detail) = theme_error {
         app.handle()
             .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
