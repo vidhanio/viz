@@ -51,23 +51,13 @@ pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
     let any_failed = children
         .iter()
         .any(|task| task.status == TaskStatus::Failed);
-    let active_ids: Vec<String> = active.iter().map(|task| task.id.clone()).collect();
     let total = children.len();
     let done = settled.len();
 
     let body = if expanded {
-        expanded_body(s, &active, &settled, &active_ids, any_failed, t)
+        expanded_body(s, &active, &settled, any_failed, t)
     } else {
-        collapsed_bar(
-            s,
-            &children,
-            &active,
-            &active_ids,
-            done,
-            total,
-            any_failed,
-            t,
-        )
+        collapsed_bar(s, &children, &active, done, total, any_failed, t)
     };
 
     let motion = Transition::offset(0.0, S12)
@@ -85,15 +75,10 @@ pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
     )
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "collapsed dock summarizes active tasks, progress ratio, and stop targets"
-)]
 fn collapsed_bar(
     s: &Desktop,
     all: &[&Task],
     active: &[&Task],
-    active_ids: &[String],
     done: usize,
     total: usize,
     any_failed: bool,
@@ -109,7 +94,7 @@ fn collapsed_bar(
     let medallions = medallion_stack(s, all, t);
     let summary = collapsed_summary(s, active, done, total, any_failed, t);
     let progress = progress_hairline(done, total, t);
-    let mut bar = row()
+    row()
         .key("tasks-dock-collapsed")
         .role("button")
         .label("Expand tasks")
@@ -126,17 +111,14 @@ fn collapsed_bar(
         .child(lead_mark)
         .child(medallions)
         .child(summary)
-        .child(progress);
-    if s.connected() && !active_ids.is_empty() {
-        bar = bar.child(stop_all_button(active_ids.to_vec(), t));
-    }
-    bar.child(
-        icon(&ui::CHEVRON_UP, ICON_SMALL + 1.0)
-            .icon_rotation(0.0)
-            .color(t.muted)
-            .group_color(t.text)
-            .a11y_hidden(),
-    )
+        .child(progress)
+        .child(
+            icon(&ui::CHEVRON_UP, ICON_SMALL + 1.0)
+                .icon_rotation(0.0)
+                .color(t.muted)
+                .group_color(t.text)
+                .a11y_hidden(),
+        )
 }
 
 fn medallion_stack(s: &Desktop, tasks: &[&Task], t: &Theme) -> El {
@@ -182,7 +164,7 @@ fn collapsed_summary(
                 .child(text("·").font(t.small).color(t.faint).a11y_hidden())
                 .child(
                     text(detail)
-                        .font(t.mono_small)
+                        .font(t.small)
                         .color(t.faint)
                         .shrink()
                         .truncate(),
@@ -231,7 +213,6 @@ fn expanded_body(
     s: &Desktop,
     active: &[&Task],
     settled: &[&Task],
-    active_ids: &[String],
     any_failed: bool,
     t: &Theme,
 ) -> El {
@@ -248,7 +229,7 @@ fn expanded_body(
         active.len() + settled.len(),
         any_failed,
     );
-    let mut header = row()
+    let header = row()
         .key("tasks-dock-header")
         .role("button")
         .label("Collapse tasks")
@@ -271,17 +252,14 @@ fn expanded_body(
                 .color(t.muted)
                 .grow(1.0)
                 .truncate(),
+        )
+        .child(
+            icon(&ui::CHEVRON_UP, ICON_SMALL + 1.0)
+                .icon_rotation(PI)
+                .color(t.muted)
+                .group_color(t.text)
+                .a11y_hidden(),
         );
-    if s.connected() && !active_ids.is_empty() {
-        header = header.child(stop_all_button(active_ids.to_vec(), t));
-    }
-    header = header.child(
-        icon(&ui::CHEVRON_UP, ICON_SMALL + 1.0)
-            .icon_rotation(PI)
-            .color(t.muted)
-            .group_color(t.text)
-            .a11y_hidden(),
-    );
 
     let (recent_settled, earlier) = if settled.len() > RECENT_SETTLED {
         settled.split_at(RECENT_SETTLED)
@@ -538,32 +516,6 @@ fn task_row_trailing(
         );
     }
     trailing
-}
-
-fn stop_all_button(ids: Vec<String>, t: &Theme) -> El {
-    row()
-        .key("stop-all-tasks")
-        .role("button")
-        .label("Cancel running tasks")
-        .help("Cancel running tasks")
-        .size(S24, S24)
-        .center()
-        .radius(RADIUS_INNER)
-        .hover_group()
-        .press_scale(0.95)
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .on_press_tx(move |s: &mut Desktop, tx| {
-            for id in &ids {
-                s.send(Command::CancelTask(id.clone()), tx);
-            }
-        })
-        .child(
-            icon(&ui::STOP, ICON_SMALL - 1.0)
-                .color(t.faint)
-                .group_color(t.danger)
-                .a11y_hidden(),
-        )
 }
 
 fn child_summary<'a>(s: &'a Desktop, task: &Task) -> Option<&'a ThreadSummary> {
