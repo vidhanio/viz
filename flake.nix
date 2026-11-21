@@ -131,6 +131,7 @@
               // {
                 inherit cargoArtifacts;
                 pname = name;
+                meta.mainProgram = name;
                 cargoExtraArgs = "--locked --package ${name}";
                 doCheck = false;
               }
@@ -144,11 +145,11 @@
           };
 
           packages = {
-            viz-backend = crate "viz-backend" { };
+            backend = crate "viz-backend" { };
             viz = crate "viz" { };
-            viz-discord = crate "viz-discord" { };
-            viz-imessage = crate "viz-imessage" { };
-            viz-desktop = crate "viz-desktop" {
+            discord = crate "viz-discord" { };
+            imessage = crate "viz-imessage" { };
+            desktop = crate "viz-desktop" {
               nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
               postFixup = ''
                 wrapProgram $out/bin/viz-desktop \
@@ -158,12 +159,13 @@
             };
             default = pkgs.symlinkJoin {
               name = "viz";
+              meta.mainProgram = "viz";
               paths = with self'.packages; [
                 viz
-                viz-backend
-                viz-discord
-                viz-imessage
-                viz-desktop
+                backend
+                discord
+                imessage
+                desktop
               ];
             };
           };

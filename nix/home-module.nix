@@ -92,8 +92,8 @@ let
         settings = settingsOption "connectors/${name}.toml";
         package = mkOption {
           type = types.package;
-          default = vizPackages."viz-${name}";
-          defaultText = lib.literalExpression "viz.packages.\${system}.viz-${name}";
+          default = vizPackages.${name};
+          defaultText = lib.literalExpression "viz.packages.\${system}.${name}";
           description = "The viz-${name} package.";
         };
       };
@@ -177,8 +177,8 @@ in
       };
       package = mkOption {
         type = types.package;
-        default = vizPackages.viz-backend;
-        defaultText = lib.literalExpression "viz.packages.\${system}.viz-backend";
+        default = vizPackages.backend;
+        defaultText = lib.literalExpression "viz.packages.\${system}.backend";
         description = "The viz-backend package.";
       };
     };
@@ -198,8 +198,8 @@ in
       };
       package = mkOption {
         type = types.package;
-        default = vizPackages.viz-desktop;
-        defaultText = lib.literalExpression "viz.packages.\${system}.viz-desktop";
+        default = vizPackages.desktop;
+        defaultText = lib.literalExpression "viz.packages.\${system}.desktop";
         description = "The viz-desktop package.";
       };
     };

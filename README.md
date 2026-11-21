@@ -10,14 +10,17 @@ Status: early. See `TODO.md` for the roadmap and `docs/design.md` for what viz i
 ## Run
 
 ```sh
-nix develop                           # or: direnv allow
 mkdir -p ~/.config/viz
 cp config.example.toml ~/.config/viz/config.toml
 # Enable the ACP harness you want in config.toml.
-cargo run -p viz-backend
-# Create or import a thread in the desktop app, then send to its ID:
-cargo run -p viz -- send --thread 42 "hello"
+nix run .#backend
+# In another terminal, open the desktop app to create or import a thread:
+nix run .#desktop
+# Send a message to that thread:
+nix run .#viz -- send --thread 42 "hello"
 ```
+
+The connectors are available as `nix run .#discord` and `nix run .#imessage`.
 
 See the examples for the [backend](config.example.toml), [CLI](cli.example.toml), [desktop](desktop.example.toml), [Discord](connectors/discord.example.toml), and [iMessage](connectors/imessage.example.toml).
 
