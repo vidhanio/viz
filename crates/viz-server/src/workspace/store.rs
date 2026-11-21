@@ -166,7 +166,7 @@ pub(super) async fn create_thread(
 
 const STATUS: &str = "CASE
     WHEN EXISTS (SELECT 1 FROM runs WHERE thread = t.id AND status IN ('queued','running')) THEN 'working'
-    WHEN t.setup_failed = 1 OR (SELECT status FROM runs WHERE thread = t.id AND end_entry IS NOT NULL
+    WHEN t.setup_failed = 1 OR (SELECT status FROM runs WHERE thread = t.id AND hidden = 0 AND end_entry IS NOT NULL
            ORDER BY end_entry DESC LIMIT 1) IN ('failed','interrupted') THEN 'failed'
     ELSE 'idle' END";
 
@@ -216,7 +216,7 @@ pub(super) async fn list_threads(
 
 pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadState, RpcError> {
     let query = format!(
-        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS} FROM threads AS t WHERE t.id = ?1"
+        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS}, t.history_revision FROM threads AS t WHERE t.id = ?1"
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
@@ -236,6 +236,7 @@ pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadSt
     })
     .collect::<Result<_, RpcError>>()?;
     Ok(ThreadState {
+        history_revision: row.u64(5)?,
         harness: row.str(0)?,
         project: row.opt_str(1)?,
         cwd: row.str(2)?,
@@ -280,7 +281,7 @@ pub(super) async fn publish(
             let previous = row(
                 db,
                 "SELECT id, data FROM entries WHERE thread = ?1 AND tool_session = ?2
-                 AND json_extract(data, '$.data.id') = ?3 ORDER BY id DESC LIMIT 1",
+                 AND hidden = 0 AND json_extract(data, '$.data.id') = ?3 ORDER BY id DESC LIMIT 1",
                 [thread.into(), session.into(), id.as_str().into()],
             )
             .await?
@@ -381,7 +382,7 @@ pub(super) async fn entries(
     let mut entries = if let Some(before) = before {
         rows(
             db,
-            "SELECT id, data FROM entries WHERE thread = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
+            "SELECT id, data FROM entries WHERE thread = ?1 AND id < ?2 AND hidden = 0 ORDER BY id DESC LIMIT ?3",
             [thread.into(), before.into(), (limit + 1).into()],
         )
         .await?
@@ -390,7 +391,7 @@ pub(super) async fn entries(
     } else {
         rows(
             db,
-            "SELECT id, data FROM entries WHERE thread = ?1 ORDER BY id DESC LIMIT ?2",
+            "SELECT id, data FROM entries WHERE thread = ?1 AND hidden = 0 ORDER BY id DESC LIMIT ?2",
             [thread.into(), (limit + 1).into()],
         )
         .await?
@@ -416,7 +417,7 @@ pub(super) async fn entries_after(
     require(db, thread).await?;
     rows(
         db,
-        "SELECT id, data FROM entries WHERE thread = ?1 AND id > ?2 ORDER BY id LIMIT ?3",
+        "SELECT id, data FROM entries WHERE thread = ?1 AND id > ?2 AND hidden = 0 ORDER BY id LIMIT ?3",
         [thread.into(), after.into(), limit.into()],
     )
     .await?
@@ -454,8 +455,8 @@ pub(super) async fn search(
     rows(
         db,
         "SELECT s.thread, s.rowid, snippet(search_entries, 0, char(1), char(2), '…', 32)
-        FROM search_entries AS s
-        WHERE search_entries MATCH ?1 ORDER BY bm25(search_entries), s.rowid DESC LIMIT ?2",
+        FROM search_entries AS s JOIN entries AS e ON e.id = s.rowid
+        WHERE search_entries MATCH ?1 AND e.hidden = 0 ORDER BY bm25(search_entries), s.rowid DESC LIMIT ?2",
         [terms.into(), limit.into()],
     )
     .await?

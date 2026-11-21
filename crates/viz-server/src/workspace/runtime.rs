@@ -400,7 +400,8 @@ impl Workspace {
         };
         let id = session.id().to_owned();
         let id = id.as_str();
-        session
+        let (seed, text) = self.seed_prompt(thread, text).await?;
+        let outcome = session
             .prompt(
                 Prompt {
                     text: &text,
@@ -416,7 +417,11 @@ impl Workspace {
                         .map_err(anyhow::Error::from)
                 },
             )
-            .await
+            .await?;
+        if seed {
+            super::rewind::clear_seed(&mut *self.db.lock().await, thread).await?;
+        }
+        Ok(outcome)
     }
 
     async fn publish(

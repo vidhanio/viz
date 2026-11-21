@@ -104,6 +104,9 @@ methods! {
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
     LaunchThread => "thread.launch", Launched;
+    RestoreRun => "run.restore", Empty;
+    RewindThread => "thread.rewind", Empty;
+    ForkThread => "thread.fork", Launched;
     RunDiff => "run.diff", GitDiff;
     ThreadDiff => "thread.diff", GitDiff;
     ListGitBranches => "git.branches", GitBranches;
@@ -274,6 +277,52 @@ pub struct GitWorktree {
     pub path: String,
     /// Local branch at creation.
     pub branch: String,
+}
+
+/// Restore the working tree to the start of a settled run.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RestoreRun {
+    pub thread: ThreadId,
+    pub run: RunId,
+}
+
+/// Restore the working tree and hide transcript entries starting with the
+/// selected run.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct RewindThread {
+    pub thread: ThreadId,
+    pub run: RunId,
+}
+
+/// Copy the transcript up to a settled run boundary into a new ACP thread.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ForkThread {
+    pub thread: ThreadId,
+    pub run: RunId,
+    #[serde(default)]
+    pub boundary: RunBoundary,
+    /// Omit to use the same working directory at its current filesystem state.
+    pub worktree: Option<ForkWorktree>,
+    /// Defaults to the source title with a fork suffix.
+    pub title: Option<String>,
+}
+
+/// Boundary of the run that determines the transcript and checkout snapshot.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum RunBoundary {
+    /// Exclude this run from the forked transcript.
+    Start,
+    /// Include this run in the forked transcript.
+    #[default]
+    End,
+}
+
+/// Start a new branch at the checkpoint commit in a fresh worktree.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
+pub struct ForkWorktree {
+    /// Use the server's generated branch name when omitted.
+    pub branch: Option<String>,
 }
 
 /// Compare the working tree at the start and end of a run.
@@ -498,6 +547,8 @@ pub struct SlashCommand {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ThreadState {
+    /// Increases when a rewind invalidates cached transcript entries.
+    pub history_revision: u64,
     /// Status of this thread.
     pub status: ThreadStatus,
     /// The configured ACP runner.

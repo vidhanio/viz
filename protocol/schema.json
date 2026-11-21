@@ -956,6 +956,12 @@
             "description": "The current application state of a watched thread.",
             "type": "object",
             "properties": {
+              "historyRevision": {
+                "description": "Increases when a rewind invalidates cached transcript entries.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
               "status": {
                 "description": "Status of this thread.",
                 "$ref": "#/$defs/ThreadStatus"
@@ -1024,6 +1030,7 @@
               }
             },
             "required": [
+              "historyRevision",
               "status",
               "harness",
               "cwd",
@@ -3175,6 +3182,209 @@
         }
       }
     },
+    "run.restore": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RestoreRun",
+        "description": "Restore the working tree to the start of a settled run.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          }
+        },
+        "required": [
+          "thread",
+          "run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "thread.rewind": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RewindThread",
+        "description": "Restore the working tree and hide transcript entries starting with the\nselected run.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          }
+        },
+        "required": [
+          "thread",
+          "run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "thread.fork": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ForkThread",
+        "description": "Copy the transcript up to a settled run boundary into a new ACP thread.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "boundary": {
+            "$ref": "#/$defs/RunBoundary",
+            "default": "end"
+          },
+          "worktree": {
+            "description": "Omit to use the same working directory at its current filesystem state.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ForkWorktree"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "title": {
+            "description": "Defaults to the source title with a fork suffix.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "thread",
+          "run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunBoundary": {
+            "description": "Boundary of the run that determines the transcript and checkout snapshot.",
+            "oneOf": [
+              {
+                "description": "Exclude this run from the forked transcript.",
+                "type": "string",
+                "const": "start"
+              },
+              {
+                "description": "Include this run in the forked transcript.",
+                "type": "string",
+                "const": "end"
+              }
+            ]
+          },
+          "ForkWorktree": {
+            "description": "Start a new branch at the checkpoint commit in a fresh worktree.",
+            "type": "object",
+            "properties": {
+              "branch": {
+                "description": "Use the server's generated branch name when omitted.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Launched",
+        "description": "`thread.launch` result.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The new thread.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        }
+      }
+    },
     "run.diff": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -5158,6 +5368,12 @@
         "description": "The current application state of a watched thread.",
         "type": "object",
         "properties": {
+          "historyRevision": {
+            "description": "Increases when a rewind invalidates cached transcript entries.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "status": {
             "description": "Status of this thread.",
             "$ref": "#/$defs/ThreadStatus"
@@ -5226,6 +5442,7 @@
           }
         },
         "required": [
+          "historyRevision",
           "status",
           "harness",
           "cwd",

@@ -8,8 +8,9 @@ use git2::{
 };
 use serde_json::{Value, json};
 use viz_client::protocol::{
-    CreateGitWorktree, GitBranch, GitBranches, GitSummary, GitWorktree, ListGitBranches, Method,
-    Project, RemoveGitWorktree, RunDiff, ThreadDiff, WorktreeRequest,
+    CreateGitWorktree, ForkThread, GitBranch, GitBranches, GitSummary, GitWorktree, Launched,
+    ListGitBranches, Method, Project, RemoveGitWorktree, RestoreRun, RewindThread, RunDiff,
+    ThreadDiff, WorktreeRequest,
 };
 
 use super::{
@@ -125,6 +126,20 @@ impl Drop for Provisioned {
 impl Workspace {
     pub(super) async fn git_call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
+            ForkThread::NAME => {
+                let thread = self.fork(decode(params)?).await?;
+                encode(Launched { thread, run: None })
+            }
+            RestoreRun::NAME => {
+                let input: RestoreRun = decode(params)?;
+                self.restore(input.thread.0, input.run.0, false).await?;
+                Ok(json!({}))
+            }
+            RewindThread::NAME => {
+                let input: RewindThread = decode(params)?;
+                self.restore(input.thread.0, input.run.0, true).await?;
+                Ok(json!({}))
+            }
             RunDiff::NAME => {
                 let input: RunDiff = decode(params)?;
                 encode(

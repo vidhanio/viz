@@ -166,6 +166,7 @@ const fn preview_harness(id: u64) -> (&'static str, &'static str) {
 
 fn thread() -> ThreadState {
     ThreadState {
+        history_revision: 0,
         status: ThreadStatus::Idle,
         harness: "claude".into(),
         project: Some("/work/workbench".into()),

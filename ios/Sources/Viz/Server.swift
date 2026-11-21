@@ -233,6 +233,7 @@ enum VizProtocol {
   }
 
   struct ThreadState: Decodable {
+    let historyRevision: UInt64
     struct Queued: Decodable, Identifiable {
       let run: Int
       let text: String
@@ -432,6 +433,28 @@ final class Server {
   func delete(thread: Int, removeWorktree: Bool = false) async throws {
     _ = try await call(
       "thread.delete", params: ["thread": thread, "removeWorktree": removeWorktree])
+  }
+
+  func restore(thread: Int, run: Int, rewind: Bool = false) async throws {
+    _ = try await call(
+      rewind ? "thread.rewind" : "run.restore", params: ["thread": thread, "run": run])
+  }
+
+  func fork(
+    thread: Int, run: Int, atStart: Bool = false,
+    newWorktree: Bool = false, branch: String? = nil, title: String? = nil
+  ) async throws -> Int {
+    var params: [String: Any] = [
+      "thread": thread, "run": run, "boundary": atStart ? "start" : "end",
+    ]
+    if newWorktree {
+      var worktree: [String: String] = [:]
+      if let branch { worktree["branch"] = branch }
+      params["worktree"] = worktree
+    }
+    if let title { params["title"] = title }
+    let data = try await call("thread.fork", params: params)
+    return try JSONDecoder().decode(VizProtocol.Launched.self, from: data).thread
   }
 
   func diff(thread: Int, run: Int? = nil, summary: Bool = false) async throws -> VizProtocol.GitDiff

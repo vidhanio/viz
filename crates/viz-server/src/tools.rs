@@ -8,9 +8,9 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use viz_client::protocol::{
-    EnvironmentList, HarnessList, HarnessOptions, HarnessOptionsResult, LaunchThread, ListEntries,
-    ListGitBranches, ReadThreadState, RunDiff, SendMode, StopThread, TaskList, TaskResult,
-    ThreadDiff, ThreadStateResult, WaitThread,
+    EnvironmentList, ForkThread, HarnessList, HarnessOptions, HarnessOptionsResult, LaunchThread,
+    ListEntries, ListGitBranches, ReadThreadState, RestoreRun, RewindThread, RunDiff, SendMode,
+    StopThread, TaskList, TaskResult, ThreadDiff, ThreadStateResult, WaitThread,
 };
 
 use crate::{
@@ -78,6 +78,9 @@ rpc_tools! {
     "thread_list", "threads.list", ThreadList, "List threads in the selected environment, optionally filtered by project.";
     "git_branches", "git.branches", ListGitBranches, "List local and remote-tracking branches of a registered project.";
     "run_diff", "run.diff", RunDiff, "Compare the Git working tree at the start and end of a run.";
+    "run_restore", "run.restore", RestoreRun, "Restore the working tree of an idle thread to the selected run's start checkpoint.";
+    "thread_rewind", "thread.rewind", RewindThread, "Restore the working tree and rewind the transcript of an idle thread.";
+    "thread_fork", "thread.fork", ForkThread, "Branch off a settled run boundary with a fresh ACP session and optional new worktree.";
     "thread_diff", "thread.diff", ThreadDiff, "Compare the first and latest complete Git checkpoints of a thread.";
     "thread_read", "thread.entries", ListEntries, "Read recent thread entries. Pass before for earlier entries.";
     "thread_state", "thread.state", ReadThreadState, "Read a thread's current state, ACP options, working directory, and queue.";

@@ -108,9 +108,9 @@ impl Workspace {
             .ok_or_else(|| RpcError::not_found(format!("no run {run} in thread {thread}")))?;
             (record.opt_str(0)?, record.opt_str(1)?)
         } else {
-            let first = row(&mut *db, "SELECT checkpoint_start FROM runs WHERE thread = ?1 AND checkpoint_end IS NOT NULL ORDER BY end_entry LIMIT 1", [thread.into()])
+            let first = row(&mut *db, "SELECT checkpoint_start FROM runs WHERE thread = ?1 AND checkpoint_end IS NOT NULL AND hidden = 0 ORDER BY end_entry LIMIT 1", [thread.into()])
                 .await?.map(|mut record| record.str(0)).transpose()?;
-            let last = row(&mut *db, "SELECT checkpoint_end FROM runs WHERE thread = ?1 AND checkpoint_end IS NOT NULL ORDER BY end_entry DESC LIMIT 1", [thread.into()])
+            let last = row(&mut *db, "SELECT checkpoint_end FROM runs WHERE thread = ?1 AND checkpoint_end IS NOT NULL AND hidden = 0 ORDER BY end_entry DESC LIMIT 1", [thread.into()])
                 .await?.map(|mut record| record.str(0)).transpose()?;
             (first, last)
         };
