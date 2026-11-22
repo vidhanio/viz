@@ -5,6 +5,7 @@ mod admission;
 mod attachments;
 mod checkouts;
 mod files;
+mod follow_ups;
 mod notifications;
 mod projects;
 pub(crate) mod rpc;

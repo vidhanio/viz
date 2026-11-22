@@ -128,13 +128,62 @@ pub const fn follow_up_mode(original_wake: Option<RunId>, stopped: bool) -> Wake
 /// A root run and the delivery obligations for its descendants.
 #[derive(Debug)]
 pub struct Family {
-    pub outcome: Option<Run>,
+    outcome: Option<Run>,
     pub active: Vec<RunId>,
-    pub pending_delivery: bool,
-    pub cancelled_run: bool,
+    pending_delivery: bool,
+    cancelled_run: bool,
 }
 
 impl Family {
+    /// Derive progress from the root and its wakes. A finished family reports
+    /// the most recent wake's outcome unless cancellation won anywhere in the
+    /// family.
+    #[must_use]
+    pub fn from_runs(
+        mut outcome: Option<Run>,
+        mut wakes: Vec<Run>,
+        pending_delivery: bool,
+    ) -> Self {
+        let mut active: Vec<RunId> = outcome
+            .iter()
+            .filter(|run| is_open(run.status))
+            .map(|run| run.id)
+            .collect();
+        wakes.sort_unstable_by_key(|run| std::cmp::Reverse(run.id));
+        active.extend(
+            wakes
+                .iter()
+                .filter(|run| is_open(run.status))
+                .map(|run| run.id),
+        );
+        let cancelled_run = outcome
+            .iter()
+            .chain(&wakes)
+            .any(|run| run.status == RunStatus::Cancelled);
+        if active.is_empty()
+            && !pending_delivery
+            && !cancelled_run
+            && let (Some(root), Some(wake)) = (&mut outcome, wakes.into_iter().next())
+        {
+            root.status = wake.status;
+            root.answer = wake.answer;
+            root.error = wake.error;
+        }
+        Self {
+            outcome,
+            active,
+            pending_delivery,
+            cancelled_run,
+        }
+    }
+
+    /// Persist the stop intent before requesting cancellation from any
+    /// descendants.
+    #[must_use]
+    pub const fn should_record_stop(&self, requested: bool, recorded: bool) -> bool {
+        (requested || self.cancelled_run) && self.pending() && !recorded
+    }
+
     /// Stop is complete only after the running family and outstanding
     /// deliveries drain.
     #[must_use]
@@ -267,4 +316,76 @@ pub const fn admit(receipt: Option<Receipt>, retracted: bool) -> Admission {
         (None, true) => Admission::Cancelled,
         (None, false) => Admission::Create,
     }
+}
+
+/// A result delivered to a parent run can wake another local run in that
+/// family.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WakeEdge {
+    pub parent: RunId,
+    pub wake: RunId,
+}
+
+/// Compute all runs in the family, including the root and descendant
+/// follow-ups.
+#[must_use]
+pub fn descendants(
+    root: RunId,
+    edges: impl IntoIterator<Item = WakeEdge>,
+) -> std::collections::HashSet<RunId> {
+    reachable(root, edges.into_iter().map(|edge| (edge.parent, edge.wake)))
+}
+
+/// Find receipt candidates by tracing the preceding prompt back through its
+/// wakes.
+#[must_use]
+pub fn ancestors(
+    original: RunId,
+    edges: impl IntoIterator<Item = WakeEdge>,
+) -> std::collections::HashSet<RunId> {
+    reachable(
+        original,
+        edges.into_iter().map(|edge| (edge.wake, edge.parent)),
+    )
+}
+
+fn reachable(
+    origin: RunId,
+    edges: impl IntoIterator<Item = (RunId, RunId)>,
+) -> std::collections::HashSet<RunId> {
+    use std::collections::{HashMap, HashSet};
+    let mut adjacency: HashMap<RunId, Vec<RunId>> = HashMap::new();
+    for (from, to) in edges {
+        adjacency.entry(from).or_default().push(to);
+    }
+    let mut seen = HashSet::from([origin]);
+    let mut pending = vec![origin];
+    while let Some(from) = pending.pop() {
+        for to in adjacency.remove(&from).into_iter().flatten() {
+            if seen.insert(to) {
+                pending.push(to);
+            }
+        }
+    }
+    seen
+}
+
+/// A completed continuation can inherit a completed prompt's receipt. A manual
+/// prompt with no receipt or wake ancestry breaks the association.
+#[must_use]
+pub fn continuation_parent(
+    continuation: &Run,
+    preceding: Option<(RunId, RunStatus)>,
+) -> Option<(RunId, &str)> {
+    if continuation.kind != RunKind::Unprompted || continuation.status != RunStatus::Completed {
+        return None;
+    }
+    let answer = continuation
+        .answer
+        .as_deref()
+        .filter(|text| !text.trim_matches(' ').is_empty())?;
+    let (prompt, RunStatus::Completed) = preceding? else {
+        return None;
+    };
+    Some((prompt, answer))
 }

@@ -1,6 +1,6 @@
 //! Durable run persistence and the continuation outbox.
 
-use std::num::NonZeroU64;
+use std::{collections::HashSet, num::NonZeroU64};
 
 use viz_core::{
     runs::{self as decisions, Move, Place, QueueRejection, Settlement},
@@ -118,6 +118,25 @@ pub(crate) async fn run_from(
     .await?
     .map(|row| decode_run(thread, row))
     .transpose()
+}
+
+pub(crate) async fn by_ids(
+    db: &mut Connection,
+    thread: u64,
+    runs: &HashSet<RunId>,
+) -> Result<Vec<Run>, RpcError> {
+    if runs.is_empty() {
+        return Ok(Vec::new());
+    }
+    rows(
+        db,
+        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1
+         AND id IN (SELECT value FROM json_each(?2))",
+        [thread.into(), store::json(runs)?.into()],
+    )
+    .await?
+    .map(|record| decode_run(thread, record))
+    .collect()
 }
 
 pub(super) async fn latest(db: &mut Connection, thread: u64) -> Result<Option<Run>, RpcError> {
@@ -339,37 +358,7 @@ pub(super) async fn settle(
     .await?;
     exec(db, "UPDATE threads SET updated_at = ?2, unread = CASE WHEN ?3 THEN 1 ELSE unread END, setup_failed = 0 WHERE id = ?1",
         [thread.into(), store::now().into(), unread.into()]).await?;
-    follow_up(db, thread, run).await
-}
-
-/// Queue the answer only when the preceding prompt belongs to a task receipt
-/// or a wake in that task's run family. Manual inputs break this association.
-/// The outbox row commits with the run, and the parent deduplicates retries
-/// using the continuation run ID.
-async fn follow_up(db: &mut Connection, thread: u64, run: u64) -> Result<(), RpcError> {
-    exec(
-        db,
-        "WITH RECURSIVE lineage(id) AS (
-            SELECT r.id FROM runs u JOIN runs r ON r.id = (
-                SELECT id FROM runs WHERE thread = u.thread AND kind = 'prompt'
-                    AND end_entry < u.prompt_entry ORDER BY end_entry DESC LIMIT 1
-            ) WHERE u.id = ?2 AND u.thread = ?1 AND u.kind = 'unprompted'
-                AND u.status = 'completed' AND r.status = 'completed'
-                AND trim(coalesce(u.answer, '')) <> ''
-            UNION
-            SELECT a.parent_run FROM lineage l JOIN task_wakes w ON w.run = l.id AND w.thread = ?1
-                JOIN agent_tasks a ON a.id = w.task AND a.parent = w.thread
-                WHERE a.parent_run IS NOT NULL
-        )
-        INSERT OR IGNORE INTO task_follow_ups (environment, task, run, thread, text)
-        SELECT tr.environment, tr.task, u.id, u.thread, u.answer
-        FROM runs u JOIN task_receipts tr ON tr.thread = u.thread
-        WHERE u.id = ?2 AND tr.run IN (SELECT id FROM lineage)
-            AND NOT EXISTS (SELECT 1 FROM stopped_task_runs s WHERE s.thread = tr.thread AND s.run = tr.run)",
-        [thread.into(), run.into()],
-    )
-    .await?;
-    Ok(())
+    super::follow_ups::record(db, thread, run).await
 }
 
 pub(super) async fn recover(db: &mut Connection) -> Result<(), RpcError> {

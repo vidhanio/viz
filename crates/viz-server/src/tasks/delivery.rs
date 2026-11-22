@@ -162,7 +162,7 @@ impl Tasks {
         let mut db = self.workspace.db.lock().await;
         let family = snapshot(&mut db, thread.0, run.0).await?;
         let mut stopped = stop_exists(&mut db, thread.0, run.0).await?;
-        if (cancel || family.cancelled_run) && family.pending() && !stopped {
+        if family.should_record_stop(cancel, stopped) {
             let mut tx = db.transaction().await?;
             sql::exec(
                 &mut tx,
