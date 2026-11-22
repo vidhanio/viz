@@ -6622,7 +6622,6 @@ version = "0.1.0"
 dependencies = [
  "futures-util",
  "rustls 0.23.46",
- "schemars 1.2.3",
  "serde",
  "serde_json",
  "thiserror 2.0.21",
@@ -6630,6 +6629,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tracing",
  "viz-config",
+ "viz-protocol",
 ]
 
 [[package]]
@@ -6733,6 +6733,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "viz-protocol"
+version = "0.1.0"
+dependencies = [
+ "schemars 1.2.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "viz-server"
 version = "0.1.0"
 dependencies = [
@@ -6767,8 +6776,8 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
- "viz-client",
  "viz-config",
+ "viz-protocol",
 ]
 
 [[package]]

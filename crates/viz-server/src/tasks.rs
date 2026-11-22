@@ -21,7 +21,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use viz_client::protocol::{TaskList, TaskResult, TaskStatusResult, WorktreeTarget};
+use viz_protocol::{TaskList, TaskResult, TaskStatusResult, WorktreeTarget};
 
 use self::model::{StoppedTaskRun, TaskRow};
 use crate::{

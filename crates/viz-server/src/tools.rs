@@ -7,7 +7,7 @@ use futures_util::future::BoxFuture;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use viz_client::protocol::{
+use viz_protocol::{
     EnvironmentList, HarnessList, HarnessOptions, HarnessOptionsResult, LaunchThread, ListEntries,
     ReadThreadState, SendMode, StopThread, TaskList, TaskResult, ThreadStateResult, WaitThread,
     WorktreeTarget,
@@ -492,8 +492,8 @@ struct HarnessLabel<'a> {
 struct SpawnSelection<'a> {
     harness: &'a str,
     harness_name: &'a str,
-    model: Option<&'a viz_client::protocol::OptionValue>,
-    thinking: Option<&'a viz_client::protocol::ConfigOption>,
+    model: Option<&'a viz_protocol::OptionValue>,
+    thinking: Option<&'a viz_protocol::ConfigOption>,
 }
 
 #[derive(Serialize)]

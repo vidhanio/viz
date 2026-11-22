@@ -58,7 +58,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
-viz-client.workspace = true
+viz-protocol.workspace = true
 viz-config.workspace = true
 
 [lints]

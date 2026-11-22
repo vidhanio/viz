@@ -29,7 +29,7 @@ use tokio_tungstenite::{
     tungstenite::{Message as PeerMessage, client::IntoClientRequest},
 };
 use tokio_util::sync::CancellationToken;
-use viz_client::protocol::{Empty, ListEnvironments, Method, SendInput, Unwatch, Watch, Watching};
+use viz_protocol::{Empty, ListEnvironments, Method, SendInput, Unwatch, Watch, Watching};
 
 use crate::{
     config::Config,
@@ -125,7 +125,7 @@ impl Server {
 
     async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
         match method {
-            "environments.list" => encode(viz_client::protocol::EnvironmentList {
+            "environments.list" => encode(viz_protocol::EnvironmentList {
                 environments: self.peers.list().await,
             }),
             "tasks.list" | "task.delegate" | "task.status" | "task.cancel" | "task.progress"
@@ -450,7 +450,7 @@ async fn refresh_watch(
 async fn local_session(
     socket: WebSocket,
     server: Arc<Server>,
-    client: viz_client::protocol::ClientInfo,
+    client: viz_protocol::ClientInfo,
 ) -> Result<()> {
     let (write, mut read) = socket.split();
     let (outgoing, messages) = mpsc::channel::<Message>(32);

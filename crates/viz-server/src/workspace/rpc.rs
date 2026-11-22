@@ -3,7 +3,7 @@ use std::{num::NonZeroU64, path::Path, sync::Arc, time::Duration};
 use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
-use viz_client::protocol::{
+use viz_protocol::{
     DeleteThread, HarnessOptions, LaunchThread, Launched, ListBranches, ListWorktrees, Method,
     MoveThread, RemoveProject, RemoveWorktree, RunId, SendInput, SendMode, Sent, SteerQueuedInput,
     ThreadId, WorktreeTarget,

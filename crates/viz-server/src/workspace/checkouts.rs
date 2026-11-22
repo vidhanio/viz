@@ -9,7 +9,7 @@ use std::{path::Path, sync::Arc};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use viz_client::protocol::{
+use viz_protocol::{
     BranchList, ListBranches, ListWorktrees, Method, MoveThread, Moved, RemoveWorktree, ThreadId,
     Worktree, WorktreeList, WorktreeTarget,
 };

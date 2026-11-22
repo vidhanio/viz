@@ -4,7 +4,7 @@
 mod client;
 mod endpoint;
 mod error;
-pub mod protocol;
+pub use viz_protocol as protocol;
 
 pub use crate::{
     client::{Client, Connection},

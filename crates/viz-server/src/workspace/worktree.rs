@@ -14,7 +14,7 @@ use std::{
 };
 
 use tokio::process::Command;
-use viz_client::protocol::GitBranch;
+use viz_protocol::GitBranch;
 
 use crate::wire::RpcError;
 

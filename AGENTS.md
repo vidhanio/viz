@@ -17,7 +17,8 @@ Out of scope until a job needs it: issue tracker pages (mentioning a GitHub issu
 | Path                   | What                                                      |
 | ---------------------- | --------------------------------------------------------- |
 | `crates/viz-server`    | Tokio/Axum server, Toasty SQLite workspace, ACP and MCP   |
-| `crates/viz-client`    | Shared Serde protocol types and JSON-RPC WebSocket client |
+| `crates/viz-client`    | JSON-RPC WebSocket client and protocol re-exports        |
+| `crates/viz-protocol`  | Shared Serde wire types and method schemas               |
 | `protocol/schema.json` | JSON Schema generated from the Rust wire types            |
 | `crates/viz-config`    | XDG config and `Secret`                                   |
 | `crates/viz`           | Clap CLI (`config`, `status`, `send`)                     |

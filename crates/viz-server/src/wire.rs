@@ -6,7 +6,7 @@ use jsonrpsee_types::{ErrorObject, Response as JsonResponse, ResponsePayload};
 pub(crate) use jsonrpsee_types::{Id, Request};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-pub(crate) use viz_client::protocol::{
+pub(crate) use viz_protocol::{
     Attachment, AttachmentCapabilities, ClientKind, ConfigOption, ContextUsage as Usage,
     DependentChoice, DependentOption, Entry, EntryData as NewEntry, EntryId, EntryPage,
     Environment, EnvironmentStatus, Harness, Hello, HelloParams, LiveText, LiveTextKind, LiveTurn,

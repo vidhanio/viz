@@ -63,7 +63,7 @@ fn main() -> Result<()> {
         Command::Schema { output } => {
             let schema = serde_json::json!({
                 "protocol": wire::PROTOCOL_VERSION,
-                "methods": viz_client::protocol::method_schemas(),
+                "methods": viz_protocol::method_schemas(),
                 "notification": schemars::schema_for!(wire::Notification),
             });
             let mut json = serde_json::to_string_pretty(&schema)?;
