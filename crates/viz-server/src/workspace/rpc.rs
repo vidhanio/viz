@@ -3,6 +3,11 @@ use std::{num::NonZeroU64, path::Path, sync::Arc, time::Duration};
 use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
+use viz_core::{
+    runs as decisions,
+    threads::{self, Patch},
+    titles,
+};
 use viz_protocol::{
     DeleteThread, HarnessOptions, LaunchThread, Launched, ListBranches, ListWorktrees, Method,
     MoveThread, RemoveProject, RemoveWorktree, RunId, SendInput, SendMode, Sent, SteerQueuedInput,
@@ -11,11 +16,10 @@ use viz_protocol::{
 
 use super::{
     Workspace, attachments,
-    runs::{self, NewRun, Place},
+    runs::{self, NewRun},
     runtime,
     sql::{exec, row, rows},
     store::{self, NewThread, SavedSession},
-    titles,
     worktree::{self, Placement},
 };
 use crate::{
@@ -301,9 +305,8 @@ impl Workspace {
         if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
             return Ok((found, false));
         }
-        if args.title.as_deref() == Some("") {
-            return Err(RpcError::invalid("thread title must not be empty"));
-        }
+        threads::validate_title(args.title.as_deref())
+            .map_err(|error| RpcError::invalid(error.to_string()))?;
         let (harness, _) = self.harness(args.harness.as_deref())?;
         let cwd = match placement {
             Some(placement) => placement.cwd.clone().into(),
@@ -372,20 +375,23 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         store::require(&mut tx, thread).await?;
         validate_request_id(args.request_id.as_deref())?;
-        if let Some(request_id) = &args.request_id
-            && let Some(run) = runs::by_request(&mut tx, thread, request_id).await?
-        {
-            return Ok(Sent { run: RunId(run) });
-        }
-        let active = if args.mode == Some(SendMode::Steer) {
-            runs::active(&mut tx, thread).await?
-        } else {
-            None
+        let previous = match &args.request_id {
+            Some(request_id) => runs::by_request(&mut tx, thread, request_id)
+                .await?
+                .map(RunId),
+            None => None,
         };
-        let place = if active.is_some() {
-            Place::Front
-        } else {
-            Place::End
+        let state = decisions::SubmissionState {
+            previous,
+            active: if args.mode == Some(SendMode::Steer) && previous.is_none() {
+                runs::active(&mut tx, thread).await?.map(RunId)
+            } else {
+                None
+            },
+        };
+        let (place, steer) = match decisions::submit(state, args.mode) {
+            decisions::Submission::Replay(run) => return Ok(Sent { run }),
+            decisions::Submission::Enqueue { place, steer } => (place, steer),
         };
         let attachments =
             attachments::save(&mut tx, thread, attachments::decode(args.attachments)?).await?;
@@ -402,8 +408,8 @@ impl Workspace {
         )
         .await?;
         tx.commit().await?;
-        if let Some(active) = active {
-            self.steer_active(thread, active);
+        if let Some(active) = steer {
+            self.steer_active(thread, active.0);
         }
         self.kick(thread, false);
         drop(db);
@@ -442,10 +448,14 @@ impl Workspace {
                     "no run {run} in thread {thread}"
                 )));
             }
-            runs::cancel_queued(&mut db, thread, requested).await?;
-            let active = runs::active(&mut db, thread)
-                .await?
-                .filter(|&run| requested.is_none_or(|requested| requested == run));
+            let mut tx = db.transaction().await?;
+            runs::cancel_queued(&mut tx, thread, requested).await?;
+            let active = decisions::cancel_active(
+                runs::active(&mut tx, thread).await?.map(RunId),
+                requested.map(RunId),
+            )
+            .map(|id| id.0);
+            tx.commit().await?;
             if let Some(active) = active {
                 self.cancel_active(thread, active);
             }
@@ -469,29 +479,40 @@ impl Workspace {
     async fn update(&self, args: UpdateThread) -> Result<(), RpcError> {
         let thread = args.thread.get();
         let mut db = self.db.lock().await;
-        store::require(&mut db, thread).await?;
-        if args.title.as_deref() == Some("") {
-            return Err(RpcError::invalid("thread title must not be empty"));
-        }
+        let mut current = row(&mut db,
+            "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
+            [thread.into()]).await?.ok_or_else(|| store::missing(thread))?;
+        threads::validate_title(args.title.as_deref())
+            .map_err(|error| RpcError::invalid(error.to_string()))?;
         if let Patch::Set(project) = &args.project {
             store::project(&mut db, project).await?;
         }
-        if !matches!(args.project, Patch::Keep)
-            && store::binding(&mut db, thread).await?.worktree.is_some()
-        {
+        if !matches!(args.project, Patch::Keep) && current.opt_str(2)?.is_some() {
             return Err(RpcError::invalid(
                 "move the thread out of its worktree before changing its project",
             ));
         }
-        exec(&mut db, "UPDATE threads SET title = coalesce(?2, title), user_title = CASE WHEN ?2 IS NULL THEN user_title ELSE 1 END,
-            archived = coalesce(?3, archived), pinned = coalesce(?4, pinned), unread = coalesce(?5, unread),
-            project = CASE WHEN ?6 THEN ?7 ELSE project END WHERE id = ?1", [
-            thread.into(), args.title.into(), args.archived.into(), args.pinned.into(), args.unread.into(),
-            (!matches!(args.project, Patch::Keep)).into(), match args.project {
-                Patch::Set(project) => Some(project),
-                Patch::Keep | Patch::Clear => None,
-            }.into(),
-        ]).await?;
+        let user_title = args.title.is_some() || current.flag(1)?;
+        let title = match args.title {
+            Some(title) => title,
+            None => current.str(0)?,
+        };
+        let project = args.project.apply(current.opt_str(3)?);
+        exec(
+            &mut db,
+            "UPDATE threads SET title = ?2, user_title = ?3, project = ?4,
+            archived = ?5, pinned = ?6, unread = ?7 WHERE id = ?1",
+            [
+                thread.into(),
+                title.into(),
+                user_title.into(),
+                project.into(),
+                args.archived.unwrap_or(current.flag(4)?).into(),
+                args.pinned.unwrap_or(current.flag(5)?).into(),
+                args.unread.unwrap_or(current.flag(6)?).into(),
+            ],
+        )
+        .await?;
         drop(db);
         self.relist(thread);
         Ok(())
@@ -934,14 +955,6 @@ fn page_limit(limit: Option<usize>, default: usize) -> Result<usize, RpcError> {
         Some(1..=200) | None => Ok(limit.unwrap_or(default)),
         _ => Err(RpcError::invalid("limit must be between 1 and 200")),
     }
-}
-
-#[derive(Debug, Default)]
-pub(super) enum Patch<T> {
-    #[default]
-    Keep,
-    Clear,
-    Set(T),
 }
 
 fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Patch<T>, D::Error> {

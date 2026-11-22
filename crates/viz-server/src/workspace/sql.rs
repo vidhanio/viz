@@ -261,8 +261,13 @@ impl Row {
     }
 
     pub(crate) fn i64(&self, col: usize) -> Result<i64, RpcError> {
+        self.opt_i64(col)?.ok_or_else(|| invalid_column(col))
+    }
+
+    pub(crate) fn opt_i64(&self, col: usize) -> Result<Option<i64>, RpcError> {
         match self.0[col] {
-            SqlValue::Integer(value) => Ok(value),
+            SqlValue::Integer(value) => Ok(Some(value)),
+            SqlValue::Null => Ok(None),
             _ => Err(invalid_column(col)),
         }
     }

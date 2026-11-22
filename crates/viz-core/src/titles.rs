@@ -1,6 +1,10 @@
+//! Prompt-derived titles and how automatic updates respect user edits.
+
 const MAX: usize = 60;
 
-pub(super) fn from_prompt(text: &str) -> String {
+/// Choose a readable title from the first usable line of a markdown prompt.
+#[must_use]
+pub fn from_prompt(text: &str) -> String {
     let mut fenced = false;
     let mut fallback = None;
     for raw in text.lines() {
@@ -83,4 +87,26 @@ fn shorten(line: String) -> String {
         .to_owned();
     title.push('…');
     title
+}
+
+/// Keep explicit titles and discard blank titles reported by a harness.
+#[must_use]
+pub fn observed(current: String, user_title: bool, reported: Option<&str>) -> String {
+    if user_title {
+        return current;
+    }
+    reported
+        .map(from_prompt)
+        .filter(|title| !title.is_empty())
+        .unwrap_or(current)
+}
+
+/// After a launch without a title, use the first usable queued input.
+#[must_use]
+pub fn enqueue(current: String, prompt: &str) -> String {
+    if current.is_empty() {
+        from_prompt(prompt)
+    } else {
+        current
+    }
 }

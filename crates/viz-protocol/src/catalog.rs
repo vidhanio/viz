@@ -3,10 +3,12 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+#[cfg(doc)]
+use super::LiveTurn;
 use super::{ConfigOption, ThreadId};
 
 /// An ACP tool call: the data of a tool entry, or an unfinished
-/// call in [`crate::LiveTurn::tools`].
+/// call in [`LiveTurn::tools`].
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolRecord {

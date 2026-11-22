@@ -17,6 +17,7 @@ Out of scope until a job needs it: issue tracker pages (mentioning a GitHub issu
 | Path                   | What                                                      |
 | ---------------------- | --------------------------------------------------------- |
 | `crates/viz-server`    | Tokio/Axum server, SQLite workspace, ACP and MCP         |
+| `crates/viz-core`      | Pure workspace lifecycle and delegation decisions         |
 | `crates/viz-client`    | JSON-RPC WebSocket client and protocol re-exports        |
 | `crates/viz-protocol`  | Shared Serde wire types and method schemas               |
 | `protocol/schema.json` | JSON Schema generated from the Rust wire types            |

@@ -1,0 +1,15 @@
+[package]
+name = "viz-core"
+description = "Pure workspace decisions for viz"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+viz-protocol.workspace = true
+
+[lints]
+workspace = true

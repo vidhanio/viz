@@ -226,7 +226,11 @@ impl Workspace {
         )
         .await?
         .is_some();
-        let handoff = prompted.then(|| current.session.handoff.as_deref().unwrap_or(&current.cwd));
+        let handoff = viz_core::threads::handoff_from(
+            prompted,
+            current.session.handoff.as_deref(),
+            &current.cwd,
+        );
         exec(
             &mut tx,
             "UPDATE threads SET cwd = ?2, worktree = ?3, setup_failed = 0,

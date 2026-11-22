@@ -6441,6 +6441,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "viz-core"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.21",
+ "viz-protocol",
+]
+
+[[package]]
 name = "viz-desktop"
 version = "0.1.0"
 dependencies = [
@@ -6574,6 +6582,7 @@ dependencies = [
  "url",
  "uuid",
  "viz-config",
+ "viz-core",
  "viz-protocol",
 ]
 

@@ -5,6 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use viz_core::threads;
 
 use super::{
     Workspace,
@@ -180,11 +181,8 @@ pub(super) async fn create_thread(
     row.u64(0)
 }
 
-const STATUS: &str = "CASE
-    WHEN EXISTS (SELECT 1 FROM runs WHERE thread = t.id AND status IN ('queued','running')) THEN 'working'
-    WHEN t.setup_failed = 1 OR (SELECT status FROM runs WHERE thread = t.id AND end_entry IS NOT NULL
-           ORDER BY end_entry DESC LIMIT 1) IN ('failed','interrupted') THEN 'failed'
-    ELSE 'idle' END";
+const STATUS_COLUMNS: &str = "EXISTS (SELECT 1 FROM runs WHERE thread = t.id AND status IN ('queued','running')),
+    t.setup_failed, (SELECT status FROM runs WHERE thread = t.id AND end_entry IS NOT NULL ORDER BY end_entry DESC LIMIT 1)";
 
 pub(super) async fn list_threads(
     db: &mut Connection,
@@ -193,8 +191,8 @@ pub(super) async fn list_threads(
     workspace: &Workspace,
 ) -> Result<Vec<ThreadSummary>, RpcError> {
     let query = format!(
-        "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness, {STATUS},
-            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.worktree
+        "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
+            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.worktree, {STATUS_COLUMNS}
         FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
         ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC"
     );
@@ -208,16 +206,16 @@ pub(super) async fn list_threads(
                 parent: row.opt_u64(2)?.map(ThreadId),
                 parent_environment: row.opt_str(3)?,
                 project: row.opt_str(4)?,
-                worktree: row.opt_str(13)?.map(thread_worktree),
+                worktree: row.opt_str(12)?.map(thread_worktree),
                 harness_name: workspace.harness_name(&harness).to_owned(),
                 harness,
-                status: status(&row.str(6)?)?,
-                archived: row.flag(7)?,
-                updated_at: row.i64(8)?,
-                unread: row.flag(9)?,
-                pinned: row.flag(10)?,
-                model: row.opt_str(11)?,
-                thinking: row.opt_str(12)?,
+                status: status(&mut row, 13)?,
+                archived: row.flag(6)?,
+                updated_at: row.i64(7)?,
+                unread: row.flag(8)?,
+                pinned: row.flag(9)?,
+                model: row.opt_str(10)?,
+                thinking: row.opt_str(11)?,
             })
         })
         .collect()
@@ -225,7 +223,7 @@ pub(super) async fn list_threads(
 
 pub(super) async fn state(db: &mut Connection, thread: u64) -> Result<ThreadState, RpcError> {
     let query = format!(
-        "SELECT t.harness, t.project, t.cwd, t.session, {STATUS}, t.worktree FROM threads AS t WHERE t.id = ?1"
+        "SELECT t.harness, t.project, t.cwd, t.session, t.worktree, {STATUS_COLUMNS} FROM threads AS t WHERE t.id = ?1"
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
@@ -249,9 +247,9 @@ pub(super) async fn state(db: &mut Connection, thread: u64) -> Result<ThreadStat
     Ok(ThreadState {
         harness: row.str(0)?,
         project: row.opt_str(1)?,
-        worktree: row.opt_str(5)?.map(thread_worktree),
+        worktree: row.opt_str(4)?.map(thread_worktree),
         cwd: row.str(2)?,
-        status: status(&row.str(4)?)?,
+        status: status(&mut row, 5)?,
         options: session.options,
         commands: session.commands,
         attachments: AttachmentCapabilities {
@@ -263,17 +261,17 @@ pub(super) async fn state(db: &mut Connection, thread: u64) -> Result<ThreadStat
     })
 }
 
-fn status(value: &str) -> Result<ThreadStatus, RpcError> {
-    Ok(match value {
-        "idle" => ThreadStatus::Idle,
-        "working" => ThreadStatus::Working,
-        "failed" => ThreadStatus::Failed,
-        _ => {
-            return Err(RpcError::internal(format_args!(
-                "unknown thread status {value}"
-            )));
-        }
-    })
+fn status(row: &mut super::sql::Row, first: usize) -> Result<ThreadStatus, RpcError> {
+    let last = row.opt_str(first + 2)?;
+    let last = last
+        .as_deref()
+        .map(super::runs::decode_status)
+        .transpose()?;
+    Ok(threads::status(
+        row.flag(first)?,
+        row.flag(first + 1)?,
+        last,
+    ))
 }
 
 pub(super) async fn publish(

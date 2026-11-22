@@ -9,7 +9,6 @@ pub(crate) mod runs;
 mod runtime;
 pub(crate) mod sql;
 mod store;
-mod titles;
 mod worktree;
 
 use std::{
@@ -303,7 +302,7 @@ impl Workspace {
                     timed_out: false,
                 });
             };
-            if !runs::unsettled(run.status) {
+            if !viz_core::runs::is_open(run.status) {
                 return Ok(WaitResult {
                     run: Some(run),
                     timed_out: false,

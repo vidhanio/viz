@@ -1,26 +1,23 @@
+//! Durable run persistence and the continuation outbox.
+
 use std::num::NonZeroU64;
 
+use viz_core::{
+    runs::{self as decisions, Move, Place, QueueRejection, Settlement},
+    threads::Patch,
+    titles,
+};
+
 use super::{
-    rpc::Patch,
     sql::{Row, exec, row, rows},
     store,
 };
 use crate::{
     wire::{
-        NewEntry, Origin, PromptAttachment, RpcError, Run, RunEnd, RunId, RunKind, RunStatus,
-        ThreadId,
+        NewEntry, Origin, PromptAttachment, RpcError, Run, RunId, RunKind, RunStatus, ThreadId,
     },
     workspace::sql::Connection,
 };
-
-pub(super) const INTERRUPTED: &str =
-    "server was interrupted during the ACP turn; the prompt was not resent";
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub(super) enum Place {
-    End,
-    Front,
-}
 
 pub(super) struct NewRun<'a> {
     pub(super) text: &'a str,
@@ -53,16 +50,26 @@ pub(super) async fn enqueue(
     let attachments = (!new.attachments.is_empty())
         .then(|| store::json(new.attachments))
         .transpose()?;
+    let position = queue_position(db, thread, new.place, None).await?;
     let run = row(db, "INSERT INTO runs (thread, status, position, text, origin, attachments, request_id, prompt_entry)
-        VALUES (?1, 'queued', (SELECT CASE WHEN ?2 THEN coalesce(min(position) - 1, 0)
-            ELSE coalesce(max(position) + 1, 0) END FROM runs WHERE thread = ?1 AND status = 'queued'),
-            ?3, ?4, ?5, ?6, ?7) RETURNING id", [
-        thread.into(), (new.place == Place::Front).into(), new.text.into(), origin.into(), attachments.into(),
+        VALUES (?1, 'queued', ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id", [
+        thread.into(), position.into(), new.text.into(), origin.into(), attachments.into(),
         new.request_id.into(), new.existing_entry.into(),
     ]).await?.expect("run INSERT RETURNING yielded one row").u64(0)?;
-    let title = super::titles::from_prompt(new.text);
-    exec(db, "UPDATE threads SET updated_at = ?2, title = CASE WHEN title = '' THEN ?3 ELSE title END WHERE id = ?1",
-        [thread.into(), store::now().into(), title.into()]).await?;
+    let mut thread_row = row(
+        db,
+        "SELECT title FROM threads WHERE id = ?1",
+        [thread.into()],
+    )
+    .await?
+    .ok_or_else(|| store::missing(thread))?;
+    let title = titles::enqueue(thread_row.str(0)?, new.text);
+    exec(
+        db,
+        "UPDATE threads SET updated_at = ?2, title = ?3 WHERE id = ?1",
+        [thread.into(), store::now().into(), title.into()],
+    )
+    .await?;
     Ok(run)
 }
 
@@ -174,7 +181,7 @@ pub(super) async fn status(
     .transpose()
 }
 
-fn decode_status(value: &str) -> Result<RunStatus, RpcError> {
+pub(super) fn decode_status(value: &str) -> Result<RunStatus, RpcError> {
     Ok(match value {
         "queued" => RunStatus::Queued,
         "running" => RunStatus::Running,
@@ -190,10 +197,6 @@ fn decode_status(value: &str) -> Result<RunStatus, RpcError> {
     })
 }
 
-pub(super) const fn unsettled(status: RunStatus) -> bool {
-    matches!(status, RunStatus::Queued | RunStatus::Running)
-}
-
 pub(super) struct Claimed {
     pub(super) id: u64,
     pub(super) entry: u64,
@@ -205,23 +208,39 @@ pub(super) struct Claimed {
 /// Commit the claim and corresponding prompt together before starting any
 /// external operation.
 pub(super) async fn claim(db: &mut Connection, thread: u64) -> Result<Option<Claimed>, RpcError> {
-    let Some(mut row) = row(db, "UPDATE runs SET status = 'running' WHERE thread = ?1 AND status = 'queued'
-        AND id = (SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id LIMIT 1)
-        RETURNING id, text, origin, attachments, prompt_entry", [thread.into()]).await? else { return Ok(None); };
-    let id = row.u64(0)?;
-    let text = row.str(1)?;
+    let active = active(db, thread).await?.map(RunId);
+    let next = row(
+        db,
+        "SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id LIMIT 1",
+        [thread.into()],
+    )
+    .await?
+    .map(|row| row.u64(0).map(RunId))
+    .transpose()?;
+    let Some(RunId(id)) = decisions::claim(active, next) else {
+        return Ok(None);
+    };
+    let mut row = row(
+        db,
+        "UPDATE runs SET status = 'running' WHERE id = ?1
+        RETURNING text, origin, attachments, prompt_entry",
+        [id.into()],
+    )
+    .await?
+    .expect("claimed run exists under the write lease");
+    let text = row.str(0)?;
     let origin = row
-        .opt_str(2)?
+        .opt_str(1)?
         .as_deref()
         .map(store::from_json)
         .transpose()?;
     let attachments = row
-        .opt_str(3)?
+        .opt_str(2)?
         .as_deref()
         .map(store::from_json)
         .transpose()?
         .unwrap_or_default();
-    let (entry, text, origin, attachments) = if let Some(entry) = row.opt_u64(4)? {
+    let (entry, text, origin, attachments) = if let Some(entry) = row.opt_u64(3)? {
         (entry, text, origin, attachments)
     } else {
         let data = NewEntry::Prompt {
@@ -293,35 +312,6 @@ pub(super) async fn queued(db: &mut Connection, thread: u64) -> Result<bool, Rpc
     .is_some())
 }
 
-pub(super) struct Settlement {
-    pub(super) status: RunStatus,
-    pub(super) end: RunEnd,
-}
-
-impl Settlement {
-    pub(super) fn failed(error: String) -> Self {
-        Self {
-            status: RunStatus::Failed,
-            end: RunEnd {
-                stop_reason: Some("error".into()),
-                error: Some(error),
-                answer: None,
-            },
-        }
-    }
-
-    pub(super) fn stopped(status: RunStatus, reason: &str, error: Option<&str>) -> Self {
-        Self {
-            status,
-            end: RunEnd {
-                stop_reason: Some(reason.into()),
-                error: error.map(str::to_owned),
-                answer: None,
-            },
-        }
-    }
-}
-
 pub(super) async fn settle(
     db: &mut Connection,
     thread: u64,
@@ -329,13 +319,7 @@ pub(super) async fn settle(
     settlement: Settlement,
     unread: bool,
 ) -> Result<(), RpcError> {
-    let status = match settlement.status {
-        RunStatus::Completed => "completed",
-        RunStatus::Failed => "failed",
-        RunStatus::Cancelled => "cancelled",
-        RunStatus::Interrupted => "interrupted",
-        RunStatus::Queued | RunStatus::Running => unreachable!("settlement is terminal"),
-    };
+    let status = settlement.status.as_str();
     let data = NewEntry::Run(settlement.end);
     let entry = store::append(db, thread, &data).await?;
     let NewEntry::Run(end) = data else {
@@ -400,12 +384,32 @@ pub(super) async fn recover(db: &mut Connection) -> Result<(), RpcError> {
             db,
             row.u64(1)?,
             row.u64(0)?,
-            Settlement::stopped(RunStatus::Interrupted, "interrupted", Some(INTERRUPTED)),
+            Settlement::interrupted(),
             true,
         )
         .await?;
     }
     Ok(())
+}
+
+async fn queue_position(
+    db: &mut Connection,
+    thread: u64,
+    place: Place,
+    exclude: Option<u64>,
+) -> Result<i64, RpcError> {
+    let bounds = row(
+        db,
+        "SELECT min(position), max(position) FROM runs
+        WHERE thread = ?1 AND status = 'queued' AND (?2 IS NULL OR id <> ?2)",
+        [thread.into(), exclude.into()],
+    )
+    .await?
+    .expect("aggregate query returns a row");
+    let bounds = bounds.opt_i64(0)?.zip(bounds.opt_i64(1)?);
+    place
+        .position(bounds)
+        .ok_or_else(|| RpcError::internal("run queue position overflow"))
 }
 
 /// Move the existing run ahead of other queued inputs, preserving its payload.
@@ -414,17 +418,16 @@ pub(super) async fn promote_queued(
     thread: u64,
     run: u64,
 ) -> Result<(), RpcError> {
-    let changed = exec(
+    if status(db, thread, run).await? != Some(RunStatus::Queued) {
+        return Err(RpcError::invalid(QueueRejection::NotQueued.to_string()));
+    }
+    let position = queue_position(db, thread, Place::Front, Some(run)).await?;
+    exec(
         db,
-        "UPDATE runs SET position = (SELECT coalesce(min(position) - 1, 0) FROM runs
-            WHERE thread = ?1 AND status = 'queued' AND id <> ?2)
-        WHERE thread = ?1 AND id = ?2 AND status = 'queued'",
-        [thread.into(), run.into()],
+        "UPDATE runs SET position = ?2 WHERE id = ?1",
+        [run.into(), position.into()],
     )
     .await?;
-    if changed == 0 {
-        return Err(RpcError::invalid("run is not queued"));
-    }
     Ok(())
 }
 
@@ -458,32 +461,22 @@ pub(super) async fn update_queue(
     text: Option<&str>,
     before: Patch<NonZeroU64>,
 ) -> Result<(), RpcError> {
-    if status(db, thread, run).await? != Some(RunStatus::Queued) {
-        return Err(RpcError::invalid("run is not queued"));
-    }
-    if match before {
-        Patch::Set(target) => target.get() != run,
-        Patch::Clear => true,
-        Patch::Keep => false,
-    } {
-        let mut queue = rows(
-            db,
-            "SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
-            [thread.into()],
-        )
-        .await?
-        .map(|row| row.u64(0))
-        .collect::<Result<Vec<_>, _>>()?;
-        queue.retain(|&id| id != run);
-        let index = if let Patch::Set(target) = before {
-            queue
-                .iter()
-                .position(|&id| id == target.get())
-                .ok_or_else(|| RpcError::invalid("target run is not queued"))?
-        } else {
-            queue.len()
-        };
-        queue.insert(index, run);
+    let queue = rows(
+        db,
+        "SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
+        [thread.into()],
+    )
+    .await?
+    .map(|row| row.u64(0).map(RunId))
+    .collect::<Result<Vec<_>, _>>()?;
+    let placement = match before {
+        Patch::Set(target) => Move::Before(RunId(target.get())),
+        Patch::Clear => Move::End,
+        Patch::Keep => Move::Keep,
+    };
+    if let Some(queue) = decisions::reorder(queue, RunId(run), placement)
+        .map_err(|error| RpcError::invalid(error.to_string()))?
+    {
         exec(db, "UPDATE runs AS r SET position = j.key FROM json_each(?1) AS j WHERE r.id = j.value AND r.position <> j.key",
             [store::json(&queue)?.into()]).await?;
     }

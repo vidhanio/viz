@@ -14,14 +14,10 @@ use std::{
 };
 
 use tokio::process::Command;
+use viz_core::placement;
 use viz_protocol::GitBranch;
 
 use crate::wire::RpcError;
-
-/// The branch prefix of generated names.
-const BRANCH_PREFIX: &str = "viz/";
-/// The longest generated branch or directory slug.
-const SLUG_MAX: usize = 40;
 
 /// A Git checkout as read from disk.
 pub(super) struct Checkout {
@@ -251,10 +247,10 @@ pub(super) async fn create(
         }
         branch
     } else {
-        let stem = format!("{BRANCH_PREFIX}{}", slug(title, "thread"));
+        let stem = placement::branch_stem(title);
         let mut suffix = 1;
         loop {
-            let name = numbered(&stem, suffix);
+            let name = placement::numbered(&stem, suffix);
             if !branch_exists(source, &name).await? {
                 break name;
             }
@@ -264,15 +260,15 @@ pub(super) async fn create(
     let repo = top
         .file_name()
         .and_then(|name| name.to_str())
-        .map_or_else(|| "repo".to_owned(), |name| slug(name, "repo"));
+        .map_or_else(|| "repo".to_owned(), placement::repository_dir);
     let parent = root.join(repo);
     tokio::fs::create_dir_all(&parent)
         .await
         .map_err(RpcError::internal)?;
-    let stem = slug(&branch.replace('/', "-"), "worktree");
+    let stem = placement::worktree_stem(&branch);
     let mut suffix = 1;
     let path = loop {
-        let path = parent.join(numbered(&stem, suffix));
+        let path = parent.join(placement::numbered(&stem, suffix));
         if !tokio::fs::try_exists(&path).await.unwrap_or(true) {
             break path;
         }
@@ -376,33 +372,4 @@ fn below(root: &Path, prefix: &str) -> Result<String, RpcError> {
     dir.into_os_string()
         .into_string()
         .map_err(|_| RpcError::invalid("worktree path is not UTF-8"))
-}
-
-fn numbered(stem: &str, suffix: u32) -> String {
-    if suffix == 1 {
-        stem.to_owned()
-    } else {
-        format!("{stem}-{suffix}")
-    }
-}
-
-fn slug(text: &str, fallback: &str) -> String {
-    let mut slug = String::new();
-    for word in text
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-    {
-        if slug.len() + word.len() + usize::from(!slug.is_empty()) > SLUG_MAX {
-            break;
-        }
-        if !slug.is_empty() {
-            slug.push('-');
-        }
-        slug.push_str(&word.to_ascii_lowercase());
-    }
-    if slug.is_empty() {
-        fallback.to_owned()
-    } else {
-        slug
-    }
 }

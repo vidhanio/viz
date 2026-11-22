@@ -13,13 +13,18 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 use tokio_util::sync::CancellationToken;
+use viz_core::{
+    handoff,
+    options::Labels,
+    runs::{EndStatus, Settlement},
+    titles,
+};
 
 use super::{
     Workspace, attachments,
-    runs::{self, Claimed, Settlement},
+    runs::{self, Claimed},
     sql::{exec, row, rows},
     store::{self, Binding},
-    titles,
 };
 use crate::{
     acp::{
@@ -218,7 +223,7 @@ impl Workspace {
                     .prompt(thread, driver, &mut slot, claim, &cancel, &steer)
                     .await;
                 let settlement = settle_outcome(result, &self.closing, &cancel, &steer);
-                if settlement.status == RunStatus::Interrupted {
+                if settlement.status == EndStatus::Interrupted {
                     slot.take();
                 }
                 drop(slot);
@@ -338,7 +343,7 @@ impl Workspace {
                 thread,
                 run,
                 Settlement {
-                    status: RunStatus::Completed,
+                    status: EndStatus::Completed,
                     end: RunEnd {
                         stop_reason: None,
                         answer: Some(transcript.answer().to_owned()),
@@ -368,13 +373,9 @@ impl Workspace {
             return Ok(());
         }
         if self.closing.is_cancelled() {
-            settlement = Settlement::stopped(
-                RunStatus::Interrupted,
-                "interrupted",
-                Some(runs::INTERRUPTED),
-            );
+            settlement = Settlement::interrupted();
         } else if cancel.is_cancelled() {
-            settlement = Settlement::stopped(RunStatus::Cancelled, "cancelled", None);
+            settlement = Settlement::stopped(EndStatus::Cancelled, "cancelled", None);
         }
         let mut tx = db.transaction().await?;
         runs::settle(&mut tx, thread, run, settlement, self.unread(thread)).await?;
@@ -700,14 +701,10 @@ fn settle_outcome(
     steer: &CancellationToken,
 ) -> Settlement {
     if closing.is_cancelled() {
-        return Settlement::stopped(
-            RunStatus::Interrupted,
-            "interrupted",
-            Some(runs::INTERRUPTED),
-        );
+        return Settlement::interrupted();
     }
     if cancel.is_cancelled() {
-        return Settlement::stopped(RunStatus::Cancelled, "cancelled", None);
+        return Settlement::stopped(EndStatus::Cancelled, "cancelled", None);
     }
     if steer.is_cancelled()
         && let Ok(Outcome {
@@ -715,7 +712,7 @@ fn settle_outcome(
             stop_reason: StopReason::Cancelled,
         }) = result
     {
-        let mut settlement = Settlement::stopped(RunStatus::Cancelled, "steered", None);
+        let mut settlement = Settlement::stopped(EndStatus::Cancelled, "steered", None);
         if !answer.is_empty() {
             settlement.end.answer = Some(answer);
         }
@@ -732,12 +729,12 @@ fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
             stop_reason,
         }) => {
             let (status, error) = match stop_reason {
-                StopReason::Cancelled => (RunStatus::Cancelled, None),
+                StopReason::Cancelled => (EndStatus::Cancelled, None),
                 StopReason::Refusal => (
-                    RunStatus::Failed,
+                    EndStatus::Failed,
                     Some("ACP runner refused the prompt".into()),
                 ),
-                _ => (RunStatus::Completed, None),
+                _ => (EndStatus::Completed, None),
             };
             Settlement {
                 status,
@@ -790,13 +787,7 @@ async fn persist_snapshot(
     snapshot: SessionSnapshot,
     desired: Option<&Desired>,
 ) -> Result<bool, RpcError> {
-    let title = snapshot
-        .title
-        .as_deref()
-        .map(titles::from_prompt)
-        .filter(|title| !title.is_empty());
-    let model = option_label(&snapshot.options, "model");
-    let thinking = option_label(&snapshot.options, "thought_level");
+    let Labels { model, thinking } = Labels::from_options(&snapshot.options);
     let Some(mut prior) = row(
         db,
         "SELECT title, user_title, model, thinking, setup_failed FROM threads WHERE id = ?1",
@@ -807,13 +798,18 @@ async fn persist_snapshot(
         return Ok(false);
     };
     let prior_title = prior.str(0)?;
-    let relist = (!prior.flag(1)? && title.as_ref().is_some_and(|title| *title != prior_title))
+    let title = titles::observed(
+        prior_title.clone(),
+        prior.flag(1)?,
+        snapshot.title.as_deref(),
+    );
+    let relist = title != prior_title
         || prior.opt_str(2)?.as_deref() != model
         || prior.opt_str(3)?.as_deref() != thinking
         || prior.flag(4)?;
     exec(db, "UPDATE threads SET
           session = json_set(session, '$.session_id', ?2, '$.options', json(?3), '$.commands', json(?4), '$.images', json(?5), '$.usage', json(?6)),
-          title = CASE WHEN user_title = 0 THEN coalesce(?7, title) ELSE title END,
+          title = ?7,
           model = ?8, thinking = ?9, setup_failed = 0 WHERE id = ?1", [
         thread.into(), snapshot.session_id.into(), store::json(&snapshot.options)?.into(), store::json(&snapshot.commands)?.into(),
         if snapshot.images { "true" } else { "false" }.into(), store::json(&snapshot.usage)?.into(), title.into(), model.into(), thinking.into(),
@@ -825,54 +821,27 @@ async fn persist_snapshot(
     Ok(relist)
 }
 
-fn option_label<'a>(options: &'a [crate::wire::ConfigOption], category: &str) -> Option<&'a str> {
-    let option = options
-        .iter()
-        .find(|option| option.category.as_deref() == Some(category))?;
-    let OptionValue::Select(value) = &option.value else {
-        return None;
-    };
-    Some(
-        option
-            .choices
-            .iter()
-            .find(|item| &item.value == value)
-            .map_or(value.as_str(), |item| item.name.as_str()),
-    )
-}
-
-/// The most transcript a handoff carries, newest turns first.
-const HANDOFF_BYTES: usize = 24 * 1024;
-
-/// The context prefixed to the first prompt after a move: the directory
-/// change and the earlier turns' prompts and answers.
+/// Load the durable turns for the first prompt after a move.
 async fn handoff_note(
     db: &mut Connection,
     thread: u64,
     cwd: &str,
     from: &str,
 ) -> Result<String, RpcError> {
-    let moved = format!("The working directory moved from {from} to {cwd}.");
-    let mut turns = Vec::new();
-    let mut size = 0;
-    for mut row in rows(
+    let turns = rows(
         db,
         "SELECT text, coalesce(answer, '') FROM runs WHERE thread = ?1 AND kind = 'prompt'
             AND status IN ('completed', 'failed', 'cancelled', 'interrupted') ORDER BY id DESC",
         [thread.into()],
     )
     .await?
-    {
-        let turn = format!("User: {}\n\nAssistant: {}\n\n", row.str(0)?, row.str(1)?);
-        size += turn.len();
-        if size > HANDOFF_BYTES && !turns.is_empty() {
-            break;
-        }
-        turns.push(turn);
-    }
-    turns.reverse();
-    Ok(format!(
-        "<context>\n{moved} This conversation continues in a new session; its earlier turns, oldest first:\n\n{}</context>\n\n",
-        turns.concat()
+    .map(|mut row| Ok((row.str(0)?, row.str(1)?)))
+    .collect::<Result<Vec<_>, RpcError>>()?;
+    Ok(handoff::note(
+        cwd,
+        from,
+        turns
+            .iter()
+            .map(|(prompt, answer)| (prompt.as_str(), answer.as_str())),
     ))
 }
