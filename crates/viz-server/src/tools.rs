@@ -21,9 +21,10 @@ use self::inputs::{SendText, ThreadUpdate, ToolInput};
 use crate::{
     acp::mcp::Dispatch,
     environments::Peers,
+    error::Error,
     rpc::Handler,
     tasks::{Delegate, Tasks},
-    wire::{RpcError, decode},
+    wire::decode,
     workspace::{
         Workspace,
         rpc::{
@@ -76,10 +77,10 @@ macro_rules! rpc_tools {
         }
 
         impl Tools {
-            async fn call_rpc(&self, name: &str, args: Value) -> Result<ToolResult, RpcError> {
+            async fn call_rpc(&self, name: &str, args: Value) -> Result<ToolResult, Error> {
                 match name {
                     $($name => self.rpc::<$method, $input>(args, $link).await,)+
-                    _ => Err(RpcError::not_found(format!("unknown tool {name}"))),
+                    _ => Err(Error::not_found(format!("unknown tool {name}"))),
                 }
             }
         }
@@ -141,12 +142,7 @@ impl Tools {
         }
     }
 
-    async fn invoke(
-        &self,
-        scope: ToolScope,
-        name: &str,
-        args: Value,
-    ) -> Result<ToolResult, RpcError> {
+    async fn invoke(&self, scope: ToolScope, name: &str, args: Value) -> Result<ToolResult, Error> {
         match name {
             "list_environments" => {
                 let _: Empty = decode(args)?;
@@ -214,7 +210,7 @@ impl Tools {
         environment: &'a str,
         input: T,
         wait: Duration,
-    ) -> BoxFuture<'a, Result<M::Response, RpcError>>
+    ) -> BoxFuture<'a, Result<M::Response, Error>>
     where
         M: Method + 'static,
         T: Serialize + Send + Sync + Into<<Arc<Workspace> as Handler<M>>::Input> + 'static,
@@ -233,7 +229,7 @@ impl Tools {
         &self,
         args: Value,
         child: fn(&M::Response) -> Option<ThreadId>,
-    ) -> Result<ToolResult, RpcError>
+    ) -> Result<ToolResult, Error>
     where
         M: Method + 'static,
         T: ToolInput + Into<<Arc<Workspace> as Handler<M>>::Input>,
@@ -254,14 +250,14 @@ impl Tools {
         thread: u64,
         environment: Option<&str>,
         input: SpawnOptions,
-    ) -> Result<ToolResult, RpcError> {
+    ) -> Result<ToolResult, Error> {
         let environment = environment.unwrap_or(&self.peers.local);
         let HarnessList { harnesses } = self
             .dispatch::<ListHarnesses, _>(environment, Empty {}, Duration::ZERO)
             .await?;
         let parent_harness = if input.harness.is_none() && environment == self.peers.local {
             let thread =
-                NonZeroU64::new(thread).ok_or_else(|| RpcError::invalid("invalid thread ID"))?;
+                NonZeroU64::new(thread).ok_or_else(|| Error::invalid("invalid thread ID"))?;
             let ThreadStateResult { state } =
                 Handler::<ReadThreadState>::handle(&self.workspace, Thread { thread }).await?;
             Some(state.harness)
@@ -293,11 +289,11 @@ impl Tools {
             .harness
             .as_deref()
             .or(default_harness)
-            .ok_or_else(|| RpcError::not_found("no default ACP harness; specify a harness"))?;
+            .ok_or_else(|| Error::not_found("no default ACP harness; specify a harness"))?;
         let harness = harnesses
             .iter()
             .find(|harness| harness.id == name)
-            .ok_or_else(|| RpcError::not_found(format!("no ACP harness {name}")))?;
+            .ok_or_else(|| Error::not_found(format!("no ACP harness {name}")))?;
         if let Some(model) = input.model {
             let selected = self
                 .dispatch::<HarnessOptions, _>(
@@ -331,10 +327,7 @@ impl Tools {
     }
 }
 
-fn spawn_models(
-    harness: &crate::wire::Harness,
-    search: Option<&str>,
-) -> Result<ToolResult, RpcError> {
+fn spawn_models(harness: &crate::wire::Harness, search: Option<&str>) -> Result<ToolResult, Error> {
     let model = harness
         .options
         .iter()
@@ -387,14 +380,14 @@ impl Dispatch for Tools {
             tools
                 .invoke(scope, &name, args)
                 .await
-                .map_err(|error| error.message)
+                .map_err(|error| error.to_string())
         })
     }
 }
 
-fn output(value: &impl Serialize, link: Option<(u64, &str)>) -> Result<ToolResult, RpcError> {
+fn output(value: &impl Serialize, link: Option<(u64, &str)>) -> Result<ToolResult, Error> {
     Ok(ToolResult {
-        text: serde_json::to_string(value).map_err(RpcError::internal)?,
+        text: serde_json::to_string(value)?,
         child: link.map(|(thread, _)| thread),
         child_environment: link.map(|(_, environment)| environment.to_owned()),
     })

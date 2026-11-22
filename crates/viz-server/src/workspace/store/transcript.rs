@@ -6,7 +6,8 @@ use super::{
 };
 use crate::{
     acp::{tool_record::ToolContent, transcript::Output},
-    wire::{Entry, EntryId, EntryPage, NewEntry, RpcError, SearchHit, ThreadId, ToolCallStatus},
+    error::Error,
+    wire::{Entry, EntryId, EntryPage, NewEntry, SearchHit, ThreadId, ToolCallStatus},
 };
 
 pub(in crate::workspace) async fn publish(
@@ -14,7 +15,7 @@ pub(in crate::workspace) async fn publish(
     thread: u64,
     session: &str,
     output: Output,
-) -> Result<Option<(String, ToolCallStatus)>, RpcError> {
+) -> Result<Option<(String, ToolCallStatus)>, Error> {
     let (entry, tool_session, patch) = match output {
         Output::Entry(entry) => (*entry, Some(session), None),
         Output::ToolPatch {
@@ -80,7 +81,7 @@ pub(in crate::workspace) async fn append(
     db: &mut Connection,
     thread: u64,
     data: &NewEntry,
-) -> Result<u64, RpcError> {
+) -> Result<u64, Error> {
     let id = row(
         db,
         "INSERT INTO entries (thread, data) VALUES (?1, ?2) RETURNING id",
@@ -121,7 +122,7 @@ pub(in crate::workspace) async fn entries(
     thread: u64,
     before: Option<u64>,
     limit: usize,
-) -> Result<EntryPage, RpcError> {
+) -> Result<EntryPage, Error> {
     require(db, thread).await?;
     let mut entries = if let Some(before) = before {
         rows(
@@ -157,7 +158,7 @@ pub(in crate::workspace) async fn entries_after(
     thread: u64,
     after: u64,
     limit: usize,
-) -> Result<Vec<Entry>, RpcError> {
+) -> Result<Vec<Entry>, Error> {
     require(db, thread).await?;
     rows(
         db,
@@ -169,7 +170,7 @@ pub(in crate::workspace) async fn entries_after(
     .collect()
 }
 
-fn decode_entry(mut row: Row) -> Result<Entry, RpcError> {
+fn decode_entry(mut row: Row) -> Result<Entry, Error> {
     Ok(Entry {
         id: EntryId(row.u64(0)?),
         data: from_json(&row.str(1)?)?,
@@ -180,7 +181,7 @@ pub(in crate::workspace) async fn search(
     db: &mut Connection,
     query: &str,
     limit: usize,
-) -> Result<Vec<SearchHit>, RpcError> {
+) -> Result<Vec<SearchHit>, Error> {
     let mut terms = String::new();
     for term in query
         .split(|ch: char| !ch.is_alphanumeric())

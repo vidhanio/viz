@@ -17,7 +17,7 @@ use tokio::process::Command;
 use viz_core::placement;
 use viz_protocol::GitBranch;
 
-use crate::wire::RpcError;
+use crate::error::Error;
 
 /// A Git checkout as read from disk.
 pub(super) struct Checkout {
@@ -75,7 +75,7 @@ pub(super) struct Listed {
 }
 
 /// Runs `git -C dir args`, returning stdout; a failure carries Git's message.
-async fn git(dir: &Path, args: &[&str]) -> Result<String, RpcError> {
+async fn git(dir: &Path, args: &[&str]) -> Result<String, Error> {
     let output = Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -85,13 +85,13 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String, RpcError> {
         .kill_on_drop(true)
         .output()
         .await
-        .map_err(|error| RpcError::unavailable(format!("cannot run git: {error}")))?;
+        .map_err(|error| Error::unavailable(format!("cannot run git: {error}")))?;
     if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|_| RpcError::invalid("git output is not UTF-8"))
+        String::from_utf8(output.stdout).map_err(|_| Error::invalid("git output is not UTF-8"))
     } else {
         let message = String::from_utf8_lossy(&output.stderr);
         let message = message.trim();
-        Err(RpcError::invalid(if message.is_empty() {
+        Err(Error::invalid(if message.is_empty() {
             format!("git {} failed", args.first().unwrap_or(&""))
         } else {
             message
@@ -103,7 +103,7 @@ async fn git(dir: &Path, args: &[&str]) -> Result<String, RpcError> {
 }
 
 /// Whether `git` succeeds, for checks reported through the exit status.
-async fn git_ok(dir: &Path, args: &[&str]) -> Result<bool, RpcError> {
+async fn git_ok(dir: &Path, args: &[&str]) -> Result<bool, Error> {
     Command::new("git")
         .arg("-C")
         .arg(dir)
@@ -116,23 +116,23 @@ async fn git_ok(dir: &Path, args: &[&str]) -> Result<bool, RpcError> {
         .status()
         .await
         .map(|status| status.success())
-        .map_err(|error| RpcError::unavailable(format!("cannot run git: {error}")))
+        .map_err(|error| Error::unavailable(format!("cannot run git: {error}")))
 }
 
 /// The checkout root containing `dir` and `dir`'s path below it, with a
 /// trailing slash unless empty.
-async fn toplevel(dir: &Path) -> Result<(PathBuf, String), RpcError> {
+async fn toplevel(dir: &Path) -> Result<(PathBuf, String), Error> {
     let output = git(dir, &["rev-parse", "--show-toplevel", "--show-prefix"]).await?;
     let mut lines = output.lines();
     let root = lines
         .next()
         .filter(|root| !root.is_empty())
-        .ok_or_else(|| RpcError::invalid("not a Git checkout"))?;
+        .ok_or_else(|| Error::invalid("not a Git checkout"))?;
     Ok((PathBuf::from(root), lines.next().unwrap_or("").to_owned()))
 }
 
 /// The worktrees of the repository containing `dir`, main checkout first.
-pub(super) async fn list(dir: &Path) -> Result<Vec<Listed>, RpcError> {
+pub(super) async fn list(dir: &Path) -> Result<Vec<Listed>, Error> {
     let output = git(dir, &["worktree", "list", "--porcelain", "-z"]).await?;
     let mut worktrees = Vec::new();
     for record in output.split("\0\0").filter(|record| !record.is_empty()) {
@@ -163,7 +163,7 @@ pub(super) async fn list(dir: &Path) -> Result<Vec<Listed>, RpcError> {
 
 /// Local branches, then remote-tracking branches, of the repository
 /// containing `dir`.
-pub(super) async fn branches(dir: &Path) -> Result<Vec<GitBranch>, RpcError> {
+pub(super) async fn branches(dir: &Path) -> Result<Vec<GitBranch>, Error> {
     let output = git(
         dir,
         &[
@@ -195,17 +195,17 @@ pub(super) async fn branches(dir: &Path) -> Result<Vec<GitBranch>, RpcError> {
 
 /// Resolves an existing checkout of `source`'s repository: the main checkout
 /// gives no worktree.
-pub(super) async fn existing(source: &Path, path: &str) -> Result<Placement, RpcError> {
+pub(super) async fn existing(source: &Path, path: &str) -> Result<Placement, Error> {
     let (_, prefix) = toplevel(source).await?;
     let requested = tokio::fs::canonicalize(path)
         .await
-        .map_err(|error| RpcError::invalid(format!("cannot read worktree {path}: {error}")))?;
+        .map_err(|error| Error::invalid(format!("cannot read worktree {path}: {error}")))?;
     let found = list(source)
         .await?
         .into_iter()
         .find(|worktree| Path::new(&worktree.path) == requested)
         .ok_or_else(|| {
-            RpcError::invalid(format!(
+            Error::invalid(format!(
                 "{path} is not a worktree of this project's repository"
             ))
         })?;
@@ -226,7 +226,7 @@ pub(super) async fn create(
     base: Option<&str>,
     branch: Option<&str>,
     title: &str,
-) -> Result<Placement, RpcError> {
+) -> Result<Placement, Error> {
     let (top, prefix) = toplevel(source).await?;
     let base = base.unwrap_or("HEAD");
     let commit = format!("{base}^{{commit}}");
@@ -235,15 +235,15 @@ pub(super) async fn create(
         &["rev-parse", "--verify", "--end-of-options", &commit],
     )
     .await
-    .map_err(|_| RpcError::invalid(format!("no commit at {base}")))?;
+    .map_err(|_| Error::invalid(format!("no commit at {base}")))?;
     let branch = if let Some(branch) = branch {
         let branch = git(source, &["check-ref-format", "--branch", branch])
             .await
-            .map_err(|_| RpcError::invalid(format!("invalid branch name {branch:?}")))?
+            .map_err(|_| Error::invalid(format!("invalid branch name {branch:?}")))?
             .trim()
             .to_owned();
         if branch_exists(source, &branch).await? {
-            return Err(RpcError::invalid(format!("branch {branch} already exists")));
+            return Err(Error::invalid(format!("branch {branch} already exists")));
         }
         branch
     } else {
@@ -262,9 +262,7 @@ pub(super) async fn create(
         .and_then(|name| name.to_str())
         .map_or_else(|| "repo".to_owned(), placement::repository_dir);
     let parent = root.join(repo);
-    tokio::fs::create_dir_all(&parent)
-        .await
-        .map_err(RpcError::internal)?;
+    tokio::fs::create_dir_all(&parent).await?;
     let stem = placement::worktree_stem(&branch);
     let mut suffix = 1;
     let path = loop {
@@ -276,7 +274,7 @@ pub(super) async fn create(
     };
     let path_text = path
         .to_str()
-        .ok_or_else(|| RpcError::invalid("worktree path is not UTF-8"))?
+        .ok_or_else(|| Error::invalid("worktree path is not UTF-8"))?
         .to_owned();
     git(
         source,
@@ -299,7 +297,7 @@ pub(super) async fn create(
     })
 }
 
-async fn branch_exists(dir: &Path, branch: &str) -> Result<bool, RpcError> {
+async fn branch_exists(dir: &Path, branch: &str) -> Result<bool, Error> {
     git_ok(
         dir,
         &[
@@ -315,16 +313,16 @@ async fn branch_exists(dir: &Path, branch: &str) -> Result<bool, RpcError> {
 /// Removes the linked worktree at `path`, refusing uncommitted changes and
 /// untracked (unignored) files unless `force`. Its branch stays. A worktree
 /// already deleted from disk is pruned from `source`'s repository instead.
-pub(super) async fn remove(source: &Path, path: &str, force: bool) -> Result<(), RpcError> {
+pub(super) async fn remove(source: &Path, path: &str, force: bool) -> Result<(), Error> {
     if !tokio::fs::try_exists(path).await.unwrap_or(false) {
         if source == Path::new(path) {
-            return Err(RpcError::not_found(format!("no worktree at {path}")));
+            return Err(Error::not_found(format!("no worktree at {path}")));
         }
         return git(source, &["worktree", "prune"]).await.map(drop);
     }
     let dir = Path::new(path);
     if !force && !clean(dir).await? {
-        return Err(RpcError::invalid(format!(
+        return Err(Error::invalid(format!(
             "worktree {path} has uncommitted changes or untracked files"
         )));
     }
@@ -338,7 +336,7 @@ pub(super) async fn remove(source: &Path, path: &str, force: bool) -> Result<(),
 
 /// Whether the checkout at `dir` has no uncommitted changes or untracked
 /// files; ignored files such as build output don't count.
-pub(super) async fn clean(dir: &Path) -> Result<bool, RpcError> {
+pub(super) async fn clean(dir: &Path) -> Result<bool, Error> {
     Ok(git(
         dir,
         &["status", "--porcelain", "-z", "--untracked-files=normal"],
@@ -362,7 +360,7 @@ pub(super) async fn discard(source: &Path, placement: &Placement) {
 }
 
 /// The directory `prefix` (from `--show-prefix`) below checkout `root`.
-fn below(root: &Path, prefix: &str) -> Result<String, RpcError> {
+fn below(root: &Path, prefix: &str) -> Result<String, Error> {
     let prefix = prefix.trim_end_matches('/');
     let dir = if prefix.is_empty() {
         root.to_path_buf()
@@ -371,5 +369,5 @@ fn below(root: &Path, prefix: &str) -> Result<String, RpcError> {
     };
     dir.into_os_string()
         .into_string()
-        .map_err(|_| RpcError::invalid("worktree path is not UTF-8"))
+        .map_err(|_| Error::invalid("worktree path is not UTF-8"))
 }

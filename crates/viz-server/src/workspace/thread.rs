@@ -21,13 +21,13 @@ use super::{
     worker::Intent,
     worktree::{self, Placement},
 };
-use crate::wire::RpcError;
+use crate::error::Error;
 
 impl Workspace {
     /// Launches a thread; a worktree target is resolved, and a new worktree
     /// created, before the thread is recorded, and removed again if the
     /// launch fails or repeats an earlier request.
-    pub(super) async fn launch(self: &Arc<Self>, args: LaunchThread) -> Result<Launched, RpcError> {
+    pub(super) async fn launch(self: &Arc<Self>, args: LaunchThread) -> Result<Launched, Error> {
         validate_request_id(args.request_id.as_deref())?;
         let Some(target) = args.worktree.clone() else {
             return self
@@ -38,7 +38,7 @@ impl Workspace {
         let project = args
             .project
             .clone()
-            .ok_or_else(|| RpcError::invalid("a worktree requires a project"))?;
+            .ok_or_else(|| Error::invalid("a worktree requires a project"))?;
         {
             let mut db = self.db.lock().await;
             if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
@@ -67,14 +67,13 @@ impl Workspace {
         self: &Arc<Self>,
         args: LaunchThread,
         placement: Option<&Placement>,
-    ) -> Result<(Launched, bool), RpcError> {
+    ) -> Result<(Launched, bool), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
             return Ok((found, false));
         }
-        threads::validate_title(args.title.as_deref())
-            .map_err(|error| RpcError::invalid(error.to_string()))?;
+        threads::validate_title(args.title.as_deref())?;
         let (harness, _) = self.harness(args.harness.as_deref())?;
         let cwd = match placement {
             Some(placement) => placement.cwd.clone().into(),
@@ -137,7 +136,7 @@ impl Workspace {
         ))
     }
 
-    pub(crate) async fn send(self: &Arc<Self>, args: SendInput) -> Result<Sent, RpcError> {
+    pub(crate) async fn send(self: &Arc<Self>, args: SendInput) -> Result<Sent, Error> {
         let thread = args.thread.0;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
@@ -191,16 +190,17 @@ impl Workspace {
         }
     }
 
-    pub(crate) async fn stop(&self, thread: u64, requested: Option<u64>) -> Result<(), RpcError> {
+    pub(crate) async fn stop(&self, thread: u64, requested: Option<u64>) -> Result<(), Error> {
         let active = {
             let mut db = self.db.lock().await;
             store::require(&mut db, thread).await?;
             if let Some(run) = requested
                 && runs::status(&mut db, thread, run).await?.is_none()
             {
-                return Err(RpcError::not_found(format!(
-                    "no run {run} in thread {thread}"
-                )));
+                return Err(Error::NoRun {
+                    thread: ThreadId(thread),
+                    run: RunId(run),
+                });
             }
             let mut tx = db.transaction().await?;
             runs::cancel_queued(&mut tx, thread, requested).await?;
@@ -224,27 +224,24 @@ impl Workspace {
                 .wait_run(thread, Some(active), Duration::from_secs(120))
                 .await?;
             if result.timed_out {
-                return Err(RpcError::unavailable(
-                    "ACP cancellation is still in progress",
-                ));
+                return Err(Error::unavailable("ACP cancellation is still in progress"));
             }
         }
         Ok(())
     }
 
-    pub(super) async fn update(&self, args: UpdateMetadata) -> Result<(), RpcError> {
+    pub(super) async fn update(&self, args: UpdateMetadata) -> Result<(), Error> {
         let thread = args.thread.get();
         let mut db = self.db.lock().await;
         let mut current = row(&mut db,
             "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
-            [thread.into()]).await?.ok_or_else(|| store::missing(thread))?;
-        threads::validate_title(args.title.as_deref())
-            .map_err(|error| RpcError::invalid(error.to_string()))?;
+            [thread.into()]).await?.ok_or_else(|| Error::NoThread(ThreadId(thread)))?;
+        threads::validate_title(args.title.as_deref())?;
         if let Patch::Set(project) = &args.project {
             store::project(&mut db, project).await?;
         }
         if !matches!(args.project, Patch::Keep) && current.opt_str(2)?.is_some() {
-            return Err(RpcError::invalid(
+            return Err(Error::invalid(
                 "move the thread out of its worktree before changing its project",
             ));
         }
@@ -276,17 +273,17 @@ impl Workspace {
 
     /// Deletes a thread, and with `remove_worktree` the clean worktree viz
     /// created for it once its harness has stopped.
-    pub(super) async fn delete(&self, thread: u64, remove_worktree: bool) -> Result<(), RpcError> {
+    pub(super) async fn delete(&self, thread: u64, remove_worktree: bool) -> Result<(), Error> {
         let checkout = if remove_worktree {
             let mut db = self.db.lock().await;
             let binding = store::binding(&mut db, thread).await?;
             let path = binding
                 .worktree
-                .ok_or_else(|| RpcError::invalid("the thread runs in no worktree"))?;
+                .ok_or_else(|| Error::invalid("the thread runs in no worktree"))?;
             self.removable(&mut db, &path, Some(thread)).await?;
             drop(db);
             if !worktree::clean(Path::new(&path)).await? {
-                return Err(RpcError::invalid(format!(
+                return Err(Error::invalid(format!(
                     "worktree {path} has uncommitted changes or untracked files"
                 )));
             }
@@ -303,7 +300,7 @@ impl Workspace {
             )
             .await?;
             if count == 0 {
-                return Err(store::missing(thread));
+                return Err(Error::NoThread(ThreadId(thread)));
             }
             self.updates.remove(thread);
             let driver = self.workers.remove(ThreadId(thread));
@@ -325,10 +322,7 @@ impl Workspace {
             worktree::remove(Path::new(&source), &path, false)
                 .await
                 .map_err(|error| {
-                    RpcError::invalid(format!(
-                        "deleted the thread, but not its worktree: {}",
-                        error.message
-                    ))
+                    Error::invalid(format!("deleted the thread, but not its worktree: {error}"))
                 })?;
             self.changed(None);
         }
@@ -339,7 +333,7 @@ impl Workspace {
 async fn launched(
     db: &mut Connection,
     request_id: Option<&str>,
-) -> Result<Option<Launched>, RpcError> {
+) -> Result<Option<Launched>, Error> {
     let Some(request_id) = request_id else {
         return Ok(None);
     };
@@ -358,11 +352,9 @@ async fn launched(
     .transpose()
 }
 
-pub(super) fn validate_request_id(request_id: Option<&str>) -> Result<(), RpcError> {
+pub(super) fn validate_request_id(request_id: Option<&str>) -> Result<(), Error> {
     if request_id.is_some_and(|id| id.is_empty() || id.chars().count() > 256) {
-        return Err(RpcError::invalid(
-            "requestId must contain 1 to 256 characters",
-        ));
+        return Err(Error::invalid("requestId must contain 1 to 256 characters"));
     }
     Ok(())
 }

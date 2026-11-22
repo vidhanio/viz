@@ -9,7 +9,8 @@ use super::{
     sql::{self, exec, row},
 };
 use crate::{
-    wire::{Attachment, PromptAttachment, RpcError, StoredAttachment},
+    error::Error,
+    wire::{Attachment, PromptAttachment, StoredAttachment},
     workspace::sql::Connection,
 };
 
@@ -20,7 +21,7 @@ pub(super) struct Upload {
     bytes: Vec<u8>,
 }
 
-pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, RpcError> {
+pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, Error> {
     let mut remaining = TOTAL_LIMIT;
     attachments
         .into_iter()
@@ -33,7 +34,7 @@ pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, RpcErr
                     .bytes()
                     .any(|ch| matches!(ch, b'/' | b'\\' | 0..=31 | 127))
             {
-                return Err(RpcError::invalid("invalid attachment name"));
+                return Err(Error::invalid("invalid attachment name"));
             }
             let decoded_len = data.len() / 4 * 3
                 - data
@@ -48,7 +49,7 @@ pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, RpcErr
             }
             let bytes = STANDARD
                 .decode(data)
-                .map_err(|_| RpcError::invalid("invalid attachment base64"))?;
+                .map_err(|_| Error::invalid("invalid attachment base64"))?;
             remaining = remaining.checked_sub(bytes.len()).ok_or_else(too_large)?;
             let mut digest = Sha256::new();
             for field in [name.as_bytes(), mime.as_bytes(), bytes.as_slice()] {
@@ -70,15 +71,15 @@ pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, RpcErr
         .collect()
 }
 
-fn too_large() -> RpcError {
-    RpcError::invalid("attachments exceed 20 MiB total")
+fn too_large() -> Error {
+    Error::invalid("attachments exceed 20 MiB total")
 }
 
 pub(super) async fn save(
     db: &mut Connection,
     thread: u64,
     uploads: Vec<Upload>,
-) -> Result<Vec<PromptAttachment>, RpcError> {
+) -> Result<Vec<PromptAttachment>, Error> {
     let mut attachments = Vec::with_capacity(uploads.len());
     for Upload { reference, bytes } in uploads {
         exec(db, "INSERT INTO attachments (thread, id, name, mime, data) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
@@ -93,10 +94,10 @@ async fn owned(
     thread: u64,
     id: &str,
     budget: usize,
-) -> Result<sql::Row, RpcError> {
+) -> Result<sql::Row, Error> {
     row(db, "SELECT name, mime, CASE WHEN length(data) <= ?3 THEN data END, length(data) FROM attachments WHERE thread = ?1 AND id = ?2",
         [thread.into(), id.into(), budget.into()]).await?.ok_or_else(|| {
-        RpcError::invalid(format!("attachment {id} does not belong to thread {thread}"))
+        Error::invalid(format!("attachment {id} does not belong to thread {thread}"))
     })
 }
 
@@ -104,7 +105,7 @@ pub(super) async fn inputs(
     db: &mut Connection,
     thread: u64,
     ids: &[String],
-) -> Result<Vec<Attachment>, RpcError> {
+) -> Result<Vec<Attachment>, Error> {
     let mut remaining = TOTAL_LIMIT;
     let mut attachments = Vec::with_capacity(ids.len());
     for id in ids {
@@ -125,7 +126,7 @@ pub(super) async fn materialize(
     thread: u64,
     run: u64,
     refs: Vec<PromptAttachment>,
-) -> Result<Vec<StoredAttachment>, RpcError> {
+) -> Result<Vec<StoredAttachment>, Error> {
     if refs.is_empty() {
         return Ok(Vec::new());
     }
@@ -139,9 +140,7 @@ pub(super) async fn materialize(
                 let mut db = workspace.db.lock().await;
                 owned(&mut db, thread, &id, TOTAL_LIMIT).await?.bytes(2)?
             };
-            write_file(&directory, &path, &data)
-                .await
-                .map_err(RpcError::internal)?;
+            write_file(&directory, &path, &data).await?;
         }
         saved.push(StoredAttachment {
             id,

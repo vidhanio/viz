@@ -7,17 +7,18 @@ use viz_protocol::peer::{FollowUp, PeerMethod, ProgressRequest, ReceiveTask, Ret
 
 use super::Server;
 use crate::{
+    error::Error,
     rpc::{self, Handler},
-    wire::{RpcError, encode},
+    wire::encode,
 };
 
 pub(super) enum PeerError {
-    Rpc(RpcError),
+    Rpc(Error),
     SourceMismatch,
 }
 
-impl From<RpcError> for PeerError {
-    fn from(error: RpcError) -> Self {
+impl From<Error> for PeerError {
+    fn from(error: Error) -> Self {
         Self::Rpc(error)
     }
 }
@@ -53,7 +54,7 @@ macro_rules! peer_handlers {
 
                 async fn handle(&self, input: Self::Input) -> Result<
                     <$method as viz_protocol::Method>::Response,
-                    RpcError,
+                    Error,
                 > {
                     self.$service.$operation(input).await
                 }

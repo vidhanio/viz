@@ -19,13 +19,13 @@ use super::{
     store::{self, NewThread, SavedSession},
     worktree::{self, Placement},
 };
-use crate::{acp::Selection, wire::RpcError};
+use crate::{acp::Selection, error::Error};
 
 type Id = NonZeroU64;
 
 impl Workspace {
     /// Resolve a worktree target before taking the write lease.
-    pub(crate) async fn receive(self: &Arc<Self>, args: ReceiveTask) -> Result<Received, RpcError> {
+    pub(crate) async fn receive(self: &Arc<Self>, args: ReceiveTask) -> Result<Received, Error> {
         let Some(target) = args.target.worktree.clone() else {
             return self
                 .receive_in(args, None)
@@ -33,7 +33,7 @@ impl Workspace {
                 .map(|(received, _)| received);
         };
         if args.thread.is_some() {
-            return Err(RpcError::invalid(
+            return Err(Error::invalid(
                 "an existing task thread cannot change its worktree",
             ));
         }
@@ -57,7 +57,7 @@ impl Workspace {
                 .project
                 .clone()
                 .or_else(|| parent.as_ref()?.project.clone())
-                .ok_or_else(|| RpcError::invalid("a worktree requires a project"))?;
+                .ok_or_else(|| Error::invalid("a worktree requires a project"))?;
             store::project(&mut db, &project).await?;
             let source = match parent {
                 Some(parent)
@@ -90,7 +90,7 @@ impl Workspace {
         self: &Arc<Self>,
         mut args: ReceiveTask,
         placement: Option<&Placement>,
-    ) -> Result<(Received, bool), RpcError> {
+    ) -> Result<(Received, bool), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let key = [args.origin_environment.as_str(), args.task.as_str()];
@@ -117,12 +117,12 @@ impl Workspace {
                 return Ok((received(found.thread.0, found.run.0)?, false));
             }
             Admission::Cancelled => {
-                return Err(RpcError::invalid("task was cancelled before admission"));
+                return Err(Error::invalid("task was cancelled before admission"));
             }
             Admission::Create => {}
         }
         if args.text.is_empty() {
-            return Err(RpcError::invalid("task text must not be empty"));
+            return Err(Error::invalid("task text must not be empty"));
         }
         let decoded = attachments::decode(std::mem::take(&mut args.attachments))?;
         let thread = self.task_thread(&mut tx, &args, placement).await?;
@@ -161,13 +161,13 @@ impl Workspace {
         db: &mut crate::workspace::sql::Connection,
         args: &ReceiveTask,
         placement: Option<&Placement>,
-    ) -> Result<u64, RpcError> {
+    ) -> Result<u64, Error> {
         if let Some(thread) = args.thread {
             let binding = store::binding(db, thread.get()).await?;
             if binding.parent.map(|id| id.0) != Some(args.parent.get())
                 || binding.parent_environment.as_deref() != Some(args.origin_environment.as_str())
             {
-                return Err(RpcError::invalid(
+                return Err(Error::invalid(
                     "target thread is not owned by this task parent",
                 ));
             }
@@ -184,7 +184,7 @@ impl Workspace {
                 || args.target.model.is_some()
                 || args.target.thinking.is_some()
             {
-                return Err(RpcError::invalid(
+                return Err(Error::invalid(
                     "existing task thread cannot change its harness, project, model, or thinking",
                 ));
             }
@@ -201,7 +201,7 @@ impl Workspace {
             .as_deref()
             .or_else(|| inherited.as_ref()?.project.as_deref());
         if placement.is_none() && args.target.worktree.is_some() {
-            return Err(RpcError::invalid("unresolved worktree target"));
+            return Err(Error::invalid("unresolved worktree target"));
         }
         let selected = args
             .target
@@ -240,7 +240,7 @@ impl Workspace {
         .await
     }
 
-    pub(crate) async fn retract(&self, args: RetractTask) -> Result<Option<Received>, RpcError> {
+    pub(crate) async fn retract(&self, args: RetractTask) -> Result<Option<Received>, Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         if let Some(found) = receipt(&mut tx, [&args.origin_environment, &args.task]).await? {
@@ -257,7 +257,7 @@ impl Workspace {
 async fn receipt(
     tx: &mut Connection,
     [environment, task]: [&str; 2],
-) -> Result<Option<Received>, RpcError> {
+) -> Result<Option<Received>, Error> {
     row(
         tx,
         "SELECT thread, run FROM task_receipts WHERE environment = ?1 AND task = ?2",
@@ -272,9 +272,9 @@ pub(super) fn selection(model: Option<String>, thinking: Option<String>) -> Opti
     (model.is_some() || thinking.is_some()).then_some(Selection { model, thinking })
 }
 
-fn received(thread: u64, run: u64) -> Result<Received, RpcError> {
+fn received(thread: u64, run: u64) -> Result<Received, Error> {
     Ok(Received {
-        thread: Id::new(thread).ok_or_else(|| RpcError::internal("invalid receipt thread"))?,
-        run: Id::new(run).ok_or_else(|| RpcError::internal("invalid receipt run"))?,
+        thread: Id::new(thread).ok_or_else(|| Error::corrupt("invalid receipt thread"))?,
+        run: Id::new(run).ok_or_else(|| Error::corrupt("invalid receipt run"))?,
     })
 }

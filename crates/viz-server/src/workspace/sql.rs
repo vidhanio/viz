@@ -16,7 +16,7 @@ use rusqlite::{
 };
 use tokio::sync::{mpsc, oneshot};
 
-use crate::wire::RpcError;
+use crate::error::Error;
 
 type Job = Box<dyn FnOnce(&mut Sqlite) + Send>;
 
@@ -73,20 +73,20 @@ impl Connection {
     async fn call<T: Send + 'static>(
         &mut self,
         operation: impl FnOnce(&mut Sqlite) -> rusqlite::Result<T> + Send + 'static,
-    ) -> Result<T, RpcError> {
+    ) -> Result<T, Error> {
         let (reply, result) = oneshot::channel();
         self.writer
             .send(Message::Work(Box::new(move |db| {
                 let _ = reply.send(operation(db));
             })))
-            .map_err(|_| writer_closed())?;
+            .map_err(|_| Error::WriterStopped)?;
         result
             .await
-            .map_err(|_| writer_closed())?
-            .map_err(RpcError::internal)
+            .map_err(|_| Error::WriterStopped)?
+            .map_err(Error::Storage)
     }
 
-    pub(crate) async fn transaction(&mut self) -> Result<Transaction<'_>, RpcError> {
+    pub(crate) async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
         let tx = Transaction {
             db: self,
             committed: false,
@@ -96,10 +96,6 @@ impl Connection {
     }
 }
 
-fn writer_closed() -> RpcError {
-    RpcError::internal("workspace SQLite writer stopped")
-}
-
 #[derive(Debug)]
 pub(crate) struct Transaction<'a> {
     db: &'a mut Connection,
@@ -107,7 +103,7 @@ pub(crate) struct Transaction<'a> {
 }
 
 impl Transaction<'_> {
-    pub(crate) async fn commit(mut self) -> Result<(), RpcError> {
+    pub(crate) async fn commit(mut self) -> Result<(), Error> {
         self.db.call(|db| db.execute_batch("COMMIT")).await?;
         self.committed = true;
         Ok(())
@@ -193,7 +189,7 @@ pub(crate) async fn exec<const N: usize>(
     db: &mut Connection,
     statement: &str,
     args: [Value; N],
-) -> Result<usize, RpcError> {
+) -> Result<usize, Error> {
     let statement = statement.to_owned();
     db.call(move |db| {
         db.prepare_cached(&statement)?
@@ -206,7 +202,7 @@ pub(crate) async fn rows<const N: usize>(
     db: &mut Connection,
     query: &str,
     args: [Value; N],
-) -> Result<impl Iterator<Item = Row> + use<N>, RpcError> {
+) -> Result<impl Iterator<Item = Row> + use<N>, Error> {
     let query = query.to_owned();
     let rows = db
         .call(move |db| {
@@ -229,7 +225,7 @@ pub(crate) async fn row<const N: usize>(
     db: &mut Connection,
     query: &str,
     args: [Value; N],
-) -> Result<Option<Row>, RpcError> {
+) -> Result<Option<Row>, Error> {
     Ok(rows(db, query, args).await?.next())
 }
 
@@ -241,11 +237,11 @@ impl Row {
         std::mem::replace(&mut self.0[col], SqlValue::Null)
     }
 
-    pub(crate) fn str(&mut self, col: usize) -> Result<String, RpcError> {
+    pub(crate) fn str(&mut self, col: usize) -> Result<String, Error> {
         self.opt_str(col)?.ok_or_else(|| invalid_column(col))
     }
 
-    pub(crate) fn opt_str(&mut self, col: usize) -> Result<Option<String>, RpcError> {
+    pub(crate) fn opt_str(&mut self, col: usize) -> Result<Option<String>, Error> {
         match self.take(col) {
             SqlValue::Text(value) => Ok(Some(value)),
             SqlValue::Null => Ok(None),
@@ -253,18 +249,18 @@ impl Row {
         }
     }
 
-    pub(crate) fn bytes(&mut self, col: usize) -> Result<Vec<u8>, RpcError> {
+    pub(crate) fn bytes(&mut self, col: usize) -> Result<Vec<u8>, Error> {
         match self.take(col) {
             SqlValue::Blob(value) => Ok(value),
             _ => Err(invalid_column(col)),
         }
     }
 
-    pub(crate) fn i64(&self, col: usize) -> Result<i64, RpcError> {
+    pub(crate) fn i64(&self, col: usize) -> Result<i64, Error> {
         self.opt_i64(col)?.ok_or_else(|| invalid_column(col))
     }
 
-    pub(crate) fn opt_i64(&self, col: usize) -> Result<Option<i64>, RpcError> {
+    pub(crate) fn opt_i64(&self, col: usize) -> Result<Option<i64>, Error> {
         match self.0[col] {
             SqlValue::Integer(value) => Ok(Some(value)),
             SqlValue::Null => Ok(None),
@@ -272,11 +268,11 @@ impl Row {
         }
     }
 
-    pub(crate) fn u64(&self, col: usize) -> Result<u64, RpcError> {
+    pub(crate) fn u64(&self, col: usize) -> Result<u64, Error> {
         self.opt_u64(col)?.ok_or_else(|| invalid_column(col))
     }
 
-    pub(crate) fn opt_u64(&self, col: usize) -> Result<Option<u64>, RpcError> {
+    pub(crate) fn opt_u64(&self, col: usize) -> Result<Option<u64>, Error> {
         match self.0[col] {
             SqlValue::Integer(value) => u64::try_from(value)
                 .map(Some)
@@ -286,11 +282,11 @@ impl Row {
         }
     }
 
-    pub(crate) fn flag(&self, col: usize) -> Result<bool, RpcError> {
+    pub(crate) fn flag(&self, col: usize) -> Result<bool, Error> {
         Ok(self.i64(col)? != 0)
     }
 }
 
-fn invalid_column(col: usize) -> RpcError {
-    RpcError::internal(format_args!("unexpected SQLite value in column {col}"))
+fn invalid_column(col: usize) -> Error {
+    Error::corrupt(format_args!("unexpected SQLite value in column {col}"))
 }

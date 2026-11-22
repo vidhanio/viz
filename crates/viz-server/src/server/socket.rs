@@ -24,10 +24,11 @@ use viz_protocol::{Empty, ListEnvironments, Method, SendInput, Unwatch, Watch, W
 
 use super::{Server, parse_request, peer_rpc};
 use crate::{
+    error::{Error, RequestError},
     rpc,
     wire::{
-        self, ClientKind, Hello, HelloParams, Id, Notification, PROTOCOL_VERSION, Request,
-        Response, RpcError, RunStatus, ThreadId, ThreadState, params, raw_params,
+        ClientKind, Hello, HelloParams, Id, Notification, PROTOCOL_VERSION, Request, Response,
+        RunStatus, ThreadId, ThreadState, params, raw_params,
     },
     workspace::{Change, WatchChange},
 };
@@ -47,14 +48,17 @@ pub(super) async fn connect(mut socket: WebSocket, server: Arc<Server>) -> Resul
             socket
                 .send(json_message(&Response::<Value>::new(
                     request.id,
-                    Err(RpcError::new(-32000, "call hello first")),
+                    Err(RequestError::HelloRequired.into()),
                 ))?)
                 .await?;
             return Ok(());
         }
         Err(error) => {
             socket
-                .send(json_message(&Response::<Value>::new(Id::Null, Err(error)))?)
+                .send(json_message(&Response::<Value>::new(
+                    Id::Null,
+                    Err(error.into()),
+                ))?)
                 .await?;
             return Ok(());
         }
@@ -115,7 +119,7 @@ async fn watch_thread(
     thread: ThreadId,
     outgoing: &mpsc::Sender<Message>,
     app: bool,
-) -> Result<WatchCursor, RpcError> {
+) -> Result<WatchCursor, Error> {
     let page = server.workspace.entries(thread.0, None, PAGE).await?;
     let state = server.workspace.state(thread.0).await?;
     let last = page.entries.last().map_or(0, |entry| entry.id.0);
@@ -161,7 +165,7 @@ async fn refresh_watch(
     };
     let state = match server.workspace.state(thread.0).await {
         Ok(state) => state,
-        Err(error) if error.code == wire::NOT_FOUND => return Ok(()),
+        Err(Error::NoThread(_)) => return Ok(()),
         Err(error) => return Err(error.into()),
     };
     loop {
@@ -248,7 +252,7 @@ async fn local_session(
                     let request = match parse_request(&frame) {
                         Ok(request) => request,
                         Err(error) => {
-                            outgoing.send(json_message(&Response::<Value>::new(Id::Null, Err(error)))?).await?;
+                            outgoing.send(json_message(&Response::<Value>::new(Id::Null, Err(error.into())))?).await?;
                             continue;
                         }
                     };
@@ -258,13 +262,13 @@ async fn local_session(
                             outgoing.send(json_message(&Response::new(request.id, result))?).await?;
                         }
                         HelloParams::NAME => {
-                            outgoing.send(json_message(&Response::<Value>::new(request.id, Err(RpcError::invalid("hello already sent"))))?).await?;
+                            outgoing.send(json_message(&Response::<Value>::new(request.id, Err(Error::invalid("hello already sent"))))?).await?;
                         }
                         method if peer_rpc::find(method).is_some() => {
-                            outgoing.send(json_message(&Response::<Value>::new(request.id, Err(RpcError::new(-32601, "internal peer method"))))?).await?;
+                            outgoing.send(json_message(&Response::<Value>::new(request.id, Err(RequestError::UnknownMethod("internal peer method".into()).into())))?).await?;
                         }
                         _ if calls.len() >= MAX_IN_FLIGHT => {
-                            outgoing.send(json_message(&Response::<Value>::new(request.id, Err(RpcError::unavailable("too many requests in flight"))))?).await?;
+                            outgoing.send(json_message(&Response::<Value>::new(request.id, Err(Error::unavailable("too many requests in flight"))))?).await?;
                         }
                         _ => {
                             let args = raw_params(&request).to_owned();
@@ -319,7 +323,7 @@ async fn update_watch(
     watches: &mut HashMap<ThreadId, WatchCursor>,
     outgoing: &mpsc::Sender<Message>,
     app: bool,
-) -> Result<Watching, RpcError> {
+) -> Result<Watching, Error> {
     if request.method == Watch::NAME {
         let Watch { thread } = params(request)?;
         if let std::collections::hash_map::Entry::Vacant(slot) = watches.entry(thread) {
@@ -366,7 +370,7 @@ async fn client_call(
             outgoing
                 .send(json_message(&Response::<Value>::new(
                     id,
-                    Err(RpcError::invalid(
+                    Err(Error::invalid(
                         "origin must belong to the connected connector",
                     )),
                 ))?)
@@ -478,7 +482,7 @@ async fn proxy(
             socket
                 .send(json_message(&Response::<Value>::new(
                     id,
-                    Err(RpcError::unavailable(error.to_string())),
+                    Err(Error::unavailable(error.to_string())),
                 ))?)
                 .await?;
             return Ok(());

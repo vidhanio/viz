@@ -20,7 +20,8 @@ use viz_protocol::{ClientInfo, ClientKind, HelloParams, Method};
 
 use crate::{
     config::Config,
-    wire::{Environment, EnvironmentStatus, PROTOCOL_VERSION, RPC_PATH, RpcError},
+    error::Error,
+    wire::{Environment, EnvironmentStatus, PROTOCOL_VERSION, RPC_PATH},
 };
 
 const RECENCY: Duration = Duration::from_secs(10);
@@ -173,17 +174,17 @@ impl Peers {
         id: &str,
         params: &(impl Serialize + Sync),
         extra_wait: Duration,
-    ) -> Result<M::Response, RpcError> {
+    ) -> Result<M::Response, Error> {
         let peer = self
             .get(id)
-            .ok_or_else(|| RpcError::unavailable(format!("unknown environment {id}")))?;
+            .ok_or_else(|| Error::unavailable(format!("unknown environment {id}")))?;
         let response = self
             .request::<M>(peer, params, RPC_TIMEOUT + extra_wait)
             .await;
         response.map_or_else(
             |()| {
                 peer.mark(false);
-                Err(RpcError::unavailable(format!(
+                Err(Error::unavailable(format!(
                     "no valid response from environment {id}"
                 )))
             },
@@ -227,7 +228,7 @@ impl Peers {
         peer: &Peer,
         params: &(impl Serialize + Sync),
         timeout: Duration,
-    ) -> Result<Result<M::Response, RpcError>, ()> {
+    ) -> Result<Result<M::Response, Error>, ()> {
         #[derive(Serialize)]
         struct Request<'a, P> {
             jsonrpc: TwoPointZero,
@@ -264,7 +265,7 @@ impl Peers {
         Ok(match reply.payload {
             ResponsePayload::Success(value) => Ok(value.into_owned()),
             ResponsePayload::Error(error) => {
-                Err(RpcError::new(i64::from(error.code()), error.message()))
+                Err(crate::wire::peer_error(error.code(), error.message()))
             }
         })
     }

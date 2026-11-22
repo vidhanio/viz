@@ -6,7 +6,8 @@ use std::collections::HashSet;
 use viz_core::tasks::{self as decisions, Command, Family, Phase, Transition, WakeEdge};
 
 use crate::{
-    wire::{RpcError, RunId, TaskStatus},
+    error::Error,
+    wire::{RunId, TaskStatus},
     workspace::{
         run_from,
         runs::by_ids,
@@ -18,7 +19,7 @@ pub(super) async fn prior_request(
     db: &mut Connection,
     parent: u64,
     request: &str,
-) -> Result<Option<String>, RpcError> {
+) -> Result<Option<String>, Error> {
     sql::row(
         db,
         "SELECT id FROM agent_tasks WHERE parent = ?1 AND request_id = ?2",
@@ -29,11 +30,7 @@ pub(super) async fn prior_request(
     .transpose()
 }
 
-pub(super) async fn stop_exists(
-    db: &mut Connection,
-    thread: u64,
-    run: u64,
-) -> Result<bool, RpcError> {
+pub(super) async fn stop_exists(db: &mut Connection, thread: u64, run: u64) -> Result<bool, Error> {
     Ok(sql::row(
         db,
         "SELECT handled FROM stopped_task_runs WHERE thread = ?1 AND run = ?2",
@@ -43,14 +40,14 @@ pub(super) async fn stop_exists(
     .is_some())
 }
 
-pub(super) async fn task_phase(db: &mut Connection, task: &str) -> Result<Option<Phase>, RpcError> {
+pub(super) async fn task_phase(db: &mut Connection, task: &str) -> Result<Option<Phase>, Error> {
     sql::row(
         db,
         "SELECT phase FROM agent_tasks WHERE id = ?1",
         [task.into()],
     )
     .await?
-    .map(|mut row| row.str(0)?.parse::<Phase>().map_err(RpcError::internal))
+    .map(|mut row| row.str(0)?.parse::<Phase>().map_err(Error::corrupt))
     .transpose()
 }
 
@@ -60,7 +57,7 @@ pub(super) async fn finish_task(
     status: TaskStatus,
     result: Option<&str>,
     error: Option<&str>,
-) -> Result<(), RpcError> {
+) -> Result<(), Error> {
     sql::exec(db,
         "UPDATE agent_tasks SET status = ?2, result = ?3, error = ?4, phase = 'settled', payload = NULL WHERE id = ?1",
         [task.into(), decisions::status_name(status).into(), result.into(), error.into()],
@@ -75,7 +72,7 @@ pub(super) async fn cancel_task(
     task: &str,
     phase: Phase,
     delivery: Option<&str>,
-) -> Result<(), RpcError> {
+) -> Result<(), Error> {
     let (phase, status) = match decisions::decide(phase, Command::Cancel) {
         Transition::Keep if delivery.is_none() => return Ok(()),
         Transition::Keep => (phase, None),
@@ -109,7 +106,7 @@ pub(super) async fn suppress_descendant_wakes(
     db: &mut Connection,
     thread: u64,
     run: u64,
-) -> Result<(), RpcError> {
+) -> Result<(), Error> {
     let family = family(db, thread, RunId(run)).await?;
     for task in family
         .tasks
@@ -121,11 +118,7 @@ pub(super) async fn suppress_descendant_wakes(
     Ok(())
 }
 
-pub(super) async fn snapshot(
-    db: &mut Connection,
-    thread: u64,
-    run: u64,
-) -> Result<Family, RpcError> {
+pub(super) async fn snapshot(db: &mut Connection, thread: u64, run: u64) -> Result<Family, Error> {
     let root = run_from(db, thread, run).await?;
     let family = family(db, thread, RunId(run)).await?;
     let pending_delivery = family.tasks.iter().any(|task| task.delivery != "delivered");
@@ -148,7 +141,7 @@ struct FamilyTask {
 
 /// Original result wakes join the family after delivery is recorded. Follow-up
 /// wakes join on their receipt, which is persisted with the new run.
-async fn family(db: &mut Connection, thread: u64, run: RunId) -> Result<FamilyRows, RpcError> {
+async fn family(db: &mut Connection, thread: u64, run: RunId) -> Result<FamilyRows, Error> {
     let tasks = sql::rows(
         db,
         "SELECT id, parent_run, phase, delivery, wake_run FROM agent_tasks
@@ -160,12 +153,12 @@ async fn family(db: &mut Connection, thread: u64, run: RunId) -> Result<FamilyRo
         Ok(FamilyTask {
             id: row.str(0)?,
             parent: RunId(row.u64(1)?),
-            phase: row.str(2)?.parse().map_err(RpcError::internal)?,
+            phase: row.str(2)?.parse().map_err(Error::corrupt)?,
             delivery: row.str(3)?,
             wake: row.opt_u64(4)?.map(RunId),
         })
     })
-    .collect::<Result<Vec<_>, RpcError>>()?;
+    .collect::<Result<Vec<_>, Error>>()?;
     let follow_ups = sql::rows(
         db,
         "SELECT a.parent_run, w.run FROM task_wakes w
@@ -180,7 +173,7 @@ async fn family(db: &mut Connection, thread: u64, run: RunId) -> Result<FamilyRo
             wake: RunId(row.u64(1)?),
         })
     })
-    .collect::<Result<Vec<_>, RpcError>>()?;
+    .collect::<Result<Vec<_>, Error>>()?;
     let original = tasks.iter().filter_map(|task| {
         task.wake.map(|wake| WakeEdge {
             parent: task.parent,
@@ -205,14 +198,14 @@ async fn family(db: &mut Connection, thread: u64, run: RunId) -> Result<FamilyRo
     Ok(FamilyRows { tasks, wakes })
 }
 
-pub(super) fn parse_status(status: &str) -> Result<TaskStatus, RpcError> {
+pub(super) fn parse_status(status: &str) -> Result<TaskStatus, Error> {
     match status {
         "queued" => Ok(TaskStatus::Queued),
         "running" => Ok(TaskStatus::Running),
         "completed" => Ok(TaskStatus::Completed),
         "failed" => Ok(TaskStatus::Failed),
         "cancelled" => Ok(TaskStatus::Cancelled),
-        _ => Err(RpcError::internal(format!(
+        _ => Err(Error::corrupt(format!(
             "invalid persisted task status {status}"
         ))),
     }

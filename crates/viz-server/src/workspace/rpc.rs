@@ -19,10 +19,7 @@ use super::{
     sql::{exec, row},
     store, worktree,
 };
-use crate::{
-    rpc::handlers,
-    wire::{OptionValue, RpcError},
-};
+use crate::{error::Error, rpc::handlers, wire::OptionValue};
 
 type Id = NonZeroU64;
 
@@ -44,7 +41,7 @@ handlers! {
         }
         SearchFiles<'static>, FileSearch, |workspace, FileSearch { thread, query, limit }| {
             let cwd = row(&mut *workspace.db.lock().await, "SELECT cwd FROM threads WHERE id = ?1",
-                [thread.get().into()]).await?.ok_or_else(|| store::missing(thread.get()))?.str(0)?;
+                [thread.get().into()]).await?.ok_or_else(|| Error::NoThread(viz_protocol::ThreadId(thread.get())))?.str(0)?;
             let files = workspace.files.search(&cwd, &query, page_limit(limit, 50)?).await;
             Ok(FileList { files })
         }
@@ -64,7 +61,7 @@ handlers! {
             store::project(&mut db, &project).await?;
             if let Some(name) = name {
                 if name.is_empty() {
-                    return Err(RpcError::invalid("project name must not be empty"));
+                    return Err(Error::invalid("project name must not be empty"));
                 }
                 exec(&mut db, "UPDATE projects SET name = ?2 WHERE path = ?1",
                     [project.into(), name.into()]).await?;
@@ -97,14 +94,14 @@ handlers! {
         }
         SendInput, SendInput, |workspace, input| {
             if input.origin.is_some() {
-                return Err(RpcError::invalid("origins require a connector WebSocket"));
+                return Err(Error::invalid("origins require a connector WebSocket"));
             }
             workspace.send(input).await
         }
         WaitThread, Wait, |workspace, Wait { thread, run, timeout_ms }| {
             let timeout = timeout_ms.unwrap_or(30_000);
             if timeout > 120_000 {
-                return Err(RpcError::invalid("timeoutMs must not exceed 120000"));
+                return Err(Error::invalid("timeoutMs must not exceed 120000"));
             }
             workspace.wait_run(thread.get(), run.map(Id::get), Duration::from_millis(timeout)).await
         }
@@ -151,7 +148,7 @@ handlers! {
 }
 
 impl Workspace {
-    async fn update_queue(&self, input: UpdateQueue) -> Result<(), RpcError> {
+    async fn update_queue(&self, input: UpdateQueue) -> Result<(), Error> {
         let UpdateQueue {
             thread,
             run,
@@ -168,7 +165,7 @@ impl Workspace {
         Ok(())
     }
 
-    async fn steer_queue(self: &Arc<Self>, input: SteerQueuedInput) -> Result<(), RpcError> {
+    async fn steer_queue(self: &Arc<Self>, input: SteerQueuedInput) -> Result<(), Error> {
         let thread = input.thread.0;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
@@ -186,10 +183,10 @@ impl Workspace {
     }
 }
 
-fn page_limit(limit: Option<usize>, default: usize) -> Result<usize, RpcError> {
+fn page_limit(limit: Option<usize>, default: usize) -> Result<usize, Error> {
     match limit {
         Some(1..=200) | None => Ok(limit.unwrap_or(default)),
-        _ => Err(RpcError::invalid("limit must be between 1 and 200")),
+        _ => Err(Error::invalid("limit must be between 1 and 200")),
     }
 }
 

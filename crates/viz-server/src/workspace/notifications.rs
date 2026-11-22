@@ -7,7 +7,7 @@ use std::{collections::HashMap, sync::Mutex};
 use tokio::sync::broadcast;
 
 use super::{Workspace, sql::exec, store};
-use crate::wire::{LiveTurn, RpcError};
+use crate::{error::Error, wire::LiveTurn};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Change {
@@ -90,7 +90,7 @@ impl Workspace {
         self.changed(None);
     }
 
-    pub(crate) async fn watched(&self, thread: u64, mode: WatchChange) -> Result<(), RpcError> {
+    pub(crate) async fn watched(&self, thread: u64, mode: WatchChange) -> Result<(), Error> {
         match mode {
             WatchChange::Open => {
                 let mut db = self.db.lock().await;

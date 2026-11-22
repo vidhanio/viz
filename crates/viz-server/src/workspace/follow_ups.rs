@@ -8,9 +8,9 @@ use super::{
     runs,
     sql::{Connection, exec, row, rows},
 };
-use crate::wire::RpcError;
+use crate::error::Error;
 
-pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result<(), RpcError> {
+pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result<(), Error> {
     let Some(continuation) = runs::run_from(db, thread, run).await? else {
         return Ok(());
     };
@@ -25,7 +25,7 @@ pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result
         [run.into()],
     )
     .await?
-    .map(|mut row| Ok::<_, RpcError>((RunId(row.u64(0)?), runs::decode_status(&row.str(1)?)?)))
+    .map(|mut row| Ok::<_, Error>((RunId(row.u64(0)?), runs::decode_status(&row.str(1)?)?)))
     .transpose()?;
     let Some((parent, text)) = tasks::continuation_parent(&continuation, preceding) else {
         return Ok(());
@@ -44,7 +44,7 @@ pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result
             wake: RunId(row.u64(1)?),
         })
     })
-    .collect::<Result<Vec<_>, RpcError>>()?;
+    .collect::<Result<Vec<_>, Error>>()?;
     let ancestry = tasks::ancestors(parent, edges);
     for mut receipt in rows(
         db,

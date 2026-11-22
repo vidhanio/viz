@@ -8,18 +8,19 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 use viz_protocol::Method;
 
-use crate::wire::{RpcError, encode};
+use crate::{
+    error::{Error, RequestError},
+    wire::encode,
+};
 
 pub(crate) trait Handler<M: Method> {
     type Input: DeserializeOwned + Send;
 
-    fn handle(
-        &self,
-        input: Self::Input,
-    ) -> impl Future<Output = Result<M::Response, RpcError>> + Send;
+    fn handle(&self, input: Self::Input)
+    -> impl Future<Output = Result<M::Response, Error>> + Send;
 }
 
-type Dispatch<C> = for<'a> fn(&'a C, &'a str) -> BoxFuture<'a, Result<Value, RpcError>>;
+type Dispatch<C> = for<'a> fn(&'a C, &'a str) -> BoxFuture<'a, Result<Value, Error>>;
 
 #[derive(Debug)]
 pub(crate) struct Route<C> {
@@ -32,7 +33,7 @@ impl<C: 'static> Route<C> {
     where
         C: Handler<M> + Sync,
     {
-        fn call<'a, C, M>(context: &'a C, raw: &'a str) -> BoxFuture<'a, Result<Value, RpcError>>
+        fn call<'a, C, M>(context: &'a C, raw: &'a str) -> BoxFuture<'a, Result<Value, Error>>
         where
             C: Handler<M> + Sync,
             M: Method,
@@ -54,12 +55,12 @@ impl<C: 'static> Route<C> {
     }
 }
 
-pub(crate) fn parse<T: DeserializeOwned>(raw: &str) -> Result<T, RpcError> {
-    serde_json::from_str(raw).map_err(|error| RpcError::invalid(error.to_string()))
+pub(crate) fn parse<T: DeserializeOwned>(raw: &str) -> Result<T, Error> {
+    serde_json::from_str(raw).map_err(|error| Error::invalid(error.to_string()))
 }
 
-pub(crate) fn unknown(method: &str) -> RpcError {
-    RpcError::new(-32601, format!("unknown method {method}"))
+pub(crate) fn unknown(method: &str) -> Error {
+    RequestError::UnknownMethod(format!("unknown method {method}")).into()
 }
 
 /// Declare each procedure once, with its transport input and typed
@@ -77,7 +78,7 @@ macro_rules! handlers {
 
                 async fn handle(&self, input: Self::Input) -> Result<
                     <$method as viz_protocol::Method>::Response,
-                    crate::wire::RpcError,
+                    crate::error::Error,
                 > {
                     let $receiver = self;
                     let $pattern = input;

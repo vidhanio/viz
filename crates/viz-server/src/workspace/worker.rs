@@ -24,7 +24,7 @@ use super::{
     Workspace, runs, runtime::settle_outcome, sessions::SessionSlot, sql::exec, store,
     worktree::Placement,
 };
-use crate::wire::RpcError;
+use crate::error::Error;
 
 /// Restorable idle processes are released after ten minutes.
 const IDLE_SESSION: Duration = Duration::from_mins(10);
@@ -69,12 +69,12 @@ enum Request {
     Configure {
         option: String,
         value: OptionValue,
-        reply: oneshot::Sender<Result<(), RpcError>>,
+        reply: oneshot::Sender<Result<(), Error>>,
     },
     Rebind {
         before: Box<store::Binding>,
         after: Placement,
-        reply: oneshot::Sender<Result<(), RpcError>>,
+        reply: oneshot::Sender<Result<(), Error>>,
     },
 }
 
@@ -190,8 +190,8 @@ impl Driver {
 
     async fn request(
         &self,
-        make: impl FnOnce(oneshot::Sender<Result<(), RpcError>>) -> Request,
-    ) -> Result<(), RpcError> {
+        make: impl FnOnce(oneshot::Sender<Result<(), Error>>) -> Request,
+    ) -> Result<(), Error> {
         let (reply, result) = oneshot::channel();
         self.inbox.send(make(reply)).map_err(|_| worker_closed())?;
         result.await.map_err(|_| worker_closed())?
@@ -201,7 +201,7 @@ impl Driver {
         &self,
         before: store::Binding,
         after: Placement,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         self.request(move |reply| Request::Rebind {
             before: Box::new(before),
             after,
@@ -216,14 +216,14 @@ impl Driver {
     }
 }
 
-fn worker_closed() -> RpcError {
-    RpcError::unavailable("thread worker stopped")
+fn worker_closed() -> Error {
+    Error::unavailable("thread worker stopped")
 }
 
 impl Workspace {
     /// The caller holds the workspace write lease while resolving a thread so
     /// deletion cannot race insertion of its driver.
-    pub(super) fn driver(self: &Arc<Self>, thread: ThreadId) -> Result<Arc<Driver>, RpcError> {
+    pub(super) fn driver(self: &Arc<Self>, thread: ThreadId) -> Result<Arc<Driver>, Error> {
         let mut workers = self.workers.0.lock().expect("worker registry poisoned");
         if self.closing.is_cancelled() {
             return Err(worker_closed());
@@ -264,7 +264,7 @@ impl Workspace {
         thread: u64,
         option: String,
         value: OptionValue,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let driver = {
             let mut db = self.db.lock().await;
             store::require(&mut db, thread).await?;
@@ -366,7 +366,7 @@ impl Workspace {
         driver: &Driver,
         slot: &mut SessionSlot,
         prepare: bool,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, Error> {
         if let Some(session) = slot.current.as_mut() {
             self.continue_idle(thread.0, driver, session).await?;
         }

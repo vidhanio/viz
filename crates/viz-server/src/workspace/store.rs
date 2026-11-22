@@ -11,19 +11,18 @@ use serde::{Serialize, de::DeserializeOwned};
 pub(super) use self::{
     projects::{directory, path_text, project, project_at, projects, thread_worktree},
     threads::{
-        Binding, NewThread, SavedSession, binding, create_thread, list_threads, missing, require,
-        state,
+        Binding, NewThread, SavedSession, binding, create_thread, list_threads, require, state,
     },
     transcript::{append, entries, entries_after, publish, search},
 };
-use crate::wire::RpcError;
+use crate::error::Error;
 
-pub(super) fn json<T: Serialize + ?Sized>(value: &T) -> Result<String, RpcError> {
-    serde_json::to_string(value).map_err(RpcError::internal)
+pub(super) fn json<T: Serialize + ?Sized>(value: &T) -> Result<String, Error> {
+    Ok(serde_json::to_string(value)?)
 }
 
-pub(super) fn from_json<T: DeserializeOwned>(value: &str) -> Result<T, RpcError> {
-    serde_json::from_str(value).map_err(RpcError::internal)
+pub(super) fn from_json<T: DeserializeOwned>(value: &str) -> Result<T, Error> {
+    serde_json::from_str(value).map_err(Error::corrupt)
 }
 
 pub(super) fn now() -> i64 {

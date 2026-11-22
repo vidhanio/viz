@@ -14,7 +14,8 @@ use super::{
 };
 use crate::{
     acp::{Catalog, Desired, Session, SessionSnapshot},
-    wire::{OptionValue, RpcError},
+    error::Error,
+    wire::OptionValue,
 };
 
 #[derive(Default)]
@@ -122,7 +123,7 @@ impl Workspace {
         cancel: &CancellationToken,
         option: &str,
         value: OptionValue,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let Bound {
             session,
             harness,
@@ -130,8 +131,8 @@ impl Workspace {
         } = self.session(thread, slot, cancel).await?;
         let desired = tokio::select! {
             biased;
-            () = cancel.cancelled() => return Err(RpcError::unavailable("ACP configuration cancelled")),
-            result = session.configure(option, value, &desired) => result.map_err(|error| RpcError::invalid(error.to_string()))?,
+            () = cancel.cancelled() => return Err(Error::unavailable("ACP configuration cancelled")),
+            result = session.configure(option, value, &desired) => result.map_err(|error| Error::invalid(error.to_string()))?,
         };
         let snapshot = session.snapshot();
         let mut db = self.db.lock().await;
@@ -152,7 +153,7 @@ impl Workspace {
         &self,
         thread: u64,
         slot: &SessionSlot,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let Some(session) = slot.current.as_ref() else {
             return Ok(());
         };
@@ -173,7 +174,7 @@ pub(super) struct Bound<'slot> {
     desired: Desired,
 }
 
-pub(super) async fn catalog(db: &mut Connection, name: &str) -> Result<Option<Catalog>, RpcError> {
+pub(super) async fn catalog(db: &mut Connection, name: &str) -> Result<Option<Catalog>, Error> {
     row(
         db,
         "SELECT data FROM harness_catalogs WHERE name = ?1",
@@ -188,7 +189,7 @@ pub(super) async fn save_catalog(
     db: &mut Connection,
     name: &str,
     catalog: &Catalog,
-) -> Result<(), RpcError> {
+) -> Result<(), Error> {
     exec(db, "INSERT INTO harness_catalogs (name, data) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET data = excluded.data WHERE data <> excluded.data",
         [name.into(), store::json(catalog)?.into()]).await?;
     Ok(())
@@ -198,7 +199,7 @@ async fn update_catalog(
     db: &mut Connection,
     name: &str,
     snapshot: &SessionSnapshot,
-) -> Result<(), RpcError> {
+) -> Result<(), Error> {
     let stored = catalog(db, name).await?;
     if let Some(updated) = Catalog::merge(stored.as_ref(), &snapshot.options, &snapshot.opened) {
         save_catalog(db, name, &updated).await?;
@@ -211,7 +212,7 @@ pub(super) async fn persist_snapshot(
     thread: u64,
     snapshot: SessionSnapshot,
     desired: Option<&Desired>,
-) -> Result<bool, RpcError> {
+) -> Result<bool, Error> {
     let Labels { model, thinking } = Labels::from_options(&snapshot.options);
     let Some(mut prior) = row(
         db,

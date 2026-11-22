@@ -15,7 +15,8 @@ use super::{
     store::{finish_task, parse_status, task_phase},
 };
 use crate::{
-    wire::{INVALID_PARAMS, NOT_FOUND, RpcError, Run, TaskStatus},
+    error::Error,
+    wire::{Run, TaskStatus},
     workspace::sql,
 };
 
@@ -45,7 +46,7 @@ impl Tasks {
         }
     }
 
-    async fn pending_jobs(&self) -> Result<Vec<Job>, RpcError> {
+    async fn pending_jobs(&self) -> Result<Vec<Job>, Error> {
         let mut db = self.workspace.db.lock().await;
         let mut jobs = sql::rows(
             &mut db,
@@ -54,7 +55,7 @@ impl Tasks {
         )
         .await?
         .map(|mut row| Ok(Job::Task(row.str(0)?)))
-        .collect::<Result<Vec<_>, RpcError>>()?;
+        .collect::<Result<Vec<_>, Error>>()?;
         for row in sql::rows(
             &mut db,
             "SELECT thread, run FROM stopped_task_runs WHERE handled = 0",
@@ -141,12 +142,12 @@ impl Tasks {
         }
     }
 
-    async fn advance(&self, id: &str) -> Result<Advance, RpcError> {
+    async fn advance(&self, id: &str) -> Result<Advance, Error> {
         let Some(mut row) = sql::row(&mut *self.workspace.db.lock().await,
             "SELECT environment, thread, run, status, phase FROM agent_tasks WHERE id = ?1 AND delivery != 'delivered'",
             [id.into()],
         ).await? else { return Ok(Advance::Done) };
-        let phase = row.str(4)?.parse::<Phase>().map_err(RpcError::internal)?;
+        let phase = row.str(4)?.parse::<Phase>().map_err(Error::corrupt)?;
         if phase == Phase::Settled {
             self.deliver(id).await?;
             return Ok(Advance::Done);
@@ -164,7 +165,7 @@ impl Tasks {
             return self.advance_admission(id, &target, phase, poll).await;
         }
         let (Some(thread), Some(run)) = (row.opt_u64(1)?, row.opt_u64(2)?) else {
-            return Err(RpcError::internal("accepted task has no run receipt"));
+            return Err(Error::corrupt("accepted task has no run receipt"));
         };
         let status = parse_status(&row.str(3)?)?;
         let request = ProgressRequest {
@@ -217,7 +218,7 @@ impl Tasks {
         target: &str,
         phase: Phase,
         poll: Advance,
-    ) -> Result<Advance, RpcError> {
+    ) -> Result<Advance, Error> {
         let was_reachable = self.peers.reachable(target);
         let retracting = phase == Phase::Retracting;
         let result = if retracting {
@@ -260,8 +261,7 @@ impl Tasks {
                 };
                 row.str(0)?
             };
-            let request: ReceiveTask =
-                serde_json::from_str(&payload).map_err(RpcError::internal)?;
+            let request: ReceiveTask = serde_json::from_str(&payload)?;
             if target == self.peers.local {
                 self.workspace.receive(request).await.map(Some)
             } else {
@@ -291,8 +291,8 @@ impl Tasks {
                 self.admission_failed(id, Command::Retracted, None).await?;
                 Ok(Advance::Immediate)
             }
-            Err(error) if !retracting && matches!(error.code, INVALID_PARAMS | NOT_FOUND) => {
-                self.admission_failed(id, Command::Rejected, Some(&error.message))
+            Err(error) if !retracting && error.rejected() => {
+                self.admission_failed(id, Command::Rejected, Some(&error.to_string()))
                     .await?;
                 Ok(Advance::Immediate)
             }
@@ -305,7 +305,7 @@ impl Tasks {
         id: &str,
         command: Command,
         error: Option<&str>,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let mut db = self.workspace.db.lock().await;
         if let Some(current) = task_phase(&mut db, id).await?
             && let Transition::Settle(status) = decisions::decide(current, command)
@@ -324,7 +324,7 @@ impl Tasks {
         previous: TaskStatus,
         run: &Run,
         poll: Advance,
-    ) -> Result<Advance, RpcError> {
+    ) -> Result<Advance, Error> {
         match decisions::record_progress(previous, run) {
             Progress::Wait => Ok(poll),
             Progress::Started => {
@@ -354,7 +354,7 @@ impl Tasks {
         status: TaskStatus,
         result: Option<&str>,
         error: Option<&str>,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         finish_task(
             &mut *self.workspace.db.lock().await,
             id,

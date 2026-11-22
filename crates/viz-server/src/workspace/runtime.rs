@@ -25,7 +25,8 @@ use crate::{
         Outcome, Prompt, Session, SessionSnapshot, StopReason, stop_reason_name,
         transcript::{Output, Transcript},
     },
-    wire::{LiveTurn, RpcError, RunEnd, RunId, RunStatus, ToolCallStatus},
+    error::Error,
+    wire::{LiveTurn, RunEnd, RunId, RunStatus, ToolCallStatus},
 };
 
 /// ACP sends no stop signal for idle output. Allow four seconds between
@@ -42,7 +43,7 @@ impl Workspace {
         thread: u64,
         driver: &Driver,
         session: &mut Session,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let pending = session.idle_updates();
         if pending.is_empty() || driver.lifetime.is_cancelled() {
             return Ok(());
@@ -114,7 +115,7 @@ impl Workspace {
                 }
                 self.publish(thread, run, session.id(), transcript.finish(), None, None)
                     .await?;
-                Ok::<_, RpcError>(Settlement {
+                Ok::<_, Error>(Settlement {
                     status: EndStatus::Completed,
                     end: RunEnd {
                         stop_reason: None,
@@ -141,7 +142,7 @@ impl Workspace {
         driver: &Driver,
         turn: &Turn,
         mut settlement: Settlement,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let run = turn.run.0;
         let mut db = self.db.lock().await;
         if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
@@ -164,7 +165,7 @@ impl Workspace {
     /// Best-effort fallback when [`Self::finish`] fails: a run left `running`
     /// would make every later `claim` on the thread violate the `runs_active`
     /// index, so mark it failed with a bare update that appends no entry.
-    pub(super) async fn abandon(&self, thread: u64, run: u64, error: &RpcError) {
+    pub(super) async fn abandon(&self, thread: u64, run: u64, error: &Error) {
         let failed = exec(
             &mut *self.db.lock().await,
             "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
@@ -251,7 +252,7 @@ impl Workspace {
         entries: Vec<Output>,
         live: Option<LiveTurn>,
         snapshot: Option<SessionSnapshot>,
-    ) -> Result<Vec<(String, ToolCallStatus)>, RpcError> {
+    ) -> Result<Vec<(String, ToolCallStatus)>, Error> {
         let mut db = self.db.lock().await;
         let current = self
             .workers
@@ -345,7 +346,7 @@ async fn handoff_note(
     thread: u64,
     cwd: &str,
     from: &str,
-) -> Result<String, RpcError> {
+) -> Result<String, Error> {
     let turns = rows(
         db,
         "SELECT text, coalesce(answer, '') FROM runs WHERE thread = ?1 AND kind = 'prompt'
@@ -354,7 +355,7 @@ async fn handoff_note(
     )
     .await?
     .map(|mut row| Ok((row.str(0)?, row.str(1)?)))
-    .collect::<Result<Vec<_>, RpcError>>()?;
+    .collect::<Result<Vec<_>, Error>>()?;
     Ok(handoff::note(
         cwd,
         from,

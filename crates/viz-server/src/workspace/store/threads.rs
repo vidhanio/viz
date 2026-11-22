@@ -12,9 +12,10 @@ use super::{
 };
 use crate::{
     acp::{Desired, Selection},
+    error::Error,
     wire::{
-        AttachmentCapabilities, Command, ConfigOption, QueuedInput, RpcError, RunId, ThreadId,
-        ThreadState, ThreadStatus, ThreadSummary, Usage,
+        AttachmentCapabilities, Command, ConfigOption, QueuedInput, RunId, ThreadId, ThreadState,
+        ThreadStatus, ThreadSummary, Usage,
     },
 };
 
@@ -48,9 +49,9 @@ pub(in crate::workspace) struct Binding {
 pub(in crate::workspace) async fn binding(
     db: &mut Connection,
     thread: u64,
-) -> Result<Binding, RpcError> {
+) -> Result<Binding, Error> {
     let mut row = row(db, "SELECT harness, cwd, project, worktree, parent, parent_environment, session FROM threads WHERE id = ?1", [thread.into()]).await?
-        .ok_or_else(|| missing(thread))?;
+        .ok_or_else(|| Error::NoThread(ThreadId(thread)))?;
     Ok(Binding {
         harness: row.str(0)?,
         cwd: row.str(1)?,
@@ -62,18 +63,11 @@ pub(in crate::workspace) async fn binding(
     })
 }
 
-pub(in crate::workspace) async fn require(
-    db: &mut Connection,
-    thread: u64,
-) -> Result<(), RpcError> {
+pub(in crate::workspace) async fn require(db: &mut Connection, thread: u64) -> Result<(), Error> {
     row(db, "SELECT id FROM threads WHERE id = ?1", [thread.into()])
         .await?
         .map(|_| ())
-        .ok_or_else(|| missing(thread))
-}
-
-pub(in crate::workspace) fn missing(thread: u64) -> RpcError {
-    RpcError::not_found(format!("no thread {thread}"))
+        .ok_or_else(|| Error::NoThread(ThreadId(thread)))
 }
 
 pub(in crate::workspace) struct NewThread<'a> {
@@ -90,7 +84,7 @@ pub(in crate::workspace) struct NewThread<'a> {
 pub(in crate::workspace) async fn create_thread(
     db: &mut Connection,
     new: &NewThread<'_>,
-) -> Result<u64, RpcError> {
+) -> Result<u64, Error> {
     let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
         new.harness.into(), new.cwd.into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
@@ -107,7 +101,7 @@ pub(in crate::workspace) async fn list_threads(
     archived: Option<bool>,
     project: Option<&str>,
     workspace: &Workspace,
-) -> Result<Vec<ThreadSummary>, RpcError> {
+) -> Result<Vec<ThreadSummary>, Error> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
             t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.worktree, {STATUS_COLUMNS}
@@ -142,13 +136,13 @@ pub(in crate::workspace) async fn list_threads(
 pub(in crate::workspace) async fn state(
     db: &mut Connection,
     thread: u64,
-) -> Result<ThreadState, RpcError> {
+) -> Result<ThreadState, Error> {
     let query = format!(
         "SELECT t.harness, t.project, t.cwd, t.session, t.worktree, {STATUS_COLUMNS} FROM threads AS t WHERE t.id = ?1"
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
-        .ok_or_else(|| missing(thread))?;
+        .ok_or_else(|| Error::NoThread(ThreadId(thread)))?;
     let session: SavedSession = from_json(&row.str(3)?)?;
     let queue = rows(
         db,
@@ -164,7 +158,7 @@ pub(in crate::workspace) async fn state(
             attachment_count: row.u64(2)?,
         })
     })
-    .collect::<Result<_, RpcError>>()?;
+    .collect::<Result<_, Error>>()?;
     Ok(ThreadState {
         harness: row.str(0)?,
         project: row.opt_str(1)?,
@@ -182,7 +176,7 @@ pub(in crate::workspace) async fn state(
     })
 }
 
-fn status(row: &mut Row, first: usize) -> Result<ThreadStatus, RpcError> {
+fn status(row: &mut Row, first: usize) -> Result<ThreadStatus, Error> {
     let last = row.opt_str(first + 2)?;
     let last = last.as_deref().map(runs::decode_status).transpose()?;
     Ok(threads::status(

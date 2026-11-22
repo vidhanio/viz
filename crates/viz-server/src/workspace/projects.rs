@@ -11,7 +11,8 @@ use super::{
 };
 use crate::{
     acp,
-    wire::{Harness, Project, RpcError},
+    error::Error,
+    wire::{Harness, Project},
 };
 
 impl Workspace {
@@ -19,9 +20,9 @@ impl Workspace {
         &self,
         path: &str,
         name: Option<String>,
-    ) -> Result<Project, RpcError> {
+    ) -> Result<Project, Error> {
         if path.is_empty() || name.as_deref() == Some("") {
-            return Err(RpcError::invalid("project path and name must not be empty"));
+            return Err(Error::invalid("project path and name must not be empty"));
         }
         let canonical = store::directory(Path::new(path)).await?;
         let path = store::path_text(&canonical)?;
@@ -38,13 +39,13 @@ impl Workspace {
             [path.into(), name.as_str().into(), created_at.into()]).await?;
         drop(db);
         if count == 0 {
-            return Err(RpcError::invalid(format!("project already exists: {path}")));
+            return Err(Error::invalid(format!("project already exists: {path}")));
         }
         self.changed(None);
         Ok(store::project_at(path.to_owned(), name, created_at))
     }
 
-    pub(super) async fn remove_project(&self, project: &str) -> Result<(), RpcError> {
+    pub(super) async fn remove_project(&self, project: &str) -> Result<(), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let threads = rows(
@@ -60,7 +61,7 @@ impl Workspace {
         )
         .await?;
         if count == 0 {
-            return Err(RpcError::not_found(format!("no project {project}")));
+            return Err(Error::NoProject(project.to_owned()));
         }
         tx.commit().await?;
         drop(db);
@@ -102,7 +103,7 @@ impl Workspace {
         &self,
         name: &str,
         model: Option<&str>,
-    ) -> Result<Vec<crate::wire::ConfigOption>, RpcError> {
+    ) -> Result<Vec<crate::wire::ConfigOption>, Error> {
         let (_, config) = self.harness(Some(name))?;
         let stored = {
             let mut db = self.db.lock().await;

@@ -23,11 +23,12 @@ use viz_protocol::{Empty, EnvironmentList, ListEnvironments, Method, Unwatch, Wa
 use crate::{
     config::Config,
     environments::Peers,
+    error::{Error, RequestError},
     rpc::{self, Route, handlers},
     tasks::{self, Tasks},
     wire::{
-        HEALTH_PATH, Hello, HelloParams, Id, PROTOCOL_VERSION, RPC_PATH, Request, Response,
-        RpcError, encode, params, raw_params,
+        HEALTH_PATH, Hello, HelloParams, Id, PROTOCOL_VERSION, RPC_PATH, Request, Response, encode,
+        params, raw_params,
     },
     workspace::{self, Workspace},
 };
@@ -109,7 +110,7 @@ impl Server {
             .context("serving viz RPC")
     }
 
-    async fn call(&self, method: &str, raw: &str) -> Result<Value, RpcError> {
+    async fn call(&self, method: &str, raw: &str) -> Result<Value, Error> {
         if let Some(call) = Route::find(ROUTES, method) {
             call(self, raw).await
         } else if let Some(call) = Route::find(tasks::ROUTES, method) {
@@ -121,9 +122,9 @@ impl Server {
         }
     }
 
-    fn hello(&self, params: &HelloParams) -> Result<Hello, RpcError> {
+    fn hello(&self, params: &HelloParams) -> Result<Hello, Error> {
         if params.protocol != PROTOCOL_VERSION {
-            return Err(RpcError::invalid(format!(
+            return Err(Error::invalid(format!(
                 "expected protocol {PROTOCOL_VERSION}"
             )));
         }
@@ -189,7 +190,9 @@ async fn peer_rpc(
     }
     let request = match parse_request(&body) {
         Ok(request) => request,
-        Err(error) => return Json(Response::<Value>::new(Id::Null, Err(error))).into_response(),
+        Err(error) => {
+            return Json(Response::<Value>::new(Id::Null, Err(error.into()))).into_response();
+        }
     };
     let response = if request.method == HelloParams::NAME {
         params::<HelloParams>(&request).and_then(|params| {
@@ -198,7 +201,7 @@ async fn peer_rpc(
                 .as_deref()
                 .is_some_and(|id| id != listener.server.environment)
             {
-                return Err(RpcError::invalid(
+                return Err(Error::invalid(
                     "peer RPC must address the receiving environment",
                 ));
             }
@@ -216,7 +219,7 @@ async fn peer_rpc(
             return (StatusCode::FORBIDDEN, "unconfigured source environment").into_response();
         };
         let result = tokio::select! {
-            () = listener.server.stop.cancelled() => Err(RpcError::unavailable("server is stopping").into()),
+            () = listener.server.stop.cancelled() => Err(Error::unavailable("server is stopping").into()),
             result = dispatch(&listener.server, raw_params(&request), source) => result,
         };
         match result {
@@ -227,31 +230,27 @@ async fn peer_rpc(
             }
         }
     } else if matches!(request.method_name(), Watch::NAME | Unwatch::NAME) {
-        Err(RpcError::new(-32601, "watch requires a WebSocket"))
+        Err(RequestError::UnknownMethod("watch requires a WebSocket".into()).into())
     } else {
         tokio::select! {
-            () = listener.server.stop.cancelled() => Err(RpcError::unavailable("server is stopping")),
+            () = listener.server.stop.cancelled() => Err(Error::unavailable("server is stopping")),
             result = listener.server.call(request.method_name(), raw_params(&request)) => result,
         }
     };
     Json(Response::new(request.id, response)).into_response()
 }
 
-fn parse_request(data: &[u8]) -> Result<Request<'_>, RpcError> {
+fn parse_request(data: &[u8]) -> Result<Request<'_>, RequestError> {
     let request: Request<'_> = serde_json::from_slice(data).map_err(|error| {
-        RpcError::new(
-            if error.is_syntax() || error.is_eof() {
-                -32700
-            } else {
-                -32600
-            },
-            error.to_string(),
-        )
+        if error.is_syntax() || error.is_eof() {
+            RequestError::Malformed(error.to_string())
+        } else {
+            RequestError::NotARequest(error.to_string())
+        }
     })?;
     if request.id == Id::Null {
-        return Err(RpcError::new(
-            -32600,
-            "expected a JSON-RPC 2.0 request with an ID",
+        return Err(RequestError::NotARequest(
+            "expected a JSON-RPC 2.0 request with an ID".into(),
         ));
     }
     Ok(request)

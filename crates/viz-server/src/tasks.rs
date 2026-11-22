@@ -29,8 +29,9 @@ use viz_protocol::{
 use self::store::{cancel_task, parse_status, prior_request, stop_exists, task_phase};
 use crate::{
     environments::Peers,
+    error::Error,
     rpc::handlers,
-    wire::{Attachment, RpcError, RunId, Task, TaskStatus, ThreadId},
+    wire::{Attachment, RunId, Task, TaskStatus, ThreadId},
     workspace::{Workspace, active_run_from, sql, sql::Connection},
 };
 
@@ -194,7 +195,7 @@ impl Tasks {
         }
     }
 
-    pub(crate) async fn list(&self, parent: Option<u64>) -> Result<Vec<Task>, RpcError> {
+    pub(crate) async fn list(&self, parent: Option<u64>) -> Result<Vec<Task>, Error> {
         let mut db = self.workspace.db.lock().await;
         let rows = sql::rows(&mut db, LIST_TASKS_SQL, [parent.into()]).await?;
         drop(db);
@@ -206,15 +207,13 @@ impl Tasks {
         parent: u64,
         turn: Option<u64>,
         mut input: Delegate,
-    ) -> Result<Task, RpcError> {
+    ) -> Result<Task, Error> {
         let environment = input.environment.as_deref().unwrap_or(&self.peers.local);
         if environment != self.peers.local && self.peers.get(environment).is_none() {
-            return Err(RpcError::invalid(format!(
-                "unknown environment {environment}"
-            )));
+            return Err(Error::invalid(format!("unknown environment {environment}")));
         }
         if parent == 0 || input.thread == Some(0) || input.text.trim().is_empty() {
-            return Err(RpcError::invalid(
+            return Err(Error::invalid(
                 "task requires a parent, a valid target, and nonempty text",
             ));
         }
@@ -223,7 +222,7 @@ impl Tasks {
             .as_ref()
             .is_some_and(|id| id.is_empty() || id.len() > 256)
         {
-            return Err(RpcError::invalid("task requestId must contain 1–256 bytes"));
+            return Err(Error::invalid("task requestId must contain 1–256 bytes"));
         }
         if let Some(request_id) = input.request_id.as_deref() {
             let mut db = self.workspace.db.lock().await;
@@ -252,12 +251,12 @@ impl Tasks {
             } else {
                 let parent_run = active_run_from(&mut db, parent).await?;
                 if turn.is_some() && turn != parent_run {
-                    return Err(RpcError::invalid("the delegating run is no longer active"));
+                    return Err(Error::invalid("the delegating run is no longer active"));
                 }
                 if let Some(run) = parent_run
                     && stop_exists(&mut db, parent, run).await?
                 {
-                    return Err(RpcError::invalid("the delegating run is being cancelled"));
+                    return Err(Error::invalid("the delegating run is being cancelled"));
                 }
                 let id = Uuid::new_v4().to_string();
                 let title = task_title(&input.text);
@@ -265,12 +264,12 @@ impl Tasks {
                     task: id.clone(),
                     origin_environment: self.peers.local.clone(),
                     parent: NonZeroU64::new(parent)
-                        .ok_or_else(|| RpcError::invalid("task requires a parent thread"))?,
+                        .ok_or_else(|| Error::invalid("task requires a parent thread"))?,
                     thread: input
                         .thread
                         .map(|thread| {
                             NonZeroU64::new(thread)
-                                .ok_or_else(|| RpcError::invalid("invalid task thread"))
+                                .ok_or_else(|| Error::invalid("invalid task thread"))
                         })
                         .transpose()?,
                     target: TaskTarget {
@@ -282,8 +281,7 @@ impl Tasks {
                     },
                     text: input.text,
                     attachments: input.attachments,
-                })
-                .map_err(RpcError::internal)?;
+                })?;
                 sql::exec(
                     &mut db,
                     "INSERT INTO agent_tasks (id, parent, parent_run, environment, status, title, payload, request_id, phase, delivery)
@@ -309,10 +307,10 @@ impl Tasks {
         parent: Option<u64>,
         wait: bool,
         timeout_ms: Option<u64>,
-    ) -> Result<TaskStatusResult, RpcError> {
+    ) -> Result<TaskStatusResult, Error> {
         let timeout_ms = timeout_ms.unwrap_or(DEFAULT_WAIT);
         if timeout_ms > MAX_WAIT {
-            return Err(RpcError::invalid("task wait is limited to 120 seconds"));
+            return Err(Error::invalid("task wait is limited to 120 seconds"));
         }
         if !wait {
             return Ok(TaskStatusResult {
@@ -326,7 +324,7 @@ impl Tasks {
         .await
     }
 
-    pub(crate) async fn cancel(&self, task: &str, parent: Option<u64>) -> Result<Task, RpcError> {
+    pub(crate) async fn cancel(&self, task: &str, parent: Option<u64>) -> Result<Task, Error> {
         let current = {
             let mut db = self.workspace.db.lock().await;
             let mut tx = db.transaction().await?;
@@ -353,7 +351,7 @@ impl Tasks {
             .task)
     }
 
-    async fn admitted(&self, id: &str, parent: u64) -> Result<Task, RpcError> {
+    async fn admitted(&self, id: &str, parent: u64) -> Result<Task, Error> {
         Ok(self
             .wait_for(id, Some(parent), ADMISSION_GRACE, |task| {
                 task.thread.is_some() || terminal(task.status)
@@ -368,7 +366,7 @@ impl Tasks {
         parent: Option<u64>,
         timeout: Duration,
         done: impl Fn(&Task) -> bool,
-    ) -> Result<TaskStatusResult, RpcError> {
+    ) -> Result<TaskStatusResult, Error> {
         let mut changes = self.subscribe();
         let deadline = Instant::now() + timeout;
         loop {
@@ -384,7 +382,7 @@ impl Tasks {
         }
     }
 
-    async fn read(&self, id: &str, parent: Option<u64>) -> Result<Task, RpcError> {
+    async fn read(&self, id: &str, parent: Option<u64>) -> Result<Task, Error> {
         self.read_from(&mut *self.workspace.db.lock().await, id, parent)
             .await
     }
@@ -394,14 +392,14 @@ impl Tasks {
         db: &mut Connection,
         id: &str,
         parent: Option<u64>,
-    ) -> Result<Task, RpcError> {
+    ) -> Result<Task, Error> {
         let row = sql::row(db, READ_TASK_SQL, [id.into(), parent.into()])
             .await?
-            .ok_or_else(|| RpcError::not_found(format!("no task {id}")))?;
+            .ok_or_else(|| Error::NoTask(id.to_owned()))?;
         self.task(row)
     }
 
-    fn task(&self, mut row: sql::Row) -> Result<Task, RpcError> {
+    fn task(&self, mut row: sql::Row) -> Result<Task, Error> {
         let environment = row.str(2)?;
         Ok(Task {
             id: row.str(0)?,

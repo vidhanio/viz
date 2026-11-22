@@ -9,23 +9,24 @@ use super::super::{
     sql::{Connection, row, rows},
     worktree,
 };
-use crate::wire::{Project, RpcError, ThreadWorktree};
+use crate::{
+    error::Error,
+    wire::{Project, ThreadWorktree},
+};
 
-pub(in crate::workspace) async fn directory(path: &Path) -> Result<PathBuf, RpcError> {
+pub(in crate::workspace) async fn directory(path: &Path) -> Result<PathBuf, Error> {
     let path = if let Ok(rest) = path.strip_prefix("~") {
-        PathBuf::from(env::var_os("HOME").ok_or_else(|| RpcError::invalid("HOME is not set"))?)
+        PathBuf::from(env::var_os("HOME").ok_or_else(|| Error::invalid("HOME is not set"))?)
             .join(rest)
     } else {
         path.to_path_buf()
     };
     let canonical = tokio::fs::canonicalize(&path)
         .await
-        .map_err(|e| RpcError::invalid(format!("cannot read directory {}: {e}", path.display())))?;
-    let metadata = tokio::fs::metadata(&canonical)
-        .await
-        .map_err(RpcError::internal)?;
+        .map_err(|e| Error::invalid(format!("cannot read directory {}: {e}", path.display())))?;
+    let metadata = tokio::fs::metadata(&canonical).await?;
     if !metadata.is_dir() {
-        return Err(RpcError::invalid(format!(
+        return Err(Error::invalid(format!(
             "not a directory: {}",
             path.display()
         )));
@@ -33,22 +34,22 @@ pub(in crate::workspace) async fn directory(path: &Path) -> Result<PathBuf, RpcE
     Ok(canonical)
 }
 
-pub(in crate::workspace) fn path_text(path: &Path) -> Result<&str, RpcError> {
+pub(in crate::workspace) fn path_text(path: &Path) -> Result<&str, Error> {
     path.to_str()
-        .ok_or_else(|| RpcError::invalid("working directory is not UTF-8"))
+        .ok_or_else(|| Error::invalid("working directory is not UTF-8"))
 }
 
 pub(in crate::workspace) async fn project(
     db: &mut Connection,
     path: &str,
-) -> Result<Project, RpcError> {
+) -> Result<Project, Error> {
     let mut row = row(
         db,
         "SELECT name, created_at FROM projects WHERE path = ?1",
         [path.into()],
     )
     .await?
-    .ok_or_else(|| RpcError::not_found(format!("no project {path}")))?;
+    .ok_or_else(|| Error::NoProject(path.to_owned()))?;
     Ok(project_at(path.to_owned(), row.str(0)?, row.i64(1)?))
 }
 
@@ -72,7 +73,7 @@ pub(in crate::workspace) fn thread_worktree(path: String) -> ThreadWorktree {
     }
 }
 
-pub(in crate::workspace) async fn projects(db: &mut Connection) -> Result<Vec<Project>, RpcError> {
+pub(in crate::workspace) async fn projects(db: &mut Connection) -> Result<Vec<Project>, Error> {
     rows(
         db,
         "SELECT path, name, created_at FROM projects ORDER BY name, path",

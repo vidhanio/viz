@@ -9,6 +9,7 @@ mod acp;
 mod config;
 mod daemon;
 mod environments;
+mod error;
 mod rpc;
 mod server;
 mod tasks;

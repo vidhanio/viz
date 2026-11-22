@@ -46,7 +46,8 @@ pub(crate) use self::{
 use crate::{
     acp::Mcp,
     config::{Config, HarnessConfig},
-    wire::{Attachment, Entry, EntryPage, NewEntry, Origin, RpcError, ThreadState, WaitResult},
+    error::Error,
+    wire::{Attachment, Entry, EntryPage, NewEntry, Origin, ThreadState, WaitResult},
 };
 
 pub(crate) struct Workspace {
@@ -113,7 +114,7 @@ impl Workspace {
         }))
     }
 
-    pub(crate) async fn resume(self: &Arc<Self>) -> Result<(), RpcError> {
+    pub(crate) async fn resume(self: &Arc<Self>) -> Result<(), Error> {
         for row in rows(
             &mut *self.db.lock().await,
             "SELECT DISTINCT thread FROM runs WHERE status = 'queued'",
@@ -126,7 +127,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub(crate) async fn state(&self, thread: u64) -> Result<ThreadState, RpcError> {
+    pub(crate) async fn state(&self, thread: u64) -> Result<ThreadState, Error> {
         let mut db = self.db.lock().await;
         let mut state = store::state(&mut db, thread).await?;
         state.live = self.updates.latest(thread);
@@ -139,7 +140,7 @@ impl Workspace {
         thread: u64,
         before: Option<u64>,
         limit: usize,
-    ) -> Result<EntryPage, RpcError> {
+    ) -> Result<EntryPage, Error> {
         let mut db = self.db.lock().await;
         store::entries(&mut db, thread, before, limit.clamp(1, 200)).await
     }
@@ -149,16 +150,12 @@ impl Workspace {
         thread: u64,
         after: u64,
         limit: usize,
-    ) -> Result<Vec<Entry>, RpcError> {
+    ) -> Result<Vec<Entry>, Error> {
         let mut db = self.db.lock().await;
         store::entries_after(&mut db, thread, after, limit.clamp(1, 200)).await
     }
 
-    pub(crate) async fn run_origin(
-        &self,
-        thread: u64,
-        run: u64,
-    ) -> Result<Option<Origin>, RpcError> {
+    pub(crate) async fn run_origin(&self, thread: u64, run: u64) -> Result<Option<Origin>, Error> {
         let mut db = self.db.lock().await;
         runs::origin(&mut db, thread, run).await
     }
@@ -168,7 +165,7 @@ impl Workspace {
         thread: u64,
         requested: Option<u64>,
         timeout: Duration,
-    ) -> Result<WaitResult, RpcError> {
+    ) -> Result<WaitResult, Error> {
         let mut changes = self.subscribe();
         let deadline = time::Instant::now() + timeout;
         let timer = time::sleep_until(deadline);
@@ -222,7 +219,7 @@ impl Workspace {
         &self,
         thread: u64,
         ids: &[String],
-    ) -> Result<Vec<Attachment>, RpcError> {
+    ) -> Result<Vec<Attachment>, Error> {
         let mut db = self.db.lock().await;
         store::require(&mut db, thread).await?;
         attachments::inputs(&mut db, thread, ids).await
@@ -239,7 +236,7 @@ impl Workspace {
         sequence: u64,
         text: &str,
         mode: WakeMode,
-    ) -> Result<Option<u64>, RpcError> {
+    ) -> Result<Option<u64>, Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let previous = row(
@@ -303,9 +300,9 @@ impl Workspace {
         Ok(run)
     }
 
-    fn harness(&self, name: Option<&str>) -> Result<(&str, &HarnessConfig), RpcError> {
+    fn harness(&self, name: Option<&str>) -> Result<(&str, &HarnessConfig), Error> {
         let name = name.or(self.default_harness.as_deref()).ok_or_else(|| {
-            RpcError::invalid(if self.harnesses.is_empty() {
+            Error::invalid(if self.harnesses.is_empty() {
                 "no ACP harness configured"
             } else {
                 "no default ACP harness configured"
@@ -314,7 +311,7 @@ impl Workspace {
         self.harnesses
             .get_key_value(name)
             .map(|(name, cfg)| (name.as_str(), cfg))
-            .ok_or_else(|| RpcError::invalid(format!("ACP harness {name} is not configured")))
+            .ok_or_else(|| Error::invalid(format!("ACP harness {name} is not configured")))
     }
 
     /// Resolve presentation from current config, not from the saved thread.
@@ -329,7 +326,7 @@ impl Workspace {
         &self,
         db: &mut crate::workspace::sql::Connection,
         project: Option<&str>,
-    ) -> Result<PathBuf, RpcError> {
+    ) -> Result<PathBuf, Error> {
         match project {
             Some(project) => Ok(PathBuf::from(store::project(db, project).await?.path)),
             None => Ok(self.cwd.clone()),

@@ -15,7 +15,7 @@ use super::{
     store,
     worktree::{self, Placement},
 };
-use crate::wire::RpcError;
+use crate::error::Error;
 
 impl Workspace {
     /// Resolves `target` in `project`'s repository. `source` is the checkout
@@ -26,7 +26,7 @@ impl Workspace {
         source: &Path,
         target: &WorktreeTarget,
         title: &str,
-    ) -> Result<Placement, RpcError> {
+    ) -> Result<Placement, Error> {
         match target {
             WorktreeTarget::Local => Ok(Placement {
                 cwd: project.to_owned(),
@@ -51,7 +51,7 @@ impl Workspace {
         Path::new(path).starts_with(&self.worktrees)
     }
 
-    pub(super) async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, RpcError> {
+    pub(super) async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, Error> {
         let project = store::project(&mut *self.db.lock().await, project).await?;
         let listed = worktree::list(Path::new(&project.path)).await?;
         let mut db = self.db.lock().await;
@@ -93,9 +93,9 @@ impl Workspace {
         db: &mut crate::workspace::sql::Connection,
         path: &str,
         except: Option<u64>,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         if !self.managed(path) {
-            return Err(RpcError::invalid(format!(
+            return Err(Error::invalid(format!(
                 "{path} is not a worktree viz created"
             )));
         }
@@ -106,7 +106,7 @@ impl Workspace {
         )
         .await?
         {
-            return Err(RpcError::invalid(format!(
+            return Err(Error::invalid(format!(
                 "thread {} still runs in {path}",
                 user.u64(0)?
             )));
@@ -114,7 +114,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub(super) async fn remove_worktree(&self, path: &str, force: bool) -> Result<(), RpcError> {
+    pub(super) async fn remove_worktree(&self, path: &str, force: bool) -> Result<(), Error> {
         self.removable(&mut *self.db.lock().await, path, None)
             .await?;
         worktree::remove(Path::new(path), path, force).await?;
@@ -124,7 +124,7 @@ impl Workspace {
 
     /// Moves an idle thread. Its harness stops; the next run starts a new
     /// session in the new directory (see [`store::SavedSession::handoff`]).
-    pub(super) async fn move_thread(self: &Arc<Self>, args: MoveThread) -> Result<Moved, RpcError> {
+    pub(super) async fn move_thread(self: &Arc<Self>, args: MoveThread) -> Result<Moved, Error> {
         let thread = args.thread.0;
         let (binding, title) = {
             let mut db = self.db.lock().await;
@@ -145,7 +145,7 @@ impl Workspace {
         let project = binding
             .project
             .clone()
-            .ok_or_else(|| RpcError::invalid("only a project thread can move to a worktree"))?;
+            .ok_or_else(|| Error::invalid("only a project thread can move to a worktree"))?;
         let placement = self
             .place(&project, Path::new(&binding.cwd), &args.worktree, &title)
             .await?;
@@ -166,7 +166,7 @@ impl Workspace {
         thread: u64,
         before: store::Binding,
         placement: Placement,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let driver = {
             let mut db = self.db.lock().await;
             store::require(&mut db, thread).await?;
@@ -183,12 +183,12 @@ impl Workspace {
         thread: u64,
         before: &store::Binding,
         placement: &Placement,
-    ) -> Result<(), RpcError> {
+    ) -> Result<(), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let current = store::binding(&mut tx, thread).await?;
         if current.cwd != before.cwd || current.worktree != before.worktree {
-            return Err(RpcError::invalid("the thread moved concurrently"));
+            return Err(Error::invalid("the thread moved concurrently"));
         }
         idle(&mut tx, thread).await?;
         let prompted = row(
@@ -222,7 +222,7 @@ impl Workspace {
     }
 }
 
-async fn idle(db: &mut crate::workspace::sql::Connection, thread: u64) -> Result<(), RpcError> {
+async fn idle(db: &mut crate::workspace::sql::Connection, thread: u64) -> Result<(), Error> {
     if row(
         db,
         "SELECT 1 FROM runs WHERE thread = ?1 AND status IN ('queued', 'running') LIMIT 1",
@@ -231,7 +231,7 @@ async fn idle(db: &mut crate::workspace::sql::Connection, thread: u64) -> Result
     .await?
     .is_some()
     {
-        return Err(RpcError::invalid("stop the thread's runs before moving it"));
+        return Err(Error::invalid("stop the thread's runs before moving it"));
     }
     Ok(())
 }
