@@ -79,6 +79,8 @@ pub struct GitHub(Arc<Inner>);
 
 struct Inner {
     host: String,
+    api_origin: String,
+    enterprise_server: bool,
     auth: OnceCell<Authenticated>,
     requests: Mutex<Requests>,
 }
@@ -110,7 +112,7 @@ impl fmt::Debug for GitHub {
 }
 
 impl GitHub {
-    /// Set the hostname used for both gh authentication and HTTPS requests.
+    /// Use the web hostname for GitHub.com, Enterprise Server, or GHE.com.
     ///
     /// # Errors
     /// Returns an error if the hostname is invalid.
@@ -121,8 +123,16 @@ impl GitHub {
         if !host.eq_ignore_ascii_case(normalized) || url.domain().is_none() {
             return Err(Error::Invalid("GitHub host"));
         }
+        let cloud = normalized == "github.com" || normalized.ends_with(".ghe.com");
+        let api_origin = if cloud {
+            format!("https://api.{normalized}")
+        } else {
+            format!("https://{normalized}")
+        };
         Ok(Self(Arc::new(Inner {
             host: normalized.to_owned(),
+            api_origin,
+            enterprise_server: !cloud,
             auth: OnceCell::new(),
             requests: Mutex::default(),
         })))
@@ -172,13 +182,8 @@ impl GitHub {
                 }
                 let token = String::from_utf8(output.stdout).map_err(|_| Error::LoggedOut)?;
                 let token = Secret::Inline(token.trim().to_owned());
-                let base = if self.host() == "github.com" {
-                    "https://api.github.com".to_owned()
-                } else {
-                    format!("https://{}", self.host())
-                };
                 let api = Octocrab::builder()
-                    .base_uri(base)
+                    .base_uri(self.0.api_origin.as_str())
                     .map_err(|_| Error::Transport)?
                     .personal_token(token.resolve().map_err(|_| Error::LoggedOut)?)
                     .build()
@@ -189,10 +194,10 @@ impl GitHub {
     }
 
     pub(super) fn rest(&self, path: &str) -> String {
-        if self.host() == "github.com" {
-            path.to_owned()
-        } else {
+        if self.0.enterprise_server {
             format!("/api/v3{path}")
+        } else {
+            path.to_owned()
         }
     }
 
@@ -260,10 +265,10 @@ impl GitHub {
         &self,
         data: &P,
     ) -> Result<T, Error> {
-        let route = if self.host() == "github.com" {
-            "/graphql"
-        } else {
+        let route = if self.0.enterprise_server {
             "/api/graphql"
+        } else {
+            "/graphql"
         };
         self.post(route, data).await
     }
