@@ -12,7 +12,7 @@ use crate::{
     app::{Desktop, thread_title},
     server::{Command, ThreadChange},
     sidebar,
-    theme::{DIALOG_INSET, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
+    theme::{DIALOG_INSET, HAIRLINE, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
     ui,
 };
 
@@ -447,7 +447,11 @@ fn result_row(result: ResultRow<'_>, active: bool, s: &Desktop, t: &Theme) -> El
         } else {
             Color::TRANSPARENT
         })
-        .hover_group()
+        .hover_group();
+    if active {
+        item = item.focus_ring_for(FIELD, HAIRLINE, -HAIRLINE, t.accent);
+    }
+    item = item
         .child(
             icon(glyph, ICON)
                 .color(if active { t.accent_text } else { t.muted })

@@ -7,7 +7,7 @@ use crate::{
     app::Desktop,
     motion,
     server::Command,
-    theme::{ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, S12, S16, S32, Theme},
+    theme::{HAIRLINE, ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, S12, S16, S32, Theme},
     ui,
 };
 
@@ -281,7 +281,7 @@ pub(super) fn drawer(s: &Desktop, t: &Theme) -> Option<El> {
 fn slash_row(command: &SlashCommand, index: usize, highlighted: bool, t: &Theme) -> El {
     let id = command.name.clone();
     let label = format!("/{}", command.name);
-    row()
+    let mut item = row()
         .key(format!("slash-{}", command.name))
         .role("option")
         .label(&label)
@@ -324,7 +324,11 @@ fn slash_row(command: &SlashCommand, index: usize, highlighted: bool, t: &Theme)
                 .max_w(HINT_MAX_WIDTH)
                 .truncate()
                 .a11y_hidden()
-        }))
+        }));
+    if highlighted {
+        item = item.focus_ring_for("draft", HAIRLINE, -HAIRLINE, t.accent);
+    }
+    item
 }
 
 fn file_row(path: &str, index: usize, highlighted: bool, t: &Theme) -> El {
@@ -333,7 +337,7 @@ fn file_row(path: &str, index: usize, highlighted: bool, t: &Theme) -> El {
         Some((dir, name)) if !name.is_empty() => (Some(dir), name),
         _ => (None, path),
     };
-    row()
+    let mut item = row()
         .key(format!("file-{path}"))
         .role("option")
         .label(path)
@@ -374,7 +378,11 @@ fn file_row(path: &str, index: usize, highlighted: bool, t: &Theme) -> El {
                 .min_w(0.0)
                 .truncate_middle()
                 .a11y_hidden()
-        }))
+        }));
+    if highlighted {
+        item = item.focus_ring_for("draft", HAIRLINE, -HAIRLINE, t.accent);
+    }
+    item
 }
 
 pub(super) fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {

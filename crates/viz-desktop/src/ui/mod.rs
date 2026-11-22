@@ -390,9 +390,9 @@ pub fn kbd(key: &str, t: &Theme) -> El {
     Keybind::new(&[COMMAND_KEY, key]).build(&t.k)
 }
 
-/// A horizontal hairline across its parent.
+/// A horizontal hairline across its parent, snapped to whole device pixels.
 pub fn rule(t: &Theme) -> El {
-    el().w_full().h(HAIRLINE).fill(t.hairline).a11y_hidden()
+    rune::hairline(t.hairline).w_full().a11y_hidden()
 }
 
 /// A section title: small, medium, muted.
@@ -974,7 +974,7 @@ pub fn toast<S: 'static>(
     title: &str,
     detail: Option<&str>,
     mark: El,
-    close: impl Fn(&mut S) + 'static,
+    close: impl Fn(&mut S, &mut Tx) + 'static,
     t: &Theme,
 ) -> El {
     let k = &t.overlay;
@@ -1003,7 +1003,7 @@ pub fn toast<S: 'static>(
         );
     }
     let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::GhostMuted, Size::Small)
-        .on_press(close)
+        .on_press_tx(close)
         .build(k)
         .key("close")
         .mt(-S2)

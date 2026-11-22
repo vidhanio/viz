@@ -136,21 +136,29 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
 
 /// The toast stack, when there's anything in it.
 fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
-    if s.toasts.is_empty() {
+    let entries = s.toasts.entries();
+    if entries.is_empty() {
         return None;
     }
-    let region = s.toasts.iter().fold(ToastRegion::new(), |region, toast| {
-        let id = toast.id;
-        region.toast(ui::toast(
-            format!("toast-{id}"),
-            &toast.title,
-            toast.detail.as_deref(),
-            ui::lead(ui::dot(t.danger), t.ui.line_height),
-            move |s: &mut Desktop| s.dismiss(id),
-            t,
-        ))
-    });
-    Some(region.build(&t.k))
+    let start = entries.len().saturating_sub(rune_kit::toast_stack::VISIBLE);
+    let region = entries[start..]
+        .iter()
+        .fold(ToastRegion::new(), |region, entry| {
+            let id = entry.id;
+            region.toast(ui::toast(
+                format!("toast-{id}"),
+                &entry.options.title,
+                entry.options.detail.as_deref(),
+                ui::lead(ui::dot(t.danger), t.ui.line_height),
+                move |s: &mut Desktop, tx| s.dismiss(id, tx),
+                t,
+            ))
+        });
+    Some(
+        region
+            .build(&t.k)
+            .on_hover_change(|s: &mut Desktop, inside, tx| s.toast_hover(inside, tx)),
+    )
 }
 
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
@@ -205,7 +213,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     } else {
         false
     };
-    s.expire(clock) || completion || palette || tool_timer
+    s.expire(clock, tx) || completion || palette || tool_timer
 }
 
 #[derive(Parser)]

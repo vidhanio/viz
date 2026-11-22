@@ -16,6 +16,7 @@
 use rune::{El, Icon, ScrollFade, ScrollSpec, Span, Tx, col, el, icon, rich, row, text};
 use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
+    ScrollBar, ScrollBarStyle,
     diff::{FileDiff, LineKind},
 };
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
@@ -138,7 +139,8 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .scroll(ScrollSpec { stick_bottom: true })
                 .scroll_fade(ScrollFade::strength(S24).linear())
                 .scroll_anchor()
-                .child(body),
+                .child(body)
+                .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k)),
         )
 }
 

@@ -6,7 +6,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use rune::{Color, Edge, El, ScrollSpec, col, el, icon, row, text};
 use rune_kit::{
-    ButtonVariant, IconButtonVariant,
+    ButtonVariant, IconButtonVariant, Placement, ScrollBar, ScrollBarStyle, SegmentedControl,
     shell::{PaneState, SplitView, Toolbar},
 };
 
@@ -15,7 +15,7 @@ use crate::{
     motion::{self, DragOrder, Switch},
     theme::{
         CARD_INSET, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_INNER, S2, S4,
-        S6, S8, S12, S16, Size, TOOLBAR_HEIGHT, Theme,
+        S6, S8, S12, S16, Size, Theme,
     },
     ui,
 };
@@ -29,6 +29,7 @@ pub struct MotionDemo {
     shared: SharedState,
     cta_mode: CtaMode,
     diff_step: usize,
+    diff_mode: usize,
     live: LiveState,
     overlays: OverlayState,
     panel: PaneState,
@@ -132,6 +133,7 @@ impl Default for MotionDemo {
             shared: SharedState::default(),
             cta_mode: CtaMode::Send,
             diff_step: 0,
+            diff_mode: 0,
             live: LiveState::default(),
             overlays: OverlayState::default(),
             panel: PaneState::new(300.0).range(240.0, 420.0).collapsed(),
@@ -392,7 +394,8 @@ fn disclosure_card(demo: &MotionDemo, t: &Theme) -> El {
         })
         .scroll_anchor()
         .scroll_edge_fade(S12)
-        .child(inner);
+        .child(inner)
+        .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k));
 
     let launch_btn = ui::button("Launch msg", ButtonVariant::GhostMuted, Size::Small)
         .on_press_tx(|s: &mut Desktop, tx| {
@@ -971,12 +974,7 @@ fn shimmer_presence_card(demo: &MotionDemo, t: &Theme, overlays: &mut Vec<El>) -
         drawer_host = drawer_host.child(tucked_files_drawer(t));
     }
     if demo.overlays.popover {
-        let right = if demo.panel.is_open() {
-            demo.panel.width() + S16
-        } else {
-            S16
-        };
-        overlays.push(details_popover(right, t));
+        overlays.push(details_popover(t));
     }
 
     let controls = row()
@@ -1141,17 +1139,15 @@ fn tucked_files_drawer(t: &Theme) -> El {
         .child(chips)
 }
 
-fn details_popover(right: f32, t: &Theme) -> El {
-    col()
+fn details_popover(t: &Theme) -> El {
+    let card = col()
         .key("demo-details-popover")
-        .pin(None, Some(TOOLBAR_HEIGHT + S8), Some(right), None)
         .w(248.0)
         .padding(S12)
         .gap(S6)
         .radius(RADIUS_CARD)
         .fill(t.overlay.c.layer_01)
         .border(HAIRLINE, t.hairline)
-        .transition(motion::popover(-motion::TRAVEL_MICRO))
         .child(
             row()
                 .w_full()
@@ -1173,15 +1169,24 @@ fn details_popover(right: f32, t: &Theme) -> El {
         )
         .child(ui::rule(t))
         .child(
-            text("Flat opaque base16 overlay with 1px hairline and zero drop shadow.")
+            text("Anchored popover with viewport flip, 1px hairline, and zero drop shadow.")
                 .font(t.small)
                 .color(t.muted)
                 .wrap(),
-        )
+        );
+    motion::anchored_popover(card, "btn-popover", Placement::TopStart, S6)
 }
 
 fn diff_inspector(demo: &MotionDemo, t: &Theme) -> El {
     let (added, removed, _) = DIFF_STEPS[demo.diff_step % DIFF_STEPS.len()];
+    let mode_toggle = SegmentedControl::new(&["Unified", "Split"], Some(demo.diff_mode))
+        .label("Diff layout")
+        .fit()
+        .on_pick(|s: &mut Desktop, idx, _tx| {
+            with_demo(s, |d| d.diff_mode = idx);
+        })
+        .build(&t.k)
+        .key("diff-mode-segmented");
     col()
         .key("diff-inspector")
         .w_full()
@@ -1207,6 +1212,7 @@ fn diff_inspector(demo: &MotionDemo, t: &Theme) -> El {
                 )
                 .child(motion::rolling_diff_stat("panel-diff", added, removed, t)),
         )
+        .child(mode_toggle)
         .child(ui::rule(t))
         .child(diff_line(
             "+ pub const SETTLE: Spring = Spring::new(0.24, 0.0);",

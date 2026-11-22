@@ -8,7 +8,7 @@ use std::{
 };
 
 use rune::{TextEdit, Tx};
-use rune_kit::shell::PaneState;
+use rune_kit::{ToastEffect, ToastEvent, ToastPage, ToastStack, shell::PaneState};
 use tokio::sync::mpsc;
 use viz_client::protocol::{
     Attachment, ConfigOption, Environment, GitBranch, Harness, LaunchThread, OptionValue, Project,
@@ -27,10 +27,8 @@ use crate::{
     thread::Thread,
 };
 
-/// How long a toast stays up.
+/// How long a toast stays up while unpaused.
 const TOAST_LIFE: Duration = Duration::from_secs(6);
-/// The most toasts shown at once; older ones go first.
-const TOAST_MAX: usize = 3;
 /// The window's size on launch, in points; headless renders use it too.
 pub const WINDOW_SIZE: (f32, f32) = (1240.0, 760.0);
 
@@ -48,17 +46,13 @@ pub enum Status {
     Error(String),
 }
 
-/// A transient message in the bottom-right corner.
+/// Content carried by an entry in [`Desktop::toasts`].
 #[derive(Debug, Clone)]
-pub struct Toast {
-    /// Element key.
-    pub id: u64,
+pub struct ToastContent {
     /// One line.
     pub title: String,
     /// More, if there is any.
     pub detail: Option<String>,
-    /// When it goes, on the window clock.
-    due: f64,
 }
 
 /// A local draft. No ACP session is open until its first send.
@@ -169,9 +163,8 @@ pub struct Desktop {
     /// The sidebar's width and whether it's open.
     pub sidebar: PaneState,
     pub palette: Palette,
-    /// Toasts, oldest first.
-    pub toasts: Vec<Toast>,
-    next_toast: u64,
+    /// Coalesced toast stack with hover and hidden-window timer pause.
+    pub toasts: ToastStack<ToastContent>,
     /// The window has keyboard focus; notifications cover what the user can't
     /// see.
     focused: bool,
@@ -225,8 +218,7 @@ impl Desktop {
             navigation: Navigation::default(),
             sidebar: PaneState::new(256.0).range(220.0, 384.0),
             palette: Palette::default(),
-            toasts: Vec::new(),
-            next_toast: 0,
+            toasts: ToastStack::default(),
             focused: true,
             window_width: WINDOW_SIZE.0,
             tool_clock: crate::theme::now_ms(),
@@ -891,43 +883,94 @@ impl Desktop {
         self.summary(thread).map_or("New thread", thread_title)
     }
 
-    /// Shows a toast for [`TOAST_LIFE`].
+    /// Shows a toast for [`TOAST_LIFE`], coalescing identical copies in place.
     pub fn toast(&mut self, tx: &mut Tx, title: impl Into<String>, detail: Option<String>) {
-        let id = self.next_toast;
-        self.next_toast += 1;
-        self.toasts.push(Toast {
-            id,
-            title: title.into(),
-            detail,
-            due: tx.clock() + TOAST_LIFE.as_secs_f64(),
-        });
-        if self.toasts.len() > TOAST_MAX {
-            self.toasts.remove(0);
-        }
-        tx.wake_after(TOAST_LIFE);
+        let title = title.into();
+        let key = format!("{title}\n{}", detail.as_deref().unwrap_or_default());
+        self.step_toasts(
+            ToastEvent::Shown {
+                key,
+                options: ToastContent { title, detail },
+                secs: Some(TOAST_LIFE.as_secs_f64()),
+                now: tx.clock(),
+            },
+            tx,
+        );
     }
 
-    /// A toast that stays, for a preview scene (it has no `Tx` clock).
+    /// A persistent toast for a preview scene (no expiry clock).
     pub fn preview_toast(&mut self, title: &str, detail: &str) {
-        self.toasts.push(Toast {
-            id: self.next_toast,
-            title: title.into(),
-            detail: Some(detail.into()),
-            due: f64::INFINITY,
+        let key = format!("{title}\n{detail}");
+        let _ = self.toasts.step(ToastEvent::Shown {
+            key,
+            options: ToastContent {
+                title: title.into(),
+                detail: Some(detail.into()),
+            },
+            secs: None,
+            now: 0.0,
         });
-        self.next_toast += 1;
     }
 
     /// Closes a toast early.
-    pub fn dismiss(&mut self, id: u64) {
-        self.toasts.retain(|toast| toast.id != id);
+    pub fn dismiss(&mut self, id: u64, tx: &mut Tx) {
+        self.step_toasts(
+            ToastEvent::Dismissed {
+                id: Some(id),
+                now: tx.clock(),
+            },
+            tx,
+        );
     }
 
-    /// Drops toasts whose time is up; true if any went.
-    pub fn expire(&mut self, clock: f64) -> bool {
-        let before = self.toasts.len();
-        self.toasts.retain(|toast| toast.due > clock);
-        self.toasts.len() != before
+    /// Pauses or resumes toast auto-dismiss while the pointer is over the
+    /// stack.
+    pub fn toast_hover(&mut self, inside: bool, tx: &mut Tx) {
+        let event = if inside {
+            ToastEvent::PointerOver { now: tx.clock() }
+        } else {
+            ToastEvent::PointerLeft { now: tx.clock() }
+        };
+        self.step_toasts(event, tx);
+    }
+
+    /// Syncs window visibility and drops toasts whose timer is due; true if any
+    /// went.
+    pub fn expire(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        if self.toasts.entries().is_empty() {
+            return false;
+        }
+        let page = if tx.window_visible() {
+            ToastPage::Shown
+        } else {
+            ToastPage::Hidden
+        };
+        if self.toasts.page() != page {
+            self.step_toasts(ToastEvent::Page { page, now: clock }, tx);
+        }
+        if self
+            .toasts
+            .next_due()
+            .is_some_and(|due| clock + 1e-3 >= due)
+        {
+            return self.step_toasts(ToastEvent::Tick { now: clock }, tx);
+        }
+        false
+    }
+
+    fn step_toasts(&mut self, event: ToastEvent<ToastContent>, tx: &mut Tx) -> bool {
+        let mut closed = false;
+        for effect in self.toasts.step(event) {
+            match effect {
+                ToastEffect::Closed(_) => closed = true,
+                ToastEffect::WakeAt(due) => {
+                    let wait = (due - tx.clock()).max(0.0);
+                    tx.wake_after(Duration::from_secs_f64(wait));
+                }
+                ToastEffect::Pulse(_) => {}
+            }
+        }
+        closed
     }
 
     /// Opens or closes a timeline row.
