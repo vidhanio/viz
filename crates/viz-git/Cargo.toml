@@ -1,0 +1,23 @@
+[package]
+name = "viz-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+git2.workspace = true
+ignore.workspace = true
+notify.workspace = true
+nucleo-matcher.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
+tokio-util = { workspace = true, features = ["rt"] }
+url.workspace = true
+uuid = { workspace = true, features = ["v4"] }

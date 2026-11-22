@@ -1,0 +1,21 @@
+[package]
+name = "viz-github"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+http.workspace = true
+octocrab.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["process", "sync", "time"] }
+url.workspace = true
+viz-config.workspace = true
+viz-git.workspace = true

@@ -1,0 +1,104 @@
+//! Repository operations for the workspace runtime.
+//!
+//! git2 0.21 provides status, tree/index/worktree diffs with structured
+//! patches, rename detection and line statistics, linked worktree discovery,
+//! upstream lookup, and ahead/behind counts. gix 0.90 has status, rewrite
+//! detection, blob diff statistics, index access, commit/ref creation,
+//! worktrees and tracking-ref lookup. Its index/worktree and blob diff APIs
+//! require additional composition for patch output. We use git2 for reads, refs
+//! and graph traversal, and Git for operations that need checkout filters,
+//! hooks, signing, SSH configuration or credential helpers.
+//!
+//! Cancellation is cooperative for blocking reads, and checked before each
+//! mutation begins. Once started, a mutation runs to completion. The caller
+//! owns checkout admission and must hold it through destructive operations.
+
+mod checkpoint;
+mod diff;
+mod files;
+mod repository;
+mod watch;
+
+pub use checkpoint::CheckpointId;
+pub use diff::{Diff, DiffFile, DiffLine, DiffTarget, FileKind, Hunk, LineStats, RevisionId};
+pub use files::find_files;
+pub use repository::{
+    AheadBehind, Branch, Branches, Commit, Head, Identity, Remote, RemoteRepository, Repository,
+    StatusEntry, Worktree, parse_remote,
+};
+use tokio_util::sync::CancellationToken;
+pub use watch::StatusWatch;
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error(transparent)]
+    Git(#[from] git2::Error),
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Worker(#[from] tokio::task::JoinError),
+    #[error(transparent)]
+    Watch(#[from] notify::Error),
+    #[error(transparent)]
+    Walk(#[from] ignore::Error),
+    #[error("git {operation} failed ({status})")]
+    Command {
+        operation: &'static str,
+        status: std::process::ExitStatus,
+    },
+    #[error("operation cancelled")]
+    Cancelled,
+    #[error("other threads are running in this checkout")]
+    Busy,
+    #[error("repository operation or unresolved conflicts in progress")]
+    Conflicted,
+    #[error("worktree has local changes")]
+    Dirty,
+    #[error("checkout changed since the expected checkpoint")]
+    StaleCheckpoint,
+    #[error("checkpoint would overwrite an uncaptured path: {0}")]
+    CheckpointObstruction(std::path::PathBuf),
+    #[error("invalid {0}")]
+    Invalid(&'static str),
+    #[error("repository has no working tree")]
+    Bare,
+}
+
+/// The caller's admission decision for a checkout-changing operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckoutActivity {
+    Idle,
+    OtherThreadsRunning,
+}
+
+/// Reject changes to a checkout that is actively shared with other threads.
+///
+/// # Errors
+/// Returns [`Error::Busy`] when other threads are running.
+pub const fn guard_checkout(activity: CheckoutActivity) -> Result<(), Error> {
+    match activity {
+        CheckoutActivity::Idle => Ok(()),
+        CheckoutActivity::OtherThreadsRunning => Err(Error::Busy),
+    }
+}
+
+fn check(cancel: &CancellationToken) -> Result<(), Error> {
+    if cancel.is_cancelled() {
+        Err(Error::Cancelled)
+    } else {
+        Ok(())
+    }
+}
+
+async fn blocking<T: Send + 'static>(
+    cancel: &CancellationToken,
+    job: impl FnOnce(&CancellationToken) -> Result<T, Error> + Send + 'static,
+) -> Result<T, Error> {
+    let cancel = cancel.child_token();
+    let _cancel_on_drop = cancel.clone().drop_guard();
+    tokio::task::spawn_blocking(move || {
+        check(&cancel)?;
+        job(&cancel)
+    })
+    .await?
+}
