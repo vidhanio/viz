@@ -3,6 +3,7 @@
 use std::{
     collections::HashSet,
     ffi::OsStr,
+    fs::File,
     io::{self, BufRead, BufReader, Read},
     path::Path,
     process::{Command, Stdio},
@@ -11,10 +12,12 @@ use std::{
 
 use regex::Regex;
 use serde_json::Value;
+use tempfile::NamedTempFile;
 
 use crate::Error;
 
 const DIAGNOSTIC_LIMIT: usize = 8 * 1024;
+const TRACE_LIMIT: u64 = 1024 * 1024;
 
 /// Failure classes a caller can use to present a recovery action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,10 +84,12 @@ pub fn run_read(
 }
 
 pub fn output(command: &mut Command, operation: &'static str) -> Result<Vec<u8>, Error> {
-    let tracing_hooks = matches!(operation, "commit" | "push" | "fetch" | "switch" | "pull");
-    if tracing_hooks {
+    let trace = matches!(operation, "commit" | "push" | "fetch" | "switch" | "pull")
+        .then(NamedTempFile::new)
+        .transpose()?;
+    if let Some(trace) = &trace {
         command
-            .env("GIT_TRACE2_EVENT", "2")
+            .env("GIT_TRACE2_EVENT", trace.path())
             .env("GIT_TRACE2_EVENT_NESTING", "1");
     }
     let mut child = command
@@ -96,7 +101,7 @@ pub fn output(command: &mut Command, operation: &'static str) -> Result<Vec<u8>,
         .take()
         .ok_or(Error::Invalid("git stderr pipe"))?;
     let (result, stderr) = std::thread::scope(|scope| {
-        let reader = scope.spawn(|| bounded_diagnostic(stderr, tracing_hooks));
+        let reader = scope.spawn(|| bounded_diagnostic(stderr));
         let result = child.wait_with_output();
         Ok::<_, Error>((
             result,
@@ -109,16 +114,17 @@ pub fn output(command: &mut Command, operation: &'static str) -> Result<Vec<u8>,
     if result.status.success() {
         return Ok(result.stdout);
     }
-    let (stderr, hook_rejected) = stderr?;
+    let stderr = stderr?;
+    let hook_rejected = trace
+        .as_ref()
+        .is_some_and(|trace| hook_rejected(trace.as_file()).unwrap_or(false));
     let stdout = diagnostic_prefix(&result.stdout);
-    let diagnostic = format!("{stderr}\n{stdout}");
-    let kind = classify(operation, &diagnostic, hook_rejected);
-    let message = if stderr.trim().is_empty() {
-        stdout
+    let kind = classify(operation, &format!("{stderr}\n{stdout}"), hook_rejected);
+    let message = sanitize(if stderr.trim().is_empty() {
+        &stdout
     } else {
-        stderr
-    };
-    let message = sanitize(&message);
+        &stderr
+    });
     let message = if message.is_empty() && hook_rejected {
         "Git hook exited unsuccessfully".to_owned()
     } else {
@@ -132,46 +138,31 @@ pub fn output(command: &mut Command, operation: &'static str) -> Result<Vec<u8>,
     })
 }
 
-/// Trace2 distinguishes silent hook failures. Parse its events in memory and
-/// exclude the trace from diagnostics because it can contain command arguments.
-fn bounded_diagnostic(pipe: impl Read, tracing_hooks: bool) -> io::Result<(String, bool)> {
-    const TRACE_LIMIT: u64 = 64 * 1024;
+/// Drains the pipe so Git never blocks on it, keeping the first whole lines
+/// that fit.
+fn bounded_diagnostic(pipe: impl Read) -> io::Result<String> {
     let mut pipe = BufReader::new(pipe);
-    let mut line = Vec::new();
-    let mut diagnostic = Vec::new();
+    let mut kept = Vec::new();
+    pipe.by_ref()
+        .take(DIAGNOSTIC_LIMIT as u64 + 1)
+        .read_to_end(&mut kept)?;
+    io::copy(&mut pipe, &mut io::sink())?;
+    Ok(diagnostic_prefix(&kept))
+}
+
+/// Whether a hook exited unsuccessfully, which a silent hook reports nowhere
+/// else. The trace goes to a private file because hooks inherit its setting
+/// and may capture their own commands' stderr; it can hold command arguments,
+/// so it never reaches diagnostics.
+fn hook_rejected(trace: &File) -> io::Result<bool> {
     let mut hooks = HookTrace::default();
-    loop {
+    let mut lines = BufReader::new(trace.take(TRACE_LIMIT));
+    let mut line = Vec::new();
+    while lines.read_until(b'\n', &mut line)? != 0 {
+        hooks.record(&line);
         line.clear();
-        if pipe
-            .by_ref()
-            .take(TRACE_LIMIT)
-            .read_until(b'\n', &mut line)?
-            == 0
-        {
-            break;
-        }
-        if line.len() as u64 == TRACE_LIMIT && !line.ends_with(b"\n") {
-            pipe.skip_until(b'\n')?;
-            continue;
-        }
-        let text = if tracing_hooks
-            && let Some(offset) = line
-                .windows(b"{\"event\":".len())
-                .position(|window| window == b"{\"event\":")
-        {
-            hooks.record(&line[offset..]);
-            &line[..offset]
-        } else {
-            &line
-        };
-        if diagnostic.len() + text.len() <= DIAGNOSTIC_LIMIT {
-            diagnostic.extend_from_slice(text);
-        }
     }
-    Ok((
-        String::from_utf8_lossy(&diagnostic).into_owned(),
-        hooks.rejected,
-    ))
+    Ok(hooks.rejected)
 }
 
 fn diagnostic_prefix(bytes: &[u8]) -> String {
@@ -285,8 +276,7 @@ fn sanitize(message: &str) -> String {
     let plain: String = ESCAPES
         .replace_all(message, "")
         .chars()
-        .map(|character| if character == '\n' { ' ' } else { character })
-        .filter(|character| !character.is_control())
+        .filter(|character| *character == '\n' || !character.is_control())
         .collect();
     let redacted = URL.replace_all(&plain, |captures: &regex::Captures<'_>| {
         let url = &captures[0];
