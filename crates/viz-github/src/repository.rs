@@ -1,5 +1,10 @@
 //! Repository, pull request, issue and account operations.
 
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    fmt::Write,
+};
+
 use http::StatusCode;
 use serde::Deserialize;
 use serde_json::json;
@@ -8,11 +13,15 @@ use url::form_urlencoded;
 use crate::{
     Account, CheckRun, CreatePullRequest, Error, GitHub, Issue, IssueKind, PullComment,
     PullRequest, PullRequestMode, PullReview, RemoteRepository, Repository, Template,
+    client::missing_graphql,
 };
 
 const PR_FIELDS: &str = "
-    number title url state isDraft headRefName headRefOid baseRefName mergeable reviewDecision
+    number title url state isDraft headRefName headRefOid baseRefName baseRefOid mergeable reviewDecision
+    additions deletions updatedAt author { login avatarUrl }
     statusCheckRollup { state }
+    headRepository { nameWithOwner }
+    repository { nameWithOwner }
 ";
 
 impl GitHub {
@@ -96,7 +105,7 @@ impl GitHub {
             repository(owner:$owner, name:$repo) {{
                 pullRequests(first:30, after:$cursor, headRefName:$head, orderBy:{{field:UPDATED_AT,direction:DESC}}) {{
                     pageInfo {{ endCursor hasNextPage }}
-                    nodes {{ {PR_FIELDS} headRepository {{ nameWithOwner }} }}
+                    nodes {{ {PR_FIELDS} }}
                 }}
             }}
         }}");
@@ -107,31 +116,75 @@ impl GitHub {
             let request = json!({"query":query, "variables":{
                 "owner":repository.owner, "repo":repository.repo, "head":branch, "cursor":cursor
             }});
-            let response: GraphResponse<BranchRepository> = self.graphql(&request).await?;
+            let response: BranchRepository = self.graphql(&request).await?;
             let pulls = response
-                .data()?
                 .repository
-                .ok_or(Error::GraphQl)?
+                .ok_or_else(|| missing_graphql("repository unavailable"))?
                 .pull_requests;
-            for node in pulls.nodes.into_iter().flatten() {
-                if node
-                    .head_repository
-                    .as_ref()
-                    .is_some_and(|head| head.name_with_owner.eq_ignore_ascii_case(&full_name))
-                {
-                    if node.pull.state == "OPEN" {
-                        return Ok(Some(node.finish()));
-                    }
-                    if historical.is_none() {
-                        historical = Some(node.finish());
-                    }
+            if let Some(pull) = preferred_pull(pulls.nodes, &full_name) {
+                if pull.state == "OPEN" {
+                    return Ok(Some(pull));
+                }
+                if historical.is_none() {
+                    historical = Some(pull);
                 }
             }
             if !pulls.page_info.has_next_page {
                 return Ok(historical);
             }
-            cursor = Some(pulls.page_info.end_cursor.ok_or(Error::GraphQl)?);
+            cursor = Some(
+                pulls
+                    .page_info
+                    .end_cursor
+                    .ok_or_else(|| missing_graphql("missing pull request page cursor"))?,
+            );
         }
+    }
+
+    /// Look up up to 100 distinct branches in one GraphQL request.
+    ///
+    /// Each requested branch has an entry, with open PRs preferred over
+    /// historical PRs. Only branches with a current remote ref participate.
+    /// Use the paginated single-branch lookup for deleted refs.
+    ///
+    /// # Errors
+    /// Returns an error if the batch exceeds 100 branches or GitHub rejects the
+    /// request.
+    pub async fn pulls_for_branches(
+        &self,
+        repository: &RemoteRepository,
+        branches: &[&str],
+    ) -> Result<BTreeMap<String, Option<PullRequest>>, Error> {
+        self.repo_route(repository)?;
+        let branches: BTreeSet<_> = branches.iter().copied().collect();
+        if branches.len() > 100 {
+            return Err(Error::Invalid(
+                "pull request batch larger than 100 branches",
+            ));
+        }
+        if branches.is_empty() {
+            return Ok(BTreeMap::new());
+        }
+        let request = batch_query(repository, &branches)?;
+        let response: BatchRepository = self.graphql(&request).await?;
+        let mut results = response
+            .repository
+            .ok_or_else(|| missing_graphql("repository unavailable"))?;
+        let full_name = format!("{}/{}", repository.owner, repository.repo);
+        branches
+            .into_iter()
+            .enumerate()
+            .map(|(index, branch)| {
+                let reference = results
+                    .remove(&format!("branch{index}"))
+                    .ok_or_else(|| missing_graphql("missing branch result"))?;
+                let pull = reference.and_then(|reference| {
+                    preferred_pull(reference.open.nodes, &full_name)
+                        .or_else(|| preferred_pull(reference.recent.nodes, &full_name))
+                });
+                Ok((branch.to_owned(), pull))
+            })
+            .collect()
     }
 
     /// List or search a repository's issues or PRs for mention completion.
@@ -186,7 +239,7 @@ impl GitHub {
             "draft":input.mode == PullRequestMode::Draft,
         });
         let pull = self.post(&self.rest(&route), &body).await?;
-        self.invalidate().await;
+        self.invalidate_pull_search().await;
         Ok(pull)
     }
 
@@ -401,35 +454,77 @@ struct Content {
     name: String,
 }
 
-#[derive(Deserialize)]
-struct GraphResponse<T> {
-    data: Option<T>,
-    errors: Option<Vec<GraphError>>,
-}
-
-#[derive(Deserialize)]
-struct GraphError {
-    #[serde(rename = "type")]
-    kind: Option<String>,
-}
-
-impl<T> GraphResponse<T> {
-    fn data(self) -> Result<T, Error> {
-        if let Some(errors) = self.errors
-            && !errors.is_empty()
-        {
-            if errors
-                .iter()
-                .any(|error| error.kind.as_deref() == Some("RATE_LIMITED"))
-            {
-                return Err(Error::RateLimited {
-                    retry_after: std::time::Duration::from_secs(60),
-                });
-            }
-            return Err(Error::GraphQl);
-        }
-        self.data.ok_or(Error::GraphQl)
+fn batch_query(
+    repository: &RemoteRepository,
+    branches: &BTreeSet<&str>,
+) -> Result<serde_json::Value, Error> {
+    let mut query = "query($owner:String!, $repo:String!".to_owned();
+    let mut selections = String::new();
+    let mut variables = serde_json::Map::new();
+    variables.insert("owner".to_owned(), json!(repository.owner));
+    variables.insert("repo".to_owned(), json!(repository.repo));
+    for (index, branch) in branches.iter().enumerate() {
+        write!(query, ",$head{index}:String!").map_err(|_| Error::Invalid("batch query"))?;
+        write!(
+            selections,
+            "branch{index}:ref(qualifiedName:$head{index}) {{
+                open:associatedPullRequests(first:30, states:[OPEN], orderBy:{{field:UPDATED_AT,direction:DESC}}) {{
+                    nodes {{ {PR_FIELDS} }}
+                }}
+                recent:associatedPullRequests(first:30, orderBy:{{field:UPDATED_AT,direction:DESC}}) {{
+                    nodes {{ {PR_FIELDS} }}
+                }}
+            }} "
+        )
+        .map_err(|_| Error::Invalid("batch query"))?;
+        variables.insert(
+            format!("head{index}"),
+            json!(format!("refs/heads/{branch}")),
+        );
     }
+    write!(
+        query,
+        ") {{ repository(owner:$owner,name:$repo) {{ {selections} }} }}"
+    )
+    .map_err(|_| Error::Invalid("batch query"))?;
+    Ok(json!({"query":query,"variables":variables}))
+}
+
+fn preferred_pull(nodes: Vec<Option<PullNode>>, full_name: &str) -> Option<PullRequest> {
+    let mut historical = None;
+    for node in nodes.into_iter().flatten().filter(|node| {
+        node.head_repository
+            .as_ref()
+            .is_some_and(|head| head.name_with_owner.eq_ignore_ascii_case(full_name))
+            && node
+                .repository
+                .name_with_owner
+                .eq_ignore_ascii_case(full_name)
+    }) {
+        if node.pull.state == "OPEN" {
+            return Some(node.finish());
+        }
+        if historical.is_none() {
+            historical = Some(node.finish());
+        }
+    }
+    historical
+}
+
+#[derive(Deserialize)]
+struct BatchRepository {
+    repository: Option<BTreeMap<String, Option<BatchRef>>>,
+}
+
+#[derive(Deserialize)]
+struct BatchRef {
+    open: PullCandidates,
+    recent: PullCandidates,
+}
+
+#[derive(Deserialize)]
+struct PullCandidates {
+    nodes: Vec<Option<PullNode>>,
 }
 
 #[derive(Deserialize)]
@@ -463,7 +558,8 @@ struct PullNode {
     #[serde(flatten)]
     pull: PullRequest,
     status_check_rollup: Option<Rollup>,
-    head_repository: Option<HeadRepository>,
+    head_repository: Option<NamedRepository>,
+    repository: NamedRepository,
 }
 
 #[derive(Deserialize)]
@@ -473,7 +569,7 @@ struct Rollup {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct HeadRepository {
+struct NamedRepository {
     name_with_owner: String,
 }
 

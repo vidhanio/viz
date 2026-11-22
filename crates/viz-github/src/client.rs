@@ -2,16 +2,18 @@
 
 use std::{
     collections::HashMap,
+    error::Error as StdError,
     fmt,
     process::Stdio,
-    sync::Arc,
+    sync::{Arc, LazyLock},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use http::{HeaderMap, StatusCode, header};
 use octocrab::Octocrab;
-use serde::{Serialize, de::DeserializeOwned};
-use tokio::sync::{Mutex, OnceCell};
+use regex::Regex;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tokio::sync::Mutex;
 use url::Url;
 use viz_config::Secret;
 
@@ -37,18 +39,34 @@ pub enum Error {
     Gh(#[source] std::io::Error),
     #[error("invalid {0}")]
     Invalid(&'static str),
-    #[error("GitHub transport failed")]
-    Transport,
+    #[error("GitHub transport failed: {0}")]
+    Transport(#[source] TransportFailure),
     #[error("GitHub request timed out")]
     Timeout,
     #[error("GitHub returned HTTP {0}")]
     Http(StatusCode),
     #[error("GitHub throttled requests for {retry_after:?}")]
     RateLimited { retry_after: Duration },
-    #[error("GitHub response did not match the requested shape: {0}")]
-    Response(#[from] serde_json::Error),
-    #[error("GitHub could not resolve the GraphQL query")]
-    GraphQl,
+    #[error("GitHub response did not match the requested shape (line {line}, column {column})")]
+    Response { line: usize, column: usize },
+    #[error("GitHub could not resolve the GraphQL query: {messages:?}")]
+    GraphQl { messages: Vec<String> },
+}
+
+/// A bounded, sanitized description of the upstream transport cause.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub struct TransportFailure {
+    message: String,
+}
+
+impl From<serde_json::Error> for Error {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Response {
+            line: error.line(),
+            column: error.column(),
+        }
+    }
 }
 
 /// Poll state supplied by the caller, with any server backoff taking
@@ -81,13 +99,13 @@ struct Inner {
     host: String,
     api_origin: String,
     enterprise_server: bool,
-    auth: OnceCell<Authenticated>,
-    requests: Mutex<Requests>,
+    auth: Mutex<Option<Arc<Authenticated>>>,
 }
 
 struct Authenticated {
-    _token: Secret,
+    token: Secret,
     api: Octocrab,
+    requests: Mutex<Requests>,
 }
 
 #[derive(Default)]
@@ -133,8 +151,7 @@ impl GitHub {
             host: normalized.to_owned(),
             api_origin,
             enterprise_server: !cloud,
-            auth: OnceCell::new(),
-            requests: Mutex::default(),
+            auth: Mutex::default(),
         })))
     }
 
@@ -156,41 +173,59 @@ impl GitHub {
         }
     }
 
-    async fn auth(&self) -> Result<&Authenticated, Error> {
-        self.0
-            .auth
-            .get_or_try_init(|| async {
-                let mut gh = tokio::process::Command::new("gh");
-                gh.args(["auth", "token", "--hostname", self.host()])
-                    .env("GH_PROMPT_DISABLED", "1")
-                    .env_remove("GH_DEBUG")
-                    .stdin(Stdio::null())
-                    .stderr(Stdio::null())
-                    .kill_on_drop(true);
-                let output = tokio::time::timeout(REQUEST_TIMEOUT, gh.output())
-                    .await
-                    .map_err(|_| Error::Timeout)?
-                    .map_err(|error| {
-                        if error.kind() == std::io::ErrorKind::NotFound {
-                            Error::GhMissing
-                        } else {
-                            Error::Gh(error)
-                        }
-                    })?;
-                if !output.status.success() {
-                    return Err(Error::LoggedOut);
-                }
-                let token = String::from_utf8(output.stdout).map_err(|_| Error::LoggedOut)?;
-                let token = Secret::Inline(token.trim().to_owned());
-                let api = Octocrab::builder()
-                    .base_uri(self.0.api_origin.as_str())
-                    .map_err(|_| Error::Transport)?
-                    .personal_token(token.resolve().map_err(|_| Error::LoggedOut)?)
-                    .build()
-                    .map_err(|_| Error::Transport)?;
-                Ok(Authenticated { _token: token, api })
-            })
+    async fn auth(&self) -> Result<Arc<Authenticated>, Error> {
+        let mut current = self.0.auth.lock().await;
+        if let Some(auth) = current.as_ref() {
+            return Ok(Arc::clone(auth));
+        }
+        let mut gh = tokio::process::Command::new("gh");
+        gh.args(["auth", "token", "--hostname", self.host()])
+            .env("GH_PROMPT_DISABLED", "1")
+            .env_remove("GH_DEBUG")
+            .stdin(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        let output = tokio::time::timeout(REQUEST_TIMEOUT, gh.output())
             .await
+            .map_err(|_| Error::Timeout)?
+            .map_err(|error| {
+                if error.kind() == std::io::ErrorKind::NotFound {
+                    Error::GhMissing
+                } else {
+                    Error::Gh(error)
+                }
+            })?;
+        if !output.status.success() {
+            return Err(Error::LoggedOut);
+        }
+        let token = String::from_utf8(output.stdout).map_err(|_| Error::LoggedOut)?;
+        let token = Secret::Inline(token.trim().to_owned());
+        let api = Octocrab::builder()
+            .base_uri(self.0.api_origin.as_str())
+            .map_err(|error| transport(&error, &token))?
+            .personal_token(token.resolve().map_err(|_| Error::LoggedOut)?)
+            .build()
+            .map_err(|error| transport(&error, &token))?;
+        let auth = Arc::new(Authenticated {
+            token,
+            api,
+            requests: Mutex::default(),
+        });
+        *current = Some(Arc::clone(&auth));
+        drop(current);
+        Ok(auth)
+    }
+
+    async fn forget_unauthorized(&self, status: StatusCode, auth: &Arc<Authenticated>) {
+        if status == StatusCode::UNAUTHORIZED {
+            let mut current = self.0.auth.lock().await;
+            if current
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(current, auth))
+            {
+                *current = None;
+            }
+        }
     }
 
     pub(super) fn rest(&self, path: &str) -> String {
@@ -213,14 +248,15 @@ impl GitHub {
     ) -> Result<Arc<str>, Error> {
         let route = self.rest(path);
         let key = format!("{route}\n{}", accept.unwrap_or_default());
-        let cached = self.0.requests.lock().await.cache.get(&key).cloned();
+        let auth = self.auth().await?;
+        let cached = auth.requests.lock().await.cache.get(&key).cloned();
         if let Some(entry) = &cached
             && entry.at.elapsed() < CACHE_TTL
         {
             return Ok(Arc::clone(&entry.body));
         }
-        self.admit().await?;
-        let api = &self.auth().await?.api;
+        auth.admit().await?;
+        let api = &auth.api;
         let mut headers = HeaderMap::new();
         if let Some(accept) = accept {
             headers.insert(header::ACCEPT, header::HeaderValue::from_static(accept));
@@ -228,10 +264,15 @@ impl GitHub {
         if let Some(etag) = cached.as_ref().and_then(|entry| entry.etag.clone()) {
             headers.insert(header::IF_NONE_MATCH, etag);
         }
-        let response = within(api._get_with_headers(route.as_str(), Some(headers))).await?;
+        let response = within(
+            api._get_with_headers(route.as_str(), Some(headers)),
+            &auth.token,
+        )
+        .await?;
         let status = response.status();
         let etag = response.headers().get(header::ETAG).cloned();
-        let throttled = self.record_limit(status, response.headers()).await;
+        self.forget_unauthorized(status, &auth).await;
+        let throttled = auth.record_limit(status, response.headers()).await;
         let entry = if status == StatusCode::NOT_MODIFIED {
             Cached {
                 at: Instant::now(),
@@ -239,7 +280,7 @@ impl GitHub {
             }
         } else {
             require_success(status, throttled)?;
-            let body = within(api.body_to_string(response)).await?;
+            let body = within(api.body_to_string(response), &auth.token).await?;
             Cached {
                 etag,
                 at: Instant::now(),
@@ -247,14 +288,16 @@ impl GitHub {
             }
         };
         let body = Arc::clone(&entry.body);
-        let mut requests = self.0.requests.lock().await;
-        if requests.cache.len() >= CACHE_CAPACITY {
-            requests
+        let mut requests = auth.requests.lock().await;
+        if requests.cache.len() >= CACHE_CAPACITY
+            && !requests.cache.contains_key(&key)
+            && let Some(oldest) = requests
                 .cache
-                .retain(|_, item| item.at.elapsed() < CACHE_TTL);
-            if requests.cache.len() >= CACHE_CAPACITY {
-                requests.cache.clear();
-            }
+                .iter()
+                .min_by_key(|(_, item)| item.at)
+                .map(|(key, _)| key.clone())
+        {
+            requests.cache.remove(&oldest);
         }
         requests.cache.insert(key, entry);
         drop(requests);
@@ -270,7 +313,30 @@ impl GitHub {
         } else {
             "/graphql"
         };
-        self.post(route, data).await
+        let auth = self.auth().await?;
+        let response: GraphResponse<T> = self.post_with(&auth, route, data).await?;
+        if let Some(errors) = response.errors
+            && !errors.is_empty()
+        {
+            if errors
+                .iter()
+                .any(|error| error.kind.as_deref() == Some("RATE_LIMITED"))
+            {
+                return Err(Error::RateLimited {
+                    retry_after: Duration::from_secs(60),
+                });
+            }
+            return Err(Error::GraphQl {
+                messages: errors
+                    .into_iter()
+                    .take(10)
+                    .map(|error| sanitized(&error.message, &auth.token))
+                    .collect(),
+            });
+        }
+        response
+            .data
+            .ok_or_else(|| missing_graphql("response has no data"))
     }
 
     pub(super) async fn post<P: Serialize + Sync, T: DeserializeOwned>(
@@ -278,22 +344,43 @@ impl GitHub {
         route: &str,
         data: &P,
     ) -> Result<T, Error> {
-        self.admit().await?;
-        let api = &self.auth().await?.api;
-        let response = within(api._post(route, Some(data))).await?;
+        let auth = self.auth().await?;
+        self.post_with(&auth, route, data).await
+    }
+
+    async fn post_with<P: Serialize + Sync, T: DeserializeOwned>(
+        &self,
+        auth: &Arc<Authenticated>,
+        route: &str,
+        data: &P,
+    ) -> Result<T, Error> {
+        auth.admit().await?;
+        let api = &auth.api;
+        let response = within(api._post(route, Some(data)), &auth.token).await?;
         let status = response.status();
-        let throttled = self.record_limit(status, response.headers()).await;
+        self.forget_unauthorized(status, auth).await;
+        let throttled = auth.record_limit(status, response.headers()).await;
         require_success(status, throttled)?;
-        let body = within(api.body_to_string(response)).await?;
+        let body = within(api.body_to_string(response), &auth.token).await?;
         Ok(serde_json::from_str(&body)?)
     }
 
-    pub(super) async fn invalidate(&self) {
-        self.0.requests.lock().await.cache.clear();
+    pub(super) async fn invalidate_pull_search(&self) {
+        let auth = self.0.auth.lock().await.clone();
+        if let Some(auth) = auth {
+            let search = self.rest("/search/issues?");
+            auth.requests
+                .lock()
+                .await
+                .cache
+                .retain(|key, _| !key.starts_with(&search));
+        }
     }
+}
 
+impl Authenticated {
     async fn admit(&self) -> Result<(), Error> {
-        let blocked_until = self.0.requests.lock().await.blocked_until;
+        let blocked_until = self.requests.lock().await.blocked_until;
         if let Some(retry_after) =
             blocked_until.and_then(|until| until.checked_duration_since(Instant::now()))
         {
@@ -305,7 +392,7 @@ impl GitHub {
     async fn record_limit(&self, status: StatusCode, headers: &HeaderMap) -> Option<Duration> {
         let retry_after = rate_delay(status, headers, SystemTime::now())?;
         if let Some(deadline) = Instant::now().checked_add(retry_after) {
-            let mut requests = self.0.requests.lock().await;
+            let mut requests = self.requests.lock().await;
             requests.blocked_until = Some(
                 requests
                     .blocked_until
@@ -344,9 +431,84 @@ fn require_success(status: StatusCode, throttled: Option<Duration>) -> Result<()
     Err(Error::Http(status))
 }
 
-async fn within<T>(request: impl Future<Output = octocrab::Result<T>>) -> Result<T, Error> {
+#[derive(Deserialize)]
+struct GraphResponse<T> {
+    data: Option<T>,
+    errors: Option<Vec<GraphError>>,
+}
+
+#[derive(Deserialize)]
+struct GraphError {
+    #[serde(rename = "type")]
+    kind: Option<String>,
+    message: String,
+}
+
+pub fn missing_graphql(message: &'static str) -> Error {
+    Error::GraphQl {
+        messages: vec![message.to_owned()],
+    }
+}
+
+async fn within<T>(
+    request: impl Future<Output = octocrab::Result<T>>,
+    token: &Secret,
+) -> Result<T, Error> {
     tokio::time::timeout(REQUEST_TIMEOUT, request)
         .await
         .map_err(|_| Error::Timeout)?
-        .map_err(|_| Error::Transport)
+        .map_err(|error| transport(&error, token))
+}
+
+fn transport(error: &octocrab::Error, token: &Secret) -> Error {
+    let message = match error {
+        octocrab::Error::GitHub { .. } | octocrab::Error::Graphql { .. } => {
+            "unexpected API error envelope".to_owned()
+        }
+        octocrab::Error::InvalidUtf8 { .. } => "response body is not UTF-8".to_owned(),
+        _ => {
+            let mut causes = Vec::new();
+            let mut source = error.source();
+            while let Some(cause) = source.filter(|_| causes.len() < 4) {
+                causes.push(sanitized(&cause.to_string(), token));
+                source = cause.source();
+            }
+            if causes.is_empty() {
+                sanitized(&error.to_string(), token)
+            } else {
+                causes.join(": ")
+            }
+        }
+    };
+    Error::Transport(TransportFailure { message })
+}
+
+fn sanitized(message: &str, token: &Secret) -> String {
+    static SENSITIVE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?i)header|authorization|cookie|bearer|basic |\b(?:[a-z][a-z0-9]*(?:-[a-z0-9]+)+|accept|host|etag|date|link|vary|location)["']?\s*[:=]"#)
+            .expect("header diagnostic regex is valid")
+    });
+    static TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)(?:gh[pousr]_|github_pat_)[a-z0-9_]+")
+            .expect("token diagnostic regex is valid")
+    });
+    static URL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"(?i)[a-z][a-z0-9+.-]*://[^\s<>"']+"#).expect("URL diagnostic regex is valid")
+    });
+    let plain: String = message
+        .chars()
+        .filter(|character| !character.is_control())
+        .collect();
+    if SENSITIVE.is_match(&plain) {
+        return "diagnostic contains HTTP authentication or headers".to_owned();
+    }
+    let scrubbed = token.resolve().ok().map_or_else(
+        || plain.clone(),
+        |secret| plain.replace(&secret, "[redacted]"),
+    );
+    let scrubbed = TOKEN.replace_all(&scrubbed, "[redacted]");
+    URL.replace_all(&scrubbed, "[URL]")
+        .chars()
+        .take(512)
+        .collect()
 }

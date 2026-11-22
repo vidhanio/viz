@@ -1,21 +1,56 @@
-//! Ignore-aware path lookup using the same rules inside and outside Git.
+//! Ignore-aware file and directory lookup with a short-lived listing per root.
 
 use std::{
     cmp::Reverse,
-    collections::BinaryHeap,
+    collections::{BinaryHeap, HashMap},
     path::{Path, PathBuf},
+    sync::{Arc, LazyLock, Mutex},
+    time::{Duration, Instant},
 };
 
 use ignore::WalkBuilder;
 use nucleo_matcher::{
-    Config, Matcher,
+    Config, Matcher, Utf32Str,
     pattern::{CaseMatching, Normalization, Pattern},
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{Error, blocking, check};
 
-/// Find matching files relative to the root, sorted by score then path.
+const LISTING_TTL: Duration = Duration::from_secs(3);
+const CACHED_ROOTS: usize = 8;
+
+static LISTINGS: LazyLock<Mutex<HashMap<PathBuf, Listing>>> = LazyLock::new(Mutex::default);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathKind {
+    File,
+    Directory,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileMatch {
+    pub path: PathBuf,
+    pub kind: PathKind,
+    pub score: u32,
+    /// Sorted grapheme indices in the lossy display path, for highlighting.
+    pub positions: Vec<u32>,
+}
+
+#[derive(Clone)]
+struct Listing {
+    entries: Arc<[Entry]>,
+    scanned_at: Instant,
+}
+
+struct Entry {
+    path: PathBuf,
+    display: String,
+    kind: PathKind,
+}
+
+/// Find files and directories relative to a root, ordered by descending score
+/// then path.
 ///
 /// # Errors
 /// Returns an error if walking the root fails or the request is cancelled.
@@ -24,35 +59,28 @@ pub async fn find_files(
     query: &str,
     limit: usize,
     cancel: &CancellationToken,
-) -> Result<Vec<PathBuf>, Error> {
+) -> Result<Vec<FileMatch>, Error> {
     let (root, query) = (root.to_owned(), query.to_owned());
     blocking(cancel, move |cancel| {
         if limit == 0 {
             return Ok(Vec::new());
         }
         let pattern = Pattern::parse(&query, CaseMatching::Smart, Normalization::Smart);
+        let entries = listing(&root.canonicalize()?, cancel)?;
         let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
         let mut utf32 = Vec::new();
         let mut selected = BinaryHeap::new();
-        let mut walk = WalkBuilder::new(&root);
-        walk.require_git(false)
-            .filter_entry(|entry| entry.file_name() != ".git");
-        for entry in walk.build() {
+        for entry in entries.iter() {
             check(cancel)?;
-            let entry = entry?;
-            if entry.file_type().is_none_or(|kind| kind.is_dir()) {
-                continue;
-            }
-            let path = entry
-                .path()
-                .strip_prefix(&root)
-                .map_err(|_| Error::Invalid("walk path"))?;
-            let path_string = path.to_string_lossy();
-            if let Some(score) = pattern.score(
-                nucleo_matcher::Utf32Str::new(&path_string, &mut utf32),
-                &mut matcher,
-            ) {
-                selected.push((Reverse(score), path.to_owned()));
+            if let Some(score) =
+                pattern.score(Utf32Str::new(&entry.display, &mut utf32), &mut matcher)
+            {
+                selected.push((
+                    Reverse(score),
+                    &entry.path,
+                    entry.kind == PathKind::Directory,
+                    &entry.display,
+                ));
                 if selected.len() > limit {
                     selected.pop();
                 }
@@ -61,8 +89,92 @@ pub async fn find_files(
         Ok(selected
             .into_sorted_vec()
             .into_iter()
-            .map(|(_, path)| path)
+            .map(|(Reverse(score), path, directory, display)| {
+                let mut positions = Vec::new();
+                pattern.indices(
+                    Utf32Str::new(display, &mut utf32),
+                    &mut matcher,
+                    &mut positions,
+                );
+                positions.sort_unstable();
+                positions.dedup();
+                FileMatch {
+                    path: path.clone(),
+                    kind: if directory {
+                        PathKind::Directory
+                    } else {
+                        PathKind::File
+                    },
+                    score,
+                    positions,
+                }
+            })
             .collect())
     })
     .await
+}
+
+fn listing(root: &Path, cancel: &CancellationToken) -> Result<Arc<[Entry]>, Error> {
+    let cached = LISTINGS
+        .lock()
+        .map_err(|_| Error::Invalid("file listing lock"))?
+        .get(root)
+        .cloned();
+    if let Some(cached) = cached
+        && cached.scanned_at.elapsed() < LISTING_TTL
+    {
+        return Ok(cached.entries);
+    }
+    let mut walk = WalkBuilder::new(root);
+    walk.require_git(false)
+        .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git");
+    let mut entries = Vec::new();
+    for entry in walk.build() {
+        check(cancel)?;
+        let entry = entry?;
+        if entry.depth() == 0 {
+            continue;
+        }
+        let Some(kind) = entry.file_type() else {
+            continue;
+        };
+        if !(kind.is_dir() || kind.is_file() || kind.is_symlink()) {
+            continue;
+        }
+        let path = entry
+            .path()
+            .strip_prefix(root)
+            .map_err(|_| Error::Invalid("walk path"))?;
+        entries.push(Entry {
+            path: path.to_owned(),
+            display: path.to_string_lossy().into_owned(),
+            kind: if kind.is_dir() {
+                PathKind::Directory
+            } else {
+                PathKind::File
+            },
+        });
+    }
+    let entries = Arc::from(entries);
+    let mut cache = LISTINGS
+        .lock()
+        .map_err(|_| Error::Invalid("file listing lock"))?;
+    if cache.len() >= CACHED_ROOTS
+        && !cache.contains_key(root)
+        && let Some(oldest) = cache
+            .iter()
+            .min_by_key(|(_, listing)| listing.scanned_at)
+            .map(|(root, _)| root.clone())
+    {
+        cache.remove(&oldest);
+    }
+    cache.insert(
+        root.to_owned(),
+        Listing {
+            entries: Arc::clone(&entries),
+            scanned_at: Instant::now(),
+        },
+    );
+    drop(cache);
+    Ok(entries)
 }

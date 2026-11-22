@@ -10,10 +10,13 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
+cap-std.workspace = true
 git2.workspace = true
 ignore.workspace = true
 notify.workspace = true
 nucleo-matcher.workspace = true
+regex.workspace = true
+serde_json.workspace = true
 sha2.workspace = true
 tempfile.workspace = true
 thiserror.workspace = true
@@ -21,3 +24,6 @@ tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tokio-util = { workspace = true, features = ["rt"] }
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true

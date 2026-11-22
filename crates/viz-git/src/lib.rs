@@ -13,19 +13,29 @@
 //! mutation begins. Once started, a mutation runs to completion. The caller
 //! owns checkout admission and must hold it through destructive operations.
 
+mod branches;
+mod changes;
 mod checkpoint;
+mod command;
 mod diff;
 mod files;
+mod icons;
+mod remotes;
 mod repository;
+mod status;
 mod watch;
 
+use std::ffi::OsString;
+
+pub use branches::{Branch, Branches, Worktree};
 pub use checkpoint::CheckpointId;
+pub use command::CommandFailure;
 pub use diff::{Diff, DiffFile, DiffLine, DiffTarget, FileKind, Hunk, LineStats, RevisionId};
-pub use files::find_files;
-pub use repository::{
-    AheadBehind, Branch, Branches, Commit, Head, Identity, Remote, RemoteRepository, Repository,
-    StatusEntry, Worktree, parse_remote,
-};
+pub use files::{FileMatch, PathKind, find_files};
+pub use icons::{icon_candidate_paths, read_icon};
+pub use remotes::{AheadBehind, Remote, RemoteRepository, parse_remote};
+pub use repository::{Commit, Head, Identity, Repository};
+pub use status::StatusEntry;
 use tokio_util::sync::CancellationToken;
 pub use watch::StatusWatch;
 
@@ -41,10 +51,12 @@ pub enum Error {
     Watch(#[from] notify::Error),
     #[error(transparent)]
     Walk(#[from] ignore::Error),
-    #[error("git {operation} failed ({status})")]
+    #[error("git {operation} failed ({status}): {message}")]
     Command {
         operation: &'static str,
         status: std::process::ExitStatus,
+        kind: CommandFailure,
+        message: String,
     },
     #[error("operation cancelled")]
     Cancelled,
@@ -101,4 +113,15 @@ async fn blocking<T: Send + 'static>(
         job(&cancel)
     })
     .await?
+}
+
+#[cfg(unix)]
+fn path_bytes(bytes: &[u8]) -> OsString {
+    use std::os::unix::ffi::OsStringExt;
+    OsString::from_vec(bytes.to_vec())
+}
+
+#[cfg(not(unix))]
+fn path_bytes(bytes: &[u8]) -> OsString {
+    String::from_utf8_lossy(bytes).into_owned().into()
 }

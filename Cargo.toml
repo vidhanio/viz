@@ -18,6 +18,7 @@ async-trait = "0.1"
 anyhow = "1"
 axum = "0.8"
 base64 = "0.23"
+cap-std = "4"
 clap = "4"
 config = { version = "0.15", default-features = false, features = ["toml"] }
 fontique = { version = "0.12", default-features = false, features = [
@@ -31,6 +32,7 @@ git2 = { version = "0.21", default-features = false }
 http = "1"
 ignore = "0.4"
 jsonrpsee-types = "0.26"
+libc = "0.2"
 listenfd = "1"
 lucide-static-svg = "1.77"
 mime_guess = "2"
@@ -42,6 +44,7 @@ octocrab = { version = "0.54", default-features = false, features = [
   "rustls-ring",
 ] }
 notify-rust = { version = "4", default-features = false }
+regex = "1"
 reqwest = { version = "0.13", default-features = false }
 rmcp = "3.11"
 rfd = { version = "0.18", default-features = false }

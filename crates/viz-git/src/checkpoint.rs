@@ -7,9 +7,10 @@ use uuid::Uuid;
 
 use crate::{
     CheckoutActivity, Diff, Error, Repository, check,
+    command::{git, output},
     diff::collect,
     guard_checkout,
-    repository::{git, guard_conflicts, output},
+    status::guard_conflicts,
 };
 
 /// A durable identifier for a hidden ref in the repository.

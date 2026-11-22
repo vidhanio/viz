@@ -32,10 +32,23 @@ pub struct PullRequest {
     pub head_ref_name: String,
     pub head_ref_oid: String,
     pub base_ref_name: String,
+    pub base_ref_oid: String,
+    pub additions: u64,
+    pub deletions: u64,
+    pub author: Option<PullRequestAuthor>,
+    pub updated_at: String,
     pub mergeable: String,
     pub review_decision: Option<String>,
     #[serde(skip)]
     pub checks_rollup: Option<String>,
+}
+
+/// GitHub actor, which may be a user, bot, or organization.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestAuthor {
+    pub login: String,
+    pub avatar_url: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -8,9 +8,9 @@ mod client;
 mod models;
 mod repository;
 
-pub use client::{AuthState, Error, GitHub, PollState, poll_delay};
+pub use client::{AuthState, Error, GitHub, PollState, TransportFailure, poll_delay};
 pub use models::{
     Account, CheckRun, CreatePullRequest, Issue, IssueKind, PullComment, PullRequest,
-    PullRequestMode, PullReview, Repository, Template,
+    PullRequestAuthor, PullRequestMode, PullReview, Repository, Template,
 };
 pub use viz_git::RemoteRepository;
