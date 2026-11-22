@@ -37,6 +37,7 @@ use serde_json::Value;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
+use viz_protocol::{RunId, ThreadId};
 
 use super::tool_record::Receipts;
 use crate::tools::{ToolDefinition, ToolResult, ToolScope};
@@ -77,12 +78,12 @@ impl Drop for Inner {
 
 /// What a token may do: act as its thread, during that thread's running turn.
 struct Grant {
-    thread: u64,
+    thread: ThreadId,
     active: Mutex<Option<Active>>,
 }
 
 struct Active {
-    run: u64,
+    run: RunId,
     cancel: CancellationToken,
     receipts: Arc<Receipts>,
 }
@@ -163,7 +164,7 @@ impl Mcp {
 
     /// A new token acting as `thread`, revoked when the last clone of the
     /// endpoint drops.
-    pub(crate) fn endpoint(&self, thread: u64) -> McpEndpoint {
+    pub(crate) fn endpoint(&self, thread: ThreadId) -> McpEndpoint {
         let token = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
         let grant = Arc::new(Grant {
             thread,
@@ -224,7 +225,7 @@ impl McpEndpoint {
     /// cancels calls still running.
     pub(super) fn activate(
         &self,
-        run: u64,
+        run: RunId,
         cancel: CancellationToken,
         receipts: Arc<Receipts>,
     ) -> ActiveTurn {

@@ -28,8 +28,8 @@ use std::{
 use anyhow::Context as _;
 use tokio::{sync::Mutex, time};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use viz_core::tasks::{self, Wake, WakeMode};
-use viz_protocol::RunId;
+use viz_core::tasks::{self, Wake, WakeMode, WakeSource};
+use viz_protocol::{EntryId, RunId, TaskId, ThreadId};
 
 use self::{
     files::Files,
@@ -122,12 +122,12 @@ impl Workspace {
         )
         .await?
         {
-            self.kick(row.u64(0)?, false);
+            self.kick(row.id(0)?, false);
         }
         Ok(())
     }
 
-    pub(crate) async fn state(&self, thread: u64) -> Result<ThreadState, Error> {
+    pub(crate) async fn state(&self, thread: ThreadId) -> Result<ThreadState, Error> {
         let mut db = self.db.lock().await;
         let mut state = store::state(&mut db, thread).await?;
         state.live = self.updates.latest(thread);
@@ -137,8 +137,8 @@ impl Workspace {
 
     pub(crate) async fn entries(
         &self,
-        thread: u64,
-        before: Option<u64>,
+        thread: ThreadId,
+        before: Option<EntryId>,
         limit: usize,
     ) -> Result<EntryPage, Error> {
         let mut db = self.db.lock().await;
@@ -147,23 +147,27 @@ impl Workspace {
 
     pub(crate) async fn entries_after(
         &self,
-        thread: u64,
-        after: u64,
+        thread: ThreadId,
+        after: Option<EntryId>,
         limit: usize,
     ) -> Result<Vec<Entry>, Error> {
         let mut db = self.db.lock().await;
         store::entries_after(&mut db, thread, after, limit.clamp(1, 200)).await
     }
 
-    pub(crate) async fn run_origin(&self, thread: u64, run: u64) -> Result<Option<Origin>, Error> {
+    pub(crate) async fn run_origin(
+        &self,
+        thread: ThreadId,
+        run: RunId,
+    ) -> Result<Option<Origin>, Error> {
         let mut db = self.db.lock().await;
         runs::origin(&mut db, thread, run).await
     }
 
     pub(crate) async fn wait_run(
         &self,
-        thread: u64,
-        requested: Option<u64>,
+        thread: ThreadId,
+        requested: Option<RunId>,
         timeout: Duration,
     ) -> Result<WaitResult, Error> {
         let mut changes = self.subscribe();
@@ -199,7 +203,7 @@ impl Workspace {
                     timed_out: true,
                 });
             }
-            id = Some(run.id.0);
+            id = Some(run.id);
             tokio::select! {
                 () = &mut timer => {},
                 () = self.closing.cancelled() => {},
@@ -217,7 +221,7 @@ impl Workspace {
 
     pub(crate) async fn attachments(
         &self,
-        thread: u64,
+        thread: ThreadId,
         ids: &[String],
     ) -> Result<Vec<Attachment>, Error> {
         let mut db = self.db.lock().await;
@@ -225,27 +229,27 @@ impl Workspace {
         attachments::inputs(&mut db, thread, ids).await
     }
 
-    fn attachment_dir(&self, thread: u64) -> PathBuf {
+    fn attachment_dir(&self, thread: ThreadId) -> PathBuf {
         self.dir.join("attachments").join(thread.to_string())
     }
 
     pub(crate) async fn wake(
         self: &Arc<Self>,
-        thread: u64,
-        task: &str,
-        sequence: u64,
+        thread: ThreadId,
+        task: &TaskId,
+        source: WakeSource,
         text: &str,
         mode: WakeMode,
-    ) -> Result<Option<u64>, Error> {
+    ) -> Result<Option<RunId>, Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let previous = row(
             &mut tx,
             "SELECT run FROM task_wakes WHERE thread = ?1 AND task = ?2 AND sequence = ?3",
-            [thread.into(), task.into(), sequence.into()],
+            [thread.into(), task.into(), source.sequence().into()],
         )
         .await?
-        .map(|row| row.opt_u64(0).map(|run| run.map(RunId)))
+        .map(|row| row.opt_id(0))
         .transpose()?;
         let exists = if previous.is_some() {
             true
@@ -259,12 +263,12 @@ impl Workspace {
             .is_some()
         };
         let mode = match tasks::wake(previous, exists, mode) {
-            Wake::Replay(run) => return Ok(run.map(|run| run.0)),
+            Wake::Replay(run) => return Ok(run),
             Wake::MissingThread => return Ok(None),
             Wake::Append(mode) => mode,
         };
         let result = NewEntry::TaskResult {
-            task: task.to_owned(),
+            task: task.to_string(),
             text: text.to_owned(),
         };
         let entry = store::append(&mut tx, thread, &result).await?;
@@ -288,7 +292,12 @@ impl Workspace {
         exec(
             &mut tx,
             "INSERT INTO task_wakes (thread, task, sequence, run) VALUES (?1, ?2, ?3, ?4)",
-            [thread.into(), task.into(), sequence.into(), run.into()],
+            [
+                thread.into(),
+                task.into(),
+                source.sequence().into(),
+                run.into(),
+            ],
         )
         .await?;
         tx.commit().await?;

@@ -40,7 +40,7 @@ impl Workspace {
     /// transcript, with patches still applied to the original tool entries.
     pub(super) async fn continue_idle(
         &self,
-        thread: u64,
+        thread: ThreadId,
         driver: &Driver,
         session: &mut Session,
     ) -> Result<(), Error> {
@@ -56,11 +56,11 @@ impl Workspace {
             let mut tx = db.transaction().await?;
             let (run, entry) = runs::begin_unprompted(&mut tx, thread).await?;
             tx.commit().await?;
-            let turn = driver.begin(RunId(run));
+            let turn = driver.begin(run);
             drop(db);
             (turn, entry)
         };
-        let run = turn.run.0;
+        let run = turn.run;
         let cancel = &turn.cancel;
         let mut transcript = Transcript::new(entry.to_string(), Arc::default());
         let result = driver
@@ -138,12 +138,12 @@ impl Workspace {
 
     pub(super) async fn finish(
         &self,
-        thread: u64,
+        thread: ThreadId,
         driver: &Driver,
         turn: &Turn,
         mut settlement: Settlement,
     ) -> Result<(), Error> {
-        let run = turn.run.0;
+        let run = turn.run;
         let mut db = self.db.lock().await;
         if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
             return Ok(());
@@ -165,7 +165,7 @@ impl Workspace {
     /// Best-effort fallback when [`Self::finish`] fails: a run left `running`
     /// would make every later `claim` on the thread violate the `runs_active`
     /// index, so mark it failed with a bare update that appends no entry.
-    pub(super) async fn abandon(&self, thread: u64, run: u64, error: &Error) {
+    pub(super) async fn abandon(&self, thread: ThreadId, run: RunId, error: &Error) {
         let failed = exec(
             &mut *self.db.lock().await,
             "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
@@ -176,7 +176,7 @@ impl Workspace {
         )
         .await;
         if let Err(error) = failed {
-            tracing::error!(thread, run, %error, "could not fail an unsettled run");
+            tracing::error!(%thread, %run, %error, "could not fail an unsettled run");
         }
         self.updates.live(thread, None);
         self.settled(thread);
@@ -184,7 +184,7 @@ impl Workspace {
 
     pub(super) async fn prompt(
         &self,
-        thread: u64,
+        thread: ThreadId,
         slot: &mut SessionSlot,
         claim: Claimed,
         turn: &Turn,
@@ -220,7 +220,7 @@ impl Workspace {
                 Prompt {
                     text: &text,
                     turn: claim.entry.to_string(),
-                    run: RunId(claim.id),
+                    run: claim.id,
                     attachments: &files,
                     cancel: turn.cancel.clone(),
                     steer: turn.steer.clone(),
@@ -246,8 +246,8 @@ impl Workspace {
 
     async fn publish(
         &self,
-        thread: u64,
-        run: u64,
+        thread: ThreadId,
+        run: RunId,
         session: &str,
         entries: Vec<Output>,
         live: Option<LiveTurn>,
@@ -256,8 +256,8 @@ impl Workspace {
         let mut db = self.db.lock().await;
         let current = self
             .workers
-            .get(ThreadId(thread))
-            .is_some_and(|driver| driver.is_current(RunId(run)));
+            .get(thread)
+            .is_some_and(|driver| driver.is_current(run));
         let mut patches = Vec::new();
         if !current {
             return Ok(patches);
@@ -343,7 +343,7 @@ fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
 /// Load the durable turns for the first prompt after a move.
 async fn handoff_note(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     cwd: &str,
     from: &str,
 ) -> Result<String, Error> {

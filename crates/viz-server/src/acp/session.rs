@@ -364,11 +364,7 @@ impl Session {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let mut pending = self.begin_prompt(sender);
         let tools = self.mcp.as_ref().map(|endpoint| {
-            endpoint.activate(
-                input.run.0,
-                input.cancel.child_token(),
-                Arc::clone(&receipts),
-            )
+            endpoint.activate(input.run, input.cancel.child_token(), Arc::clone(&receipts))
         });
         let state = Arc::clone(&self.state);
         let response = self.agent.prompt(&self.id, &blocks, move || {

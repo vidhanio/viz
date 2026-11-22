@@ -15,7 +15,7 @@
 //! sequence) wake in the same transaction as its entry and optional prompt, so
 //! retries cannot wake twice.
 
-use viz_protocol::{Run, RunId, RunKind, RunStatus, TaskStatus, ThreadId};
+use viz_protocol::{Run, RunId, RunKind, RunStatus, TaskStatus, ThreadId, peer::Received};
 
 use crate::runs::is_open;
 
@@ -275,7 +275,27 @@ pub const fn status_name(status: TaskStatus) -> &'static str {
     }
 }
 
-/// A wake is keyed by its task and sequence within the receiving thread.
+/// What a wake reports: the task's result, or a later continuation of the
+/// child, identified by its run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeSource {
+    Result,
+    Continuation(RunId),
+}
+
+impl WakeSource {
+    /// The durable key of the wake among its task's wakes. Run IDs start at
+    /// one.
+    #[must_use]
+    pub const fn sequence(self) -> u64 {
+        match self {
+            Self::Result => 0,
+            Self::Continuation(run) => run.0,
+        }
+    }
+}
+
+/// A wake is keyed by its task and source within the receiving thread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Wake {
     Replay(Option<RunId>),
@@ -293,24 +313,17 @@ pub const fn wake(previous: Option<Option<RunId>>, exists: bool, mode: WakeMode)
     }
 }
 
-/// Admission and retraction use the same durable receiver key.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Receipt {
-    pub thread: ThreadId,
-    pub run: RunId,
-}
-
 /// The result of evaluating an admission request against its recorded key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Admission {
-    Replay(Receipt),
+    Replay(Received),
     Cancelled,
     Create,
 }
 
 /// A receipt takes precedence over a tombstone, which prevents late offers.
 #[must_use]
-pub const fn admit(receipt: Option<Receipt>, retracted: bool) -> Admission {
+pub const fn admit(receipt: Option<Received>, retracted: bool) -> Admission {
     match (receipt, retracted) {
         (Some(receipt), _) => Admission::Replay(receipt),
         (None, true) => Admission::Cancelled,

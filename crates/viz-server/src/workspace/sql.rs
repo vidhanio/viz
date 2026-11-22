@@ -15,6 +15,7 @@ use rusqlite::{
     types::{ToSql, ToSqlOutput, Value as SqlValue},
 };
 use tokio::sync::{mpsc, oneshot};
+use viz_protocol::{EntryId, RunId, TaskId, ThreadId};
 
 use crate::error::Error;
 
@@ -173,6 +174,41 @@ impl From<u64> for Value {
     }
 }
 
+/// Numeric identifiers stored as SQLite integers.
+pub(crate) trait Id {
+    fn from_column(value: u64) -> Self;
+}
+
+macro_rules! sql_ids {
+    ($($id:ident),+) => {$(
+        impl Id for $id {
+            fn from_column(value: u64) -> Self {
+                Self(value)
+            }
+        }
+
+        impl From<$id> for Value {
+            fn from(id: $id) -> Self {
+                Self::Unsigned(id.0)
+            }
+        }
+    )+};
+}
+
+sql_ids!(ThreadId, RunId, EntryId);
+
+impl From<TaskId> for Value {
+    fn from(id: TaskId) -> Self {
+        id.0.into()
+    }
+}
+
+impl From<&TaskId> for Value {
+    fn from(id: &TaskId) -> Self {
+        id.as_str().into()
+    }
+}
+
 impl From<usize> for Value {
     fn from(value: usize) -> Self {
         Self::Unsigned(value as u64)
@@ -280,6 +316,14 @@ impl Row {
             SqlValue::Null => Ok(None),
             _ => Err(invalid_column(col)),
         }
+    }
+
+    pub(crate) fn id<T: Id>(&self, col: usize) -> Result<T, Error> {
+        self.u64(col).map(T::from_column)
+    }
+
+    pub(crate) fn opt_id<T: Id>(&self, col: usize) -> Result<Option<T>, Error> {
+        Ok(self.opt_u64(col)?.map(T::from_column))
     }
 
     pub(crate) fn flag(&self, col: usize) -> Result<bool, Error> {

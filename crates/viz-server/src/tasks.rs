@@ -6,7 +6,6 @@ mod drive;
 mod store;
 
 use std::{
-    num::NonZeroU64,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -21,8 +20,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use viz_protocol::{
-    CancelTask, DelegateTask, ListTasks, TaskList, TaskResult, TaskStatusRequest, TaskStatusResult,
-    WorktreeTarget,
+    CancelTask, DelegateTask, ListTasks, TaskId, TaskList, TaskResult, TaskStatusRequest,
+    TaskStatusResult, WorktreeTarget,
     peer::{ReceiveTask, TaskTarget},
 };
 
@@ -79,8 +78,7 @@ pub(crate) struct Delegate {
     harness: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
-    #[schemars(range(min = 1))]
-    thread: Option<u64>,
+    thread: Option<ThreadId>,
     #[schemars(length(min = 1))]
     text: String,
     #[serde(default)]
@@ -94,15 +92,14 @@ pub(crate) struct Delegate {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct ListRequest {
-    #[schemars(range(min = 1))]
-    parent: Option<u64>,
+    parent: Option<ThreadId>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct StatusRequest {
     #[schemars(length(min = 1))]
-    task: String,
+    task: TaskId,
     #[serde(default)]
     wait: bool,
     #[schemars(range(max = 120_000))]
@@ -113,7 +110,7 @@ pub(crate) struct StatusRequest {
 #[serde(deny_unknown_fields)]
 pub(crate) struct CancelRequest {
     #[schemars(length(min = 1))]
-    task: String,
+    task: TaskId,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,7 +127,7 @@ handlers! {
             Ok(TaskList { tasks: tasks.list(parent).await? })
         }
         DelegateTask<'static>, DelegateFromThread, |tasks, DelegateFromThread { parent, input }| {
-            Ok(TaskResult { task: tasks.delegate(parent.0, None, input).await? })
+            Ok(TaskResult { task: tasks.delegate(parent, None, input).await? })
         }
         TaskStatusRequest<'static>, StatusRequest, |tasks, StatusRequest { task, wait, timeout_ms }| {
             tasks.status(&task, None, wait, timeout_ms).await
@@ -143,15 +140,15 @@ handlers! {
 
 #[derive(Debug, Eq, Hash, PartialEq)]
 enum Job {
-    Task(String),
+    Task(TaskId),
     FollowUp {
         environment: String,
-        task: String,
-        run: u64,
+        task: TaskId,
+        run: RunId,
     },
     Stop {
-        thread: u64,
-        run: u64,
+        thread: ThreadId,
+        run: RunId,
     },
 }
 
@@ -195,7 +192,7 @@ impl Tasks {
         }
     }
 
-    pub(crate) async fn list(&self, parent: Option<u64>) -> Result<Vec<Task>, Error> {
+    pub(crate) async fn list(&self, parent: Option<ThreadId>) -> Result<Vec<Task>, Error> {
         let mut db = self.workspace.db.lock().await;
         let rows = sql::rows(&mut db, LIST_TASKS_SQL, [parent.into()]).await?;
         drop(db);
@@ -204,15 +201,15 @@ impl Tasks {
 
     pub(crate) async fn delegate(
         &self,
-        parent: u64,
-        turn: Option<u64>,
+        parent: ThreadId,
+        turn: Option<RunId>,
         mut input: Delegate,
     ) -> Result<Task, Error> {
         let environment = input.environment.as_deref().unwrap_or(&self.peers.local);
         if environment != self.peers.local && self.peers.get(environment).is_none() {
             return Err(Error::invalid(format!("unknown environment {environment}")));
         }
-        if parent == 0 || input.thread == Some(0) || input.text.trim().is_empty() {
+        if input.text.trim().is_empty() {
             return Err(Error::invalid(
                 "task requires a parent, a valid target, and nonempty text",
             ));
@@ -258,20 +255,13 @@ impl Tasks {
                 {
                     return Err(Error::invalid("the delegating run is being cancelled"));
                 }
-                let id = Uuid::new_v4().to_string();
+                let id = TaskId(Uuid::new_v4().to_string());
                 let title = task_title(&input.text);
                 let payload = serde_json::to_string(&ReceiveTask {
                     task: id.clone(),
                     origin_environment: self.peers.local.clone(),
-                    parent: NonZeroU64::new(parent)
-                        .ok_or_else(|| Error::invalid("task requires a parent thread"))?,
-                    thread: input
-                        .thread
-                        .map(|thread| {
-                            NonZeroU64::new(thread)
-                                .ok_or_else(|| Error::invalid("invalid task thread"))
-                        })
-                        .transpose()?,
+                    parent,
+                    thread: input.thread,
                     target: TaskTarget {
                         project: input.project,
                         worktree: input.worktree,
@@ -287,7 +277,7 @@ impl Tasks {
                     "INSERT INTO agent_tasks (id, parent, parent_run, environment, status, title, payload, request_id, phase, delivery)
                      VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, 'pending', 'prompt')",
                     [
-                        id.as_str().into(), parent.into(), parent_run.into(), environment.into(),
+                        (&id).into(), parent.into(), parent_run.into(), environment.into(),
                         title.into(), payload.into(), input.request_id.as_deref().into(),
                     ],
                 )
@@ -303,8 +293,8 @@ impl Tasks {
 
     pub(crate) async fn status(
         &self,
-        task: &str,
-        parent: Option<u64>,
+        task: &TaskId,
+        parent: Option<ThreadId>,
         wait: bool,
         timeout_ms: Option<u64>,
     ) -> Result<TaskStatusResult, Error> {
@@ -324,7 +314,11 @@ impl Tasks {
         .await
     }
 
-    pub(crate) async fn cancel(&self, task: &str, parent: Option<u64>) -> Result<Task, Error> {
+    pub(crate) async fn cancel(
+        &self,
+        task: &TaskId,
+        parent: Option<ThreadId>,
+    ) -> Result<Task, Error> {
         let current = {
             let mut db = self.workspace.db.lock().await;
             let mut tx = db.transaction().await?;
@@ -351,7 +345,7 @@ impl Tasks {
             .task)
     }
 
-    async fn admitted(&self, id: &str, parent: u64) -> Result<Task, Error> {
+    async fn admitted(&self, id: &TaskId, parent: ThreadId) -> Result<Task, Error> {
         Ok(self
             .wait_for(id, Some(parent), ADMISSION_GRACE, |task| {
                 task.thread.is_some() || terminal(task.status)
@@ -362,8 +356,8 @@ impl Tasks {
 
     async fn wait_for(
         &self,
-        id: &str,
-        parent: Option<u64>,
+        id: &TaskId,
+        parent: Option<ThreadId>,
         timeout: Duration,
         done: impl Fn(&Task) -> bool,
     ) -> Result<TaskStatusResult, Error> {
@@ -382,7 +376,7 @@ impl Tasks {
         }
     }
 
-    async fn read(&self, id: &str, parent: Option<u64>) -> Result<Task, Error> {
+    async fn read(&self, id: &TaskId, parent: Option<ThreadId>) -> Result<Task, Error> {
         self.read_from(&mut *self.workspace.db.lock().await, id, parent)
             .await
     }
@@ -390,12 +384,12 @@ impl Tasks {
     async fn read_from(
         &self,
         db: &mut Connection,
-        id: &str,
-        parent: Option<u64>,
+        id: &TaskId,
+        parent: Option<ThreadId>,
     ) -> Result<Task, Error> {
         let row = sql::row(db, READ_TASK_SQL, [id.into(), parent.into()])
             .await?
-            .ok_or_else(|| Error::NoTask(id.to_owned()))?;
+            .ok_or_else(|| Error::NoTask(id.clone()))?;
         self.task(row)
     }
 
@@ -403,11 +397,11 @@ impl Tasks {
         let environment = row.str(2)?;
         Ok(Task {
             id: row.str(0)?,
-            parent: ThreadId(row.u64(1)?),
+            parent: row.id(1)?,
             reachable: self.peers.reachable(&environment),
             environment,
-            thread: row.opt_u64(3)?.map(ThreadId),
-            run: row.opt_u64(4)?.map(RunId),
+            thread: row.opt_id(3)?,
+            run: row.opt_id(4)?,
             status: parse_status(&row.str(5)?)?,
             title: row.str(6)?,
             result: row.opt_str(7)?,

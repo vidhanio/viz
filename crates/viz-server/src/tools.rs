@@ -3,7 +3,7 @@
 
 mod inputs;
 
-use std::{num::NonZeroU64, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use futures_util::future::BoxFuture;
 use schemars::{JsonSchema, schema_for};
@@ -12,9 +12,9 @@ use serde_json::{Value, json};
 use viz_protocol::{
     CreateProject, Empty, EnvironmentList, HarnessList, HarnessOptions, LaunchThread, Launched,
     ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method,
-    MoveThread, ReadProject, ReadThreadState, RemoveProject, RemoveWorktree, SearchThreads,
-    SendInput, StopThread, TaskList, TaskResult, ThreadId, ThreadStateResult, UpdateProject,
-    UpdateThread, WaitThread,
+    MoveThread, ReadProject, ReadThreadState, RemoveProject, RemoveWorktree, RunId, SearchThreads,
+    SendInput, StopThread, TaskId, TaskList, TaskResult, ThreadId, ThreadStateResult,
+    UpdateProject, UpdateThread, WaitThread,
 };
 
 use self::inputs::{SendText, ThreadUpdate, ToolInput};
@@ -28,8 +28,8 @@ use crate::{
     workspace::{
         Workspace,
         rpc::{
-            Entries, ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search,
-            Thread, ThreadRun, Wait, WorktreeRemove,
+            ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search,
+            WorktreeRemove,
         },
     },
 };
@@ -46,14 +46,14 @@ const LISTED_MODELS: usize = 24;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ToolScope {
-    pub(crate) thread: u64,
-    pub(crate) run: u64,
+    pub(crate) thread: ThreadId,
+    pub(crate) run: RunId,
 }
 
 #[derive(Debug)]
 pub(crate) struct ToolResult {
     pub(crate) text: String,
-    pub(crate) child: Option<u64>,
+    pub(crate) child: Option<ThreadId>,
     pub(crate) child_environment: Option<String>,
 }
 
@@ -89,13 +89,13 @@ macro_rules! rpc_tools {
 
 rpc_tools! {
     "thread_list", ListThreads<'static>, ThreadList, |_| None, "List threads in the selected environment, optionally filtered by project.";
-    "thread_read", ListEntries, Entries, |_| None, "Read recent thread entries. Pass before for earlier entries.";
-    "thread_state", ReadThreadState, Thread, |_| None, "Read a thread's current state, ACP options, working directory, and queue.";
+    "thread_read", ListEntries, ListEntries, |_| None, "Read recent thread entries. Pass before for earlier entries.";
+    "thread_state", ReadThreadState, ReadThreadState, |_| None, "Read a thread's current state, ACP options, working directory, and queue.";
     "thread_search", SearchThreads<'static>, Search, |_| None, "Search thread transcripts in the selected environment.";
     "thread_launch", LaunchThread, LaunchThread, |response: &Launched| Some(response.thread), "Launch an independent ACP thread (use delegate_task for a result that returns here).";
     "thread_send", SendInput, SendText, |_| None, "Send a new input to an existing thread. Its previous task result is not changed.";
-    "thread_wait", WaitThread, Wait, |_| None, "Wait for a thread run to settle; specify the run ID to wait for that exact input.";
-    "thread_stop", StopThread, ThreadRun, |_| None, "Stop a specific thread run, or the active run and queue if run is omitted.";
+    "thread_wait", WaitThread, WaitThread, |_| None, "Wait for a thread run to settle; specify the run ID to wait for that exact input.";
+    "thread_stop", StopThread, StopThread, |_| None, "Stop a specific thread run, or the active run and queue if run is omitted.";
     "thread_update", UpdateThread<'static>, ThreadUpdate, |_| None, "Change a thread's title, archive or pin state.";
     "project_list", ListProjects, Empty, |_| None, "List the configured projects in the selected environment.";
     "project_read", ReadProject<'static>, ProjectKey, |_| None, "Read a project by its absolute path in the selected environment.";
@@ -116,7 +116,7 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
         definition::<Delegate>("delegate_task", "Delegate a self-contained task from this thread. Pass a destination environment and project if needed, or reuse one of your existing child threads. The result arrives as a new input here."),
         definition::<Empty>("list_tasks", "List the durable tasks delegated by this thread."),
         definition::<TaskStatus>("task_status", "Read the status and result of one of this thread's tasks by task ID. Set wait to wait for completion."),
-        definition::<TaskId>("task_cancel", "Cancel one of this thread's tasks by task ID, including its nested work. An unreachable task remains pending until cancellation succeeds."),
+        definition::<TaskKey>("task_cancel", "Cancel one of this thread's tasks by task ID, including its nested work. An unreachable task remains pending until cancellation succeeds."),
     ]);
     definitions
 }
@@ -172,7 +172,7 @@ impl Tools {
                 let link = result
                     .task
                     .thread
-                    .map(|thread| (thread.0, result.task.environment.as_str()));
+                    .map(|thread| (thread, result.task.environment.as_str()));
                 output(&result, link)
             }
             "task_status" => {
@@ -188,17 +188,17 @@ impl Tools {
                 let link = result
                     .task
                     .thread
-                    .map(|thread| (thread.0, result.task.environment.as_str()));
+                    .map(|thread| (thread, result.task.environment.as_str()));
                 output(&result, link)
             }
             "task_cancel" => {
-                let TaskId { task } = decode(args)?;
+                let TaskKey { task } = decode(args)?;
                 let task = self.tasks.cancel(&task, Some(scope.thread)).await?;
                 let result = TaskResult { task };
                 let link = result
                     .task
                     .thread
-                    .map(|thread| (thread.0, result.task.environment.as_str()));
+                    .map(|thread| (thread, result.task.environment.as_str()));
                 output(&result, link)
             }
             _ => self.call_rpc(name, args).await,
@@ -241,13 +241,13 @@ impl Tools {
         let result = self.dispatch::<M, T>(environment, input, wait).await?;
         let link = thread
             .or_else(|| child(&result))
-            .map(|thread| (thread.0, environment));
+            .map(|thread| (thread, environment));
         output(&result, link)
     }
 
     async fn spawn_options(
         &self,
-        thread: u64,
+        thread: ThreadId,
         environment: Option<&str>,
         input: SpawnOptions,
     ) -> Result<ToolResult, Error> {
@@ -256,10 +256,9 @@ impl Tools {
             .dispatch::<ListHarnesses, _>(environment, Empty {}, Duration::ZERO)
             .await?;
         let parent_harness = if input.harness.is_none() && environment == self.peers.local {
-            let thread =
-                NonZeroU64::new(thread).ok_or_else(|| Error::invalid("invalid thread ID"))?;
             let ThreadStateResult { state } =
-                Handler::<ReadThreadState>::handle(&self.workspace, Thread { thread }).await?;
+                Handler::<ReadThreadState>::handle(&self.workspace, ReadThreadState { thread })
+                    .await?;
             Some(state.harness)
         } else {
             None
@@ -385,7 +384,7 @@ impl Dispatch for Tools {
     }
 }
 
-fn output(value: &impl Serialize, link: Option<(u64, &str)>) -> Result<ToolResult, Error> {
+fn output(value: &impl Serialize, link: Option<(ThreadId, &str)>) -> Result<ToolResult, Error> {
     Ok(ToolResult {
         text: serde_json::to_string(value)?,
         child: link.map(|(thread, _)| thread),
@@ -448,14 +447,14 @@ struct ListedModel<'a> {
 }
 
 #[derive(Deserialize, JsonSchema)]
-struct TaskId {
-    task: String,
+struct TaskKey {
+    task: TaskId,
 }
 
 #[derive(Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct TaskStatus {
-    task: String,
+    task: TaskId,
     #[serde(default)]
     wait: bool,
     #[schemars(range(max = 120_000))]

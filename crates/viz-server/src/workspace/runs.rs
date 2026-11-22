@@ -1,6 +1,6 @@
 //! Durable run persistence and the continuation outbox.
 
-use std::{collections::HashSet, num::NonZeroU64};
+use std::collections::HashSet;
 
 use viz_core::{
     runs::{self as decisions, Move, Place, QueueRejection, Settlement},
@@ -14,7 +14,7 @@ use super::{
 };
 use crate::{
     error::Error,
-    wire::{NewEntry, Origin, PromptAttachment, Run, RunId, RunKind, RunStatus, ThreadId},
+    wire::{EntryId, NewEntry, Origin, PromptAttachment, Run, RunId, RunKind, RunStatus, ThreadId},
     workspace::sql::Connection,
 };
 
@@ -23,7 +23,7 @@ pub(super) struct NewRun<'a> {
     pub(super) origin: Option<&'a Origin>,
     pub(super) attachments: &'a [PromptAttachment],
     pub(super) request_id: Option<&'a str>,
-    pub(super) existing_entry: Option<u64>,
+    pub(super) existing_entry: Option<EntryId>,
     pub(super) place: Place,
 }
 
@@ -42,9 +42,9 @@ impl<'a> NewRun<'a> {
 
 pub(super) async fn enqueue(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     new: NewRun<'_>,
-) -> Result<u64, Error> {
+) -> Result<RunId, Error> {
     let origin = new.origin.map(store::json).transpose()?;
     let attachments = (!new.attachments.is_empty())
         .then(|| store::json(new.attachments))
@@ -54,14 +54,14 @@ pub(super) async fn enqueue(
         VALUES (?1, 'queued', ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id", [
         thread.into(), position.into(), new.text.into(), origin.into(), attachments.into(),
         new.request_id.into(), new.existing_entry.into(),
-    ]).await?.expect("run INSERT RETURNING yielded one row").u64(0)?;
+    ]).await?.expect("run INSERT RETURNING yielded one row").id(0)?;
     let mut thread_row = row(
         db,
         "SELECT title FROM threads WHERE id = ?1",
         [thread.into()],
     )
     .await?
-    .ok_or_else(|| Error::NoThread(ThreadId(thread)))?;
+    .ok_or_else(|| Error::NoThread(thread))?;
     let title = titles::enqueue(thread_row.str(0)?, new.text);
     exec(
         db,
@@ -74,23 +74,23 @@ pub(super) async fn enqueue(
 
 pub(super) async fn by_request(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     request_id: &str,
-) -> Result<Option<u64>, Error> {
+) -> Result<Option<RunId>, Error> {
     row(
         db,
         "SELECT id FROM runs WHERE thread = ?1 AND request_id = ?2",
         [thread.into(), request_id.into()],
     )
     .await?
-    .map(|row| row.u64(0))
+    .map(|row| row.id(0))
     .transpose()
 }
 
 pub(super) async fn origin(
     db: &mut Connection,
-    thread: u64,
-    run: u64,
+    thread: ThreadId,
+    run: RunId,
 ) -> Result<Option<Origin>, Error> {
     let Some(mut row) = row(
         db,
@@ -106,8 +106,8 @@ pub(super) async fn origin(
 
 pub(crate) async fn run_from(
     db: &mut Connection,
-    thread: u64,
-    run: u64,
+    thread: ThreadId,
+    run: RunId,
 ) -> Result<Option<Run>, Error> {
     row(
         db,
@@ -121,7 +121,7 @@ pub(crate) async fn run_from(
 
 pub(crate) async fn by_ids(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     runs: &HashSet<RunId>,
 ) -> Result<Vec<Run>, Error> {
     if runs.is_empty() {
@@ -138,7 +138,7 @@ pub(crate) async fn by_ids(
     .collect()
 }
 
-pub(super) async fn latest(db: &mut Connection, thread: u64) -> Result<Option<Run>, Error> {
+pub(super) async fn latest(db: &mut Connection, thread: ThreadId) -> Result<Option<Run>, Error> {
     store::require(db, thread).await?;
     row(
         db,
@@ -152,27 +152,27 @@ pub(super) async fn latest(db: &mut Connection, thread: u64) -> Result<Option<Ru
 
 pub(crate) async fn active_run_from(
     db: &mut Connection,
-    thread: u64,
-) -> Result<Option<u64>, Error> {
+    thread: ThreadId,
+) -> Result<Option<RunId>, Error> {
     store::require(db, thread).await?;
     active(db, thread).await
 }
 
-pub(super) async fn active(db: &mut Connection, thread: u64) -> Result<Option<u64>, Error> {
+pub(super) async fn active(db: &mut Connection, thread: ThreadId) -> Result<Option<RunId>, Error> {
     row(
         db,
         "SELECT id FROM runs WHERE thread = ?1 AND status = 'running'",
         [thread.into()],
     )
     .await?
-    .map(|row| row.u64(0))
+    .map(|row| row.id(0))
     .transpose()
 }
 
-fn decode_run(thread: u64, mut row: Row) -> Result<Run, Error> {
+fn decode_run(thread: ThreadId, mut row: Row) -> Result<Run, Error> {
     Ok(Run {
-        id: RunId(row.u64(0)?),
-        thread: ThreadId(thread),
+        id: row.id(0)?,
+        thread,
         kind: if row.str(4)? == "unprompted" {
             RunKind::Unprompted
         } else {
@@ -186,8 +186,8 @@ fn decode_run(thread: u64, mut row: Row) -> Result<Run, Error> {
 
 pub(super) async fn status(
     db: &mut Connection,
-    thread: u64,
-    run: u64,
+    thread: ThreadId,
+    run: RunId,
 ) -> Result<Option<RunStatus>, Error> {
     row(
         db,
@@ -216,8 +216,8 @@ pub(super) fn decode_status(value: &str) -> Result<RunStatus, Error> {
 }
 
 pub(super) struct Claimed {
-    pub(super) id: u64,
-    pub(super) entry: u64,
+    pub(super) id: RunId,
+    pub(super) entry: EntryId,
     pub(super) text: String,
     pub(super) origin: Option<Origin>,
     pub(super) attachments: Vec<PromptAttachment>,
@@ -225,17 +225,17 @@ pub(super) struct Claimed {
 
 /// Commit the claim and corresponding prompt together before starting any
 /// external operation.
-pub(super) async fn claim(db: &mut Connection, thread: u64) -> Result<Option<Claimed>, Error> {
-    let active = active(db, thread).await?.map(RunId);
+pub(super) async fn claim(db: &mut Connection, thread: ThreadId) -> Result<Option<Claimed>, Error> {
+    let active = active(db, thread).await?;
     let next = row(
         db,
         "SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id LIMIT 1",
         [thread.into()],
     )
     .await?
-    .map(|row| row.u64(0).map(RunId))
+    .map(|row| row.id(0))
     .transpose()?;
-    let Some(RunId(id)) = decisions::claim(active, next) else {
+    let Some(id) = decisions::claim(active, next) else {
         return Ok(None);
     };
     let mut row = row(
@@ -258,7 +258,7 @@ pub(super) async fn claim(db: &mut Connection, thread: u64) -> Result<Option<Cla
         .map(store::from_json)
         .transpose()?
         .unwrap_or_default();
-    let (entry, text, origin, attachments) = if let Some(entry) = row.opt_u64(3)? {
+    let (entry, text, origin, attachments) = if let Some(entry) = row.opt_id(3)? {
         (entry, text, origin, attachments)
     } else {
         let data = NewEntry::Prompt {
@@ -298,8 +298,8 @@ pub(super) async fn claim(db: &mut Connection, thread: u64) -> Result<Option<Cla
 /// slot, so the `runs_active` index cannot conflict.
 pub(super) async fn begin_unprompted(
     db: &mut Connection,
-    thread: u64,
-) -> Result<(u64, u64), Error> {
+    thread: ThreadId,
+) -> Result<(RunId, EntryId), Error> {
     let entry = store::append(db, thread, &NewEntry::Continued).await?;
     let run = row(
         db,
@@ -309,7 +309,7 @@ pub(super) async fn begin_unprompted(
     )
     .await?
     .expect("run INSERT RETURNING yielded one row")
-    .u64(0)?;
+    .id(0)?;
     exec(
         db,
         "UPDATE threads SET updated_at = ?2 WHERE id = ?1",
@@ -320,7 +320,7 @@ pub(super) async fn begin_unprompted(
 }
 
 /// Whether inputs are waiting on the thread.
-pub(super) async fn queued(db: &mut Connection, thread: u64) -> Result<bool, Error> {
+pub(super) async fn queued(db: &mut Connection, thread: ThreadId) -> Result<bool, Error> {
     Ok(row(
         db,
         "SELECT 1 FROM runs WHERE thread = ?1 AND status = 'queued' LIMIT 1",
@@ -332,8 +332,8 @@ pub(super) async fn queued(db: &mut Connection, thread: u64) -> Result<bool, Err
 
 pub(super) async fn settle(
     db: &mut Connection,
-    thread: u64,
-    run: u64,
+    thread: ThreadId,
+    run: RunId,
     settlement: Settlement,
     unread: bool,
 ) -> Result<(), Error> {
@@ -368,23 +368,16 @@ pub(super) async fn recover(db: &mut Connection) -> Result<(), Error> {
     )
     .await?
     {
-        settle(
-            db,
-            row.u64(1)?,
-            row.u64(0)?,
-            Settlement::interrupted(),
-            true,
-        )
-        .await?;
+        settle(db, row.id(1)?, row.id(0)?, Settlement::interrupted(), true).await?;
     }
     Ok(())
 }
 
 async fn queue_position(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     place: Place,
-    exclude: Option<u64>,
+    exclude: Option<RunId>,
 ) -> Result<i64, Error> {
     let bounds = row(
         db,
@@ -403,8 +396,8 @@ async fn queue_position(
 /// Move the existing run ahead of other queued inputs, preserving its payload.
 pub(super) async fn promote_queued(
     db: &mut Connection,
-    thread: u64,
-    run: u64,
+    thread: ThreadId,
+    run: RunId,
 ) -> Result<(), Error> {
     if status(db, thread, run).await? != Some(RunStatus::Queued) {
         return Err(QueueRejection::NotQueued.into());
@@ -419,7 +412,11 @@ pub(super) async fn promote_queued(
     Ok(())
 }
 
-pub(super) async fn remove_queued(db: &mut Connection, thread: u64, run: u64) -> Result<(), Error> {
+pub(super) async fn remove_queued(
+    db: &mut Connection,
+    thread: ThreadId,
+    run: RunId,
+) -> Result<(), Error> {
     let changed = exec(db, "UPDATE runs SET status = 'cancelled', error = 'removed from queue' WHERE thread = ?1 AND id = ?2 AND status = 'queued'",
         [thread.into(), run.into()]).await?;
     if changed == 0 {
@@ -430,8 +427,8 @@ pub(super) async fn remove_queued(db: &mut Connection, thread: u64, run: u64) ->
 
 pub(super) async fn cancel_queued(
     db: &mut Connection,
-    thread: u64,
-    run: Option<u64>,
+    thread: ThreadId,
+    run: Option<RunId>,
 ) -> Result<(), Error> {
     exec(db, "UPDATE runs SET status = 'cancelled', error = 'cancelled before dispatch' WHERE thread = ?1 AND status = 'queued' AND (?2 IS NULL OR id = ?2)",
         [thread.into(), run.into()]).await?;
@@ -440,10 +437,10 @@ pub(super) async fn cancel_queued(
 
 pub(super) async fn update_queue(
     db: &mut Connection,
-    thread: u64,
-    run: u64,
+    thread: ThreadId,
+    run: RunId,
     text: Option<&str>,
-    before: Patch<NonZeroU64>,
+    before: Patch<RunId>,
 ) -> Result<(), Error> {
     let queue = rows(
         db,
@@ -451,14 +448,14 @@ pub(super) async fn update_queue(
         [thread.into()],
     )
     .await?
-    .map(|row| row.u64(0).map(RunId))
+    .map(|row| row.id(0))
     .collect::<Result<Vec<_>, _>>()?;
     let placement = match before {
-        Patch::Set(target) => Move::Before(RunId(target.get())),
+        Patch::Set(target) => Move::Before(target),
         Patch::Clear => Move::End,
         Patch::Keep => Move::Keep,
     };
-    if let Some(queue) = decisions::reorder(queue, RunId(run), placement)? {
+    if let Some(queue) = decisions::reorder(queue, run, placement)? {
         exec(db, "UPDATE runs AS r SET position = j.key FROM json_each(?1) AS j WHERE r.id = j.value AND r.position <> j.key",
             [store::json(&queue)?.into()]).await?;
     }

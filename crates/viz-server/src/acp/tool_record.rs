@@ -112,7 +112,7 @@ pub(crate) struct Receipts {
 #[derive(Debug)]
 struct Call {
     viz: String,
-    child: Option<u64>,
+    child: Option<ThreadId>,
     child_environment: Option<String>,
     claimed_by: Option<String>,
 }
@@ -123,7 +123,7 @@ impl Receipts {
     pub(crate) fn issue(
         &self,
         viz: &str,
-        child: Option<u64>,
+        child: Option<ThreadId>,
         child_environment: Option<String>,
     ) -> String {
         let id = Uuid::new_v4().hyphenated().to_string();
@@ -172,7 +172,7 @@ impl Receipts {
                 call.claimed_by = Some(record.id.clone());
                 record.viz = Some(call.viz.clone());
                 if let Some(child) = call.child {
-                    record.child = Some(ThreadId(child));
+                    record.child = Some(child);
                 }
                 if let Some(environment) = &call.child_environment {
                     record.child_environment = Some(environment.clone());

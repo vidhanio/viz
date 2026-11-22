@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::{task::JoinHandle, time};
 use viz_core::tasks::{self as decisions, Command, Phase, Progress, Transition};
 use viz_protocol::{
-    RunId, ThreadId,
+    RunId, TaskId, ThreadId,
     peer::{ProgressRequest, ReceiveTask, RetractTask},
 };
 
@@ -54,7 +54,7 @@ impl Tasks {
             [],
         )
         .await?
-        .map(|mut row| Ok(Job::Task(row.str(0)?)))
+        .map(|mut row| Ok(Job::Task(TaskId(row.str(0)?))))
         .collect::<Result<Vec<_>, Error>>()?;
         for row in sql::rows(
             &mut db,
@@ -64,8 +64,8 @@ impl Tasks {
         .await?
         {
             jobs.push(Job::Stop {
-                thread: row.u64(0)?,
-                run: row.u64(1)?,
+                thread: row.id(0)?,
+                run: row.id(1)?,
             });
         }
         for row in sql::rows(
@@ -78,8 +78,8 @@ impl Tasks {
             let mut row = row;
             jobs.push(Job::FollowUp {
                 environment: row.str(0)?,
-                task: row.str(1)?,
-                run: row.u64(2)?,
+                task: TaskId(row.str(1)?),
+                run: row.id(2)?,
             });
         }
         drop(db);
@@ -109,7 +109,7 @@ impl Tasks {
                         () = tasks.shutdown.cancelled() => {},
                         result = tasks.send_follow_up(&environment, &task, run) => {
                             if let Err(error) = result {
-                                tracing::debug!(%task, run, %error, "delivering task follow-up");
+                                tracing::debug!(%task, %run, %error, "delivering task follow-up");
                             }
                         }
                     }
@@ -127,7 +127,7 @@ impl Tasks {
         }
     }
 
-    async fn drive_task(&self, id: &str) {
+    async fn drive_task(&self, id: &TaskId) {
         loop {
             match self.advance(id).await {
                 Ok(Advance::Done) => return,
@@ -135,14 +135,14 @@ impl Tasks {
                 Ok(Advance::LocalPoll) => time::sleep(LOCAL_POLL).await,
                 Ok(Advance::PeerPoll) => time::sleep(POLL).await,
                 Err(error) => {
-                    tracing::error!(task = id, %error, "advancing durable task");
+                    tracing::error!(task = %id, %error, "advancing durable task");
                     time::sleep(POLL).await;
                 }
             }
         }
     }
 
-    async fn advance(&self, id: &str) -> Result<Advance, Error> {
+    async fn advance(&self, id: &TaskId) -> Result<Advance, Error> {
         let Some(mut row) = sql::row(&mut *self.workspace.db.lock().await,
             "SELECT environment, thread, run, status, phase FROM agent_tasks WHERE id = ?1 AND delivery != 'delivered'",
             [id.into()],
@@ -164,13 +164,14 @@ impl Tasks {
         if matches!(phase, Phase::Pending | Phase::Offered | Phase::Retracting) {
             return self.advance_admission(id, &target, phase, poll).await;
         }
-        let (Some(thread), Some(run)) = (row.opt_u64(1)?, row.opt_u64(2)?) else {
+        let (Some(thread), Some(run)) = (row.opt_id::<ThreadId>(1)?, row.opt_id::<RunId>(2)?)
+        else {
             return Err(Error::corrupt("accepted task has no run receipt"));
         };
         let status = parse_status(&row.str(3)?)?;
         let request = ProgressRequest {
-            thread: ThreadId(thread),
-            run: RunId(run),
+            thread,
+            run,
             cancel,
         };
         let reply = if local {
@@ -185,7 +186,7 @@ impl Tasks {
             self.signal();
         }
         match reply {
-            Ok(Some(progress)) if progress.thread.0 == thread && progress.id.0 == run => {
+            Ok(Some(progress)) if progress.thread == thread && progress.id == run => {
                 self.update_from_run(id, status, &progress, poll).await
             }
             Ok(Some(_)) => {
@@ -214,7 +215,7 @@ impl Tasks {
 
     async fn advance_admission(
         &self,
-        id: &str,
+        id: &TaskId,
         target: &str,
         phase: Phase,
         poll: Advance,
@@ -224,7 +225,7 @@ impl Tasks {
         let result = if retracting {
             let request = RetractTask {
                 origin_environment: self.peers.local.clone(),
-                task: id.to_owned(),
+                task: id.clone(),
             };
             if target == self.peers.local {
                 self.workspace.retract(request).await
@@ -281,7 +282,7 @@ impl Tasks {
                     && let Transition::Move(next) = decisions::decide(current, Command::Receipt)
                 {
                     sql::exec(&mut db, "UPDATE agent_tasks SET thread = ?2, run = ?3, payload = NULL, phase = ?4 WHERE id = ?1",
-                        [id.into(), receipt.thread.get().into(), receipt.run.get().into(), next.as_str().into()]).await?;
+                        [id.into(), receipt.thread.into(), receipt.run.into(), next.as_str().into()]).await?;
                 }
                 drop(db);
                 self.signal();
@@ -302,7 +303,7 @@ impl Tasks {
 
     async fn admission_failed(
         &self,
-        id: &str,
+        id: &TaskId,
         command: Command,
         error: Option<&str>,
     ) -> Result<(), Error> {
@@ -320,7 +321,7 @@ impl Tasks {
 
     async fn update_from_run(
         &self,
-        id: &str,
+        id: &TaskId,
         previous: TaskStatus,
         run: &Run,
         poll: Advance,
@@ -350,7 +351,7 @@ impl Tasks {
 
     async fn finish(
         &self,
-        id: &str,
+        id: &TaskId,
         status: TaskStatus,
         result: Option<&str>,
         error: Option<&str>,

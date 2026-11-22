@@ -1,14 +1,14 @@
 //! Receiver-side admission and retraction. A receipt commits with its thread
 //! and input. A tombstone prevents a delayed offer from starting work.
 
-use std::{num::NonZeroU64, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use viz_core::{
-    tasks::{self, Admission, Receipt},
+    tasks::{self, Admission},
     titles,
 };
 use viz_protocol::{
-    RunId, ThreadId,
+    TaskId, ThreadId,
     peer::{ReceiveTask, Received, RetractTask},
 };
 
@@ -20,8 +20,6 @@ use super::{
     worktree::{self, Placement},
 };
 use crate::{acp::Selection, error::Error};
-
-type Id = NonZeroU64;
 
 impl Workspace {
     /// Resolve a worktree target before taking the write lease.
@@ -39,16 +37,13 @@ impl Workspace {
         }
         let (project, source) = {
             let mut db = self.db.lock().await;
-            if let Some(found) = receipt(
-                &mut db,
-                [args.origin_environment.as_str(), args.task.as_str()],
-            )
-            .await?
+            if let Some(found) =
+                receipt(&mut db, (args.origin_environment.as_str(), &args.task)).await?
             {
                 return Ok(found);
             }
             let parent = if args.origin_environment == self.environment {
-                Some(store::binding(&mut db, args.parent.get()).await?)
+                Some(store::binding(&mut db, args.parent).await?)
             } else {
                 None
             };
@@ -93,7 +88,7 @@ impl Workspace {
     ) -> Result<(Received, bool), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
-        let key = [args.origin_environment.as_str(), args.task.as_str()];
+        let key = (args.origin_environment.as_str(), &args.task);
         let found = receipt(&mut tx, key).await?;
         let retracted = if found.is_some() {
             false
@@ -101,20 +96,14 @@ impl Workspace {
             row(
                 &mut tx,
                 "SELECT 1 FROM task_retractions WHERE environment = ?1 AND task = ?2",
-                key.map(Into::into),
+                [key.0.into(), key.1.into()],
             )
             .await?
             .is_some()
         };
-        match tasks::admit(
-            found.map(|found| Receipt {
-                thread: ThreadId(found.thread.get()),
-                run: RunId(found.run.get()),
-            }),
-            retracted,
-        ) {
+        match tasks::admit(found, retracted) {
             Admission::Replay(found) => {
-                return Ok((received(found.thread.0, found.run.0)?, false));
+                return Ok((found, false));
             }
             Admission::Cancelled => {
                 return Err(Error::invalid("task was cancelled before admission"));
@@ -151,7 +140,7 @@ impl Workspace {
         self.kick(thread, false);
         drop(db);
         self.relist(thread);
-        Ok((received(thread, run)?, true))
+        Ok((Received { thread, run }, true))
     }
 
     /// The thread a task runs in. Without a placement or project, a child
@@ -161,10 +150,10 @@ impl Workspace {
         db: &mut crate::workspace::sql::Connection,
         args: &ReceiveTask,
         placement: Option<&Placement>,
-    ) -> Result<u64, Error> {
+    ) -> Result<ThreadId, Error> {
         if let Some(thread) = args.thread {
-            let binding = store::binding(db, thread.get()).await?;
-            if binding.parent.map(|id| id.0) != Some(args.parent.get())
+            let binding = store::binding(db, thread).await?;
+            if binding.parent != Some(args.parent)
                 || binding.parent_environment.as_deref() != Some(args.origin_environment.as_str())
             {
                 return Err(Error::invalid(
@@ -188,10 +177,10 @@ impl Workspace {
                     "existing task thread cannot change its harness, project, model, or thinking",
                 ));
             }
-            return Ok(thread.get());
+            return Ok(thread);
         }
         let inherited = if args.origin_environment == self.environment {
-            Some(store::binding(db, args.parent.get()).await?)
+            Some(store::binding(db, args.parent).await?)
         } else {
             None
         };
@@ -231,7 +220,7 @@ impl Workspace {
                 cwd,
                 project,
                 worktree,
-                parent: Some(args.parent.get()),
+                parent: Some(args.parent),
                 parent_environment: Some(&args.origin_environment),
                 title: None,
                 session,
@@ -243,7 +232,7 @@ impl Workspace {
     pub(crate) async fn retract(&self, args: RetractTask) -> Result<Option<Received>, Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
-        if let Some(found) = receipt(&mut tx, [&args.origin_environment, &args.task]).await? {
+        if let Some(found) = receipt(&mut tx, (&args.origin_environment, &args.task)).await? {
             return Ok(Some(found));
         }
         exec(&mut tx, "INSERT INTO task_retractions (environment, task) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
@@ -256,7 +245,7 @@ impl Workspace {
 
 async fn receipt(
     tx: &mut Connection,
-    [environment, task]: [&str; 2],
+    (environment, task): (&str, &TaskId),
 ) -> Result<Option<Received>, Error> {
     row(
         tx,
@@ -264,17 +253,15 @@ async fn receipt(
         [environment.into(), task.into()],
     )
     .await?
-    .map(|row| received(row.u64(0)?, row.u64(1)?))
+    .map(|row| {
+        Ok(Received {
+            thread: row.id(0)?,
+            run: row.id(1)?,
+        })
+    })
     .transpose()
 }
 
 pub(super) fn selection(model: Option<String>, thinking: Option<String>) -> Option<Selection> {
     (model.is_some() || thinking.is_some()).then_some(Selection { model, thinking })
-}
-
-fn received(thread: u64, run: u64) -> Result<Received, Error> {
-    Ok(Received {
-        thread: Id::new(thread).ok_or_else(|| Error::corrupt("invalid receipt thread"))?,
-        run: Id::new(run).ok_or_else(|| Error::corrupt("invalid receipt run"))?,
-    })
 }

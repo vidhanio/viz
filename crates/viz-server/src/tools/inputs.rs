@@ -1,22 +1,24 @@
 //! MCP input projections for typed workspace methods. Some tools expose a
 //! subset of the underlying request, such as sends without connector origin.
 
-use std::{num::NonZeroU64, time::Duration};
+use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use viz_core::threads::Patch;
-use viz_protocol::{Empty, LaunchThread, MoveThread, SendInput, SendMode, ThreadId};
+use viz_protocol::{
+    Empty, LaunchThread, ListEntries, MoveThread, ReadThreadState, SendInput, SendMode, StopThread,
+    ThreadId, WaitThread,
+};
 
 use crate::workspace::rpc::{
-    Entries, ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search, Thread,
-    ThreadRun, UpdateMetadata, Wait, WorktreeRemove,
+    ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search, UpdateMetadata,
+    WorktreeRemove,
 };
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct SendText {
-    #[schemars(range(min = 1))]
     thread: ThreadId,
     #[schemars(length(min = 1))]
     text: String,
@@ -28,8 +30,7 @@ pub(super) struct SendText {
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub(super) struct ThreadUpdate {
-    #[schemars(range(min = 1))]
-    thread: NonZeroU64,
+    thread: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -75,17 +76,17 @@ macro_rules! thread_inputs {
 }
 
 thread_inputs! {
-    Entries => |input: &Entries| ThreadId(input.thread.get()),
-    Thread => |input: &Thread| ThreadId(input.thread.get()),
-    ThreadRun => |input: &ThreadRun| ThreadId(input.thread.get()),
+    ListEntries => |input: &ListEntries| input.thread,
+    ReadThreadState => |input: &ReadThreadState| input.thread,
+    StopThread => |input: &StopThread| input.thread,
     MoveThread => |input: &MoveThread| input.thread,
     SendText => |input: &SendText| input.thread,
-    ThreadUpdate => |input: &ThreadUpdate| ThreadId(input.thread.get()),
+    ThreadUpdate => |input: &ThreadUpdate| input.thread,
 }
 
-impl ToolInput for Wait {
+impl ToolInput for WaitThread {
     fn thread(&self) -> Option<ThreadId> {
-        Some(ThreadId(self.thread.get()))
+        Some(self.thread)
     }
 
     fn extra_wait(&self) -> Duration {

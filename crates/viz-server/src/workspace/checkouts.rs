@@ -72,7 +72,7 @@ impl Workspace {
                 )
                 .await?
             }
-            .map(|row| row.u64(0).map(ThreadId))
+            .map(|row| row.id(0))
             .collect::<Result<_, _>>()?;
             worktrees.push(Worktree {
                 managed: !checkout.main && self.managed(&checkout.path),
@@ -92,7 +92,7 @@ impl Workspace {
         &self,
         db: &mut crate::workspace::sql::Connection,
         path: &str,
-        except: Option<u64>,
+        except: Option<ThreadId>,
     ) -> Result<(), Error> {
         if !self.managed(path) {
             return Err(Error::invalid(format!(
@@ -108,7 +108,7 @@ impl Workspace {
         {
             return Err(Error::invalid(format!(
                 "thread {} still runs in {path}",
-                user.u64(0)?
+                user.id::<ThreadId>(0)?
             )));
         }
         Ok(())
@@ -125,7 +125,7 @@ impl Workspace {
     /// Moves an idle thread. Its harness stops; the next run starts a new
     /// session in the new directory (see [`store::SavedSession::handoff`]).
     pub(super) async fn move_thread(self: &Arc<Self>, args: MoveThread) -> Result<Moved, Error> {
-        let thread = args.thread.0;
+        let thread = args.thread;
         let (binding, title) = {
             let mut db = self.db.lock().await;
             let binding = store::binding(&mut db, thread).await?;
@@ -163,14 +163,14 @@ impl Workspace {
 
     async fn rebind(
         self: &Arc<Self>,
-        thread: u64,
+        thread: ThreadId,
         before: store::Binding,
         placement: Placement,
     ) -> Result<(), Error> {
         let driver = {
             let mut db = self.db.lock().await;
             store::require(&mut db, thread).await?;
-            let driver = self.driver(ThreadId(thread))?;
+            let driver = self.driver(thread)?;
             drop(db);
             driver
         };
@@ -180,7 +180,7 @@ impl Workspace {
     /// Only the session owner may change the binding while the thread is idle.
     pub(super) async fn apply_checkout(
         &self,
-        thread: u64,
+        thread: ThreadId,
         before: &store::Binding,
         placement: &Placement,
     ) -> Result<(), Error> {
@@ -222,7 +222,7 @@ impl Workspace {
     }
 }
 
-async fn idle(db: &mut crate::workspace::sql::Connection, thread: u64) -> Result<(), Error> {
+async fn idle(db: &mut crate::workspace::sql::Connection, thread: ThreadId) -> Result<(), Error> {
     if row(
         db,
         "SELECT 1 FROM runs WHERE thread = ?1 AND status IN ('queued', 'running') LIMIT 1",

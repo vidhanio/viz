@@ -67,7 +67,7 @@ impl Workspace {
         drop(db);
         self.changed(None);
         for thread in threads {
-            self.changed(Some(thread.u64(0)?));
+            self.changed(Some(thread.id(0)?));
         }
         Ok(())
     }

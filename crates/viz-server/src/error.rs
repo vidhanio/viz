@@ -4,7 +4,7 @@
 //! JSON-RPC codes.
 
 use viz_core::{runs::QueueRejection, threads::EmptyTitle};
-use viz_protocol::{RunId, ThreadId};
+use viz_protocol::{RunId, TaskId, ThreadId};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
@@ -13,7 +13,7 @@ pub(crate) enum Error {
     #[error("no run {run} in thread {thread}")]
     NoRun { thread: ThreadId, run: RunId },
     #[error("no task {0}")]
-    NoTask(String),
+    NoTask(TaskId),
     #[error("no project {0}")]
     NoProject(String),
     #[error("{0}")]

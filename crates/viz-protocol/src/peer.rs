@@ -1,11 +1,9 @@
 //! Server-to-server methods for durable delegation. These procedures require
 //! peer authentication and are excluded from the client method schema.
 
-use std::num::NonZeroU64;
-
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use super::{Attachment, Method, Run, RunId, ThreadId, WorktreeTarget, private};
+use super::{Attachment, Method, Run, RunId, TaskId, ThreadId, WorktreeTarget, private};
 
 /// A method restricted to configured peers.
 pub trait PeerMethod: Method + DeserializeOwned + Send {
@@ -19,11 +17,11 @@ pub trait PeerMethod: Method + DeserializeOwned + Send {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReceiveTask {
-    pub task: String,
+    pub task: TaskId,
     pub origin_environment: String,
-    pub parent: NonZeroU64,
+    pub parent: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread: Option<NonZeroU64>,
+    pub thread: Option<ThreadId>,
     pub text: String,
     #[serde(flatten)]
     pub target: TaskTarget,
@@ -47,11 +45,11 @@ pub struct TaskTarget {
 }
 
 /// The durable recipient thread and run allocated for an offer.
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Received {
-    pub thread: NonZeroU64,
-    pub run: NonZeroU64,
+    pub thread: ThreadId,
+    pub run: RunId,
 }
 
 impl PeerMethod for ReceiveTask {
@@ -65,7 +63,7 @@ impl PeerMethod for ReceiveTask {
 #[serde(rename_all = "camelCase")]
 pub struct RetractTask {
     pub origin_environment: String,
-    pub task: String,
+    pub task: TaskId,
 }
 
 impl PeerMethod for RetractTask {
@@ -107,9 +105,9 @@ where
 #[serde(deny_unknown_fields)]
 pub struct FollowUp {
     pub source: String,
-    pub task: String,
-    pub thread: NonZeroU64,
-    pub run: NonZeroU64,
+    pub task: TaskId,
+    pub thread: ThreadId,
+    pub run: RunId,
     pub text: String,
 }
 

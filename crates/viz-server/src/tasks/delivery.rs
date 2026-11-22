@@ -1,12 +1,12 @@
 //! Interpret settled results, continuation outboxes, and durable stop requests.
 //! The delivery lease serializes prompt wakes against family cancellation.
 
-use std::{num::NonZeroU64, time::Duration};
+use std::time::Duration;
 
 use tokio::time;
-use viz_core::tasks::{self as decisions, WakeMode};
+use viz_core::tasks::{self as decisions, WakeMode, WakeSource};
 use viz_protocol::{
-    RunId,
+    RunId, TaskId, ThreadId,
     peer::{FollowUp, ProgressRequest, ProgressResult},
 };
 
@@ -17,14 +17,14 @@ use super::{
 use crate::{error::Error, workspace::sql};
 
 impl Tasks {
-    pub(super) async fn deliver(&self, id: &str) -> Result<(), Error> {
+    pub(super) async fn deliver(&self, id: &TaskId) -> Result<(), Error> {
         let _delivery = self.delivery.lock().await;
         let mut row = sql::row(&mut *self.workspace.db.lock().await,
             "SELECT parent, environment, thread, status, title, result, error, delivery FROM agent_tasks WHERE id = ?1 AND delivery != 'delivered'",
             [id.into()],
         ).await?.ok_or_else(|| Error::corrupt("task vanished before delivery"))?;
         let target = row.str(1)?;
-        let location = match row.opt_u64(2)? {
+        let location = match row.opt_id::<ThreadId>(2)? {
             Some(child) => format!("{target} thread {child}"),
             None => target,
         };
@@ -45,7 +45,10 @@ impl Tasks {
                 )));
             }
         };
-        let wake = self.workspace.wake(row.u64(0)?, id, 0, &text, mode).await?;
+        let wake = self
+            .workspace
+            .wake(row.id(0)?, id, WakeSource::Result, &text, mode)
+            .await?;
         sql::exec(
             &mut *self.workspace.db.lock().await,
             "UPDATE agent_tasks SET delivery = 'delivered', wake_run = ?2 WHERE id = ?1",
@@ -61,8 +64,8 @@ impl Tasks {
     pub(super) async fn send_follow_up(
         &self,
         environment: &str,
-        task: &str,
-        run: u64,
+        task: &TaskId,
+        run: RunId,
     ) -> Result<(), Error> {
         let Some(mut row) = sql::row(
             &mut *self.workspace.db.lock().await,
@@ -71,10 +74,9 @@ impl Tasks {
         ).await? else { return Ok(()) };
         let request = FollowUp {
             source: self.peers.local.clone(),
-            task: task.to_owned(),
-            thread: NonZeroU64::new(row.u64(0)?)
-                .ok_or_else(|| Error::corrupt("missing child thread"))?,
-            run: NonZeroU64::new(run).ok_or_else(|| Error::corrupt("missing continuation run"))?,
+            task: task.clone(),
+            thread: row.id(0)?,
+            run,
             text: row.str(1)?,
         };
         let acknowledged = if environment == self.peers.local {
@@ -105,30 +107,30 @@ impl Tasks {
                 &mut db,
                 "SELECT parent, status, delivery, wake_run, title, parent_run, thread FROM agent_tasks
                  WHERE id = ?1 AND environment = ?2",
-                [request.task.as_str().into(), request.source.as_str().into()],
+                [(&request.task).into(), request.source.as_str().into()],
             )
             .await?
             else {
                 return Ok(true);
             };
-            let parent = row.u64(0)?;
+            let parent = row.id(0)?;
             if row.str(2)? != "delivered" {
                 return Ok(false);
             }
             if row.str(1)? != "completed" {
                 return Ok(true);
             }
-            if row.opt_u64(6)? != Some(request.thread.get()) {
+            if row.opt_id(6)? != Some(request.thread) {
                 return Err(Error::invalid(
                     "task follow-up child does not match its receipt",
                 ));
             }
-            let stopped = if let Some(run) = row.opt_u64(5)? {
+            let stopped = if let Some(run) = row.opt_id(5)? {
                 stop_exists(&mut db, parent, run).await?
             } else {
                 false
             };
-            let mode = decisions::follow_up_mode(row.opt_u64(3)?.map(RunId), stopped);
+            let mode = decisions::follow_up_mode(row.opt_id(3)?, stopped);
             (parent, mode, row.str(4)?)
         };
         let text = format!(
@@ -136,7 +138,13 @@ impl Tasks {
             request.task, request.source, request.thread, request.text,
         );
         self.workspace
-            .wake(parent, &request.task, request.run.get(), &text, mode)
+            .wake(
+                parent,
+                &request.task,
+                WakeSource::Continuation(request.run),
+                &text,
+                mode,
+            )
             .await?;
         self.signal();
         Ok(true)
@@ -148,22 +156,19 @@ impl Tasks {
             run,
             cancel,
         } = request;
-        if thread.0 == 0 || run.0 == 0 {
-            return Err(Error::invalid("invalid thread or run ID"));
-        }
         let _delivery = self.delivery.lock().await;
         let mut db = self.workspace.db.lock().await;
-        let family = snapshot(&mut db, thread.0, run.0).await?;
-        let mut stopped = stop_exists(&mut db, thread.0, run.0).await?;
+        let family = snapshot(&mut db, thread, run).await?;
+        let mut stopped = stop_exists(&mut db, thread, run).await?;
         if family.should_record_stop(cancel, stopped) {
             let mut tx = db.transaction().await?;
             sql::exec(
                 &mut tx,
                 "INSERT INTO stopped_task_runs (thread, run, handled) VALUES (?1, ?2, 0)",
-                [thread.0.into(), run.0.into()],
+                [thread.into(), run.into()],
             )
             .await?;
-            suppress_descendant_wakes(&mut tx, thread.0, run.0).await?;
+            suppress_descendant_wakes(&mut tx, thread, run).await?;
             tx.commit().await?;
             stopped = true;
             self.scan.notify_one();
@@ -175,20 +180,20 @@ impl Tasks {
         })
     }
 
-    pub(super) async fn drive_stop(&self, thread: u64, run: u64) {
+    pub(super) async fn drive_stop(&self, thread: ThreadId, run: RunId) {
         loop {
             match self.stop_family(thread, run).await {
                 Ok(true) => return,
                 Ok(false) => time::sleep(LOCAL_POLL).await,
                 Err(error) => {
-                    tracing::error!(thread, run, %error, "cancelling delegated run tree");
+                    tracing::error!(%thread, %run, %error, "cancelling delegated run tree");
                     time::sleep(POLL).await;
                 }
             }
         }
     }
 
-    async fn stop_family(&self, thread: u64, run: u64) -> Result<bool, Error> {
+    async fn stop_family(&self, thread: ThreadId, run: RunId) -> Result<bool, Error> {
         let active = {
             let _delivery = self.delivery.lock().await;
             let mut db = self.workspace.db.lock().await;
@@ -209,7 +214,7 @@ impl Tasks {
             family.active
         };
         for active_run in active {
-            if let Err(error) = self.workspace.stop(thread, Some(active_run.0)).await
+            if let Err(error) = self.workspace.stop(thread, Some(active_run)).await
                 && !error.rejected()
             {
                 return Err(error);

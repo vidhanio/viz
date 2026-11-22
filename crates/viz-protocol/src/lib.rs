@@ -6,11 +6,10 @@
 mod catalog;
 mod connections;
 mod history;
+mod ids;
 pub mod peer;
 mod requests;
 mod threads;
-
-use std::fmt;
 
 pub use catalog::{
     ContextUsage, Harness, Project, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord,
@@ -23,10 +22,11 @@ pub use connections::{
     WaitResult, WaitThread, Watch, Watching,
 };
 pub use history::{
-    Attachment, AttachmentCapabilities, Entry, EntryData, EntryId, EntryPage, ListEntries,
-    PlanEntry, PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd,
-    SearchHit, SearchHits, SearchThreads, SteerQueuedInput, UpdateQueuedInput,
+    Attachment, AttachmentCapabilities, Entry, EntryData, EntryPage, ListEntries, PlanEntry,
+    PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd, SearchHit,
+    SearchHits, SearchThreads, SteerQueuedInput, UpdateQueuedInput,
 };
+pub use ids::{EntryId, RunId, TaskId, ThreadId};
 pub use requests::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, GitBranch,
     HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches, ListHarnesses, ListProjects,
@@ -44,32 +44,6 @@ pub use threads::{
 
 /// The protocol version this crate speaks.
 pub const PROTOCOL_VERSION: u32 = 2;
-
-/// A thread id.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
-#[serde(transparent)]
-pub struct ThreadId(pub u64);
-
-impl fmt::Display for ThreadId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// A run id.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
-#[serde(transparent)]
-pub struct RunId(pub u64);
-
-impl fmt::Display for RunId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
 
 /// A request method: its params type, its name on the wire, and its result
 /// type. Sealed: the protocol defines every method.

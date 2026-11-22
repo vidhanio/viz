@@ -127,31 +127,23 @@ impl Workspace {
         self.kick(thread, run.is_none());
         drop(db);
         self.relist(thread);
-        Ok((
-            Launched {
-                thread: ThreadId(thread),
-                run: run.map(RunId),
-            },
-            true,
-        ))
+        Ok((Launched { thread, run }, true))
     }
 
     pub(crate) async fn send(self: &Arc<Self>, args: SendInput) -> Result<Sent, Error> {
-        let thread = args.thread.0;
+        let thread = args.thread;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         store::require(&mut tx, thread).await?;
         validate_request_id(args.request_id.as_deref())?;
         let previous = match &args.request_id {
-            Some(request_id) => runs::by_request(&mut tx, thread, request_id)
-                .await?
-                .map(RunId),
+            Some(request_id) => runs::by_request(&mut tx, thread, request_id).await?,
             None => None,
         };
         let state = decisions::SubmissionState {
             previous,
             active: if args.mode == Some(SendMode::Steer) && previous.is_none() {
-                runs::active(&mut tx, thread).await?.map(RunId)
+                runs::active(&mut tx, thread).await?
             } else {
                 None
             },
@@ -176,44 +168,41 @@ impl Workspace {
         .await?;
         tx.commit().await?;
         if let Some(active) = steer {
-            self.steer_active(thread, active.0);
+            self.steer_active(thread, active);
         }
         self.kick(thread, false);
         drop(db);
         self.relist(thread);
-        Ok(Sent { run: RunId(run) })
+        Ok(Sent { run })
     }
 
-    pub(super) fn steer_active(&self, thread: u64, active: u64) {
-        if let Some(driver) = self.workers.get(ThreadId(thread)) {
-            driver.signal(RunId(active), Intent::Steer);
+    pub(super) fn steer_active(&self, thread: ThreadId, active: RunId) {
+        if let Some(driver) = self.workers.get(thread) {
+            driver.signal(active, Intent::Steer);
         }
     }
 
-    pub(crate) async fn stop(&self, thread: u64, requested: Option<u64>) -> Result<(), Error> {
+    pub(crate) async fn stop(
+        &self,
+        thread: ThreadId,
+        requested: Option<RunId>,
+    ) -> Result<(), Error> {
         let active = {
             let mut db = self.db.lock().await;
             store::require(&mut db, thread).await?;
             if let Some(run) = requested
                 && runs::status(&mut db, thread, run).await?.is_none()
             {
-                return Err(Error::NoRun {
-                    thread: ThreadId(thread),
-                    run: RunId(run),
-                });
+                return Err(Error::NoRun { thread, run });
             }
             let mut tx = db.transaction().await?;
             runs::cancel_queued(&mut tx, thread, requested).await?;
-            let active = decisions::cancel_active(
-                runs::active(&mut tx, thread).await?.map(RunId),
-                requested.map(RunId),
-            )
-            .map(|id| id.0);
+            let active = decisions::cancel_active(runs::active(&mut tx, thread).await?, requested);
             tx.commit().await?;
             if let Some(active) = active
-                && let Some(driver) = self.workers.get(ThreadId(thread))
+                && let Some(driver) = self.workers.get(thread)
             {
-                driver.signal(RunId(active), Intent::Stop);
+                driver.signal(active, Intent::Stop);
             }
             drop(db);
             active
@@ -231,11 +220,11 @@ impl Workspace {
     }
 
     pub(super) async fn update(&self, args: UpdateMetadata) -> Result<(), Error> {
-        let thread = args.thread.get();
+        let thread = args.thread;
         let mut db = self.db.lock().await;
         let mut current = row(&mut db,
             "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
-            [thread.into()]).await?.ok_or_else(|| Error::NoThread(ThreadId(thread)))?;
+            [thread.into()]).await?.ok_or_else(|| Error::NoThread(thread))?;
         threads::validate_title(args.title.as_deref())?;
         if let Patch::Set(project) = &args.project {
             store::project(&mut db, project).await?;
@@ -273,7 +262,11 @@ impl Workspace {
 
     /// Deletes a thread, and with `remove_worktree` the clean worktree viz
     /// created for it once its harness has stopped.
-    pub(super) async fn delete(&self, thread: u64, remove_worktree: bool) -> Result<(), Error> {
+    pub(super) async fn delete(
+        &self,
+        thread: ThreadId,
+        remove_worktree: bool,
+    ) -> Result<(), Error> {
         let checkout = if remove_worktree {
             let mut db = self.db.lock().await;
             let binding = store::binding(&mut db, thread).await?;
@@ -300,10 +293,10 @@ impl Workspace {
             )
             .await?;
             if count == 0 {
-                return Err(Error::NoThread(ThreadId(thread)));
+                return Err(Error::NoThread(thread));
             }
             self.updates.remove(thread);
-            let driver = self.workers.remove(ThreadId(thread));
+            let driver = self.workers.remove(thread);
             drop(db);
             driver
         };
@@ -315,7 +308,7 @@ impl Workspace {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
-                tracing::warn!(thread, %error, "removing materialized thread attachments");
+                tracing::warn!(%thread, %error, "removing materialized thread attachments");
             }
         }
         if let Some((source, path)) = checkout {
@@ -345,8 +338,8 @@ async fn launched(
     .await?
     .map(|row| {
         Ok(Launched {
-            thread: ThreadId(row.u64(0)?),
-            run: row.opt_u64(1)?.map(RunId),
+            thread: row.id(0)?,
+            run: row.opt_id(1)?,
         })
     })
     .transpose()

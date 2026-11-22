@@ -6,6 +6,7 @@ use std::path::Path;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use viz_core::{options::Labels, titles};
+use viz_protocol::ThreadId;
 
 use super::{
     Workspace,
@@ -50,7 +51,7 @@ impl SessionSlot {
 impl Workspace {
     pub(super) async fn session<'slot>(
         &self,
-        thread: u64,
+        thread: ThreadId,
         slot: &'slot mut SessionSlot,
         cancel: &CancellationToken,
     ) -> anyhow::Result<Bound<'slot>> {
@@ -118,7 +119,7 @@ impl Workspace {
 
     pub(super) async fn configure_session(
         &self,
-        thread: u64,
+        thread: ThreadId,
         slot: &mut SessionSlot,
         cancel: &CancellationToken,
         option: &str,
@@ -151,7 +152,7 @@ impl Workspace {
 
     pub(super) async fn refresh_session(
         &self,
-        thread: u64,
+        thread: ThreadId,
         slot: &SessionSlot,
     ) -> Result<(), Error> {
         let Some(session) = slot.current.as_ref() else {
@@ -209,7 +210,7 @@ async fn update_catalog(
 
 pub(super) async fn persist_snapshot(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     snapshot: SessionSnapshot,
     desired: Option<&Desired>,
 ) -> Result<bool, Error> {

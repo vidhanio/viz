@@ -27,8 +27,8 @@ use crate::{
     error::{Error, RequestError},
     rpc,
     wire::{
-        ClientKind, Hello, HelloParams, Id, Notification, PROTOCOL_VERSION, Request, Response,
-        RunStatus, ThreadId, ThreadState, params, raw_params,
+        ClientKind, EntryId, Hello, HelloParams, Id, Notification, PROTOCOL_VERSION, Request,
+        Response, RunStatus, ThreadId, ThreadState, params, raw_params,
     },
     workspace::{Change, WatchChange},
 };
@@ -110,7 +110,7 @@ fn json_message(value: &impl Serialize) -> serde_json::Result<Message> {
 }
 
 struct WatchCursor {
-    last: u64,
+    last: Option<EntryId>,
     state: ThreadState,
 }
 
@@ -120,14 +120,11 @@ async fn watch_thread(
     outgoing: &mpsc::Sender<Message>,
     app: bool,
 ) -> Result<WatchCursor, Error> {
-    let page = server.workspace.entries(thread.0, None, PAGE).await?;
-    let state = server.workspace.state(thread.0).await?;
-    let last = page.entries.last().map_or(0, |entry| entry.id.0);
+    let page = server.workspace.entries(thread, None, PAGE).await?;
+    let state = server.workspace.state(thread).await?;
+    let last = page.entries.last().map(|entry| entry.id);
     if app {
-        server
-            .workspace
-            .watched(thread.0, WatchChange::Open)
-            .await?;
+        server.workspace.watched(thread, WatchChange::Open).await?;
     }
     let view = Notification::ThreadView {
         thread,
@@ -163,7 +160,7 @@ async fn refresh_watch(
     let Some(watch) = watches.get_mut(&thread) else {
         return Ok(());
     };
-    let state = match server.workspace.state(thread.0).await {
+    let state = match server.workspace.state(thread).await {
         Ok(state) => state,
         Err(Error::NoThread(_)) => return Ok(()),
         Err(error) => return Err(error.into()),
@@ -171,9 +168,9 @@ async fn refresh_watch(
     loop {
         let entries = server
             .workspace
-            .entries_after(thread.0, watch.last, PAGE)
+            .entries_after(thread, watch.last, PAGE)
             .await?;
-        let Some(last) = entries.last().map(|entry| entry.id.0) else {
+        let Some(last) = entries.last().map(|entry| entry.id) else {
             break;
         };
         let more = entries.len() == PAGE;
@@ -187,7 +184,7 @@ async fn refresh_watch(
             },
         )
         .await?;
-        watch.last = last;
+        watch.last = Some(last);
         if !more {
             break;
         }
@@ -226,7 +223,7 @@ async fn local_session(
                 () = outgoing.closed() => break,
                 event = workspace_events.recv() => match event {
                     Ok(Change::Thread(id) | Change::Settled(id)) => {
-                        refresh_watch(&server, &mut watches, ThreadId(id), &outgoing).await?;
+                        refresh_watch(&server, &mut watches, id, &outgoing).await?;
                     }
                     Ok(Change::Directory) => if app {
                         send_note(&outgoing, Notification::ThreadsChanged(Empty {})).await?;
@@ -293,7 +290,7 @@ async fn local_session(
     writer.abort();
     if app {
         for id in watches.into_keys() {
-            if let Err(error) = server.workspace.watched(id.0, WatchChange::Close).await {
+            if let Err(error) = server.workspace.watched(id, WatchChange::Close).await {
                 tracing::debug!(thread = %id, %error, "clearing disconnected thread watch");
             }
         }
@@ -333,10 +330,7 @@ async fn update_watch(
     } else {
         let Unwatch { thread } = params(request)?;
         if watches.remove(&thread).is_some() && app {
-            server
-                .workspace
-                .watched(thread.0, WatchChange::Close)
-                .await?;
+            server.workspace.watched(thread, WatchChange::Close).await?;
         }
         Ok(Watching { watching: false })
     }
@@ -394,7 +388,7 @@ async fn client_call(
     let Some(run) = run.filter(|_| route) else {
         return Ok(());
     };
-    let Some(origin) = server.workspace.run_origin(thread.0, run.0).await? else {
+    let Some(origin) = server.workspace.run_origin(thread, run).await? else {
         return Ok(());
     };
     if Some(origin.connector.as_str()) != connector {
@@ -403,7 +397,7 @@ async fn client_call(
     loop {
         let waiting = server
             .workspace
-            .wait_run(thread.0, Some(run.0), Duration::from_secs(30));
+            .wait_run(thread, Some(run), Duration::from_secs(30));
         let status = tokio::select! {
             () = outgoing.closed() => return Ok(()),
             () = server.stop.cancelled() => return Ok(()),

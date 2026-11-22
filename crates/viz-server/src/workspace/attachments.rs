@@ -3,6 +3,7 @@ use std::{fmt::Write as _, path::Path};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt as _;
+use viz_protocol::{RunId, ThreadId};
 
 use super::{
     Workspace,
@@ -77,7 +78,7 @@ fn too_large() -> Error {
 
 pub(super) async fn save(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     uploads: Vec<Upload>,
 ) -> Result<Vec<PromptAttachment>, Error> {
     let mut attachments = Vec::with_capacity(uploads.len());
@@ -91,7 +92,7 @@ pub(super) async fn save(
 
 async fn owned(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     id: &str,
     budget: usize,
 ) -> Result<sql::Row, Error> {
@@ -103,7 +104,7 @@ async fn owned(
 
 pub(super) async fn inputs(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     ids: &[String],
 ) -> Result<Vec<Attachment>, Error> {
     let mut remaining = TOTAL_LIMIT;
@@ -123,8 +124,8 @@ pub(super) async fn inputs(
 
 pub(super) async fn materialize(
     workspace: &Workspace,
-    thread: u64,
-    run: u64,
+    thread: ThreadId,
+    run: RunId,
     refs: Vec<PromptAttachment>,
 ) -> Result<Vec<StoredAttachment>, Error> {
     if refs.is_empty() {

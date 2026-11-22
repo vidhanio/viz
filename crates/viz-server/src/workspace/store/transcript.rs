@@ -12,7 +12,7 @@ use crate::{
 
 pub(in crate::workspace) async fn publish(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     session: &str,
     output: Output,
 ) -> Result<Option<(String, ToolCallStatus)>, Error> {
@@ -47,7 +47,7 @@ pub(in crate::workspace) async fn publish(
                 exec(
                     db,
                     "UPDATE entries SET data = ?2 WHERE id = ?1",
-                    [id.0.into(), json(&NewEntry::Tool(updated.clone()))?.into()],
+                    [id.into(), json(&NewEntry::Tool(updated.clone()))?.into()],
                 )
                 .await?;
                 (
@@ -79,9 +79,9 @@ pub(in crate::workspace) async fn publish(
 
 pub(in crate::workspace) async fn append(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
     data: &NewEntry,
-) -> Result<u64, Error> {
+) -> Result<EntryId, Error> {
     let id = row(
         db,
         "INSERT INTO entries (thread, data) VALUES (?1, ?2) RETURNING id",
@@ -89,7 +89,7 @@ pub(in crate::workspace) async fn append(
     )
     .await?
     .expect("entry INSERT RETURNING yielded one row")
-    .u64(0)?;
+    .id(0)?;
     let text = match data {
         NewEntry::Prompt { text, .. }
         | NewEntry::Text { text, .. }
@@ -119,8 +119,8 @@ pub(in crate::workspace) async fn append(
 
 pub(in crate::workspace) async fn entries(
     db: &mut Connection,
-    thread: u64,
-    before: Option<u64>,
+    thread: ThreadId,
+    before: Option<EntryId>,
     limit: usize,
 ) -> Result<EntryPage, Error> {
     require(db, thread).await?;
@@ -155,14 +155,14 @@ pub(in crate::workspace) async fn entries(
 
 pub(in crate::workspace) async fn entries_after(
     db: &mut Connection,
-    thread: u64,
-    after: u64,
+    thread: ThreadId,
+    after: Option<EntryId>,
     limit: usize,
 ) -> Result<Vec<Entry>, Error> {
     require(db, thread).await?;
     rows(
         db,
-        "SELECT id, data FROM entries WHERE thread = ?1 AND id > ?2 ORDER BY id LIMIT ?3",
+        "SELECT id, data FROM entries WHERE thread = ?1 AND id > coalesce(?2, 0) ORDER BY id LIMIT ?3",
         [thread.into(), after.into(), limit.into()],
     )
     .await?
@@ -172,7 +172,7 @@ pub(in crate::workspace) async fn entries_after(
 
 fn decode_entry(mut row: Row) -> Result<Entry, Error> {
     Ok(Entry {
-        id: EntryId(row.u64(0)?),
+        id: row.id(0)?,
         data: from_json(&row.str(1)?)?,
     })
 }
@@ -207,8 +207,8 @@ pub(in crate::workspace) async fn search(
     .await?
     .map(|mut row| {
         Ok(SearchHit {
-            thread: ThreadId(row.u64(0)?),
-            entry: EntryId(row.u64(1)?),
+            thread: row.id(0)?,
+            entry: row.id(1)?,
             snippet: row.str(2)?,
         })
     })

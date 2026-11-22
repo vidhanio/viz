@@ -239,8 +239,8 @@ impl Workspace {
         })))
     }
 
-    pub(super) fn kick(self: &Arc<Self>, thread: u64, prepare: bool) {
-        if let Ok(driver) = self.driver(ThreadId(thread)) {
+    pub(super) fn kick(self: &Arc<Self>, thread: ThreadId, prepare: bool) {
+        if let Ok(driver) = self.driver(thread) {
             driver.wake(prepare);
         }
     }
@@ -261,14 +261,14 @@ impl Workspace {
 
     pub(super) async fn configure(
         self: &Arc<Self>,
-        thread: u64,
+        thread: ThreadId,
         option: String,
         value: OptionValue,
     ) -> Result<(), Error> {
         let driver = {
             let mut db = self.db.lock().await;
             store::require(&mut db, thread).await?;
-            let driver = self.driver(ThreadId(thread))?;
+            let driver = self.driver(thread)?;
             drop(db);
             driver
         };
@@ -299,7 +299,7 @@ impl Workspace {
                 }
                 changed = worker.slot.changed() => {
                     if changed {
-                        if let Err(error) = self.refresh_session(thread.0, &worker.slot).await {
+                        if let Err(error) = self.refresh_session(thread, &worker.slot).await {
                             tracing::error!(%thread, %error, "saving ACP session update");
                         }
                         ready = true;
@@ -338,7 +338,7 @@ impl Workspace {
             } => {
                 if !reply.is_closed() {
                     let result = self
-                        .configure_session(thread.0, slot, &driver.lifetime, &option, value)
+                        .configure_session(thread, slot, &driver.lifetime, &option, value)
                         .await;
                     let _ = reply.send(result);
                 }
@@ -349,7 +349,7 @@ impl Workspace {
                 reply,
             } => {
                 if !reply.is_closed() {
-                    let result = self.apply_checkout(thread.0, &before, &after).await;
+                    let result = self.apply_checkout(thread, &before, &after).await;
                     if result.is_ok() {
                         slot.clear();
                         driver.wake(true);
@@ -368,7 +368,7 @@ impl Workspace {
         prepare: bool,
     ) -> Result<bool, Error> {
         if let Some(session) = slot.current.as_mut() {
-            self.continue_idle(thread.0, driver, session).await?;
+            self.continue_idle(thread, driver, session).await?;
         }
         let claim = {
             let mut db = self.db.lock().await;
@@ -376,26 +376,26 @@ impl Workspace {
                 return Ok(false);
             }
             let mut tx = db.transaction().await?;
-            let claim = runs::claim(&mut tx, thread.0).await?;
+            let claim = runs::claim(&mut tx, thread).await?;
             tx.commit().await?;
             let claim = claim.map(|claim| {
-                let turn = driver.begin(RunId(claim.id));
+                let turn = driver.begin(claim.id);
                 (claim, turn)
             });
             drop(db);
             claim
         };
         if let Some((claim, turn)) = claim {
-            self.changed(Some(thread.0));
+            self.changed(Some(thread));
             let result = driver
-                .interpret(&turn, self.prompt(thread.0, slot, claim, &turn))
+                .interpret(&turn, self.prompt(thread, slot, claim, &turn))
                 .await;
             let settlement = settle_outcome(result, &self.closing, &turn.cancel, &turn.steer);
             if settlement.status == EndStatus::Interrupted {
                 slot.clear();
             }
-            if let Err(error) = self.finish(thread.0, driver, &turn, settlement).await {
-                self.abandon(thread.0, turn.run.0, &error).await;
+            if let Err(error) = self.finish(thread, driver, &turn, settlement).await {
+                self.abandon(thread, turn.run, &error).await;
                 return Err(error);
             }
             driver.end();
@@ -404,10 +404,7 @@ impl Workspace {
         if !prepare {
             return Ok(false);
         }
-        let result = self
-            .session(thread.0, slot, &driver.lifetime)
-            .await
-            .map(drop);
+        let result = self.session(thread, slot, &driver.lifetime).await.map(drop);
         if let Err(error) = result
             && !driver.lifetime.is_cancelled()
         {
@@ -415,10 +412,10 @@ impl Workspace {
             exec(
                 &mut *self.db.lock().await,
                 "UPDATE threads SET setup_failed = 1 WHERE id = ?1",
-                [thread.0.into()],
+                [thread.into()],
             )
             .await?;
-            self.relist(thread.0);
+            self.relist(thread);
         }
         Ok(true)
     }

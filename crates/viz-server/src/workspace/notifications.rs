@@ -7,12 +7,15 @@ use std::{collections::HashMap, sync::Mutex};
 use tokio::sync::broadcast;
 
 use super::{Workspace, sql::exec, store};
-use crate::{error::Error, wire::LiveTurn};
+use crate::{
+    error::Error,
+    wire::{LiveTurn, ThreadId},
+};
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Change {
-    Thread(u64),
-    Settled(u64),
+    Thread(ThreadId),
+    Settled(ThreadId),
     Directory,
 }
 
@@ -24,8 +27,8 @@ pub(crate) enum WatchChange {
 
 #[derive(Default)]
 struct Views {
-    live: HashMap<u64, LiveTurn>,
-    watches: HashMap<u64, usize>,
+    live: HashMap<ThreadId, LiveTurn>,
+    watches: HashMap<ThreadId, usize>,
 }
 
 pub(super) struct Updates {
@@ -43,7 +46,7 @@ impl Default for Updates {
 }
 
 impl Updates {
-    pub(super) fn live(&self, thread: u64, live: Option<LiveTurn>) {
+    pub(super) fn live(&self, thread: ThreadId, live: Option<LiveTurn>) {
         let mut views = self.views.lock().expect("thread views poisoned");
         if let Some(live) = live {
             views.live.insert(thread, live);
@@ -52,7 +55,7 @@ impl Updates {
         }
     }
 
-    pub(super) fn latest(&self, thread: u64) -> Option<LiveTurn> {
+    pub(super) fn latest(&self, thread: ThreadId) -> Option<LiveTurn> {
         self.views
             .lock()
             .expect("thread views poisoned")
@@ -61,7 +64,7 @@ impl Updates {
             .cloned()
     }
 
-    pub(super) fn remove(&self, thread: u64) {
+    pub(super) fn remove(&self, thread: ThreadId) {
         let mut views = self.views.lock().expect("thread views poisoned");
         views.live.remove(&thread);
         views.watches.remove(&thread);
@@ -73,24 +76,24 @@ impl Workspace {
         self.updates.changes.subscribe()
     }
 
-    pub(super) fn changed(&self, thread: Option<u64>) {
+    pub(super) fn changed(&self, thread: Option<ThreadId>) {
         let _ = self
             .updates
             .changes
             .send(thread.map_or(Change::Directory, Change::Thread));
     }
 
-    pub(super) fn relist(&self, thread: u64) {
+    pub(super) fn relist(&self, thread: ThreadId) {
         self.changed(Some(thread));
         self.changed(None);
     }
 
-    pub(super) fn settled(&self, thread: u64) {
+    pub(super) fn settled(&self, thread: ThreadId) {
         let _ = self.updates.changes.send(Change::Settled(thread));
         self.changed(None);
     }
 
-    pub(crate) async fn watched(&self, thread: u64, mode: WatchChange) -> Result<(), Error> {
+    pub(crate) async fn watched(&self, thread: ThreadId, mode: WatchChange) -> Result<(), Error> {
         match mode {
             WatchChange::Open => {
                 let mut db = self.db.lock().await;
@@ -127,7 +130,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub(super) fn unread(&self, thread: u64) -> bool {
+    pub(super) fn unread(&self, thread: ThreadId) -> bool {
         !self
             .updates
             .views

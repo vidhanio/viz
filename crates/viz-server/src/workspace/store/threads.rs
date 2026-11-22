@@ -14,7 +14,7 @@ use crate::{
     acp::{Desired, Selection},
     error::Error,
     wire::{
-        AttachmentCapabilities, Command, ConfigOption, QueuedInput, RunId, ThreadId, ThreadState,
+        AttachmentCapabilities, Command, ConfigOption, QueuedInput, ThreadId, ThreadState,
         ThreadStatus, ThreadSummary, Usage,
     },
 };
@@ -48,26 +48,29 @@ pub(in crate::workspace) struct Binding {
 
 pub(in crate::workspace) async fn binding(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
 ) -> Result<Binding, Error> {
     let mut row = row(db, "SELECT harness, cwd, project, worktree, parent, parent_environment, session FROM threads WHERE id = ?1", [thread.into()]).await?
-        .ok_or_else(|| Error::NoThread(ThreadId(thread)))?;
+        .ok_or_else(|| Error::NoThread(thread))?;
     Ok(Binding {
         harness: row.str(0)?,
         cwd: row.str(1)?,
         project: row.opt_str(2)?,
         worktree: row.opt_str(3)?,
-        parent: row.opt_u64(4)?.map(ThreadId),
+        parent: row.opt_id(4)?,
         parent_environment: row.opt_str(5)?,
         session: from_json(&row.str(6)?)?,
     })
 }
 
-pub(in crate::workspace) async fn require(db: &mut Connection, thread: u64) -> Result<(), Error> {
+pub(in crate::workspace) async fn require(
+    db: &mut Connection,
+    thread: ThreadId,
+) -> Result<(), Error> {
     row(db, "SELECT id FROM threads WHERE id = ?1", [thread.into()])
         .await?
         .map(|_| ())
-        .ok_or_else(|| Error::NoThread(ThreadId(thread)))
+        .ok_or_else(|| Error::NoThread(thread))
 }
 
 pub(in crate::workspace) struct NewThread<'a> {
@@ -75,7 +78,7 @@ pub(in crate::workspace) struct NewThread<'a> {
     pub(in crate::workspace) cwd: &'a str,
     pub(in crate::workspace) project: Option<&'a str>,
     pub(in crate::workspace) worktree: Option<&'a str>,
-    pub(in crate::workspace) parent: Option<u64>,
+    pub(in crate::workspace) parent: Option<ThreadId>,
     pub(in crate::workspace) parent_environment: Option<&'a str>,
     pub(in crate::workspace) title: Option<&'a str>,
     pub(in crate::workspace) session: SavedSession,
@@ -84,13 +87,13 @@ pub(in crate::workspace) struct NewThread<'a> {
 pub(in crate::workspace) async fn create_thread(
     db: &mut Connection,
     new: &NewThread<'_>,
-) -> Result<u64, Error> {
+) -> Result<ThreadId, Error> {
     let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
         new.harness.into(), new.cwd.into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
         new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(), new.worktree.into(),
     ]).await?.expect("thread INSERT RETURNING yielded one row");
-    row.u64(0)
+    row.id(0)
 }
 
 const STATUS_COLUMNS: &str = "EXISTS (SELECT 1 FROM runs WHERE thread = t.id AND status IN ('queued','running')),
@@ -113,9 +116,9 @@ pub(in crate::workspace) async fn list_threads(
         .map(|mut row| {
             let harness = row.str(5)?;
             Ok(ThreadSummary {
-                id: ThreadId(row.u64(0)?),
+                id: row.id(0)?,
                 title: row.str(1)?,
-                parent: row.opt_u64(2)?.map(ThreadId),
+                parent: row.opt_id(2)?,
                 parent_environment: row.opt_str(3)?,
                 project: row.opt_str(4)?,
                 worktree: row.opt_str(12)?.map(thread_worktree),
@@ -135,14 +138,14 @@ pub(in crate::workspace) async fn list_threads(
 
 pub(in crate::workspace) async fn state(
     db: &mut Connection,
-    thread: u64,
+    thread: ThreadId,
 ) -> Result<ThreadState, Error> {
     let query = format!(
         "SELECT t.harness, t.project, t.cwd, t.session, t.worktree, {STATUS_COLUMNS} FROM threads AS t WHERE t.id = ?1"
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
-        .ok_or_else(|| Error::NoThread(ThreadId(thread)))?;
+        .ok_or_else(|| Error::NoThread(thread))?;
     let session: SavedSession = from_json(&row.str(3)?)?;
     let queue = rows(
         db,
@@ -153,7 +156,7 @@ pub(in crate::workspace) async fn state(
     .await?
     .map(|mut row| {
         Ok(QueuedInput {
-            run: RunId(row.u64(0)?),
+            run: row.id(0)?,
             text: row.str(1)?,
             attachment_count: row.u64(2)?,
         })

@@ -2,7 +2,7 @@
 //! The receiver deduplicates each wake by the continuation's run ID.
 
 use viz_core::tasks::{self, WakeEdge};
-use viz_protocol::{RunId, RunKind, RunStatus};
+use viz_protocol::{RunId, RunKind, RunStatus, ThreadId};
 
 use super::{
     runs,
@@ -10,7 +10,7 @@ use super::{
 };
 use crate::error::Error;
 
-pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result<(), Error> {
+pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) -> Result<(), Error> {
     let Some(continuation) = runs::run_from(db, thread, run).await? else {
         return Ok(());
     };
@@ -25,7 +25,7 @@ pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result
         [run.into()],
     )
     .await?
-    .map(|mut row| Ok::<_, Error>((RunId(row.u64(0)?), runs::decode_status(&row.str(1)?)?)))
+    .map(|mut row| Ok::<_, Error>((row.id(0)?, runs::decode_status(&row.str(1)?)?)))
     .transpose()?;
     let Some((parent, text)) = tasks::continuation_parent(&continuation, preceding) else {
         return Ok(());
@@ -40,8 +40,8 @@ pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result
     .await?
     .map(|row| {
         Ok(WakeEdge {
-            parent: RunId(row.u64(0)?),
-            wake: RunId(row.u64(1)?),
+            parent: row.id(0)?,
+            wake: row.id(1)?,
         })
     })
     .collect::<Result<Vec<_>, Error>>()?;
@@ -55,7 +55,7 @@ pub(super) async fn record(db: &mut Connection, thread: u64, run: u64) -> Result
     )
     .await?
     {
-        if !receipt.flag(3)? && ancestry.contains(&RunId(receipt.u64(2)?)) {
+        if !receipt.flag(3)? && ancestry.contains(&receipt.id(2)?) {
             exec(
                 db,
                 "INSERT OR IGNORE INTO task_follow_ups (environment, task, run, thread, text)

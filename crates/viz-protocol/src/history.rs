@@ -5,20 +5,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{Origin, RunId, ThreadId, ToolRecord};
-
-/// A transcript entry id.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
-)]
-#[serde(transparent)]
-pub struct EntryId(pub u64);
-
-impl fmt::Display for EntryId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
+use super::{EntryId, Origin, RunId, ThreadId, ToolRecord};
 
 /// A file attached to an input.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
