@@ -1,24 +1,34 @@
 //! ACP tools use the same authenticated dispatch as clients; task ownership
 //! comes from the MCP grant.
 
-use std::sync::Arc;
+use std::{num::NonZeroU64, sync::Arc, time::Duration};
 
 use futures_util::future::BoxFuture;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
+use viz_core::threads::Patch;
 use viz_protocol::{
-    EnvironmentList, HarnessList, HarnessOptions, HarnessOptionsResult, LaunchThread, ListEntries,
-    ReadThreadState, SendMode, StopThread, TaskList, TaskResult, ThreadStateResult, WaitThread,
-    WorktreeTarget,
+    CreateProject, Empty, EnvironmentList, HarnessList, HarnessOptions, LaunchThread, Launched,
+    ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method,
+    MoveThread, ReadProject, ReadThreadState, RemoveProject, RemoveWorktree, SearchThreads,
+    SendInput, SendMode, StopThread, TaskList, TaskResult, ThreadId, ThreadStateResult,
+    UpdateProject, UpdateThread, WaitThread,
 };
 
 use crate::{
     acp::mcp::Dispatch,
     environments::Peers,
+    rpc::Handler,
     tasks::{Delegate, Tasks},
-    wire::{RpcError, decode, encode},
-    workspace::Workspace,
+    wire::{RpcError, decode},
+    workspace::{
+        Workspace,
+        rpc::{
+            Entries, ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search,
+            Thread, ThreadRun, UpdateMetadata, Wait, WorktreeRemove,
+        },
+    },
 };
 
 #[derive(Debug, Serialize)]
@@ -58,7 +68,7 @@ impl std::fmt::Debug for Tools {
 }
 
 macro_rules! rpc_tools {
-    ($($name:literal, $method:literal, $input:ty, $description:literal;)+) => {
+    ($($name:literal, $method:ty, $input:ty, $link:expr, $description:literal;)+) => {
         fn rpc_definitions() -> Vec<ToolDefinition> {
             vec![$(definition::<Target<$input>>($name, $description)),+]
         }
@@ -66,7 +76,7 @@ macro_rules! rpc_tools {
         impl Tools {
             async fn call_rpc(&self, name: &str, args: Value) -> Result<ToolResult, RpcError> {
                 match name {
-                    $($name => self.rpc::<$input>($method, args).await,)+
+                    $($name => self.rpc::<$method, $input>(args, $link).await,)+
                     _ => Err(RpcError::not_found(format!("unknown tool {name}"))),
                 }
             }
@@ -75,24 +85,24 @@ macro_rules! rpc_tools {
 }
 
 rpc_tools! {
-    "thread_list", "threads.list", ThreadList, "List threads in the selected environment, optionally filtered by project.";
-    "thread_read", "thread.entries", ListEntries, "Read recent thread entries. Pass before for earlier entries.";
-    "thread_state", "thread.state", ReadThreadState, "Read a thread's current state, ACP options, working directory, and queue.";
-    "thread_search", "threads.search", Search, "Search thread transcripts in the selected environment.";
-    "thread_launch", "thread.launch", LaunchThread, "Launch an independent ACP thread (use delegate_task for a result that returns here).";
-    "thread_send", "thread.send", Send, "Send a new input to an existing thread. Its previous task result is not changed.";
-    "thread_wait", "thread.wait", WaitThread, "Wait for a thread run to settle; specify the run ID to wait for that exact input.";
-    "thread_stop", "thread.stop", StopThread, "Stop a specific thread run, or the active run and queue if run is omitted.";
-    "thread_update", "thread.update", ThreadUpdate, "Change a thread's title, archive or pin state.";
-    "project_list", "projects.list", Empty, "List the configured projects in the selected environment.";
-    "project_read", "project.read", Project, "Read a project by its absolute path in the selected environment.";
-    "project_create", "project.create", ProjectCreate, "Register an existing directory as a project.";
-    "project_update", "project.update", ProjectUpdate, "Rename a project by its absolute path.";
-    "project_remove", "project.remove", Project, "Remove a project record without deleting its files.";
-    "project_branches", "project.branches", Project, "List a Git project's local and remote-tracking branches, usable as a worktree base.";
-    "worktree_list", "worktrees.list", Project, "List the checkouts of a Git project's repository, with their branches and the threads running in each.";
-    "worktree_remove", "worktree.remove", WorktreeRemove, "Remove a worktree viz created once no thread runs in it. Refuses uncommitted changes unless force is set; the branch is kept.";
-    "thread_move", "thread.move", ThreadMove, "Move an idle project thread to a new worktree ({\"mode\":\"new\"}), an existing one, or back to the project checkout ({\"mode\":\"local\"}). Its conversation continues there.";
+    "thread_list", ListThreads<'static>, ThreadList, |_| None, "List threads in the selected environment, optionally filtered by project.";
+    "thread_read", ListEntries, Entries, |_| None, "Read recent thread entries. Pass before for earlier entries.";
+    "thread_state", ReadThreadState, Thread, |_| None, "Read a thread's current state, ACP options, working directory, and queue.";
+    "thread_search", SearchThreads<'static>, Search, |_| None, "Search thread transcripts in the selected environment.";
+    "thread_launch", LaunchThread, LaunchThread, |response: &Launched| Some(response.thread), "Launch an independent ACP thread (use delegate_task for a result that returns here).";
+    "thread_send", SendInput, SendText, |_| None, "Send a new input to an existing thread. Its previous task result is not changed.";
+    "thread_wait", WaitThread, Wait, |_| None, "Wait for a thread run to settle; specify the run ID to wait for that exact input.";
+    "thread_stop", StopThread, ThreadRun, |_| None, "Stop a specific thread run, or the active run and queue if run is omitted.";
+    "thread_update", UpdateThread<'static>, ThreadUpdate, |_| None, "Change a thread's title, archive or pin state.";
+    "project_list", ListProjects, Empty, |_| None, "List the configured projects in the selected environment.";
+    "project_read", ReadProject<'static>, ProjectKey, |_| None, "Read a project by its absolute path in the selected environment.";
+    "project_create", CreateProject<'static>, ProjectCreate, |_| None, "Register an existing directory as a project.";
+    "project_update", UpdateProject<'static>, ProjectUpdate, |_| None, "Rename a project by its absolute path.";
+    "project_remove", RemoveProject<'static>, ProjectKey, |_| None, "Remove a project record without deleting its files.";
+    "project_branches", ListBranches<'static>, ProjectKey, |_| None, "List a Git project's local and remote-tracking branches, usable as a worktree base.";
+    "worktree_list", ListWorktrees<'static>, ProjectKey, |_| None, "List the checkouts of a Git project's repository, with their branches and the threads running in each.";
+    "worktree_remove", RemoveWorktree<'static>, WorktreeRemove, |_| None, "Remove a worktree viz created once no thread runs in it. Refuses uncommitted changes unless force is set; the branch is kept.";
+    "thread_move", MoveThread, MoveThread, |_| None, "Move an idle project thread to a new worktree ({\"mode\":\"new\"}), an existing one, or back to the project checkout ({\"mode\":\"local\"}). Its conversation continues there.";
 }
 
 pub(crate) fn definitions() -> Vec<ToolDefinition> {
@@ -197,31 +207,44 @@ impl Tools {
         }
     }
 
-    async fn dispatch(
-        &self,
-        environment: &str,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, RpcError> {
-        if environment == self.peers.local {
-            self.workspace.call(method, params).await
-        } else {
-            self.peers.call(environment, method, params).await
-        }
+    fn dispatch<'a, M, T>(
+        &'a self,
+        environment: &'a str,
+        input: T,
+        wait: Duration,
+    ) -> BoxFuture<'a, Result<M::Response, RpcError>>
+    where
+        M: Method + 'static,
+        T: Serialize + Send + Sync + Into<<Arc<Workspace> as Handler<M>>::Input> + 'static,
+        Arc<Workspace>: Handler<M>,
+    {
+        Box::pin(async move {
+            if environment == self.peers.local {
+                Handler::<M>::handle(&self.workspace, input.into()).await
+            } else {
+                self.peers.call::<M>(environment, &input, wait).await
+            }
+        })
     }
 
-    async fn rpc<T: DeserializeOwned + Serialize>(
+    async fn rpc<M, T>(
         &self,
-        method: &str,
         args: Value,
-    ) -> Result<ToolResult, RpcError> {
+        child: fn(&M::Response) -> Option<ThreadId>,
+    ) -> Result<ToolResult, RpcError>
+    where
+        M: Method + 'static,
+        T: ToolInput + Into<<Arc<Workspace> as Handler<M>>::Input>,
+        Arc<Workspace>: Handler<M>,
+    {
         let Target::<T> { environment, input } = decode(args)?;
         let environment = environment.as_deref().unwrap_or(&self.peers.local);
-        let params = encode(input)?;
-        let target = params.get("thread").and_then(Value::as_u64);
-        let result = self.dispatch(environment, method, params).await?;
-        let thread = target.or_else(|| result.get("thread").and_then(Value::as_u64));
-        output(&result, thread.map(|thread| (thread, environment)))
+        let (thread, wait) = (input.thread(), input.extra_wait());
+        let result = self.dispatch::<M, T>(environment, input, wait).await?;
+        let link = thread
+            .or_else(|| child(&result))
+            .map(|thread| (thread.0, environment));
+        output(&result, link)
     }
 
     async fn spawn_options(
@@ -231,16 +254,15 @@ impl Tools {
         input: SpawnOptions,
     ) -> Result<ToolResult, RpcError> {
         let environment = environment.unwrap_or(&self.peers.local);
-        let HarnessList { harnesses } = decode(
-            self.dispatch(environment, "harnesses.list", json!({}))
-                .await?,
-        )?;
+        let HarnessList { harnesses } = self
+            .dispatch::<ListHarnesses, _>(environment, Empty {}, Duration::ZERO)
+            .await?;
         let parent_harness = if input.harness.is_none() && environment == self.peers.local {
-            let state = self
-                .workspace
-                .call("thread.state", json!({"thread": thread}))
-                .await?;
-            Some(decode::<ThreadStateResult>(state)?.state.harness)
+            let thread =
+                NonZeroU64::new(thread).ok_or_else(|| RpcError::invalid("invalid thread ID"))?;
+            let ThreadStateResult { state } =
+                Handler::<ReadThreadState>::handle(&self.workspace, Thread { thread }).await?;
+            Some(state.harness)
         } else {
             None
         };
@@ -275,17 +297,16 @@ impl Tools {
             .find(|harness| harness.id == name)
             .ok_or_else(|| RpcError::not_found(format!("no ACP harness {name}")))?;
         if let Some(model) = input.model {
-            let options = self
-                .dispatch(
+            let selected = self
+                .dispatch::<HarnessOptions, _>(
                     environment,
-                    "harnesses.options",
-                    encode(HarnessOptions {
+                    HarnessOptions {
                         harness: name.to_owned(),
                         model,
-                    })?,
+                    },
+                    Duration::ZERO,
                 )
                 .await?;
-            let selected: HarnessOptionsResult = decode(options)?;
             let model = selected
                 .options
                 .iter()
@@ -387,29 +408,10 @@ struct Target<T> {
 }
 
 #[derive(Serialize, Deserialize, JsonSchema)]
-struct Empty {}
-
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct ThreadList {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    archived: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    project: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct Search {
-    query: String,
-    #[schemars(range(min = 1, max = 200))]
-    #[serde(skip_serializing_if = "Option::is_none")]
-    limit: Option<u16>,
-}
-
-#[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct Send {
+struct SendText {
     #[schemars(range(min = 1))]
-    thread: u64,
+    thread: ThreadId,
     #[schemars(length(min = 1))]
     text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -421,7 +423,7 @@ struct Send {
 #[derive(Serialize, Deserialize, JsonSchema)]
 struct ThreadUpdate {
     #[schemars(range(min = 1))]
-    thread: u64,
+    thread: NonZeroU64,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -432,39 +434,83 @@ struct ThreadUpdate {
     unread: Option<bool>,
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct Project {
-    project: String,
+/// Tool inputs can project thread context and timeouts without inspecting JSON.
+trait ToolInput: DeserializeOwned + Serialize + Send + Sync + 'static {
+    fn thread(&self) -> Option<ThreadId> {
+        None
+    }
+
+    fn extra_wait(&self) -> Duration {
+        Duration::ZERO
+    }
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct WorktreeRemove {
-    /// Absolute path of the worktree root.
-    path: String,
-    /// Discard uncommitted changes and untracked files.
-    #[serde(default)]
-    force: bool,
+macro_rules! tool_inputs {
+    ($($input:ty),+ $(,)?) => { $(impl ToolInput for $input {})+ };
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct ThreadMove {
-    #[schemars(range(min = 1))]
-    thread: u64,
-    worktree: WorktreeTarget,
+tool_inputs!(
+    Empty,
+    ThreadList,
+    Search,
+    LaunchThread,
+    ProjectKey,
+    ProjectCreate,
+    ProjectUpdate,
+    WorktreeRemove
+);
+
+macro_rules! thread_inputs {
+    ($($input:ty => $thread:expr),+ $(,)?) => {
+        $(impl ToolInput for $input {
+            fn thread(&self) -> Option<ThreadId> { Some(($thread)(self)) }
+        })+
+    };
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct ProjectCreate {
-    path: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
+thread_inputs! {
+    Entries => |input: &Entries| ThreadId(input.thread.get()),
+    Thread => |input: &Thread| ThreadId(input.thread.get()),
+    ThreadRun => |input: &ThreadRun| ThreadId(input.thread.get()),
+    MoveThread => |input: &MoveThread| input.thread,
+    SendText => |input: &SendText| input.thread,
+    ThreadUpdate => |input: &ThreadUpdate| ThreadId(input.thread.get()),
 }
 
-#[derive(Serialize, Deserialize, JsonSchema)]
-struct ProjectUpdate {
-    project: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
+impl ToolInput for Wait {
+    fn thread(&self) -> Option<ThreadId> {
+        Some(ThreadId(self.thread.get()))
+    }
+
+    fn extra_wait(&self) -> Duration {
+        Duration::from_millis(self.timeout_ms.unwrap_or(30_000).min(120_000))
+    }
+}
+
+impl From<SendText> for SendInput {
+    fn from(input: SendText) -> Self {
+        Self {
+            thread: input.thread,
+            text: input.text,
+            mode: input.mode,
+            request_id: input.request_id,
+            origin: None,
+            attachments: Vec::new(),
+        }
+    }
+}
+
+impl From<ThreadUpdate> for UpdateMetadata {
+    fn from(input: ThreadUpdate) -> Self {
+        Self {
+            thread: input.thread,
+            title: input.title,
+            archived: input.archived,
+            pinned: input.pinned,
+            unread: input.unread,
+            project: Patch::Keep,
+        }
+    }
 }
 
 #[derive(Deserialize, JsonSchema)]

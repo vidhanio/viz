@@ -1,0 +1,386 @@
+//! Thread lifetime and thread-scoped transactions. Harness and Git effects
+//! run on either side of the commit as required by their ownership.
+
+use std::{path::Path, sync::Arc, time::Duration};
+
+use viz_core::{
+    runs as decisions,
+    threads::{self, Patch},
+    titles,
+};
+use viz_protocol::{LaunchThread, Launched, RunId, SendInput, SendMode, Sent, ThreadId};
+
+use super::{
+    Workspace,
+    admission::selection,
+    attachments,
+    rpc::UpdateMetadata,
+    runs::{self, NewRun},
+    sql::{Connection, exec, row},
+    store::{self, NewThread, SavedSession},
+    worktree::{self, Placement},
+};
+use crate::wire::RpcError;
+
+impl Workspace {
+    /// Launches a thread; a worktree target is resolved, and a new worktree
+    /// created, before the thread is recorded, and removed again if the
+    /// launch fails or repeats an earlier request.
+    pub(super) async fn launch(self: &Arc<Self>, args: LaunchThread) -> Result<Launched, RpcError> {
+        validate_request_id(args.request_id.as_deref())?;
+        let Some(target) = args.worktree.clone() else {
+            return self
+                .launch_in(args, None)
+                .await
+                .map(|(launched, _)| launched);
+        };
+        let project = args
+            .project
+            .clone()
+            .ok_or_else(|| RpcError::invalid("a worktree requires a project"))?;
+        {
+            let mut db = self.db.lock().await;
+            if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
+                return Ok(found);
+            }
+            store::project(&mut db, &project).await?;
+            drop(db);
+        }
+        let title = args
+            .title
+            .clone()
+            .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()));
+        let placement = self
+            .place(&project, Path::new(&project), &target, &title)
+            .await?;
+        let result = self.launch_in(args, Some(&placement)).await;
+        if !matches!(result, Ok((_, true))) {
+            worktree::discard(Path::new(&project), &placement).await;
+        }
+        result.map(|(launched, _)| launched)
+    }
+
+    /// Records a launched thread, or returns the thread an earlier request
+    /// with the same ID launched (with `false`).
+    async fn launch_in(
+        self: &Arc<Self>,
+        args: LaunchThread,
+        placement: Option<&Placement>,
+    ) -> Result<(Launched, bool), RpcError> {
+        let mut db = self.db.lock().await;
+        let mut tx = db.transaction().await?;
+        if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
+            return Ok((found, false));
+        }
+        threads::validate_title(args.title.as_deref())
+            .map_err(|error| RpcError::invalid(error.to_string()))?;
+        let (harness, _) = self.harness(args.harness.as_deref())?;
+        let cwd = match placement {
+            Some(placement) => placement.cwd.clone().into(),
+            None => self.cwd_for(&mut tx, args.project.as_deref()).await?,
+        };
+        let attachments = attachments::decode(args.attachments)?;
+        let session = SavedSession {
+            desired: args.options,
+            selection: selection(args.model, args.thinking),
+            ..SavedSession::default()
+        };
+        let thread = store::create_thread(
+            &mut tx,
+            &NewThread {
+                harness,
+                cwd: store::path_text(&cwd)?,
+                project: args.project.as_deref(),
+                worktree: placement.and_then(|placement| placement.worktree.as_deref()),
+                parent: None,
+                parent_environment: None,
+                title: args.title.as_deref(),
+                session,
+            },
+        )
+        .await?;
+        let run = if args.text.is_some() || !attachments.is_empty() {
+            let attachments = attachments::save(&mut tx, thread, attachments).await?;
+            Some(
+                runs::enqueue(
+                    &mut tx,
+                    thread,
+                    NewRun {
+                        attachments: &attachments,
+                        ..NewRun::new(args.text.as_deref().unwrap_or_default())
+                    },
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        if let Some(request_id) = args.request_id {
+            exec(
+                &mut tx,
+                "INSERT INTO launch_requests (request_id, thread, run) VALUES (?1, ?2, ?3)",
+                [request_id.into(), thread.into(), run.into()],
+            )
+            .await?;
+        }
+        tx.commit().await?;
+        self.kick(thread, run.is_none());
+        drop(db);
+        self.relist(thread);
+        Ok((
+            Launched {
+                thread: ThreadId(thread),
+                run: run.map(RunId),
+            },
+            true,
+        ))
+    }
+
+    pub(crate) async fn send(self: &Arc<Self>, args: SendInput) -> Result<Sent, RpcError> {
+        let thread = args.thread.0;
+        let mut db = self.db.lock().await;
+        let mut tx = db.transaction().await?;
+        store::require(&mut tx, thread).await?;
+        validate_request_id(args.request_id.as_deref())?;
+        let previous = match &args.request_id {
+            Some(request_id) => runs::by_request(&mut tx, thread, request_id)
+                .await?
+                .map(RunId),
+            None => None,
+        };
+        let state = decisions::SubmissionState {
+            previous,
+            active: if args.mode == Some(SendMode::Steer) && previous.is_none() {
+                runs::active(&mut tx, thread).await?.map(RunId)
+            } else {
+                None
+            },
+        };
+        let (place, steer) = match decisions::submit(state, args.mode) {
+            decisions::Submission::Replay(run) => return Ok(Sent { run }),
+            decisions::Submission::Enqueue { place, steer } => (place, steer),
+        };
+        let attachments =
+            attachments::save(&mut tx, thread, attachments::decode(args.attachments)?).await?;
+        let run = runs::enqueue(
+            &mut tx,
+            thread,
+            NewRun {
+                origin: args.origin.as_ref(),
+                attachments: &attachments,
+                request_id: args.request_id.as_deref(),
+                place,
+                ..NewRun::new(&args.text)
+            },
+        )
+        .await?;
+        tx.commit().await?;
+        if let Some(active) = steer {
+            self.steer_active(thread, active.0);
+        }
+        self.kick(thread, false);
+        drop(db);
+        self.relist(thread);
+        Ok(Sent { run: RunId(run) })
+    }
+
+    fn cancel_active(&self, thread: u64, active: u64) {
+        let state = self
+            .transient
+            .lock()
+            .expect("workspace runtime mutex poisoned");
+        if let Some(driver) = state.threads.get(&thread) {
+            driver.cancel(active);
+        }
+    }
+
+    pub(super) fn steer_active(&self, thread: u64, active: u64) {
+        let state = self
+            .transient
+            .lock()
+            .expect("workspace runtime mutex poisoned");
+        if let Some(driver) = state.threads.get(&thread) {
+            driver.steer(active);
+        }
+    }
+
+    pub(crate) async fn stop(&self, thread: u64, requested: Option<u64>) -> Result<(), RpcError> {
+        let active = {
+            let mut db = self.db.lock().await;
+            store::require(&mut db, thread).await?;
+            if let Some(run) = requested
+                && runs::status(&mut db, thread, run).await?.is_none()
+            {
+                return Err(RpcError::not_found(format!(
+                    "no run {run} in thread {thread}"
+                )));
+            }
+            let mut tx = db.transaction().await?;
+            runs::cancel_queued(&mut tx, thread, requested).await?;
+            let active = decisions::cancel_active(
+                runs::active(&mut tx, thread).await?.map(RunId),
+                requested.map(RunId),
+            )
+            .map(|id| id.0);
+            tx.commit().await?;
+            if let Some(active) = active {
+                self.cancel_active(thread, active);
+            }
+            drop(db);
+            active
+        };
+        self.settled(thread);
+        if let Some(active) = active {
+            let result = self
+                .wait_run(thread, Some(active), Duration::from_secs(120))
+                .await?;
+            if result.timed_out {
+                return Err(RpcError::unavailable(
+                    "ACP cancellation is still in progress",
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) async fn update(&self, args: UpdateMetadata) -> Result<(), RpcError> {
+        let thread = args.thread.get();
+        let mut db = self.db.lock().await;
+        let mut current = row(&mut db,
+            "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
+            [thread.into()]).await?.ok_or_else(|| store::missing(thread))?;
+        threads::validate_title(args.title.as_deref())
+            .map_err(|error| RpcError::invalid(error.to_string()))?;
+        if let Patch::Set(project) = &args.project {
+            store::project(&mut db, project).await?;
+        }
+        if !matches!(args.project, Patch::Keep) && current.opt_str(2)?.is_some() {
+            return Err(RpcError::invalid(
+                "move the thread out of its worktree before changing its project",
+            ));
+        }
+        let user_title = args.title.is_some() || current.flag(1)?;
+        let title = match args.title {
+            Some(title) => title,
+            None => current.str(0)?,
+        };
+        let project = args.project.apply(current.opt_str(3)?);
+        exec(
+            &mut db,
+            "UPDATE threads SET title = ?2, user_title = ?3, project = ?4,
+            archived = ?5, pinned = ?6, unread = ?7 WHERE id = ?1",
+            [
+                thread.into(),
+                title.into(),
+                user_title.into(),
+                project.into(),
+                args.archived.unwrap_or(current.flag(4)?).into(),
+                args.pinned.unwrap_or(current.flag(5)?).into(),
+                args.unread.unwrap_or(current.flag(6)?).into(),
+            ],
+        )
+        .await?;
+        drop(db);
+        self.relist(thread);
+        Ok(())
+    }
+
+    /// Deletes a thread, and with `remove_worktree` the clean worktree viz
+    /// created for it once its harness has stopped.
+    pub(super) async fn delete(&self, thread: u64, remove_worktree: bool) -> Result<(), RpcError> {
+        let checkout = if remove_worktree {
+            let mut db = self.db.lock().await;
+            let binding = store::binding(&mut db, thread).await?;
+            let path = binding
+                .worktree
+                .ok_or_else(|| RpcError::invalid("the thread runs in no worktree"))?;
+            self.removable(&mut db, &path, Some(thread)).await?;
+            drop(db);
+            if !worktree::clean(Path::new(&path)).await? {
+                return Err(RpcError::invalid(format!(
+                    "worktree {path} has uncommitted changes or untracked files"
+                )));
+            }
+            Some((binding.project.unwrap_or_else(|| path.clone()), path))
+        } else {
+            None
+        };
+        let driver = {
+            let mut db = self.db.lock().await;
+            let count = exec(
+                &mut db,
+                "DELETE FROM threads WHERE id = ?1",
+                [thread.into()],
+            )
+            .await?;
+            if count == 0 {
+                return Err(store::missing(thread));
+            }
+            let mut state = self
+                .transient
+                .lock()
+                .expect("workspace runtime mutex poisoned");
+            state.live.remove(&thread);
+            state.watches.remove(&thread);
+            let driver = state.threads.remove(&thread);
+            drop(state);
+            drop(db);
+            driver
+        };
+        self.settled(thread);
+        if let Some(driver) = driver {
+            driver.lifetime.cancel();
+            driver.session.lock().await.take();
+        }
+        match tokio::fs::remove_dir_all(self.attachment_dir(thread)).await {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                tracing::warn!(thread, %error, "removing materialized thread attachments");
+            }
+        }
+        if let Some((source, path)) = checkout {
+            worktree::remove(Path::new(&source), &path, false)
+                .await
+                .map_err(|error| {
+                    RpcError::invalid(format!(
+                        "deleted the thread, but not its worktree: {}",
+                        error.message
+                    ))
+                })?;
+            self.changed(None);
+        }
+        Ok(())
+    }
+}
+
+async fn launched(
+    db: &mut Connection,
+    request_id: Option<&str>,
+) -> Result<Option<Launched>, RpcError> {
+    let Some(request_id) = request_id else {
+        return Ok(None);
+    };
+    row(
+        db,
+        "SELECT thread, run FROM launch_requests WHERE request_id = ?1",
+        [request_id.into()],
+    )
+    .await?
+    .map(|row| {
+        Ok(Launched {
+            thread: ThreadId(row.u64(0)?),
+            run: row.opt_u64(1)?.map(RunId),
+        })
+    })
+    .transpose()
+}
+
+pub(super) fn validate_request_id(request_id: Option<&str>) -> Result<(), RpcError> {
+    if request_id.is_some_and(|id| id.is_empty() || id.chars().count() > 256) {
+        return Err(RpcError::invalid(
+            "requestId must contain 1 to 256 characters",
+        ));
+    }
+    Ok(())
+}

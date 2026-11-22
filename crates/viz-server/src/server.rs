@@ -1,5 +1,7 @@
 //! Authenticated HTTP peer calls and incremental WebSocket sessions.
 
+mod peer_rpc;
+
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, ensure};
@@ -29,18 +31,21 @@ use tokio_tungstenite::{
     tungstenite::{Message as PeerMessage, client::IntoClientRequest},
 };
 use tokio_util::sync::CancellationToken;
-use viz_protocol::{Empty, ListEnvironments, Method, SendInput, Unwatch, Watch, Watching};
+use viz_protocol::{
+    Empty, EnvironmentList, ListEnvironments, Method, SendInput, Unwatch, Watch, Watching,
+};
 
 use crate::{
     config::Config,
     environments::Peers,
-    tasks::Tasks,
+    rpc::{self, Route, handlers},
+    tasks::{self, Tasks},
     wire::{
         self, ClientKind, HEALTH_PATH, Hello, HelloParams, Id, Notification, PROTOCOL_VERSION,
-        RPC_PATH, Request, Response, RpcError, RunStatus, ThreadId, ThreadState, decode, encode,
-        params,
+        RPC_PATH, Request, Response, RpcError, RunStatus, ThreadId, ThreadState, encode, params,
+        raw_params,
     },
-    workspace::{Change, WatchChange, Workspace},
+    workspace::{self, Change, WatchChange, Workspace},
 };
 
 const MAX_FRAME: usize = 32 * 1024 * 1024;
@@ -123,14 +128,15 @@ impl Server {
             .context("serving viz RPC")
     }
 
-    async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        match method {
-            "environments.list" => encode(viz_protocol::EnvironmentList {
-                environments: self.peers.list().await,
-            }),
-            "tasks.list" | "task.delegate" | "task.status" | "task.cancel" | "task.progress"
-            | "task.follow_up" => self.tasks.call(method, params).await,
-            _ => self.workspace.call(method, params).await,
+    async fn call(&self, method: &str, raw: &str) -> Result<Value, RpcError> {
+        if let Some(call) = Route::find(ROUTES, method) {
+            call(self, raw).await
+        } else if let Some(call) = Route::find(tasks::ROUTES, method) {
+            call(&self.tasks, raw).await
+        } else if let Some(call) = Route::find(workspace::ROUTES, method) {
+            call(&self.workspace, raw).await
+        } else {
+            Err(rpc::unknown(method))
         }
     }
 
@@ -145,6 +151,14 @@ impl Server {
             version: VERSION.into(),
             environment: self.environment.clone(),
         })
+    }
+}
+
+handlers! {
+    ROUTES for Server {
+        ListEnvironments, Empty, |server, _| {
+            Ok(EnvironmentList { environments: server.peers.list().await })
+        }
     }
 }
 
@@ -209,56 +223,37 @@ async fn peer_rpc(
             }
             encode(listener.server.hello(&params)?)
         })
-    } else if internal(&request.method) {
+    } else if let Some(dispatch) = peer_rpc::find(&request.method) {
         if listener.token.is_none() {
             return StatusCode::UNAUTHORIZED.into_response();
         }
-        let source = headers
+        let Some(source) = headers
             .get("x-viz-source")
-            .and_then(|value| value.to_str().ok());
-        if source.is_none_or(|id| listener.server.peers.get(id).is_none()) {
+            .and_then(|value| value.to_str().ok())
+            .filter(|id| listener.server.peers.get(id).is_some())
+        else {
             return (StatusCode::FORBIDDEN, "unconfigured source environment").into_response();
-        }
-        let args = match params::<Value>(&request) {
-            Ok(args) => args,
-            Err(error) => {
-                return Json(Response::<Value>::new(request.id, Err(error))).into_response();
-            }
         };
-        if matches!(request.method_name(), "task.receive" | "task.retract")
-            && args.get("originEnvironment").and_then(Value::as_str) != source
-        {
-            return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
+        let result = tokio::select! {
+            () = listener.server.stop.cancelled() => Err(RpcError::unavailable("server is stopping").into()),
+            result = dispatch(&listener.server, raw_params(&request), source) => result,
+        };
+        match result {
+            Ok(value) => Ok(value),
+            Err(peer_rpc::PeerError::Rpc(error)) => Err(error),
+            Err(peer_rpc::PeerError::SourceMismatch) => {
+                return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
+            }
         }
-        if request.method == "task.follow_up"
-            && args.get("source").and_then(Value::as_str) != source
-        {
-            return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
-        }
-        http_call(&listener.server, request.method_name(), args).await
     } else if matches!(request.method_name(), Watch::NAME | Unwatch::NAME) {
         Err(RpcError::new(-32601, "watch requires a WebSocket"))
     } else {
-        match params(&request) {
-            Ok(args) => http_call(&listener.server, request.method_name(), args).await,
-            Err(error) => Err(error),
+        tokio::select! {
+            () = listener.server.stop.cancelled() => Err(RpcError::unavailable("server is stopping")),
+            result = listener.server.call(request.method_name(), raw_params(&request)) => result,
         }
     };
     Json(Response::new(request.id, response)).into_response()
-}
-
-async fn http_call(server: &Server, method: &str, args: Value) -> Result<Value, RpcError> {
-    tokio::select! {
-        () = server.stop.cancelled() => Err(RpcError::unavailable("server is stopping")),
-        result = server.call(method, args) => result,
-    }
-}
-
-fn internal(method: &str) -> bool {
-    matches!(
-        method,
-        "task.receive" | "task.progress" | "task.retract" | "task.follow_up"
-    )
 }
 
 fn parse_request(data: &[u8]) -> Result<Request<'_>, RpcError> {
@@ -505,27 +500,21 @@ async fn local_session(
                         HelloParams::NAME => {
                             outgoing.send(json_message(&Response::<Value>::new(request.id, Err(RpcError::invalid("hello already sent"))))?).await?;
                         }
-                        method if internal(method) => {
+                        method if peer_rpc::find(method).is_some() => {
                             outgoing.send(json_message(&Response::<Value>::new(request.id, Err(RpcError::new(-32601, "internal peer method"))))?).await?;
                         }
                         _ if calls.len() >= MAX_IN_FLIGHT => {
                             outgoing.send(json_message(&Response::<Value>::new(request.id, Err(RpcError::unavailable("too many requests in flight"))))?).await?;
                         }
                         _ => {
-                            let args = match params(&request) {
-                                Ok(args) => args,
-                                Err(error) => {
-                                    outgoing.send(json_message(&Response::<Value>::new(request.id, Err(error)))?).await?;
-                                    continue;
-                                }
-                            };
+                            let args = raw_params(&request).to_owned();
                             let server = Arc::clone(&server);
                             let outgoing = outgoing.clone();
                             let connector = (client.kind == ClientKind::Connector).then(|| client.name.clone());
                             let method = request.method.into_owned();
                             let id = request.id.into_owned();
                             calls.spawn(async move {
-                                if let Err(error) = client_call(&server, id, &method, args, &outgoing, connector.as_deref()).await {
+                                if let Err(error) = client_call(&server, id, &method, &args, &outgoing, connector.as_deref()).await {
                                     tracing::debug!(%error, %method, "client request ended");
                                 }
                             });
@@ -593,18 +582,18 @@ async fn client_call(
     server: &Server,
     id: Id<'_>,
     method: &str,
-    args: Value,
+    raw: &str,
     outgoing: &mpsc::Sender<Message>,
     connector: Option<&str>,
 ) -> Result<()> {
     if method != SendInput::NAME {
-        let result = server.call(method, args).await;
+        let result = server.call(method, raw).await;
         outgoing
             .send(json_message(&Response::new(id, result))?)
             .await?;
         return Ok(());
     }
-    let input = match decode::<SendInput>(args) {
+    let input = match rpc::parse::<SendInput>(raw) {
         Ok(input)
             if input
                 .origin
@@ -749,10 +738,7 @@ async fn proxy(
                 if !matches!(incoming, Message::Text(_) | Message::Binary(_)) { continue; }
                 let bytes = incoming.into_data();
                 if let Ok(request) = parse_request(&bytes) && request.method == ListEnvironments::NAME {
-                    let result = match wire::params(&request) {
-                        Ok(args) => server.call(request.method_name(), args).await,
-                        Err(error) => Err(error),
-                    };
+                    let result = server.call(request.method_name(), raw_params(&request)).await;
                     socket.send(json_message(&Response::new(request.id, result))?).await?;
                 } else {
                     link.send(PeerMessage::Binary(bytes)).await?;

@@ -1,125 +1,157 @@
+//! Public workspace methods bind deserialized parameters to typed operations.
+
 use std::{num::NonZeroU64, path::Path, sync::Arc, time::Duration};
 
-use futures_util::{StreamExt as _, stream::FuturesUnordered};
+use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Value, json};
-use viz_core::{
-    runs as decisions,
-    tasks::{self, Admission, Receipt},
-    threads::{self, Patch},
-    titles,
-};
+use viz_core::threads::Patch;
 use viz_protocol::{
-    DeleteThread, HarnessOptions, LaunchThread, Launched, ListBranches, ListWorktrees, Method,
-    MoveThread, RemoveProject, RemoveWorktree, RunId, SendInput, SendMode, Sent, SteerQueuedInput,
-    ThreadId, WorktreeTarget,
+    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, HarnessList,
+    HarnessOptions, HarnessOptionsResult, ListBranches, ListProjects, ListWorktrees, MoveThread,
+    ProjectList, ProjectResult, ReadProject, ReadThreadState, RemoveProject, RemoveQueuedInput,
+    RemoveWorktree, SearchFiles, SearchHits, SearchThreads, SendInput, SteerQueuedInput,
+    StopThread, ThreadList, ThreadStateResult, UpdateProject, UpdateQueuedInput, UpdateThread,
+    WaitThread,
 };
 
 use super::{
-    Workspace, attachments,
-    runs::{self, NewRun},
-    runtime,
-    sql::{exec, row, rows},
-    store::{self, NewThread, SavedSession},
-    worktree::{self, Placement},
+    Workspace, runs,
+    sql::{exec, row},
+    store, worktree,
 };
 use crate::{
-    acp::{self, Selection},
-    wire::{Attachment, Harness, OptionValue, Project, RpcError, decode, encode},
+    rpc::handlers,
+    wire::{OptionValue, RpcError},
 };
 
 type Id = NonZeroU64;
 
-impl Workspace {
-    pub(crate) async fn call(
-        self: &Arc<Self>,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, RpcError> {
-        match method {
-            "threads.list" | "thread.entries" | "thread.state" | "threads.search"
-            | "files.search" => self.query_thread(method, params).await,
-            "projects.list"
-            | "project.read"
-            | "project.create"
-            | "project.update"
-            | RemoveProject::NAME => self.project_call(method, params).await,
-            ListBranches::NAME | ListWorktrees::NAME | RemoveWorktree::NAME | MoveThread::NAME => {
-                self.checkout_call(method, params).await
-            }
-            LaunchThread::NAME => encode(self.launch(decode(params)?).await?),
-            SendInput::NAME => {
-                let input: SendInput = decode(params)?;
-                if input.origin.is_some() {
-                    return Err(RpcError::invalid("origins require a connector WebSocket"));
+handlers! {
+    ROUTES for Arc<Workspace> {
+        viz_protocol::ListThreads<'static>, ListThreads, |workspace, ListThreads { project, archived }| {
+            let threads = store::list_threads(&mut *workspace.db.lock().await, archived, project.as_deref(), workspace).await?;
+            Ok(ThreadList { threads })
+        }
+        viz_protocol::ListEntries, Entries, |workspace, Entries { thread, before, limit }| {
+            workspace.entries(thread.get(), before.map(Id::get), page_limit(limit, 100)?).await
+        }
+        ReadThreadState, Thread, |workspace, Thread { thread }| {
+            Ok(ThreadStateResult { state: workspace.state(thread.get()).await? })
+        }
+        SearchThreads<'static>, Search, |workspace, Search { query, limit }| {
+            let hits = store::search(&mut *workspace.db.lock().await, &query, page_limit(limit, 50)?).await?;
+            Ok(SearchHits { hits })
+        }
+        SearchFiles<'static>, FileSearch, |workspace, FileSearch { thread, query, limit }| {
+            let cwd = row(&mut *workspace.db.lock().await, "SELECT cwd FROM threads WHERE id = ?1",
+                [thread.get().into()]).await?.ok_or_else(|| store::missing(thread.get()))?.str(0)?;
+            let files = workspace.files.search(&cwd, &query, page_limit(limit, 50)?).await;
+            Ok(FileList { files })
+        }
+        ListProjects, Empty, |workspace, _| {
+            let projects = store::projects(&mut *workspace.db.lock().await).await?;
+            Ok(ProjectList { projects })
+        }
+        ReadProject<'static>, ProjectKey, |workspace, ProjectKey { project }| {
+            let project = store::project(&mut *workspace.db.lock().await, &project).await?;
+            Ok(ProjectResult { project })
+        }
+        CreateProject<'static>, ProjectCreate, |workspace, ProjectCreate { path, name }| {
+            Ok(ProjectResult { project: workspace.create_project(&path, name).await? })
+        }
+        UpdateProject<'static>, ProjectUpdate, |workspace, ProjectUpdate { project, name }| {
+            let mut db = workspace.db.lock().await;
+            store::project(&mut db, &project).await?;
+            if let Some(name) = name {
+                if name.is_empty() {
+                    return Err(RpcError::invalid("project name must not be empty"));
                 }
-                encode(self.send(input).await?)
-            }
-            "thread.wait" => {
-                let Wait {
-                    thread,
-                    run,
-                    timeout_ms,
-                } = decode(params)?;
-                let timeout = timeout_ms.unwrap_or(30_000);
-                if timeout > 120_000 {
-                    return Err(RpcError::invalid("timeoutMs must not exceed 120000"));
-                }
-                encode(
-                    self.wait_run(
-                        thread.get(),
-                        run.map(Id::get),
-                        Duration::from_millis(timeout),
-                    )
-                    .await?,
-                )
-            }
-            "thread.stop" => {
-                let ThreadRun { thread, run } = decode(params)?;
-                self.stop(thread.get(), run.map(Id::get)).await?;
-                Ok(json!({}))
-            }
-            "thread.update" => {
-                self.update(decode(params)?).await?;
-                Ok(json!({}))
-            }
-            "thread.configure" => {
-                let Configure {
-                    thread,
-                    option,
-                    value,
-                } = decode(params)?;
-                self.configure(thread.get(), &option, value).await?;
-                Ok(json!({}))
-            }
-            DeleteThread::NAME => {
-                let input: DeleteThread = decode(params)?;
-                self.delete(input.thread.0, input.remove_worktree).await?;
-                Ok(json!({}))
-            }
-            "queue.remove" => {
-                let QueueRun { thread, run } = decode(params)?;
-                let mut db = self.db.lock().await;
-                store::require(&mut db, thread.get()).await?;
-                runs::remove_queued(&mut db, thread.get(), run.get()).await?;
+                exec(&mut db, "UPDATE projects SET name = ?2 WHERE path = ?1",
+                    [project.into(), name.into()]).await?;
                 drop(db);
-                self.settled(thread.get());
-                Ok(json!({}))
+                workspace.changed(None);
             }
-            "queue.update" => self.update_queue(decode(params)?).await,
-            SteerQueuedInput::NAME => self.steer_queue(decode(params)?).await,
-            "harnesses.list" => Ok(json!({"harnesses": self.list_harnesses().await})),
-            HarnessOptions::NAME => {
-                let HarnessOptions { harness, model } = decode(params)?;
-                Ok(json!({"options": self.harness_options(&harness, Some(&model)).await?}))
+            Ok(Empty {})
+        }
+        RemoveProject<'static>, ProjectKey, |workspace, ProjectKey { project }| {
+            workspace.remove_project(&project).await?;
+            Ok(Empty {})
+        }
+        ListBranches<'static>, ProjectKey, |workspace, ProjectKey { project }| {
+            let project = store::project(&mut *workspace.db.lock().await, &project).await?;
+            let branches = worktree::branches(Path::new(&project.path)).await?;
+            Ok(BranchList { branches })
+        }
+        ListWorktrees<'static>, ProjectKey, |workspace, ProjectKey { project }| {
+            workspace.list_worktrees(&project).await
+        }
+        RemoveWorktree<'static>, WorktreeRemove, |workspace, WorktreeRemove { path, force }| {
+            workspace.remove_worktree(&path, force).await?;
+            Ok(Empty {})
+        }
+        MoveThread, MoveThread, |workspace, input| {
+            workspace.move_thread(input).await
+        }
+        viz_protocol::LaunchThread, viz_protocol::LaunchThread, |workspace, input| {
+            workspace.launch(input).await
+        }
+        SendInput, SendInput, |workspace, input| {
+            if input.origin.is_some() {
+                return Err(RpcError::invalid("origins require a connector WebSocket"));
             }
-            "task.receive" => encode(self.receive(decode(params)?).await?),
-            "task.retract" => encode(self.retract(decode(params)?).await?),
-            _ => Err(RpcError::new(-32601, format!("unknown method {method}"))),
+            workspace.send(input).await
+        }
+        WaitThread, Wait, |workspace, Wait { thread, run, timeout_ms }| {
+            let timeout = timeout_ms.unwrap_or(30_000);
+            if timeout > 120_000 {
+                return Err(RpcError::invalid("timeoutMs must not exceed 120000"));
+            }
+            workspace.wait_run(thread.get(), run.map(Id::get), Duration::from_millis(timeout)).await
+        }
+        StopThread, ThreadRun, |workspace, ThreadRun { thread, run }| {
+            workspace.stop(thread.get(), run.map(Id::get)).await?;
+            Ok(Empty {})
+        }
+        UpdateThread<'static>, UpdateMetadata, |workspace, input| {
+            workspace.update(input).await?;
+            Ok(Empty {})
+        }
+        ConfigureThread<'static>, Configure, |workspace, Configure { thread, option, value }| {
+            workspace.configure(thread.get(), &option, value).await?;
+            Ok(Empty {})
+        }
+        DeleteThread, DeleteThread, |workspace, input| {
+            workspace.delete(input.thread.0, input.remove_worktree).await?;
+            Ok(Empty {})
+        }
+        RemoveQueuedInput, QueueRun, |workspace, QueueRun { thread, run }| {
+            let mut db = workspace.db.lock().await;
+            store::require(&mut db, thread.get()).await?;
+            runs::remove_queued(&mut db, thread.get(), run.get()).await?;
+            drop(db);
+            workspace.settled(thread.get());
+            Ok(Empty {})
+        }
+        UpdateQueuedInput<'static>, UpdateQueue, |workspace, input| {
+            workspace.update_queue(input).await?;
+            Ok(Empty {})
+        }
+        SteerQueuedInput, SteerQueuedInput, |workspace, input| {
+            workspace.steer_queue(input).await?;
+            Ok(Empty {})
+        }
+        viz_protocol::ListHarnesses, Empty, |workspace, _| {
+            Ok(HarnessList { harnesses: workspace.list_harnesses().await })
+        }
+        HarnessOptions, HarnessOptions, |workspace, HarnessOptions { harness, model }| {
+            let options = workspace.harness_options(&harness, Some(&model)).await?;
+            Ok(HarnessOptionsResult { options })
         }
     }
+}
 
-    async fn update_queue(&self, input: UpdateQueue) -> Result<Value, RpcError> {
+impl Workspace {
+    async fn update_queue(&self, input: UpdateQueue) -> Result<(), RpcError> {
         let UpdateQueue {
             thread,
             run,
@@ -133,10 +165,10 @@ impl Workspace {
         tx.commit().await?;
         drop(db);
         self.changed(Some(thread.get()));
-        Ok(json!({}))
+        Ok(())
     }
 
-    async fn steer_queue(self: &Arc<Self>, input: SteerQueuedInput) -> Result<Value, RpcError> {
+    async fn steer_queue(self: &Arc<Self>, input: SteerQueuedInput) -> Result<(), RpcError> {
         let thread = input.thread.0;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
@@ -150,825 +182,8 @@ impl Workspace {
         self.kick(thread, false);
         drop(db);
         self.changed(Some(thread));
-        Ok(json!({}))
-    }
-
-    async fn query_thread(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        match method {
-            "threads.list" => {
-                let ListThreads { project, archived } = decode(params)?;
-                let threads = store::list_threads(
-                    &mut *self.db.lock().await,
-                    archived,
-                    project.as_deref(),
-                    self,
-                )
-                .await?;
-                Ok(json!({"threads":threads}))
-            }
-            "thread.entries" => {
-                let Entries {
-                    thread,
-                    before,
-                    limit,
-                } = decode(params)?;
-                encode(
-                    self.entries(thread.get(), before.map(Id::get), page_limit(limit, 100)?)
-                        .await?,
-                )
-            }
-            "thread.state" => {
-                let Thread { thread } = decode(params)?;
-                Ok(json!({"state": self.state(thread.get()).await?}))
-            }
-            "threads.search" => {
-                let Search { query, limit } = decode(params)?;
-                let hits =
-                    store::search(&mut *self.db.lock().await, &query, page_limit(limit, 50)?)
-                        .await?;
-                Ok(json!({"hits":hits}))
-            }
-            "files.search" => {
-                let FileSearch {
-                    thread,
-                    query,
-                    limit,
-                } = decode(params)?;
-                let cwd = row(
-                    &mut *self.db.lock().await,
-                    "SELECT cwd FROM threads WHERE id = ?1",
-                    [thread.get().into()],
-                )
-                .await?
-                .ok_or_else(|| store::missing(thread.get()))?
-                .str(0)?;
-                Ok(json!({"files": self.files.search(&cwd, &query, page_limit(limit, 50)?).await}))
-            }
-            _ => Err(RpcError::new(
-                -32601,
-                format!("unknown thread query {method}"),
-            )),
-        }
-    }
-
-    async fn project_call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        match method {
-            "projects.list" => {
-                let projects = store::projects(&mut *self.db.lock().await).await?;
-                Ok(json!({"projects":projects}))
-            }
-            "project.read" => {
-                let ProjectKey { project } = decode(params)?;
-                let project = store::project(&mut *self.db.lock().await, &project).await?;
-                Ok(json!({"project":project}))
-            }
-            "project.create" => {
-                let CreateProject { path, name } = decode(params)?;
-                Ok(json!({"project": self.create_project(&path, name).await?}))
-            }
-            "project.update" => {
-                let UpdateProject { project, name } = decode(params)?;
-                let mut db = self.db.lock().await;
-                store::project(&mut db, &project).await?;
-                if let Some(name) = name {
-                    if name.is_empty() {
-                        return Err(RpcError::invalid("project name must not be empty"));
-                    }
-                    exec(
-                        &mut db,
-                        "UPDATE projects SET name = ?2 WHERE path = ?1",
-                        [project.into(), name.into()],
-                    )
-                    .await?;
-                    drop(db);
-                    self.changed(None);
-                }
-                Ok(json!({}))
-            }
-            RemoveProject::NAME => {
-                let ProjectKey { project } = decode(params)?;
-                self.remove_project(&project).await?;
-                Ok(json!({}))
-            }
-            _ => Err(RpcError::new(
-                -32601,
-                format!("unknown project method {method}"),
-            )),
-        }
-    }
-
-    /// Launches a thread; a worktree target is resolved, and a new worktree
-    /// created, before the thread is recorded, and removed again if the
-    /// launch fails or repeats an earlier request.
-    async fn launch(self: &Arc<Self>, args: LaunchThread) -> Result<Launched, RpcError> {
-        validate_request_id(args.request_id.as_deref())?;
-        let Some(target) = args.worktree.clone() else {
-            return self
-                .launch_in(args, None)
-                .await
-                .map(|(launched, _)| launched);
-        };
-        let project = args
-            .project
-            .clone()
-            .ok_or_else(|| RpcError::invalid("a worktree requires a project"))?;
-        {
-            let mut db = self.db.lock().await;
-            if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
-                return Ok(found);
-            }
-            store::project(&mut db, &project).await?;
-            drop(db);
-        }
-        let title = args
-            .title
-            .clone()
-            .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()));
-        let placement = self
-            .place(&project, Path::new(&project), &target, &title)
-            .await?;
-        let result = self.launch_in(args, Some(&placement)).await;
-        if !matches!(result, Ok((_, true))) {
-            worktree::discard(Path::new(&project), &placement).await;
-        }
-        result.map(|(launched, _)| launched)
-    }
-
-    /// Records a launched thread, or returns the thread an earlier request
-    /// with the same ID launched (with `false`).
-    async fn launch_in(
-        self: &Arc<Self>,
-        args: LaunchThread,
-        placement: Option<&Placement>,
-    ) -> Result<(Launched, bool), RpcError> {
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
-            return Ok((found, false));
-        }
-        threads::validate_title(args.title.as_deref())
-            .map_err(|error| RpcError::invalid(error.to_string()))?;
-        let (harness, _) = self.harness(args.harness.as_deref())?;
-        let cwd = match placement {
-            Some(placement) => placement.cwd.clone().into(),
-            None => self.cwd_for(&mut tx, args.project.as_deref()).await?,
-        };
-        let attachments = attachments::decode(args.attachments)?;
-        let session = SavedSession {
-            desired: args.options,
-            selection: selection(args.model, args.thinking),
-            ..SavedSession::default()
-        };
-        let thread = store::create_thread(
-            &mut tx,
-            &NewThread {
-                harness,
-                cwd: store::path_text(&cwd)?,
-                project: args.project.as_deref(),
-                worktree: placement.and_then(|placement| placement.worktree.as_deref()),
-                parent: None,
-                parent_environment: None,
-                title: args.title.as_deref(),
-                session,
-            },
-        )
-        .await?;
-        let run = if args.text.is_some() || !attachments.is_empty() {
-            let attachments = attachments::save(&mut tx, thread, attachments).await?;
-            Some(
-                runs::enqueue(
-                    &mut tx,
-                    thread,
-                    NewRun {
-                        attachments: &attachments,
-                        ..NewRun::new(args.text.as_deref().unwrap_or_default())
-                    },
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        if let Some(request_id) = args.request_id {
-            exec(
-                &mut tx,
-                "INSERT INTO launch_requests (request_id, thread, run) VALUES (?1, ?2, ?3)",
-                [request_id.into(), thread.into(), run.into()],
-            )
-            .await?;
-        }
-        tx.commit().await?;
-        self.kick(thread, run.is_none());
-        drop(db);
-        self.relist(thread);
-        Ok((
-            Launched {
-                thread: ThreadId(thread),
-                run: run.map(RunId),
-            },
-            true,
-        ))
-    }
-
-    pub(crate) async fn send(self: &Arc<Self>, args: SendInput) -> Result<Sent, RpcError> {
-        let thread = args.thread.0;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        store::require(&mut tx, thread).await?;
-        validate_request_id(args.request_id.as_deref())?;
-        let previous = match &args.request_id {
-            Some(request_id) => runs::by_request(&mut tx, thread, request_id)
-                .await?
-                .map(RunId),
-            None => None,
-        };
-        let state = decisions::SubmissionState {
-            previous,
-            active: if args.mode == Some(SendMode::Steer) && previous.is_none() {
-                runs::active(&mut tx, thread).await?.map(RunId)
-            } else {
-                None
-            },
-        };
-        let (place, steer) = match decisions::submit(state, args.mode) {
-            decisions::Submission::Replay(run) => return Ok(Sent { run }),
-            decisions::Submission::Enqueue { place, steer } => (place, steer),
-        };
-        let attachments =
-            attachments::save(&mut tx, thread, attachments::decode(args.attachments)?).await?;
-        let run = runs::enqueue(
-            &mut tx,
-            thread,
-            NewRun {
-                origin: args.origin.as_ref(),
-                attachments: &attachments,
-                request_id: args.request_id.as_deref(),
-                place,
-                ..NewRun::new(&args.text)
-            },
-        )
-        .await?;
-        tx.commit().await?;
-        if let Some(active) = steer {
-            self.steer_active(thread, active.0);
-        }
-        self.kick(thread, false);
-        drop(db);
-        self.relist(thread);
-        Ok(Sent { run: RunId(run) })
-    }
-
-    fn cancel_active(&self, thread: u64, active: u64) {
-        let state = self
-            .transient
-            .lock()
-            .expect("workspace runtime mutex poisoned");
-        if let Some(driver) = state.threads.get(&thread) {
-            driver.cancel(active);
-        }
-    }
-
-    fn steer_active(&self, thread: u64, active: u64) {
-        let state = self
-            .transient
-            .lock()
-            .expect("workspace runtime mutex poisoned");
-        if let Some(driver) = state.threads.get(&thread) {
-            driver.steer(active);
-        }
-    }
-
-    async fn stop(&self, thread: u64, requested: Option<u64>) -> Result<(), RpcError> {
-        let active = {
-            let mut db = self.db.lock().await;
-            store::require(&mut db, thread).await?;
-            if let Some(run) = requested
-                && runs::status(&mut db, thread, run).await?.is_none()
-            {
-                return Err(RpcError::not_found(format!(
-                    "no run {run} in thread {thread}"
-                )));
-            }
-            let mut tx = db.transaction().await?;
-            runs::cancel_queued(&mut tx, thread, requested).await?;
-            let active = decisions::cancel_active(
-                runs::active(&mut tx, thread).await?.map(RunId),
-                requested.map(RunId),
-            )
-            .map(|id| id.0);
-            tx.commit().await?;
-            if let Some(active) = active {
-                self.cancel_active(thread, active);
-            }
-            drop(db);
-            active
-        };
-        self.settled(thread);
-        if let Some(active) = active {
-            let result = self
-                .wait_run(thread, Some(active), Duration::from_secs(120))
-                .await?;
-            if result.timed_out {
-                return Err(RpcError::unavailable(
-                    "ACP cancellation is still in progress",
-                ));
-            }
-        }
         Ok(())
     }
-
-    async fn update(&self, args: UpdateThread) -> Result<(), RpcError> {
-        let thread = args.thread.get();
-        let mut db = self.db.lock().await;
-        let mut current = row(&mut db,
-            "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
-            [thread.into()]).await?.ok_or_else(|| store::missing(thread))?;
-        threads::validate_title(args.title.as_deref())
-            .map_err(|error| RpcError::invalid(error.to_string()))?;
-        if let Patch::Set(project) = &args.project {
-            store::project(&mut db, project).await?;
-        }
-        if !matches!(args.project, Patch::Keep) && current.opt_str(2)?.is_some() {
-            return Err(RpcError::invalid(
-                "move the thread out of its worktree before changing its project",
-            ));
-        }
-        let user_title = args.title.is_some() || current.flag(1)?;
-        let title = match args.title {
-            Some(title) => title,
-            None => current.str(0)?,
-        };
-        let project = args.project.apply(current.opt_str(3)?);
-        exec(
-            &mut db,
-            "UPDATE threads SET title = ?2, user_title = ?3, project = ?4,
-            archived = ?5, pinned = ?6, unread = ?7 WHERE id = ?1",
-            [
-                thread.into(),
-                title.into(),
-                user_title.into(),
-                project.into(),
-                args.archived.unwrap_or(current.flag(4)?).into(),
-                args.pinned.unwrap_or(current.flag(5)?).into(),
-                args.unread.unwrap_or(current.flag(6)?).into(),
-            ],
-        )
-        .await?;
-        drop(db);
-        self.relist(thread);
-        Ok(())
-    }
-
-    /// Deletes a thread, and with `remove_worktree` the clean worktree viz
-    /// created for it once its harness has stopped.
-    async fn delete(&self, thread: u64, remove_worktree: bool) -> Result<(), RpcError> {
-        let checkout = if remove_worktree {
-            let mut db = self.db.lock().await;
-            let binding = store::binding(&mut db, thread).await?;
-            let path = binding
-                .worktree
-                .ok_or_else(|| RpcError::invalid("the thread runs in no worktree"))?;
-            self.removable(&mut db, &path, Some(thread)).await?;
-            drop(db);
-            if !worktree::clean(Path::new(&path)).await? {
-                return Err(RpcError::invalid(format!(
-                    "worktree {path} has uncommitted changes or untracked files"
-                )));
-            }
-            Some((binding.project.unwrap_or_else(|| path.clone()), path))
-        } else {
-            None
-        };
-        let driver = {
-            let mut db = self.db.lock().await;
-            let count = exec(
-                &mut db,
-                "DELETE FROM threads WHERE id = ?1",
-                [thread.into()],
-            )
-            .await?;
-            if count == 0 {
-                return Err(store::missing(thread));
-            }
-            let mut state = self
-                .transient
-                .lock()
-                .expect("workspace runtime mutex poisoned");
-            state.live.remove(&thread);
-            state.watches.remove(&thread);
-            let driver = state.threads.remove(&thread);
-            drop(state);
-            drop(db);
-            driver
-        };
-        self.settled(thread);
-        if let Some(driver) = driver {
-            driver.lifetime.cancel();
-            driver.session.lock().await.take();
-        }
-        match tokio::fs::remove_dir_all(self.attachment_dir(thread)).await {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                tracing::warn!(thread, %error, "removing materialized thread attachments");
-            }
-        }
-        if let Some((source, path)) = checkout {
-            worktree::remove(Path::new(&source), &path, false)
-                .await
-                .map_err(|error| {
-                    RpcError::invalid(format!(
-                        "deleted the thread, but not its worktree: {}",
-                        error.message
-                    ))
-                })?;
-            self.changed(None);
-        }
-        Ok(())
-    }
-
-    async fn create_project(&self, path: &str, name: Option<String>) -> Result<Project, RpcError> {
-        if path.is_empty() || name.as_deref() == Some("") {
-            return Err(RpcError::invalid("project path and name must not be empty"));
-        }
-        let canonical = store::directory(Path::new(path)).await?;
-        let path = store::path_text(&canonical)?;
-        let name = name.unwrap_or_else(|| {
-            canonical
-                .file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or(path)
-                .to_owned()
-        });
-        let mut db = self.db.lock().await;
-        let created_at = store::now();
-        let count = exec(&mut db, "INSERT INTO projects (path, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
-            [path.into(), name.as_str().into(), created_at.into()]).await?;
-        drop(db);
-        if count == 0 {
-            return Err(RpcError::invalid(format!("project already exists: {path}")));
-        }
-        self.changed(None);
-        Ok(store::project_at(path.to_owned(), name, created_at))
-    }
-
-    async fn remove_project(&self, project: &str) -> Result<(), RpcError> {
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let threads = rows(
-            &mut tx,
-            "SELECT id FROM threads WHERE project = ?1",
-            [project.into()],
-        )
-        .await?;
-        let count = exec(
-            &mut tx,
-            "DELETE FROM projects WHERE path = ?1",
-            [project.into()],
-        )
-        .await?;
-        if count == 0 {
-            return Err(RpcError::not_found(format!("no project {project}")));
-        }
-        tx.commit().await?;
-        drop(db);
-        self.changed(None);
-        for thread in threads {
-            self.changed(Some(thread.u64(0)?));
-        }
-        Ok(())
-    }
-
-    async fn list_harnesses(&self) -> Vec<Harness> {
-        let pending = self
-            .harnesses
-            .keys()
-            .map(|name| self.harness_summary(name))
-            .collect::<FuturesUnordered<_>>();
-        let mut harnesses: Vec<_> = pending.collect().await;
-        harnesses.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-        harnesses
-    }
-
-    async fn harness_summary(&self, name: &str) -> Harness {
-        let options = self
-            .harness_options(name, None)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(harness = %name, %error, "ACP catalog unavailable");
-                Vec::new()
-            });
-        Harness {
-            id: name.to_owned(),
-            name: self.harness_name(name).to_owned(),
-            default: self.default_harness.as_deref() == Some(name),
-            options,
-        }
-    }
-
-    async fn harness_options(
-        &self,
-        name: &str,
-        model: Option<&str>,
-    ) -> Result<Vec<crate::wire::ConfigOption>, RpcError> {
-        let (_, config) = self.harness(Some(name))?;
-        let stored = {
-            let mut db = self.db.lock().await;
-            runtime::catalog(&mut db, name).await?
-        };
-        let (options, updated) =
-            acp::catalog(config, self.default_cwd(), stored.as_ref(), model).await?;
-        if let Some(updated) = updated {
-            runtime::save_catalog(&mut *self.db.lock().await, name, &updated).await?;
-        }
-        Ok(options)
-    }
-
-    /// Admits a delegated task. A worktree target is resolved first, outside
-    /// the database lock, as for [`Self::launch`].
-    async fn receive(self: &Arc<Self>, args: ReceiveTask) -> Result<Received, RpcError> {
-        let Some(target) = args.target.worktree.clone() else {
-            return self
-                .receive_in(args, None)
-                .await
-                .map(|(received, _)| received);
-        };
-        if args.thread.is_some() {
-            return Err(RpcError::invalid(
-                "an existing task thread cannot change its worktree",
-            ));
-        }
-        let (project, source) = {
-            let mut db = self.db.lock().await;
-            if let Some(found) = receipt(
-                &mut db,
-                [args.origin_environment.as_str(), args.task.as_str()],
-            )
-            .await?
-            {
-                return Ok(found);
-            }
-            let parent = if args.origin_environment == self.environment {
-                Some(store::binding(&mut db, args.parent.get()).await?)
-            } else {
-                None
-            };
-            let project = args
-                .target
-                .project
-                .clone()
-                .or_else(|| parent.as_ref()?.project.clone())
-                .ok_or_else(|| RpcError::invalid("a worktree requires a project"))?;
-            store::project(&mut db, &project).await?;
-            let source = match parent {
-                Some(parent)
-                    if args.target.project.is_none()
-                        || parent.project.as_ref() == Some(&project) =>
-                {
-                    parent.cwd
-                }
-                _ => project.clone(),
-            };
-            drop(db);
-            (project, source)
-        };
-        let placement = self
-            .place(
-                &project,
-                Path::new(&source),
-                &target,
-                &titles::from_prompt(&args.text),
-            )
-            .await?;
-        let result = self.receive_in(args, Some(&placement)).await;
-        if !matches!(result, Ok((_, true))) {
-            worktree::discard(Path::new(&project), &placement).await;
-        }
-        result.map(|(received, _)| received)
-    }
-
-    async fn receive_in(
-        self: &Arc<Self>,
-        mut args: ReceiveTask,
-        placement: Option<&Placement>,
-    ) -> Result<(Received, bool), RpcError> {
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let key = [args.origin_environment.as_str(), args.task.as_str()];
-        let found = receipt(&mut tx, key).await?;
-        let retracted = if found.is_some() {
-            false
-        } else {
-            row(
-                &mut tx,
-                "SELECT 1 FROM task_retractions WHERE environment = ?1 AND task = ?2",
-                key.map(Into::into),
-            )
-            .await?
-            .is_some()
-        };
-        match tasks::admit(
-            found.map(|found| Receipt {
-                thread: ThreadId(found.thread),
-                run: RunId(found.run),
-            }),
-            retracted,
-        ) {
-            Admission::Replay(found) => {
-                return Ok((
-                    Received {
-                        thread: found.thread.0,
-                        run: found.run.0,
-                    },
-                    false,
-                ));
-            }
-            Admission::Cancelled => {
-                return Err(RpcError::invalid("task was cancelled before admission"));
-            }
-            Admission::Create => {}
-        }
-        if args.text.is_empty() {
-            return Err(RpcError::invalid("task text must not be empty"));
-        }
-        let decoded = attachments::decode(std::mem::take(&mut args.attachments))?;
-        let thread = self.task_thread(&mut tx, &args, placement).await?;
-        let attachments = attachments::save(&mut tx, thread, decoded).await?;
-        let run = runs::enqueue(
-            &mut tx,
-            thread,
-            NewRun {
-                attachments: &attachments,
-                ..NewRun::new(&args.text)
-            },
-        )
-        .await?;
-        exec(
-            &mut tx,
-            "INSERT INTO task_receipts (environment, task, thread, run) VALUES (?1, ?2, ?3, ?4)",
-            [
-                args.origin_environment.into(),
-                args.task.into(),
-                thread.into(),
-                run.into(),
-            ],
-        )
-        .await?;
-        tx.commit().await?;
-        self.kick(thread, false);
-        drop(db);
-        self.relist(thread);
-        Ok((Received { thread, run }, true))
-    }
-
-    /// The thread a task runs in. Without a placement or project, a child
-    /// of a local parent runs in the parent's checkout.
-    async fn task_thread(
-        &self,
-        db: &mut crate::workspace::sql::Connection,
-        args: &ReceiveTask,
-        placement: Option<&Placement>,
-    ) -> Result<u64, RpcError> {
-        if let Some(thread) = args.thread {
-            let binding = store::binding(db, thread.get()).await?;
-            if binding.parent.map(|id| id.0) != Some(args.parent.get())
-                || binding.parent_environment.as_deref() != Some(args.origin_environment.as_str())
-            {
-                return Err(RpcError::invalid(
-                    "target thread is not owned by this task parent",
-                ));
-            }
-            if args
-                .target
-                .harness
-                .as_ref()
-                .is_some_and(|requested| *requested != binding.harness)
-                || args
-                    .target
-                    .project
-                    .as_ref()
-                    .is_some_and(|requested| Some(requested) != binding.project.as_ref())
-                || args.target.model.is_some()
-                || args.target.thinking.is_some()
-            {
-                return Err(RpcError::invalid(
-                    "existing task thread cannot change its harness, project, model, or thinking",
-                ));
-            }
-            return Ok(thread.get());
-        }
-        let inherited = if args.origin_environment == self.environment {
-            Some(store::binding(db, args.parent.get()).await?)
-        } else {
-            None
-        };
-        let project = args
-            .target
-            .project
-            .as_deref()
-            .or_else(|| inherited.as_ref()?.project.as_deref());
-        if placement.is_none() && args.target.worktree.is_some() {
-            return Err(RpcError::invalid("unresolved worktree target"));
-        }
-        let selected = args
-            .target
-            .harness
-            .as_deref()
-            .or_else(|| inherited.as_ref().map(|parent| parent.harness.as_str()));
-        let (harness, _) = self.harness(selected)?;
-        let resolved;
-        let (cwd, worktree) = if let Some(placement) = placement {
-            (placement.cwd.as_str(), placement.worktree.as_deref())
-        } else if args.target.project.is_none()
-            && let Some(parent) = &inherited
-        {
-            (parent.cwd.as_str(), parent.worktree.as_deref())
-        } else {
-            resolved = self.cwd_for(db, args.target.project.as_deref()).await?;
-            (store::path_text(&resolved)?, None)
-        };
-        let session = SavedSession {
-            selection: selection(args.target.model.clone(), args.target.thinking.clone()),
-            ..SavedSession::default()
-        };
-        store::create_thread(
-            db,
-            &NewThread {
-                harness,
-                cwd,
-                project,
-                worktree,
-                parent: Some(args.parent.get()),
-                parent_environment: Some(&args.origin_environment),
-                title: None,
-                session,
-            },
-        )
-        .await
-    }
-
-    async fn retract(&self, args: TaskKey) -> Result<Option<Received>, RpcError> {
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        if let Some(found) = receipt(&mut tx, [&args.origin_environment, &args.task]).await? {
-            return Ok(Some(found));
-        }
-        exec(&mut tx, "INSERT INTO task_retractions (environment, task) VALUES (?1, ?2) ON CONFLICT DO NOTHING",
-            [args.origin_environment.into(), args.task.into()]).await?;
-        tx.commit().await?;
-        drop(db);
-        Ok(None)
-    }
-}
-
-async fn launched(
-    db: &mut crate::workspace::sql::Connection,
-    request_id: Option<&str>,
-) -> Result<Option<Launched>, RpcError> {
-    let Some(request_id) = request_id else {
-        return Ok(None);
-    };
-    row(
-        db,
-        "SELECT thread, run FROM launch_requests WHERE request_id = ?1",
-        [request_id.into()],
-    )
-    .await?
-    .map(|row| {
-        Ok(Launched {
-            thread: ThreadId(row.u64(0)?),
-            run: row.opt_u64(1)?.map(RunId),
-        })
-    })
-    .transpose()
-}
-
-async fn receipt(
-    tx: &mut crate::workspace::sql::Connection,
-    [environment, task]: [&str; 2],
-) -> Result<Option<Received>, RpcError> {
-    row(
-        tx,
-        "SELECT thread, run FROM task_receipts WHERE environment = ?1 AND task = ?2",
-        [environment.into(), task.into()],
-    )
-    .await?
-    .map(|row| {
-        Ok(Received {
-            thread: row.u64(0)?,
-            run: row.u64(1)?,
-        })
-    })
-    .transpose()
-}
-
-fn validate_request_id(request_id: Option<&str>) -> Result<(), RpcError> {
-    if request_id.is_some_and(|id| id.is_empty() || id.chars().count() > 256) {
-        return Err(RpcError::invalid(
-            "requestId must contain 1 to 256 characters",
-        ));
-    }
-    Ok(())
 }
 
 fn page_limit(limit: Option<usize>, default: usize) -> Result<usize, RpcError> {
@@ -982,137 +197,107 @@ fn nullable<'de, D: Deserializer<'de>, T: Deserialize<'de>>(de: D) -> Result<Pat
     Option::deserialize(de).map(|value| value.map_or(Patch::Clear, Patch::Set))
 }
 
-#[derive(Deserialize)]
-struct ListThreads {
-    archived: Option<bool>,
-    project: Option<String>,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct ListThreads {
+    pub(crate) archived: Option<bool>,
+    pub(crate) project: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct Thread {
-    thread: Id,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct Thread {
+    pub(crate) thread: Id,
 }
 
-#[derive(Deserialize)]
-struct ThreadRun {
-    thread: Id,
-    run: Option<Id>,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct ThreadRun {
+    pub(crate) thread: Id,
+    pub(crate) run: Option<Id>,
 }
 
-#[derive(Deserialize)]
-struct QueueRun {
-    thread: Id,
-    run: Id,
+#[derive(Debug, Deserialize)]
+pub(crate) struct QueueRun {
+    pub(crate) thread: Id,
+    pub(crate) run: Id,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-struct Wait {
-    thread: Id,
-    run: Option<Id>,
-    timeout_ms: Option<u64>,
+pub(crate) struct Wait {
+    pub(crate) thread: Id,
+    pub(crate) run: Option<Id>,
+    pub(crate) timeout_ms: Option<u64>,
 }
 
-#[derive(Deserialize)]
-struct Entries {
-    thread: Id,
-    before: Option<Id>,
-    limit: Option<usize>,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct Entries {
+    pub(crate) thread: Id,
+    pub(crate) before: Option<Id>,
+    pub(crate) limit: Option<usize>,
 }
 
-#[derive(Deserialize)]
-struct Search {
-    query: String,
-    limit: Option<usize>,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct Search {
+    pub(crate) query: String,
+    #[schemars(range(min = 1, max = 200))]
+    pub(crate) limit: Option<usize>,
 }
 
-#[derive(Deserialize)]
-struct FileSearch {
-    thread: Id,
-    query: String,
-    limit: Option<usize>,
+#[derive(Debug, Deserialize)]
+pub(crate) struct FileSearch {
+    pub(crate) thread: Id,
+    pub(crate) query: String,
+    pub(crate) limit: Option<usize>,
 }
 
-#[derive(Deserialize)]
-struct Configure {
-    thread: Id,
-    option: String,
-    value: OptionValue,
+#[derive(Debug, Deserialize)]
+pub(crate) struct Configure {
+    pub(crate) thread: Id,
+    pub(crate) option: String,
+    pub(crate) value: OptionValue,
 }
 
-#[derive(Deserialize)]
-struct ProjectKey {
-    project: String,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct ProjectKey {
+    pub(crate) project: String,
 }
 
-#[derive(Deserialize)]
-struct CreateProject {
-    path: String,
-    name: Option<String>,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct ProjectCreate {
+    pub(crate) path: String,
+    pub(crate) name: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct UpdateProject {
-    project: String,
-    name: Option<String>,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct ProjectUpdate {
+    pub(crate) project: String,
+    pub(crate) name: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct UpdateThread {
-    thread: Id,
-    title: Option<String>,
-    archived: Option<bool>,
-    pinned: Option<bool>,
-    unread: Option<bool>,
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateMetadata {
+    pub(crate) thread: Id,
+    pub(crate) title: Option<String>,
+    pub(crate) archived: Option<bool>,
+    pub(crate) pinned: Option<bool>,
+    pub(crate) unread: Option<bool>,
     #[serde(default, deserialize_with = "nullable")]
-    project: Patch<String>,
+    pub(crate) project: Patch<String>,
 }
 
-#[derive(Deserialize)]
-struct UpdateQueue {
-    thread: Id,
-    run: Id,
-    text: Option<String>,
+#[derive(Debug, Deserialize)]
+pub(crate) struct UpdateQueue {
+    pub(crate) thread: Id,
+    pub(crate) run: Id,
+    pub(crate) text: Option<String>,
     #[serde(default, deserialize_with = "nullable")]
-    before: Patch<Id>,
+    pub(crate) before: Patch<Id>,
 }
 
-#[derive(Deserialize)]
-struct Target {
-    project: Option<String>,
-    worktree: Option<WorktreeTarget>,
-    harness: Option<String>,
-    model: Option<String>,
-    thinking: Option<String>,
-}
-
-fn selection(model: Option<String>, thinking: Option<String>) -> Option<Selection> {
-    (model.is_some() || thinking.is_some()).then_some(Selection { model, thinking })
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReceiveTask {
-    task: String,
-    origin_environment: String,
-    parent: Id,
-    thread: Option<Id>,
-    text: String,
-    #[serde(flatten)]
-    target: Target,
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct WorktreeRemove {
+    /// Absolute path of the worktree root.
+    pub(crate) path: String,
+    /// Discard uncommitted changes and untracked files.
     #[serde(default)]
-    attachments: Vec<Attachment>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct TaskKey {
-    origin_environment: String,
-    task: String,
-}
-
-#[derive(Serialize)]
-struct Received {
-    thread: u64,
-    run: u64,
+    pub(crate) force: bool,
 }

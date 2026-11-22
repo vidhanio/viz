@@ -1,14 +1,17 @@
 //! A local environment's ACP threads, durable run queue, project metadata, and
 //! transcript.
 
+mod admission;
 mod attachments;
 mod checkouts;
 mod files;
-mod rpc;
+mod projects;
+pub(crate) mod rpc;
 pub(crate) mod runs;
 mod runtime;
 pub(crate) mod sql;
 mod store;
+mod thread;
 mod worktree;
 
 use std::{
@@ -27,12 +30,15 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use viz_core::tasks::{self, Wake, WakeMode};
 use viz_protocol::RunId;
 
-pub(crate) use self::runs::{active_run_from, run_from};
 use self::{
     files::Files,
     runs::NewRun,
     runtime::Driver,
     sql::{Connection, exec, row, rows},
+};
+pub(crate) use self::{
+    rpc::ROUTES,
+    runs::{active_run_from, run_from},
 };
 use crate::{
     acp::Mcp,

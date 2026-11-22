@@ -12,8 +12,7 @@ use std::{
 };
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde::Deserialize;
 use tokio::{
     sync::{Mutex as AsyncMutex, Notify, broadcast},
     task::JoinHandle,
@@ -21,12 +20,17 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
-use viz_protocol::{TaskList, TaskResult, TaskStatusResult, WorktreeTarget};
+use viz_protocol::{
+    CancelTask, DelegateTask, ListTasks, TaskList, TaskResult, TaskStatusRequest, TaskStatusResult,
+    WorktreeTarget,
+    peer::{ReceiveTask, TaskTarget},
+};
 
 use self::store::{cancel_task, parse_status, prior_request, stop_exists, task_phase};
 use crate::{
     environments::Peers,
-    wire::{Attachment, RpcError, Run, RunId, Task, TaskStatus, ThreadId, decode, encode},
+    rpc::handlers,
+    wire::{Attachment, RpcError, RunId, Task, TaskStatus, ThreadId},
     workspace::{Workspace, active_run_from, sql, sql::Connection},
 };
 
@@ -88,14 +92,14 @@ pub(crate) struct Delegate {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct ListRequest {
+pub(crate) struct ListRequest {
     #[schemars(range(min = 1))]
     parent: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct StatusRequest {
+pub(crate) struct StatusRequest {
     #[schemars(length(min = 1))]
     task: String,
     #[serde(default)]
@@ -106,68 +110,34 @@ struct StatusRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-struct CancelRequest {
+pub(crate) struct CancelRequest {
     #[schemars(length(min = 1))]
     task: String,
 }
 
-/// A settled continuation, identified by its run in the child environment.
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct FollowUp {
-    source: String,
-    task: String,
-    thread: NonZeroU64,
-    run: NonZeroU64,
-    text: String,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProgressRequest {
-    #[schemars(range(min = 1))]
-    thread: u64,
-    #[schemars(range(min = 1))]
-    run: u64,
-    #[serde(default)]
-    cancel: bool,
-}
-
-#[derive(Debug, Deserialize, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ProgressResult {
-    #[serde(deserialize_with = "required_option")]
-    run: Option<Run>,
-}
-
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AdmissionRequest<'a> {
-    task: &'a str,
-    origin_environment: &'a str,
-    parent: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thread: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    project: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    worktree: Option<&'a WorktreeTarget>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    harness: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    thinking: Option<&'a str>,
-    text: &'a str,
-    #[serde(skip_serializing_if = "<[Attachment]>::is_empty")]
-    attachments: &'a [Attachment],
-}
-
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Receipt {
-    thread: NonZeroU64,
-    run: NonZeroU64,
+#[serde(rename_all = "camelCase")]
+pub(crate) struct DelegateFromThread {
+    parent: ThreadId,
+    #[serde(flatten)]
+    input: Delegate,
+}
+
+handlers! {
+    ROUTES for Tasks {
+        ListTasks, ListRequest, |tasks, ListRequest { parent }| {
+            Ok(TaskList { tasks: tasks.list(parent).await? })
+        }
+        DelegateTask<'static>, DelegateFromThread, |tasks, DelegateFromThread { parent, input }| {
+            Ok(TaskResult { task: tasks.delegate(parent.0, None, input).await? })
+        }
+        TaskStatusRequest<'static>, StatusRequest, |tasks, StatusRequest { task, wait, timeout_ms }| {
+            tasks.status(&task, None, wait, timeout_ms).await
+        }
+        CancelTask<'static>, CancelRequest, |tasks, CancelRequest { task }| {
+            Ok(TaskResult { task: tasks.cancel(&task, None).await? })
+        }
+    }
 }
 
 #[derive(Debug, Eq, Hash, PartialEq)]
@@ -221,48 +191,6 @@ impl Tasks {
             .take();
         if let Some(supervisor) = supervisor {
             let _ = supervisor.await;
-        }
-    }
-
-    pub(crate) async fn call(&self, method: &str, params: Value) -> Result<Value, RpcError> {
-        match method {
-            "tasks.list" => {
-                let ListRequest { parent } = decode(params)?;
-                let tasks = self.list(parent).await?;
-                encode(TaskList { tasks })
-            }
-            "task.delegate" => {
-                let Value::Object(mut params) = params else {
-                    return Err(RpcError::invalid("expected task parameters"));
-                };
-                let parent = params
-                    .remove("parent")
-                    .and_then(|parent| parent.as_u64())
-                    .ok_or_else(|| RpcError::invalid("task requires a parent thread"))?;
-                let task = self
-                    .delegate(parent, None, decode(Value::Object(params))?)
-                    .await?;
-                encode(TaskResult { task })
-            }
-            "task.status" => {
-                let StatusRequest {
-                    task,
-                    wait,
-                    timeout_ms,
-                } = decode(params)?;
-                encode(self.status(&task, None, wait, timeout_ms).await?)
-            }
-            "task.cancel" => {
-                let CancelRequest { task } = decode(params)?;
-                let task = self.cancel(&task, None).await?;
-                encode(TaskResult { task })
-            }
-            "task.progress" => encode(self.progress(decode(params)?).await?),
-            "task.follow_up" => encode(self.follow_up(decode(params)?).await?),
-            _ => Err(RpcError::new(
-                -32601,
-                format!("unknown task method {method}"),
-            )),
         }
     }
 
@@ -332,21 +260,30 @@ impl Tasks {
                     return Err(RpcError::invalid("the delegating run is being cancelled"));
                 }
                 let id = Uuid::new_v4().to_string();
-                let payload = serde_json::to_string(&AdmissionRequest {
-                    task: &id,
-                    origin_environment: &self.peers.local,
-                    parent,
-                    thread: input.thread,
-                    project: input.project.as_deref(),
-                    worktree: input.worktree.as_ref(),
-                    harness: input.harness.as_deref(),
-                    model: input.model.as_deref(),
-                    thinking: input.thinking.as_deref(),
-                    text: &input.text,
-                    attachments: &input.attachments,
+                let title = task_title(&input.text);
+                let payload = serde_json::to_string(&ReceiveTask {
+                    task: id.clone(),
+                    origin_environment: self.peers.local.clone(),
+                    parent: NonZeroU64::new(parent)
+                        .ok_or_else(|| RpcError::invalid("task requires a parent thread"))?,
+                    thread: input
+                        .thread
+                        .map(|thread| {
+                            NonZeroU64::new(thread)
+                                .ok_or_else(|| RpcError::invalid("invalid task thread"))
+                        })
+                        .transpose()?,
+                    target: TaskTarget {
+                        project: input.project,
+                        worktree: input.worktree,
+                        harness: input.harness,
+                        model: input.model,
+                        thinking: input.thinking,
+                    },
+                    text: input.text,
+                    attachments: input.attachments,
                 })
                 .map_err(RpcError::internal)?;
-                let title = task_title(&input.text);
                 sql::exec(
                     &mut db,
                     "INSERT INTO agent_tasks (id, parent, parent_run, environment, status, title, payload, request_id, phase, delivery)
@@ -487,14 +424,6 @@ impl Tasks {
 
 const fn terminal(status: TaskStatus) -> bool {
     !matches!(status, TaskStatus::Queued | TaskStatus::Running)
-}
-
-fn required_option<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::deserialize(deserializer)
 }
 
 fn task_title(text: &str) -> String {

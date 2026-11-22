@@ -79,14 +79,15 @@ pub(crate) fn encode(value: impl Serialize) -> Result<Value, RpcError> {
     serde_json::to_value(value).map_err(RpcError::internal)
 }
 
+pub(crate) fn raw_params<'a>(request: &'a Request<'_>) -> &'a str {
+    request
+        .params
+        .as_deref()
+        .map_or("{}", serde_json::value::RawValue::get)
+}
+
 pub(crate) fn params<T: DeserializeOwned>(request: &Request<'_>) -> Result<T, RpcError> {
-    serde_json::from_str(
-        request
-            .params
-            .as_deref()
-            .map_or("{}", serde_json::value::RawValue::get),
-    )
-    .map_err(|error| RpcError::invalid(error.to_string()))
+    crate::rpc::parse(raw_params(request))
 }
 
 #[derive(Serialize)]

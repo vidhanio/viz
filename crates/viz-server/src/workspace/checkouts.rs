@@ -7,12 +7,7 @@
 
 use std::{path::Path, sync::Arc};
 
-use serde::Deserialize;
-use serde_json::{Value, json};
-use viz_protocol::{
-    BranchList, ListBranches, ListWorktrees, Method, MoveThread, Moved, RemoveWorktree, ThreadId,
-    Worktree, WorktreeList, WorktreeTarget,
-};
+use viz_protocol::{MoveThread, Moved, ThreadId, Worktree, WorktreeList, WorktreeTarget};
 
 use super::{
     Workspace,
@@ -20,38 +15,9 @@ use super::{
     store,
     worktree::{self, Placement},
 };
-use crate::wire::{RpcError, decode, encode};
+use crate::wire::RpcError;
 
 impl Workspace {
-    pub(super) async fn checkout_call(
-        self: &Arc<Self>,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, RpcError> {
-        match method {
-            ListBranches::NAME => {
-                let ProjectKey { project } = decode(params)?;
-                let project = store::project(&mut *self.db.lock().await, &project).await?;
-                let branches = worktree::branches(Path::new(&project.path)).await?;
-                encode(BranchList { branches })
-            }
-            ListWorktrees::NAME => {
-                let ProjectKey { project } = decode(params)?;
-                encode(self.list_worktrees(&project).await?)
-            }
-            RemoveWorktree::NAME => {
-                let Remove { path, force } = decode(params)?;
-                self.remove_worktree(&path, force).await?;
-                Ok(json!({}))
-            }
-            MoveThread::NAME => encode(self.move_thread(decode(params)?).await?),
-            _ => Err(RpcError::new(
-                -32601,
-                format!("unknown checkout method {method}"),
-            )),
-        }
-    }
-
     /// Resolves `target` in `project`'s repository. `source` is the checkout
     /// a new worktree branches from by default, and `title` names its branch.
     pub(super) async fn place(
@@ -85,7 +51,7 @@ impl Workspace {
         Path::new(path).starts_with(&self.worktrees)
     }
 
-    async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, RpcError> {
+    pub(super) async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, RpcError> {
         let project = store::project(&mut *self.db.lock().await, project).await?;
         let listed = worktree::list(Path::new(&project.path)).await?;
         let mut db = self.db.lock().await;
@@ -148,7 +114,7 @@ impl Workspace {
         Ok(())
     }
 
-    async fn remove_worktree(&self, path: &str, force: bool) -> Result<(), RpcError> {
+    pub(super) async fn remove_worktree(&self, path: &str, force: bool) -> Result<(), RpcError> {
         self.removable(&mut *self.db.lock().await, path, None)
             .await?;
         worktree::remove(Path::new(path), path, force).await?;
@@ -158,7 +124,7 @@ impl Workspace {
 
     /// Moves an idle thread. Its harness stops; the next run starts a new
     /// session in the new directory (see [`store::SavedSession::handoff`]).
-    async fn move_thread(self: &Arc<Self>, args: MoveThread) -> Result<Moved, RpcError> {
+    pub(super) async fn move_thread(self: &Arc<Self>, args: MoveThread) -> Result<Moved, RpcError> {
         let thread = args.thread.0;
         let (binding, title) = {
             let mut db = self.db.lock().await;
@@ -271,16 +237,4 @@ fn moved(placement: Placement) -> Moved {
         worktree: placement.worktree.map(store::thread_worktree),
         cwd: placement.cwd,
     }
-}
-
-#[derive(Deserialize)]
-struct ProjectKey {
-    project: String,
-}
-
-#[derive(Deserialize)]
-struct Remove {
-    path: String,
-    #[serde(default)]
-    force: bool,
 }

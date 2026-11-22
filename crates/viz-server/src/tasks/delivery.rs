@@ -1,18 +1,21 @@
 //! Interpret settled results, continuation outboxes, and durable stop requests.
 //! The delivery lease serializes prompt wakes against family cancellation.
 
-use std::num::NonZeroU64;
+use std::{num::NonZeroU64, time::Duration};
 
-use serde_json::json;
 use tokio::time;
 use viz_core::tasks::{self as decisions, WakeMode};
+use viz_protocol::{
+    RunId,
+    peer::{FollowUp, ProgressRequest, ProgressResult},
+};
 
 use super::{
-    FollowUp, LOCAL_POLL, POLL, ProgressRequest, ProgressResult, Tasks,
+    LOCAL_POLL, POLL, Tasks,
     store::{snapshot, stop_exists, suppress_descendant_wakes},
 };
 use crate::{
-    wire::{INVALID_PARAMS, NOT_FOUND, RpcError, RunId, ThreadId, encode},
+    wire::{INVALID_PARAMS, NOT_FOUND, RpcError},
     workspace::sql,
 };
 
@@ -81,7 +84,8 @@ impl Tasks {
         let acknowledged = if environment == self.peers.local {
             self.follow_up(request).await?
         } else {
-            self.peer(environment, "task.follow_up", encode(request)?)
+            self.peers
+                .call::<FollowUp>(environment, &request, Duration::ZERO)
                 .await?
         };
         if acknowledged {
@@ -97,7 +101,7 @@ impl Tasks {
 
     /// Deliver the original result first. A stopped parent run can receive
     /// transcript entries, but cannot be woken by a follow-up.
-    pub(super) async fn follow_up(&self, request: FollowUp) -> Result<bool, RpcError> {
+    pub(crate) async fn follow_up(&self, request: FollowUp) -> Result<bool, RpcError> {
         let _delivery = self.delivery.lock().await;
         let (parent, mode, title) = {
             let mut db = self.workspace.db.lock().await;
@@ -142,7 +146,7 @@ impl Tasks {
         Ok(true)
     }
 
-    pub(super) async fn progress(
+    pub(crate) async fn progress(
         &self,
         request: ProgressRequest,
     ) -> Result<ProgressResult, RpcError> {
@@ -151,22 +155,22 @@ impl Tasks {
             run,
             cancel,
         } = request;
-        if thread == 0 || run == 0 {
+        if thread.0 == 0 || run.0 == 0 {
             return Err(RpcError::invalid("invalid thread or run ID"));
         }
         let _delivery = self.delivery.lock().await;
         let mut db = self.workspace.db.lock().await;
-        let family = snapshot(&mut db, thread, run).await?;
-        let mut stopped = stop_exists(&mut db, thread, run).await?;
+        let family = snapshot(&mut db, thread.0, run.0).await?;
+        let mut stopped = stop_exists(&mut db, thread.0, run.0).await?;
         if (cancel || family.cancelled_run) && family.pending() && !stopped {
             let mut tx = db.transaction().await?;
             sql::exec(
                 &mut tx,
                 "INSERT INTO stopped_task_runs (thread, run, handled) VALUES (?1, ?2, 0)",
-                [thread.into(), run.into()],
+                [thread.0.into(), run.0.into()],
             )
             .await?;
-            suppress_descendant_wakes(&mut tx, thread, run).await?;
+            suppress_descendant_wakes(&mut tx, thread.0, run.0).await?;
             tx.commit().await?;
             stopped = true;
             self.scan.notify_one();
@@ -174,7 +178,7 @@ impl Tasks {
         }
         drop(db);
         Ok(ProgressResult {
-            run: family.progress(ThreadId(thread), RunId(run), stopped),
+            run: family.progress(thread, run, stopped),
         })
     }
 
@@ -212,13 +216,7 @@ impl Tasks {
             family.active
         };
         for active_run in active {
-            if let Err(error) = self
-                .workspace
-                .call(
-                    "thread.stop",
-                    json!({"thread": thread, "run": active_run.0}),
-                )
-                .await
+            if let Err(error) = self.workspace.stop(thread, Some(active_run.0)).await
                 && !matches!(error.code, INVALID_PARAMS | NOT_FOUND)
             {
                 return Err(error);

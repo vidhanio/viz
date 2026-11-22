@@ -14,20 +14,18 @@ use anyhow::{Context as _, ensure};
 use jsonrpsee_types::{Id, Response, ResponsePayload, TwoPointZero};
 use reqwest::{Client, header::HeaderValue, redirect::Policy};
 use serde::Serialize;
-use serde_json::{Value, json};
 use tokio::sync::Mutex as AsyncMutex;
 use url::{Host, Url};
+use viz_protocol::{ClientInfo, ClientKind, HelloParams, Method};
 
 use crate::{
     config::Config,
-    wire::{Environment, EnvironmentStatus, Hello, PROTOCOL_VERSION, RPC_PATH, RpcError},
+    wire::{Environment, EnvironmentStatus, PROTOCOL_VERSION, RPC_PATH, RpcError},
 };
 
 const RECENCY: Duration = Duration::from_secs(10);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const RPC_TIMEOUT: Duration = Duration::from_secs(8);
-const DEFAULT_WAIT_MS: u64 = 30_000;
-const MAX_WAIT_MS: u64 = 120_000;
 
 pub(crate) struct Peer {
     pub(crate) url: Url,
@@ -170,27 +168,18 @@ impl Peers {
         list
     }
 
-    pub(crate) async fn call(
+    pub(crate) async fn call<M: Method>(
         &self,
         id: &str,
-        method: &str,
-        params: Value,
-    ) -> Result<Value, RpcError> {
+        params: &(impl Serialize + Sync),
+        extra_wait: Duration,
+    ) -> Result<M::Response, RpcError> {
         let peer = self
             .get(id)
             .ok_or_else(|| RpcError::unavailable(format!("unknown environment {id}")))?;
-        let timeout = if method == "thread.wait"
-            || (method == "task.status" && params["wait"].as_bool() == Some(true))
-        {
-            let wait = params["timeoutMs"]
-                .as_u64()
-                .unwrap_or(DEFAULT_WAIT_MS)
-                .min(MAX_WAIT_MS);
-            RPC_TIMEOUT + Duration::from_millis(wait)
-        } else {
-            RPC_TIMEOUT
-        };
-        let response = self.request(peer, method, &params, timeout).await;
+        let response = self
+            .request::<M>(peer, params, RPC_TIMEOUT + extra_wait)
+            .await;
         response.map_or_else(
             |()| {
                 peer.mark(false);
@@ -213,30 +202,38 @@ impl Peers {
         if let Some(reachable) = peer.recent() {
             return reachable;
         }
-        let params =
-            json!({"protocol": PROTOCOL_VERSION, "client": {"kind": "cli", "name": "viz-peer"}});
-        let reachable = match self.request(peer, "hello", &params, PROBE_TIMEOUT).await {
-            Ok(Ok(reply)) => serde_json::from_value::<Hello>(reply)
-                .is_ok_and(|hello| hello.environment == id && hello.protocol == PROTOCOL_VERSION),
-            _ => false,
+        let params = HelloParams {
+            protocol: PROTOCOL_VERSION,
+            environment: None,
+            client: ClientInfo {
+                kind: ClientKind::Cli,
+                name: "viz-peer".into(),
+            },
         };
+        let reachable = self
+            .request::<HelloParams>(peer, &params, PROBE_TIMEOUT)
+            .await
+            .is_ok_and(|reply| {
+                reply.is_ok_and(|hello| {
+                    hello.environment == id && hello.protocol == PROTOCOL_VERSION
+                })
+            });
         peer.mark(reachable);
         reachable
     }
 
-    async fn request(
+    async fn request<M: Method>(
         &self,
         peer: &Peer,
-        method: &str,
-        params: &Value,
+        params: &(impl Serialize + Sync),
         timeout: Duration,
-    ) -> Result<Result<Value, RpcError>, ()> {
+    ) -> Result<Result<M::Response, RpcError>, ()> {
         #[derive(Serialize)]
-        struct Request<'a> {
+        struct Request<'a, P> {
             jsonrpc: TwoPointZero,
             id: u64,
             method: &'a str,
-            params: &'a Value,
+            params: &'a P,
         }
 
         let id = self.sequence.fetch_add(1, Ordering::Relaxed);
@@ -249,7 +246,7 @@ impl Peers {
             .json(&Request {
                 jsonrpc: TwoPointZero,
                 id,
-                method,
+                method: M::NAME,
                 params,
             })
             .timeout(timeout)
@@ -260,7 +257,7 @@ impl Peers {
             return Err(());
         }
         let bytes = response.bytes().await.map_err(|_| ())?;
-        let reply: Response<'_, Value> = serde_json::from_slice(&bytes).map_err(|_| ())?;
+        let reply: Response<'_, M::Response> = serde_json::from_slice(&bytes).map_err(|_| ())?;
         if reply.jsonrpc.is_none() || reply.id != Id::Number(id) {
             return Err(());
         }

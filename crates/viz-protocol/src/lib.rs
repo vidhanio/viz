@@ -6,6 +6,7 @@
 mod catalog;
 mod connections;
 mod history;
+pub mod peer;
 mod requests;
 mod threads;
 
@@ -76,7 +77,7 @@ pub trait Method: Serialize + Sync + private::Sealed {
     /// The JSON-RPC method name.
     const NAME: &'static str;
     /// The `result` of a successful call.
-    type Response: DeserializeOwned;
+    type Response: Clone + DeserializeOwned + Serialize;
 }
 
 mod private {

@@ -1,15 +1,17 @@
 //! Retry admission and progress asynchronously. The worker reloads a durable
 //! phase after each peer request before applying the reply.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
 use tokio::{task::JoinHandle, time};
 use viz_core::tasks::{self as decisions, Command, Phase, Progress, Transition};
+use viz_protocol::{
+    RunId, ThreadId,
+    peer::{ProgressRequest, ReceiveTask, RetractTask},
+};
 
 use super::{
-    Job, LOCAL_POLL, POLL, ProgressRequest, ProgressResult, Receipt, Tasks,
+    Job, LOCAL_POLL, POLL, Tasks,
     store::{finish_task, parse_status, task_phase},
 };
 use crate::{
@@ -166,20 +168,17 @@ impl Tasks {
         };
         let status = parse_status(&row.str(3)?)?;
         let request = ProgressRequest {
-            thread,
-            run,
+            thread: ThreadId(thread),
+            run: RunId(run),
             cancel,
         };
         let reply = if local {
             self.progress(request).await.map(|progress| progress.run)
         } else {
-            self.peer::<ProgressResult>(
-                &target,
-                "task.progress",
-                json!({"thread": thread, "run": run, "cancel": cancel}),
-            )
-            .await
-            .map(|progress| progress.run)
+            self.peers
+                .call::<ProgressRequest>(&target, &request, Duration::ZERO)
+                .await
+                .map(|progress| progress.run)
         };
         if was_reachable != self.peers.reachable(&target) {
             self.signal();
@@ -222,12 +221,17 @@ impl Tasks {
         let was_reachable = self.peers.reachable(target);
         let retracting = phase == Phase::Retracting;
         let result = if retracting {
-            self.destination::<Option<Receipt>>(
-                target,
-                "task.retract",
-                json!({"originEnvironment": self.peers.local, "task": id}),
-            )
-            .await
+            let request = RetractTask {
+                origin_environment: self.peers.local.clone(),
+                task: id.to_owned(),
+            };
+            if target == self.peers.local {
+                self.workspace.retract(request).await
+            } else {
+                self.peers
+                    .call::<RetractTask>(target, &request, Duration::ZERO)
+                    .await
+            }
         } else {
             let payload = {
                 let mut db = self.workspace.db.lock().await;
@@ -256,10 +260,16 @@ impl Tasks {
                 };
                 row.str(0)?
             };
-            let params = serde_json::from_str(&payload).map_err(RpcError::internal)?;
-            self.destination::<Receipt>(target, "task.receive", params)
-                .await
-                .map(Some)
+            let request: ReceiveTask =
+                serde_json::from_str(&payload).map_err(RpcError::internal)?;
+            if target == self.peers.local {
+                self.workspace.receive(request).await.map(Some)
+            } else {
+                self.peers
+                    .call::<ReceiveTask>(target, &request, Duration::ZERO)
+                    .await
+                    .map(Some)
+            }
         };
         if was_reachable != self.peers.reachable(target) {
             self.signal();
@@ -335,35 +345,6 @@ impl Tasks {
                 self.finish(id, status, answer, error).await?;
                 Ok(Advance::Immediate)
             }
-        }
-    }
-
-    pub(super) async fn peer<T: DeserializeOwned>(
-        &self,
-        target: &str,
-        method: &str,
-        params: Value,
-    ) -> Result<T, RpcError> {
-        let value = self.peers.call(target, method, params).await?;
-        serde_json::from_value(value).map_err(|_| {
-            self.peers.mark(target, false);
-            RpcError::unavailable(format!(
-                "invalid {method} response from environment {target}"
-            ))
-        })
-    }
-
-    async fn destination<T: DeserializeOwned>(
-        &self,
-        target: &str,
-        method: &str,
-        params: Value,
-    ) -> Result<T, RpcError> {
-        if target == self.peers.local {
-            serde_json::from_value(self.workspace.call(method, params).await?)
-                .map_err(RpcError::internal)
-        } else {
-            self.peer(target, method, params).await
         }
     }
 
