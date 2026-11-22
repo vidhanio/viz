@@ -24,9 +24,12 @@
 //!   monochrome harness marks. Hover lifts the ink, active controls use filled
 //!   states, and semantic accents distinguish selection, steering, remote
 //!   environments, and delegation.
-//! - Motion: changing threads moves the transcript and toolbar title, never the
+//! - Motion: tokens and reusable primitives live in `motion.rs`. Every spring
+//!   is critically damped (zero bounce) and preserves velocity on mid-flight
+//!   interruption; Reduce Motion removes spatial travel and stops live loops.
+//!   Changing threads moves the transcript and toolbar title, never the
 //!   composer: vertically by sidebar order, horizontally into a delegated task
-//!   (left) and back out (right); short springs without bounce.
+//!   (left) and back out (right).
 //! - One obvious place per action, plus the palette and a shortcut where it is
 //!   frequent.
 
@@ -36,6 +39,8 @@ mod checkout;
 mod composer;
 mod config;
 mod header;
+mod motion;
+mod motion_scene;
 mod palette;
 mod scenes;
 mod server;
@@ -48,7 +53,7 @@ mod ui;
 use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
-use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Spring, Tx, col};
+use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Tx, col};
 use rune_kit::{
     ToastRegion,
     shell::{SidebarToggle, SplitView},
@@ -68,8 +73,15 @@ use crate::{
 const HEADLESS_CONNECT_WAIT: Duration = Duration::from_secs(5);
 
 fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
+    if let Some(reduced) = s.reduced_motion {
+        cx.reduced_motion(reduced);
+    }
+    let reduced = cx.is_reduced_motion();
     let t = Theme::get(cx.system_dark());
     cx.help_look(t.help_look());
+    if let Some(demo) = &s.motion_demo {
+        return motion_scene::view(demo, reduced, t);
+    }
     let mut overlays = Vec::new();
     let dock = composer::composer(s, t, &mut overlays);
     let mut main = col()
@@ -82,6 +94,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     if let Some(dock) = dock {
         main = main.child(dock);
     }
+    let main = motion::stable_content(main);
     let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
         ui::drag_guard("sidebar-drag-guard")
             .pin(
@@ -112,13 +125,13 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
                         .any(|thread| thread.unread && !thread.archived),
                 ),
         )
-        .reduced_motion(cx.is_reduced_motion())
+        .pane_motion(motion::pane_motion())
+        .reduced_motion(reduced)
         .build(&t.shell);
     sidebar::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
     overlays.extend(toasts(s, t));
-    rune_kit::root(split, overlays)
-        .hover_motion_within(rune::tok::motion::INSTANT, Spring::new(0.12, 0.0))
+    rune_kit::root(split, overlays).hover_motion_within(motion::INSTANT, motion::HOVER_OUT)
 }
 
 /// The toast stack, when there's anything in it.

@@ -7,8 +7,10 @@ use rune_kit::shell::Toolbar;
 use viz_client::protocol::{Task, ThreadId, ThreadSummary};
 
 use crate::{
-    app::{Desktop, Switch, TITLE_ENTER_DELAY, TITLE_TRAVEL, thread_title},
-    checkout, sidebar,
+    app::{Desktop, thread_title},
+    checkout,
+    motion::{Switch, TITLE_ENTER_DELAY, TRAVEL_TITLE},
+    sidebar,
     theme::{
         HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
     },
@@ -34,7 +36,7 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
     };
     let mut entering = title(s, t)
         .key(page)
-        .transition(s.switch.title_enter(TITLE_TRAVEL));
+        .transition(s.switch.title_enter(TRAVEL_TITLE));
     if s.switch != Switch::Cut {
         entering = entering.enter_delay(TITLE_ENTER_DELAY);
     }
@@ -45,7 +47,7 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
         .min_w(0.0)
         .shrink()
         .clip_rounded(0.0)
-        .child_exit(s.switch.title_exit(TITLE_TRAVEL))
+        .child_exit(s.switch.title_exit(TRAVEL_TITLE))
         .child(entering);
     let title = if s.sidebar.is_open() {
         title.ml(READING_INSET - TOOLBAR_PAD)

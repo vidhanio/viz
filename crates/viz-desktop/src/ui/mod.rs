@@ -4,17 +4,20 @@
 
 use std::borrow::Cow;
 
-use rune::{Color, Edge, El, Icon, TextEdit, Transition, Tx, col, el, icon, row, text};
+use rune::{Color, El, Icon, TextEdit, Tx, col, el, icon, row, text};
 use rune_kit::{
     ButtonVariant, IconButtonVariant, Keybind, Kit, Menu, MenuItem, Placement, Spinner, TextInput,
 };
 use viz_client::protocol::ThreadStatus;
 
-use crate::theme::{
-    CARD_INSET, CARD_WIDTH, DECK_INSET, DECK_OVERLAP, DIALOG_INSET, DIALOG_WIDTH, DOT, EMPTY_WIDTH,
-    HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_DECK, READING_INSET,
-    READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16, Size, TRAILING, TREE_ROW, TREE_ROW_TALL,
-    TREE_STEP, Theme,
+use crate::{
+    motion,
+    theme::{
+        CARD_INSET, CARD_WIDTH, DECK_INSET, DECK_OVERLAP, DIALOG_INSET, DIALOG_WIDTH, DOT,
+        EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_DECK,
+        READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16, Size, TRAILING,
+        TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
+    },
 };
 
 pub const COMMAND_KEY: &str = if cfg!(target_os = "macos") {
@@ -225,7 +228,10 @@ impl Button {
             el = el.border(HAIRLINE, border);
         }
         if !self.disabled {
-            el = el.hover_group().press_color(style.hover).press_scale(0.97);
+            el = el
+                .hover_group()
+                .press_color(style.hover)
+                .press_scale(motion::PRESS_SCALE);
             if style.press.a > 0.0 {
                 el = el.press(style.press);
             }
@@ -319,7 +325,10 @@ impl IconButton {
             el = el.border(HAIRLINE, border);
         }
         if !self.disabled {
-            el = el.hover_group().press_color(style.hover).press_scale(0.97);
+            el = el
+                .hover_group()
+                .press_color(style.hover)
+                .press_scale(motion::PRESS_SCALE);
             if style.press.a > 0.0 {
                 el = el.press(style.press);
             }
@@ -931,6 +940,7 @@ fn modal<S: 'static>(
             .max_w(width)
             .radius(Size::Default.radius())
             .fill(k.c.layer_01)
+            .transition(motion::dialog())
             .token_motion(k.motion.overlay)
             .modal(true, close),
         El::box_shadow,
@@ -941,6 +951,7 @@ fn modal<S: 'static>(
             .w_full()
             .h_full()
             .fill(k.c.scrim)
+            .transition(motion::scrim())
             .token_motion(k.motion.overlay)
             .a11y_hidden(),
     );
@@ -1017,7 +1028,7 @@ pub fn toast<S: 'static>(
         );
     k.shadow_layers(&k.elevation.floating)
         .fold(panel, El::box_shadow)
-        .transition(Transition::move_edge(Edge::Bottom))
+        .transition(motion::toast())
         .token_motion(k.motion.overlay)
 }
 

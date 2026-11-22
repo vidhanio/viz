@@ -13,9 +13,7 @@
 //! stays visible under it while folded. Details are only offered when there is
 //! something to read.
 
-use rune::{
-    El, Icon, ScrollFade, ScrollSpec, Span, Transition, Tx, col, el, icon, rich, row, text,
-};
+use rune::{El, Icon, ScrollFade, ScrollSpec, Span, Tx, col, el, icon, rich, row, text};
 use rune_kit::{
     ButtonVariant, IconButtonVariant, Markdown, Menu, MenuItem, Placement, ProgressCircle,
     diff::{FileDiff, LineKind},
@@ -23,8 +21,8 @@ use rune_kit::{
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use crate::{
-    app::{Desktop, NewThread, PANE_TRAVEL, Status},
-    attachments, checkout, header, sidebar,
+    app::{Desktop, NewThread, Status},
+    attachments, checkout, header, motion, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL,
         RADIUS_INNER, S2, S4, S6, S8, S12, S16, S24, S32, Size, Theme,
@@ -45,10 +43,6 @@ const INDENT: f32 = ICON + S8;
 const DIFF_LINES: usize = 400;
 /// The widest a user bubble gets, as a share of the reading column.
 const BUBBLE_FRAC: f32 = 0.8;
-/// How long a thread may take to arrive before the timeline says it's
-/// loading, in seconds: most arrive sooner, and a spinner that flashes for a
-/// frame reads as a glitch.
-const LOADING_DELAY: f32 = 0.4;
 
 /// What a row is, for the space above it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,14 +127,14 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .grow(1.0)
         .min_h(0.0)
         .clip_rounded(0.0)
-        .child_exit(s.switch.exit(PANE_TRAVEL))
+        .child_exit(s.switch.exit(motion::TRAVEL_PANE))
         .child(
             col()
                 .key(page)
                 .w_full()
                 .grow(1.0)
                 .min_h(0.0)
-                .transition(s.switch.enter(PANE_TRAVEL))
+                .transition(s.switch.enter(motion::TRAVEL_PANE))
                 .scroll(ScrollSpec { stick_bottom: true })
                 .scroll_fade(ScrollFade::strength(S24).linear())
                 .scroll_anchor()
@@ -161,8 +155,8 @@ fn loading(t: &Theme) -> El {
         .label("Opening transcript")
         .child(ui::radar(ICON, t.accent, t))
         .child(text("Opening transcript…").font(t.small).color(t.faint))
-        .transition(Transition::opacity())
-        .enter_delay(LOADING_DELAY)
+        .transition(motion::fade(motion::QUICK_PAIR))
+        .enter_delay(motion::LOADING_DELAY)
 }
 
 /// Older history, between two rules.
@@ -1065,7 +1059,7 @@ fn action_chip(
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .hover_group()
-        .press_scale(0.97)
+        .press_scale(motion::PRESS_SCALE)
         .on_press_tx(on_press)
         .child(
             icon(glyph, ICON_SMALL)

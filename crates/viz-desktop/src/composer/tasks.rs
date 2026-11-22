@@ -6,11 +6,12 @@ use std::{
     f32::consts::{FRAC_PI_2, PI},
 };
 
-use rune::{El, GrowthSpec, ScrollSpec, Spring, SpringPair, Transition, col, el, icon, row, text};
+use rune::{El, GrowthSpec, ScrollSpec, col, el, icon, row, text};
 use viz_client::protocol::{Task, TaskStatus, ThreadSummary};
 
 use crate::{
     app::{Desktop, thread_title},
+    motion,
     server::Command,
     theme::{HAIRLINE, ICON_SMALL, RADIUS_INNER, S2, S4, S6, S8, S12, S24, Theme},
     ui,
@@ -60,17 +61,11 @@ pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
         collapsed_bar(s, &children, &active, done, total, any_failed, t)
     };
 
-    let motion = Transition::offset(0.0, S12)
-        .combined(Transition::opacity())
-        .springs(SpringPair::new(
-            Spring::new(0.22, 0.0),
-            Spring::new(0.15, 0.0),
-        ));
     Some(
         ui::tucked_deck(format!("tasks-dock-{parent}"), 10, t.surface, t)
             .role("group")
             .label("Tasks")
-            .transition(motion)
+            .transition(motion::tucked_deck())
             .child(body),
     )
 }
@@ -501,7 +496,7 @@ fn task_row_trailing(
                 .center()
                 .radius(RADIUS_INNER)
                 .hover_group()
-                .press_scale(0.95)
+                .press_scale(motion::PRESS_SCALE)
                 .focusable(true)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
                 .on_press_tx(move |s: &mut Desktop, tx| {

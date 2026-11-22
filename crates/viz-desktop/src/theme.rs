@@ -664,6 +664,9 @@ impl Theme {
         k.radius.md = Size::Default.radius();
         k.radius.lg = Size::Default.radius();
         k.radius.xl = Size::Large.radius();
+        k.motion.control = crate::motion::QUICK;
+        k.motion.overlay = crate::motion::SNAP;
+        k.motion.disclosure = crate::motion::SETTLE;
         k.elevation = rune_kit::Elevation::default();
         k.elevation.floating = Vec::new();
         k.elevation.md = Vec::new();

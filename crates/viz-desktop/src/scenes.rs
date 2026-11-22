@@ -12,7 +12,9 @@ use viz_client::protocol::{
 
 use crate::{
     app::{Checkouts, Desktop, NewThread, Status},
-    checkout, composer, palette, sidebar,
+    checkout, composer,
+    motion_scene::MotionDemo,
+    palette, sidebar,
     thread::Thread,
     timeline,
 };
@@ -20,6 +22,8 @@ use crate::{
 type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
+    ("motion", motion),
+    ("motion-reduced", motion_reduced),
     ("activity", activity),
     ("worklog", worklog),
     ("selectors", selectors),
@@ -50,6 +54,18 @@ pub const SCENES: &[Scene] = &[
 
 const THREAD: ThreadId = ThreadId(11);
 const WORKTREE: &str = "/state/worktrees/workbench/viz-trim-export-whitespace";
+
+/// Interactive motion workbench showcasing every primitive in
+/// [`crate::motion`].
+fn motion(s: &mut Desktop) {
+    s.motion_demo = Some(MotionDemo::default());
+}
+
+/// The same motion workbench with Reduce Motion forced on for headless proofs.
+fn motion_reduced(s: &mut Desktop) {
+    s.reduced_motion = Some(true);
+    s.motion_demo = Some(MotionDemo::default());
+}
 
 fn workspace(s: &mut Desktop) {
     s.status = Status::Connected {

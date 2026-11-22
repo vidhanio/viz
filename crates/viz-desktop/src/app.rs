@@ -7,7 +7,7 @@ use std::{
     time::Duration,
 };
 
-use rune::{Spring, SpringPair, TextEdit, Transition, Tx};
+use rune::{TextEdit, Tx};
 use rune_kit::shell::PaneState;
 use tokio::sync::mpsc;
 use viz_client::protocol::{
@@ -16,9 +16,11 @@ use viz_client::protocol::{
     WorktreeTarget,
 };
 
+pub use crate::motion::Switch;
 use crate::{
     attachments::{self, Loaded, Source, Target as AttachmentTarget},
     composer::{Completion, ModelMenu},
+    motion_scene::MotionDemo,
     palette::Palette,
     server::{Command, ThreadChange},
     sidebar::Navigation,
@@ -121,89 +123,6 @@ impl Default for Draft {
     }
 }
 
-/// How far the transcript travels when the open thread changes.
-pub const PANE_TRAVEL: f32 = crate::theme::S40;
-/// How far the toolbar title travels with it, inside its own clip: tall enough
-/// to clear one title line without overlapping the outgoing title.
-pub const TITLE_TRAVEL: f32 = crate::theme::S24;
-/// Delay before a new toolbar title starts fading in so the outgoing title
-/// clears first instead of colliding mid-slide.
-pub const TITLE_ENTER_DELAY: f32 = 0.08;
-/// The switch's springs: short and calm, without bounce.
-const SWITCH_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.24, 0.0), Spring::new(0.18, 0.0));
-/// Faster exit on the toolbar title so old and new text never crossfade on top
-/// of one another.
-const TITLE_SPRINGS: SpringPair = SpringPair::new(Spring::new(0.20, 0.0), Spring::new(0.10, 0.0));
-
-/// Which way the main pane moves when the open thread changes, decided by
-/// [`Desktop::show`] from where the two threads sit. Threads further down
-/// the sidebar are below: going down moves the content up. A delegated
-/// task's thread is to the right of the thread that delegated it. The
-/// composer and task panel stay put; Reduce Motion turns travel into a fade.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum Switch {
-    /// No motion: a draft becoming its thread, another environment.
-    #[default]
-    Cut,
-    /// A move with no direction: a draft, a thread the filter hides.
-    Fade,
-    /// To a thread listed further down: content moves up.
-    Down,
-    /// To a thread listed further up: content moves down.
-    Up,
-    /// Into a delegated task's thread: content moves left.
-    Into,
-    /// Back out to the thread that delegated it: content moves right.
-    Out,
-}
-
-impl Switch {
-    /// Where the new pane enters from, as a unit vector.
-    const fn from(self) -> (f32, f32) {
-        match self {
-            Self::Cut | Self::Fade => (0.0, 0.0),
-            Self::Down => (0.0, 1.0),
-            Self::Up => (0.0, -1.0),
-            Self::Into => (1.0, 0.0),
-            Self::Out => (-1.0, 0.0),
-        }
-    }
-
-    /// The new pane's entrance, travelling `travel` points.
-    pub fn enter(self, travel: f32) -> Transition {
-        let (x, y) = self.from();
-        self.motion(x * travel, y * travel, SWITCH_SPRINGS)
-    }
-
-    /// The old pane's exit, for `El::child_exit`: away the way the new one
-    /// came.
-    pub fn exit(self, travel: f32) -> Transition {
-        let (x, y) = self.from();
-        self.motion(-x * travel, -y * travel, SWITCH_SPRINGS)
-    }
-
-    /// The new toolbar title's entrance, staggered behind the outgoing title.
-    pub fn title_enter(self, travel: f32) -> Transition {
-        let (x, y) = self.from();
-        self.motion(x * travel, y * travel, TITLE_SPRINGS)
-    }
-
-    /// The old toolbar title's fast exit so old and new text do not overlap.
-    pub fn title_exit(self, travel: f32) -> Transition {
-        let (x, y) = self.from();
-        self.motion(-x * travel, -y * travel, TITLE_SPRINGS)
-    }
-
-    fn motion(self, x: f32, y: f32, springs: SpringPair) -> Transition {
-        if self == Self::Cut {
-            return Transition::none();
-        }
-        Transition::offset(x, y)
-            .combined(Transition::opacity())
-            .springs(springs)
-    }
-}
-
 /// The window's state.
 #[derive(Debug)]
 pub struct Desktop {
@@ -263,6 +182,10 @@ pub struct Desktop {
     /// Threads left by navigating, newest last, for back and forward.
     back: Vec<ThreadId>,
     forward: Vec<ThreadId>,
+    /// Scene-only override for Reduce Motion in headless verification.
+    pub reduced_motion: Option<bool>,
+    /// Interactive motion workbench state when rendering the `motion` scenes.
+    pub motion_demo: Option<MotionDemo>,
 }
 
 impl Desktop {
@@ -309,6 +232,8 @@ impl Desktop {
             tool_clock: crate::theme::now_ms(),
             back: Vec::new(),
             forward: Vec::new(),
+            reduced_motion: None,
+            motion_demo: None,
         }
     }
 

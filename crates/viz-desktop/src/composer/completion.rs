@@ -1,13 +1,11 @@
 use std::{ops::Range, time::Duration};
 
-use rune::{
-    Color, El, Key, KeyEvent, ScrollSpec, Spring, SpringPair, TextEdit, Transition, Tx, col, icon,
-    row, text,
-};
+use rune::{Color, El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, icon, row, text};
 use viz_client::protocol::SlashCommand;
 
 use crate::{
     app::Desktop,
+    motion,
     server::Command,
     theme::{ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, S12, S16, S32, Theme},
     ui,
@@ -269,17 +267,11 @@ pub(super) fn drawer(s: &Desktop, t: &Theme) -> Option<El> {
     } else {
         list = list.children(rows);
     }
-    let motion = Transition::offset(0.0, S6)
-        .combined(Transition::opacity())
-        .springs(SpringPair::new(
-            Spring::new(0.14, 0.0),
-            Spring::new(0.10, 0.0),
-        ));
     Some(
         ui::tucked_deck(POPUP, 25, t.overlay.c.layer_01, t)
             .role("group")
             .label(heading)
-            .transition(motion)
+            .transition(motion::tucked_menu())
             .child(header)
             .child(ui::rule(t))
             .child(list),
