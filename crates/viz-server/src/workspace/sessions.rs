@@ -1,0 +1,247 @@
+//! Open and configure the worker's ACP session and persist its latest view.
+//! Session notifications are read by the worker that owns the process.
+
+use std::path::Path;
+
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
+use viz_core::{options::Labels, titles};
+
+use super::{
+    Workspace,
+    sql::{Connection, exec, row},
+    store::{self, Binding},
+};
+use crate::{
+    acp::{Catalog, Desired, Session, SessionSnapshot},
+    wire::{OptionValue, RpcError},
+};
+
+#[derive(Default)]
+pub(super) struct SessionSlot {
+    pub(super) current: Option<Session>,
+    updates: Option<watch::Receiver<()>>,
+}
+
+impl SessionSlot {
+    pub(super) fn clear(&mut self) {
+        self.updates.take();
+        self.current.take();
+    }
+
+    pub(super) fn is_restorable(&self) -> bool {
+        self.current.as_ref().is_some_and(Session::is_restorable)
+    }
+
+    pub(super) async fn changed(&mut self) -> bool {
+        let Some(updates) = &mut self.updates else {
+            return std::future::pending().await;
+        };
+        if updates.changed().await.is_ok() {
+            true
+        } else {
+            self.updates.take();
+            false
+        }
+    }
+}
+
+impl Workspace {
+    pub(super) async fn session<'slot>(
+        &self,
+        thread: u64,
+        slot: &'slot mut SessionSlot,
+        cancel: &CancellationToken,
+    ) -> anyhow::Result<Bound<'slot>> {
+        let Binding {
+            harness,
+            cwd,
+            session,
+            ..
+        } = {
+            let mut db = self.db.lock().await;
+            store::binding(&mut db, thread).await?
+        };
+        if slot.current.as_ref().is_some_and(Session::is_alive) {
+            return Ok(Bound {
+                session: slot.current.as_mut().expect("checked live session"),
+                harness,
+                desired: session.desired,
+            });
+        }
+        slot.clear();
+        let (_, config) = self.harness(Some(&harness))?;
+        let endpoint = self.mcp.endpoint(thread);
+        let running = tokio::select! {
+            biased;
+            () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
+            result = Session::open(config, Path::new(&cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
+        };
+        if session.session_id.as_deref() != Some(running.id()) {
+            exec(
+                &mut *self.db.lock().await,
+                "UPDATE threads SET session = json_set(session, '$.session_id', ?2) WHERE id = ?1",
+                [thread.into(), running.id().into()],
+            )
+            .await?;
+        }
+        let desired = tokio::select! {
+            biased;
+            () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
+            result = running.restore(&session.desired, session.selection.as_ref()) => result?,
+        };
+        let updates = running.watch();
+        let relist = {
+            let mut db = self.db.lock().await;
+            let mut tx = db.transaction().await?;
+            let snapshot = running.snapshot();
+            update_catalog(&mut tx, &harness, &snapshot).await?;
+            let relist = persist_snapshot(&mut tx, thread, snapshot, Some(&desired)).await?;
+            tx.commit().await?;
+            drop(db);
+            relist
+        };
+        slot.updates = Some(updates);
+        let session_ref = slot.current.insert(running);
+        if relist {
+            self.relist(thread);
+        } else {
+            self.changed(Some(thread));
+        }
+        Ok(Bound {
+            session: session_ref,
+            harness,
+            desired,
+        })
+    }
+
+    pub(super) async fn configure_session(
+        &self,
+        thread: u64,
+        slot: &mut SessionSlot,
+        cancel: &CancellationToken,
+        option: &str,
+        value: OptionValue,
+    ) -> Result<(), RpcError> {
+        let Bound {
+            session,
+            harness,
+            desired,
+        } = self.session(thread, slot, cancel).await?;
+        let desired = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(RpcError::unavailable("ACP configuration cancelled")),
+            result = session.configure(option, value, &desired) => result.map_err(|error| RpcError::invalid(error.to_string()))?,
+        };
+        let snapshot = session.snapshot();
+        let mut db = self.db.lock().await;
+        let mut tx = db.transaction().await?;
+        update_catalog(&mut tx, &harness, &snapshot).await?;
+        let relist = persist_snapshot(&mut tx, thread, snapshot, Some(&desired)).await?;
+        tx.commit().await?;
+        drop(db);
+        if relist {
+            self.relist(thread);
+        } else {
+            self.changed(Some(thread));
+        }
+        Ok(())
+    }
+
+    pub(super) async fn refresh_session(
+        &self,
+        thread: u64,
+        slot: &SessionSlot,
+    ) -> Result<(), RpcError> {
+        let Some(session) = slot.current.as_ref() else {
+            return Ok(());
+        };
+        let updated =
+            persist_snapshot(&mut *self.db.lock().await, thread, session.snapshot(), None).await?;
+        if updated {
+            self.relist(thread);
+        } else {
+            self.changed(Some(thread));
+        }
+        Ok(())
+    }
+}
+
+pub(super) struct Bound<'slot> {
+    pub(super) session: &'slot mut Session,
+    harness: String,
+    desired: Desired,
+}
+
+pub(super) async fn catalog(db: &mut Connection, name: &str) -> Result<Option<Catalog>, RpcError> {
+    row(
+        db,
+        "SELECT data FROM harness_catalogs WHERE name = ?1",
+        [name.into()],
+    )
+    .await?
+    .map(|mut row| store::from_json(&row.str(0)?))
+    .transpose()
+}
+
+pub(super) async fn save_catalog(
+    db: &mut Connection,
+    name: &str,
+    catalog: &Catalog,
+) -> Result<(), RpcError> {
+    exec(db, "INSERT INTO harness_catalogs (name, data) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET data = excluded.data WHERE data <> excluded.data",
+        [name.into(), store::json(catalog)?.into()]).await?;
+    Ok(())
+}
+
+async fn update_catalog(
+    db: &mut Connection,
+    name: &str,
+    snapshot: &SessionSnapshot,
+) -> Result<(), RpcError> {
+    let stored = catalog(db, name).await?;
+    if let Some(updated) = Catalog::merge(stored.as_ref(), &snapshot.options, &snapshot.opened) {
+        save_catalog(db, name, &updated).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn persist_snapshot(
+    db: &mut Connection,
+    thread: u64,
+    snapshot: SessionSnapshot,
+    desired: Option<&Desired>,
+) -> Result<bool, RpcError> {
+    let Labels { model, thinking } = Labels::from_options(&snapshot.options);
+    let Some(mut prior) = row(
+        db,
+        "SELECT title, user_title, model, thinking, setup_failed FROM threads WHERE id = ?1",
+        [thread.into()],
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    let prior_title = prior.str(0)?;
+    let title = titles::observed(
+        prior_title.clone(),
+        prior.flag(1)?,
+        snapshot.title.as_deref(),
+    );
+    let relist = title != prior_title
+        || prior.opt_str(2)?.as_deref() != model
+        || prior.opt_str(3)?.as_deref() != thinking
+        || prior.flag(4)?;
+    exec(db, "UPDATE threads SET
+          session = json_set(session, '$.session_id', ?2, '$.options', json(?3), '$.commands', json(?4), '$.images', json(?5), '$.usage', json(?6)),
+          title = ?7,
+          model = ?8, thinking = ?9, setup_failed = 0 WHERE id = ?1", [
+        thread.into(), snapshot.session_id.into(), store::json(&snapshot.options)?.into(), store::json(&snapshot.commands)?.into(),
+        if snapshot.images { "true" } else { "false" }.into(), store::json(&snapshot.usage)?.into(), title.into(), model.into(), thinking.into(),
+    ]).await?;
+    if let Some(desired) = desired {
+        exec(db, "UPDATE threads SET session = json_set(session, '$.desired', json(?2), '$.selection', NULL) WHERE id = ?1",
+            [thread.into(), store::json(desired)?.into()]).await?;
+    }
+    Ok(relist)
+}

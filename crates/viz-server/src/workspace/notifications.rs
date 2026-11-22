@@ -1,0 +1,139 @@
+//! Thread watches and live transcript projections. Durable changes are
+//! published after commit. Watch and live state updates that must agree with
+//! persisted rows happen under the workspace write lease.
+
+use std::{collections::HashMap, sync::Mutex};
+
+use tokio::sync::broadcast;
+
+use super::{Workspace, sql::exec, store};
+use crate::wire::{LiveTurn, RpcError};
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Change {
+    Thread(u64),
+    Settled(u64),
+    Directory,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum WatchChange {
+    Open,
+    Close,
+}
+
+#[derive(Default)]
+struct Views {
+    live: HashMap<u64, LiveTurn>,
+    watches: HashMap<u64, usize>,
+}
+
+pub(super) struct Updates {
+    changes: broadcast::Sender<Change>,
+    views: Mutex<Views>,
+}
+
+impl Default for Updates {
+    fn default() -> Self {
+        Self {
+            changes: broadcast::channel(1024).0,
+            views: Mutex::default(),
+        }
+    }
+}
+
+impl Updates {
+    pub(super) fn live(&self, thread: u64, live: Option<LiveTurn>) {
+        let mut views = self.views.lock().expect("thread views poisoned");
+        if let Some(live) = live {
+            views.live.insert(thread, live);
+        } else {
+            views.live.remove(&thread);
+        }
+    }
+
+    pub(super) fn latest(&self, thread: u64) -> Option<LiveTurn> {
+        self.views
+            .lock()
+            .expect("thread views poisoned")
+            .live
+            .get(&thread)
+            .cloned()
+    }
+
+    pub(super) fn remove(&self, thread: u64) {
+        let mut views = self.views.lock().expect("thread views poisoned");
+        views.live.remove(&thread);
+        views.watches.remove(&thread);
+    }
+}
+
+impl Workspace {
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Change> {
+        self.updates.changes.subscribe()
+    }
+
+    pub(super) fn changed(&self, thread: Option<u64>) {
+        let _ = self
+            .updates
+            .changes
+            .send(thread.map_or(Change::Directory, Change::Thread));
+    }
+
+    pub(super) fn relist(&self, thread: u64) {
+        self.changed(Some(thread));
+        self.changed(None);
+    }
+
+    pub(super) fn settled(&self, thread: u64) {
+        let _ = self.updates.changes.send(Change::Settled(thread));
+        self.changed(None);
+    }
+
+    pub(crate) async fn watched(&self, thread: u64, mode: WatchChange) -> Result<(), RpcError> {
+        match mode {
+            WatchChange::Open => {
+                let mut db = self.db.lock().await;
+                store::require(&mut db, thread).await?;
+                let updated = exec(
+                    &mut db,
+                    "UPDATE threads SET unread = 0 WHERE id = ?1 AND unread = 1",
+                    [thread.into()],
+                )
+                .await?;
+                *self
+                    .updates
+                    .views
+                    .lock()
+                    .expect("thread views poisoned")
+                    .watches
+                    .entry(thread)
+                    .or_default() += 1;
+                drop(db);
+                if updated != 0 {
+                    self.relist(thread);
+                }
+            }
+            WatchChange::Close => {
+                let mut views = self.updates.views.lock().expect("thread views poisoned");
+                if let Some(watchers) = views.watches.get_mut(&thread) {
+                    *watchers -= 1;
+                    if *watchers == 0 {
+                        views.watches.remove(&thread);
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn unread(&self, thread: u64) -> bool {
+        !self
+            .updates
+            .views
+            .lock()
+            .expect("thread views poisoned")
+            .watches
+            .contains_key(&thread)
+    }
+}

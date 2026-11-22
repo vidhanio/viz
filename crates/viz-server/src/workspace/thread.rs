@@ -18,6 +18,7 @@ use super::{
     runs::{self, NewRun},
     sql::{Connection, exec, row},
     store::{self, NewThread, SavedSession},
+    worker::Intent,
     worktree::{self, Placement},
 };
 use crate::wire::RpcError;
@@ -184,23 +185,9 @@ impl Workspace {
         Ok(Sent { run: RunId(run) })
     }
 
-    fn cancel_active(&self, thread: u64, active: u64) {
-        let state = self
-            .transient
-            .lock()
-            .expect("workspace runtime mutex poisoned");
-        if let Some(driver) = state.threads.get(&thread) {
-            driver.cancel(active);
-        }
-    }
-
     pub(super) fn steer_active(&self, thread: u64, active: u64) {
-        let state = self
-            .transient
-            .lock()
-            .expect("workspace runtime mutex poisoned");
-        if let Some(driver) = state.threads.get(&thread) {
-            driver.steer(active);
+        if let Some(driver) = self.workers.get(ThreadId(thread)) {
+            driver.signal(RunId(active), Intent::Steer);
         }
     }
 
@@ -223,8 +210,10 @@ impl Workspace {
             )
             .map(|id| id.0);
             tx.commit().await?;
-            if let Some(active) = active {
-                self.cancel_active(thread, active);
+            if let Some(active) = active
+                && let Some(driver) = self.workers.get(ThreadId(thread))
+            {
+                driver.signal(RunId(active), Intent::Stop);
             }
             drop(db);
             active
@@ -316,21 +305,14 @@ impl Workspace {
             if count == 0 {
                 return Err(store::missing(thread));
             }
-            let mut state = self
-                .transient
-                .lock()
-                .expect("workspace runtime mutex poisoned");
-            state.live.remove(&thread);
-            state.watches.remove(&thread);
-            let driver = state.threads.remove(&thread);
-            drop(state);
+            self.updates.remove(thread);
+            let driver = self.workers.remove(ThreadId(thread));
             drop(db);
             driver
         };
         self.settled(thread);
         if let Some(driver) = driver {
-            driver.lifetime.cancel();
-            driver.session.lock().await.take();
+            driver.close().await;
         }
         match tokio::fs::remove_dir_all(self.attachment_dir(thread)).await {
             Ok(()) => {}

@@ -5,68 +5,48 @@ mod admission;
 mod attachments;
 mod checkouts;
 mod files;
+mod notifications;
 mod projects;
 pub(crate) mod rpc;
 pub(crate) mod runs;
 mod runtime;
+mod sessions;
 pub(crate) mod sql;
 mod store;
 mod thread;
+mod worker;
 mod worktree;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex as SyncMutex},
+    sync::Arc,
     time::Duration,
 };
 
 use anyhow::Context as _;
-use tokio::{
-    sync::{Mutex, broadcast},
-    time,
-};
+use tokio::{sync::Mutex, time};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use viz_core::tasks::{self, Wake, WakeMode};
 use viz_protocol::RunId;
 
 use self::{
     files::Files,
+    notifications::Updates,
     runs::NewRun,
-    runtime::Driver,
     sql::{Connection, exec, row, rows},
+    worker::Workers,
 };
 pub(crate) use self::{
+    notifications::{Change, WatchChange},
     rpc::ROUTES,
     runs::{active_run_from, run_from},
 };
 use crate::{
     acp::Mcp,
     config::{Config, HarnessConfig},
-    wire::{
-        Attachment, Entry, EntryPage, LiveTurn, NewEntry, Origin, RpcError, ThreadState, WaitResult,
-    },
+    wire::{Attachment, Entry, EntryPage, NewEntry, Origin, RpcError, ThreadState, WaitResult},
 };
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum Change {
-    Thread(u64),
-    Settled(u64),
-    Directory,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum WatchChange {
-    Open,
-    Close,
-}
-
-#[derive(Default)]
-struct Transient {
-    threads: HashMap<u64, Arc<Driver>>,
-    live: HashMap<u64, LiveTurn>,
-    watches: HashMap<u64, usize>,
-}
 
 pub(crate) struct Workspace {
     /// Kept for the entire process lifetime: sole writer and the physical
@@ -80,8 +60,8 @@ pub(crate) struct Workspace {
     worktrees: PathBuf,
     default_harness: Option<String>,
     harnesses: BTreeMap<String, HarnessConfig>,
-    changes: broadcast::Sender<Change>,
-    transient: SyncMutex<Transient>,
+    updates: Updates,
+    workers: Workers,
     files: Files,
     mcp: Mcp,
     closing: CancellationToken,
@@ -115,7 +95,6 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         runs::recover(&mut tx).await?;
         tx.commit().await?;
-        let (changes, _) = broadcast::channel(1024);
         Ok(Arc::new(Self {
             db: Mutex::new(db),
             environment: config.environment.clone(),
@@ -124,8 +103,8 @@ impl Workspace {
             worktrees,
             default_harness: config.default_harness.clone(),
             harnesses: config.harnesses.clone(),
-            changes,
-            transient: SyncMutex::default(),
+            updates: Updates::default(),
+            workers: Workers::default(),
             files: Files::default(),
             mcp,
             closing: CancellationToken::new(),
@@ -146,104 +125,10 @@ impl Workspace {
         Ok(())
     }
 
-    pub(crate) async fn shutdown(&self) {
-        {
-            let _runtime = self
-                .transient
-                .lock()
-                .expect("workspace runtime mutex poisoned");
-            self.closing.cancel();
-            self.jobs.close();
-        }
-        self.jobs.wait().await;
-        let drivers = std::mem::take(
-            &mut self
-                .transient
-                .lock()
-                .expect("workspace runtime mutex poisoned")
-                .threads,
-        );
-        drop(drivers);
-    }
-
-    pub(crate) fn subscribe(&self) -> broadcast::Receiver<Change> {
-        self.changes.subscribe()
-    }
-
-    fn changed(&self, thread: Option<u64>) {
-        let _ = self
-            .changes
-            .send(thread.map_or(Change::Directory, Change::Thread));
-    }
-
-    fn relist(&self, thread: u64) {
-        self.changed(Some(thread));
-        self.changed(None);
-    }
-
-    fn settled(&self, thread: u64) {
-        let _ = self.changes.send(Change::Settled(thread));
-        self.changed(None);
-    }
-
-    pub(crate) async fn watched(&self, thread: u64, mode: WatchChange) -> Result<(), RpcError> {
-        match mode {
-            WatchChange::Open => {
-                let mut db = self.db.lock().await;
-                store::require(&mut db, thread).await?;
-                let updated = exec(
-                    &mut db,
-                    "UPDATE threads SET unread = 0 WHERE id = ?1 AND unread = 1",
-                    [thread.into()],
-                )
-                .await?;
-                *self
-                    .transient
-                    .lock()
-                    .expect("workspace runtime mutex poisoned")
-                    .watches
-                    .entry(thread)
-                    .or_default() += 1;
-                drop(db);
-                if updated != 0 {
-                    self.relist(thread);
-                }
-            }
-            WatchChange::Close => {
-                let mut state = self
-                    .transient
-                    .lock()
-                    .expect("workspace runtime mutex poisoned");
-                if let Some(watchers) = state.watches.get_mut(&thread) {
-                    *watchers -= 1;
-                    if *watchers == 0 {
-                        state.watches.remove(&thread);
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn unread(&self, thread: u64) -> bool {
-        !self
-            .transient
-            .lock()
-            .expect("workspace runtime mutex poisoned")
-            .watches
-            .contains_key(&thread)
-    }
-
     pub(crate) async fn state(&self, thread: u64) -> Result<ThreadState, RpcError> {
         let mut db = self.db.lock().await;
         let mut state = store::state(&mut db, thread).await?;
-        state.live = self
-            .transient
-            .lock()
-            .expect("workspace runtime mutex poisoned")
-            .live
-            .get(&thread)
-            .cloned();
+        state.live = self.updates.latest(thread);
         drop(db);
         Ok(state)
     }

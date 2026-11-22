@@ -152,32 +152,38 @@ impl Workspace {
         if placement.cwd == binding.cwd && placement.worktree == binding.worktree {
             return Ok(moved(placement));
         }
-        let result = self.rebind(thread, &binding, &placement).await;
+        let result = self.rebind(thread, binding, placement.clone()).await;
         if result.is_err() {
             worktree::discard(Path::new(&project), &placement).await;
         }
         result?;
         self.relist(thread);
-        self.kick(thread, true);
         Ok(moved(placement))
     }
 
-    /// Points the thread at its new checkout while holding its session slot,
-    /// so no run can open a session in between, then stops the old harness.
     async fn rebind(
+        self: &Arc<Self>,
+        thread: u64,
+        before: store::Binding,
+        placement: Placement,
+    ) -> Result<(), RpcError> {
+        let driver = {
+            let mut db = self.db.lock().await;
+            store::require(&mut db, thread).await?;
+            let driver = self.driver(ThreadId(thread))?;
+            drop(db);
+            driver
+        };
+        driver.rebind(before, placement).await
+    }
+
+    /// Only the session owner may change the binding while the thread is idle.
+    pub(super) async fn apply_checkout(
         &self,
         thread: u64,
         before: &store::Binding,
         placement: &Placement,
     ) -> Result<(), RpcError> {
-        let driver = {
-            let mut db = self.db.lock().await;
-            store::require(&mut db, thread).await?;
-            let driver = self.driver(thread);
-            drop(db);
-            driver
-        };
-        let mut slot = driver.session.lock().await;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let current = store::binding(&mut tx, thread).await?;
@@ -212,8 +218,6 @@ impl Workspace {
         .await?;
         tx.commit().await?;
         drop(db);
-        slot.take();
-        drop(slot);
         Ok(())
     }
 }

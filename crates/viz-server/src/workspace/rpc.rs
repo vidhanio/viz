@@ -117,7 +117,7 @@ handlers! {
             Ok(Empty {})
         }
         ConfigureThread<'static>, Configure, |workspace, Configure { thread, option, value }| {
-            workspace.configure(thread.get(), &option, value).await?;
+            workspace.configure(thread.get(), option, value).await?;
             Ok(Empty {})
         }
         DeleteThread, DeleteThread, |workspace, input| {

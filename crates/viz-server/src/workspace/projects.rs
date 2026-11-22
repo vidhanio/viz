@@ -5,7 +5,7 @@ use std::path::Path;
 use futures_util::{StreamExt as _, stream::FuturesUnordered};
 
 use super::{
-    Workspace, runtime,
+    Workspace, sessions,
     sql::{exec, rows},
     store,
 };
@@ -106,12 +106,12 @@ impl Workspace {
         let (_, config) = self.harness(Some(name))?;
         let stored = {
             let mut db = self.db.lock().await;
-            runtime::catalog(&mut db, name).await?
+            sessions::catalog(&mut db, name).await?
         };
         let (options, updated) =
             acp::catalog(config, self.default_cwd(), stored.as_ref(), model).await?;
         if let Some(updated) = updated {
-            runtime::save_catalog(&mut *self.db.lock().await, name, &updated).await?;
+            sessions::save_catalog(&mut *self.db.lock().await, name, &updated).await?;
         }
         Ok(options)
     }
