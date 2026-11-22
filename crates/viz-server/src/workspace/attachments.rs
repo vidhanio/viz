@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{fmt::Write as _, path::Path};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
@@ -53,7 +53,13 @@ pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, RpcErr
                 digest.update(field.len().to_le_bytes());
                 digest.update(field);
             }
-            let id = format!("{:x}", digest.finalize());
+            let id = digest
+                .finalize()
+                .iter()
+                .fold(String::new(), |mut hex, byte| {
+                    _ = write!(hex, "{byte:02x}");
+                    hex
+                });
             Ok(Upload {
                 reference: PromptAttachment { id, name, mime },
                 bytes,
