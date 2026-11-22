@@ -93,14 +93,14 @@ impl Workspace {
         for checkout in listed {
             let threads = if checkout.main {
                 rows(
-                    &mut *db,
+                    &mut db,
                     "SELECT id FROM threads WHERE project = ?1 AND worktree IS NULL ORDER BY id",
                     [project.path.as_str().into()],
                 )
                 .await?
             } else {
                 rows(
-                    &mut *db,
+                    &mut db,
                     "SELECT id FROM threads WHERE worktree = ?1 ORDER BY id",
                     [checkout.path.as_str().into()],
                 )
@@ -124,7 +124,7 @@ impl Workspace {
     /// than `except` runs in it.
     pub(super) async fn removable(
         &self,
-        db: &mut dyn toasty::Executor,
+        db: &mut crate::workspace::sql::Connection,
         path: &str,
         except: Option<u64>,
     ) -> Result<(), RpcError> {
@@ -162,10 +162,10 @@ impl Workspace {
         let thread = args.thread.0;
         let (binding, title) = {
             let mut db = self.db.lock().await;
-            let binding = store::binding(&mut *db, thread).await?;
-            idle(&mut *db, thread).await?;
+            let binding = store::binding(&mut db, thread).await?;
+            idle(&mut db, thread).await?;
             let title = row(
-                &mut *db,
+                &mut db,
                 "SELECT title FROM threads WHERE id = ?1",
                 [thread.into()],
             )
@@ -206,7 +206,7 @@ impl Workspace {
     ) -> Result<(), RpcError> {
         let driver = {
             let mut db = self.db.lock().await;
-            store::require(&mut *db, thread).await?;
+            store::require(&mut db, thread).await?;
             let driver = self.driver(thread);
             drop(db);
             driver
@@ -248,7 +248,7 @@ impl Workspace {
     }
 }
 
-async fn idle(db: &mut dyn toasty::Executor, thread: u64) -> Result<(), RpcError> {
+async fn idle(db: &mut crate::workspace::sql::Connection, thread: u64) -> Result<(), RpcError> {
     if row(
         db,
         "SELECT 1 FROM runs WHERE thread = ?1 AND status IN ('queued', 'running') LIMIT 1",

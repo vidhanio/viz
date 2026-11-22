@@ -8,7 +8,6 @@ use std::{
     time::Duration,
 };
 
-use toasty::Executor;
 use tokio::{
     sync::{Mutex, Notify, watch},
     time::{Instant, sleep_until},
@@ -28,6 +27,7 @@ use crate::{
         transcript::{Output, Transcript},
     },
     wire::{LiveTurn, OptionValue, RpcError, RunEnd, RunId, RunStatus, ToolCallStatus},
+    workspace::sql::Connection,
 };
 
 /// ACP sends no stop signal for idle output. Allow four seconds between
@@ -364,7 +364,7 @@ impl Workspace {
         cancel: &CancellationToken,
     ) -> Result<(), RpcError> {
         let mut db = self.db.lock().await;
-        if runs::status(&mut *db, thread, run).await? != Some(RunStatus::Running) {
+        if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
             return Ok(());
         }
         if self.closing.is_cancelled() {
@@ -435,11 +435,13 @@ impl Workspace {
         };
         let handoff = {
             let mut db = self.db.lock().await;
-            let binding = store::binding(&mut *db, thread).await?;
-            match binding.session.handoff {
-                Some(from) => Some(handoff_note(&mut *db, thread, &binding.cwd, &from).await?),
+            let binding = store::binding(&mut db, thread).await?;
+            let note = match binding.session.handoff {
+                Some(from) => Some(handoff_note(&mut db, thread, &binding.cwd, &from).await?),
                 None => None,
-            }
+            };
+            drop(db);
+            note
         };
         if let Some(note) = &handoff {
             text = std::borrow::Cow::Owned(format!("{note}{text}"));
@@ -542,7 +544,7 @@ impl Workspace {
             ..
         } = {
             let mut db = self.db.lock().await;
-            store::binding(&mut *db, thread).await?
+            store::binding(&mut db, thread).await?
         };
         if slot.as_ref().is_some_and(Session::is_alive) {
             return Ok(Bound {
@@ -606,7 +608,7 @@ impl Workspace {
     ) -> Result<(), RpcError> {
         let driver = {
             let mut db = self.db.lock().await;
-            store::require(&mut *db, thread).await?;
+            store::require(&mut db, thread).await?;
             let driver = self.driver(thread);
             drop(db);
             driver
@@ -749,10 +751,7 @@ fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
     }
 }
 
-pub(super) async fn catalog(
-    db: &mut dyn Executor,
-    name: &str,
-) -> Result<Option<Catalog>, RpcError> {
+pub(super) async fn catalog(db: &mut Connection, name: &str) -> Result<Option<Catalog>, RpcError> {
     row(
         db,
         "SELECT data FROM harness_catalogs WHERE name = ?1",
@@ -764,7 +763,7 @@ pub(super) async fn catalog(
 }
 
 pub(super) async fn save_catalog(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     name: &str,
     catalog: &Catalog,
 ) -> Result<(), RpcError> {
@@ -774,7 +773,7 @@ pub(super) async fn save_catalog(
 }
 
 async fn update_catalog(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     name: &str,
     snapshot: &SessionSnapshot,
 ) -> Result<(), RpcError> {
@@ -786,7 +785,7 @@ async fn update_catalog(
 }
 
 async fn persist_snapshot(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     snapshot: SessionSnapshot,
     desired: Option<&Desired>,
@@ -848,7 +847,7 @@ const HANDOFF_BYTES: usize = 24 * 1024;
 /// The context prefixed to the first prompt after a move: the directory
 /// change and the earlier turns' prompts and answers.
 async fn handoff_note(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     cwd: &str,
     from: &str,

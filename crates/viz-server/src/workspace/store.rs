@@ -5,7 +5,6 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use toasty::Executor;
 
 use super::{
     Workspace,
@@ -19,6 +18,7 @@ use crate::{
         Project, QueuedInput, RpcError, RunId, SearchHit, ThreadId, ThreadState, ThreadStatus,
         ThreadSummary, ThreadWorktree, ToolCallStatus, Usage,
     },
+    workspace::sql::Connection,
 };
 
 pub(super) fn json<T: Serialize + ?Sized>(value: &T) -> Result<String, RpcError> {
@@ -63,7 +63,7 @@ pub(super) fn path_text(path: &Path) -> Result<&str, RpcError> {
         .ok_or_else(|| RpcError::invalid("working directory is not UTF-8"))
 }
 
-pub(super) async fn project(db: &mut dyn Executor, path: &str) -> Result<Project, RpcError> {
+pub(super) async fn project(db: &mut Connection, path: &str) -> Result<Project, RpcError> {
     let mut row = row(
         db,
         "SELECT name, created_at FROM projects WHERE path = ?1",
@@ -94,7 +94,7 @@ pub(super) fn thread_worktree(path: String) -> ThreadWorktree {
     }
 }
 
-pub(super) async fn projects(db: &mut dyn Executor) -> Result<Vec<Project>, RpcError> {
+pub(super) async fn projects(db: &mut Connection) -> Result<Vec<Project>, RpcError> {
     rows(
         db,
         "SELECT path, name, created_at FROM projects ORDER BY name, path",
@@ -132,7 +132,7 @@ pub(super) struct Binding {
     pub(super) session: SavedSession,
 }
 
-pub(super) async fn binding(db: &mut dyn Executor, thread: u64) -> Result<Binding, RpcError> {
+pub(super) async fn binding(db: &mut Connection, thread: u64) -> Result<Binding, RpcError> {
     let mut row = row(db, "SELECT harness, cwd, project, worktree, parent, parent_environment, session FROM threads WHERE id = ?1", [thread.into()]).await?
         .ok_or_else(|| missing(thread))?;
     Ok(Binding {
@@ -146,7 +146,7 @@ pub(super) async fn binding(db: &mut dyn Executor, thread: u64) -> Result<Bindin
     })
 }
 
-pub(super) async fn require(db: &mut dyn Executor, thread: u64) -> Result<(), RpcError> {
+pub(super) async fn require(db: &mut Connection, thread: u64) -> Result<(), RpcError> {
     row(db, "SELECT id FROM threads WHERE id = ?1", [thread.into()])
         .await?
         .map(|_| ())
@@ -169,7 +169,7 @@ pub(super) struct NewThread<'a> {
 }
 
 pub(super) async fn create_thread(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     new: &NewThread<'_>,
 ) -> Result<u64, RpcError> {
     let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree)
@@ -187,7 +187,7 @@ const STATUS: &str = "CASE
     ELSE 'idle' END";
 
 pub(super) async fn list_threads(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     archived: Option<bool>,
     project: Option<&str>,
     workspace: &Workspace,
@@ -223,7 +223,7 @@ pub(super) async fn list_threads(
         .collect()
 }
 
-pub(super) async fn state(db: &mut dyn Executor, thread: u64) -> Result<ThreadState, RpcError> {
+pub(super) async fn state(db: &mut Connection, thread: u64) -> Result<ThreadState, RpcError> {
     let query = format!(
         "SELECT t.harness, t.project, t.cwd, t.session, {STATUS}, t.worktree FROM threads AS t WHERE t.id = ?1"
     );
@@ -277,7 +277,7 @@ fn status(value: &str) -> Result<ThreadStatus, RpcError> {
 }
 
 pub(super) async fn publish(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     session: &str,
     output: Output,
@@ -344,7 +344,7 @@ pub(super) async fn publish(
 }
 
 pub(super) async fn append(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     data: &NewEntry,
 ) -> Result<u64, RpcError> {
@@ -384,7 +384,7 @@ pub(super) async fn append(
 }
 
 pub(super) async fn entries(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     before: Option<u64>,
     limit: usize,
@@ -420,7 +420,7 @@ pub(super) async fn entries(
 }
 
 pub(super) async fn entries_after(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     after: u64,
     limit: usize,
@@ -444,7 +444,7 @@ fn decode_entry(mut row: super::sql::Row) -> Result<Entry, RpcError> {
 }
 
 pub(super) async fn search(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     query: &str,
     limit: usize,
 ) -> Result<Vec<SearchHit>, RpcError> {

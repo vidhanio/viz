@@ -1,8 +1,6 @@
 //! Task ownership, delivery, and cancellation survive restarts and peer
 //! partitions.
 
-pub(crate) mod model;
-
 use std::{
     collections::HashMap,
     num::NonZeroU64,
@@ -13,7 +11,6 @@ use std::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use toasty::Executor;
 use tokio::{
     sync::{Mutex as AsyncMutex, Notify, broadcast},
     task::JoinHandle,
@@ -23,14 +20,13 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use viz_protocol::{TaskList, TaskResult, TaskStatusResult, WorktreeTarget};
 
-use self::model::{StoppedTaskRun, TaskRow};
 use crate::{
     environments::Peers,
     wire::{
         Attachment, INVALID_PARAMS, NOT_FOUND, RpcError, Run, RunId, RunKind, RunStatus, Task,
         TaskStatus, ThreadId, decode, encode,
     },
-    workspace::{WakeMode, Workspace, active_run_from, run_from, sql},
+    workspace::{WakeMode, Workspace, active_run_from, run_from, sql, sql::Connection},
 };
 
 const POLL: Duration = Duration::from_secs(1);
@@ -342,7 +338,7 @@ impl Tasks {
 
     pub(crate) async fn list(&self, parent: Option<u64>) -> Result<Vec<Task>, RpcError> {
         let mut db = self.workspace.db.lock().await;
-        let rows = sql::rows(&mut *db, LIST_TASKS_SQL, [parent.into()]).await?;
+        let rows = sql::rows(&mut db, LIST_TASKS_SQL, [parent.into()]).await?;
         drop(db);
         rows.map(|row| self.task(row)).collect()
     }
@@ -373,7 +369,7 @@ impl Tasks {
         }
         if let Some(request_id) = input.request_id.as_deref() {
             let mut db = self.workspace.db.lock().await;
-            if let Some(id) = prior_request(&mut *db, parent, request_id).await? {
+            if let Some(id) = prior_request(&mut db, parent, request_id).await? {
                 drop(db);
                 return self.admitted(&id, parent).await;
             }
@@ -389,19 +385,19 @@ impl Tasks {
         let id = {
             let mut db = self.workspace.db.lock().await;
             let prior = if let Some(request_id) = input.request_id.as_deref() {
-                prior_request(&mut *db, parent, request_id).await?
+                prior_request(&mut db, parent, request_id).await?
             } else {
                 None
             };
             if let Some(id) = prior {
                 id
             } else {
-                let parent_run = active_run_from(&mut *db, parent).await?;
+                let parent_run = active_run_from(&mut db, parent).await?;
                 if turn.is_some() && turn != parent_run {
                     return Err(RpcError::invalid("the delegating run is no longer active"));
                 }
                 if let Some(run) = parent_run
-                    && stop_exists(&mut *db, parent, run).await?
+                    && stop_exists(&mut db, parent, run).await?
                 {
                     return Err(RpcError::invalid("the delegating run is being cancelled"));
                 }
@@ -421,19 +417,16 @@ impl Tasks {
                 })
                 .map_err(RpcError::internal)?;
                 let title = task_title(&input.text);
-                let mut create = TaskRow::create()
-                    .id(&id)
-                    .parent(parent)
-                    .environment(environment)
-                    .title(title)
-                    .payload(payload);
-                if let Some(run) = parent_run {
-                    create = create.parent_run(run);
-                }
-                if let Some(request_id) = input.request_id.as_deref() {
-                    create = create.request_id(request_id);
-                }
-                create.exec(&mut *db).await?;
+                sql::exec(
+                    &mut db,
+                    "INSERT INTO agent_tasks (id, parent, parent_run, environment, status, title, payload, request_id, phase, delivery)
+                     VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, 'pending', 'prompt')",
+                    [
+                        id.as_str().into(), parent.into(), parent_run.into(), environment.into(),
+                        title.into(), payload.into(), input.request_id.as_deref().into(),
+                    ],
+                )
+                .await?;
                 drop(db);
                 self.signal();
                 self.scan.notify_one();
@@ -469,9 +462,9 @@ impl Tasks {
     pub(crate) async fn cancel(&self, task: &str, parent: Option<u64>) -> Result<Task, RpcError> {
         let current = {
             let mut db = self.workspace.db.lock().await;
-            let current = self.read_from(&mut *db, task, parent).await?;
+            let current = self.read_from(&mut db, task, parent).await?;
             if !terminal(current.status) {
-                sql::exec(&mut *db, cancel_task_sql!("WHERE id = ?1"), [task.into()]).await?;
+                sql::exec(&mut db, cancel_task_sql!("WHERE id = ?1"), [task.into()]).await?;
             }
             drop(db);
             current
@@ -527,7 +520,7 @@ impl Tasks {
 
     async fn read_from(
         &self,
-        db: &mut dyn Executor,
+        db: &mut Connection,
         id: &str,
         parent: Option<u64>,
     ) -> Result<Task, RpcError> {
@@ -585,7 +578,7 @@ impl Tasks {
     async fn pending_jobs(&self) -> Result<Vec<Job>, RpcError> {
         let mut db = self.workspace.db.lock().await;
         let mut jobs = sql::rows(
-            &mut *db,
+            &mut db,
             "SELECT id FROM agent_tasks WHERE delivery != 'delivered'",
             [],
         )
@@ -593,7 +586,7 @@ impl Tasks {
         .map(|mut row| Ok(Job::Task(row.str(0)?)))
         .collect::<Result<Vec<_>, RpcError>>()?;
         for row in sql::rows(
-            &mut *db,
+            &mut db,
             "SELECT thread, run FROM stopped_task_runs WHERE handled = 0",
             [],
         )
@@ -605,7 +598,7 @@ impl Tasks {
             });
         }
         for row in sql::rows(
-            &mut *db,
+            &mut db,
             "SELECT environment, task, min(run) FROM task_follow_ups GROUP BY environment, task",
             [],
         )
@@ -771,13 +764,13 @@ impl Tasks {
             let payload = {
                 let mut db = self.workspace.db.lock().await;
                 if phase == Phase::Pending {
-                    let changed = sql::exec(&mut *db, "UPDATE agent_tasks SET phase = 'offered' WHERE id = ?1 AND phase = 'pending'", [id.into()]).await?;
+                    let changed = sql::exec(&mut db, "UPDATE agent_tasks SET phase = 'offered' WHERE id = ?1 AND phase = 'pending'", [id.into()]).await?;
                     if changed == 0 {
                         return Ok(Advance::Immediate);
                     }
                 }
                 let payload = sql::row(
-                    &mut *db,
+                    &mut db,
                     "SELECT payload FROM agent_tasks WHERE id = ?1 AND phase = 'offered'",
                     [id.into()],
                 )
@@ -799,7 +792,7 @@ impl Tasks {
         match result {
             Ok(Some(receipt)) => {
                 let mut db = self.workspace.db.lock().await;
-                sql::exec(&mut *db, "UPDATE agent_tasks SET thread = ?2, run = ?3, payload = NULL, \
+                sql::exec(&mut db, "UPDATE agent_tasks SET thread = ?2, run = ?3, payload = NULL, \
                     phase = CASE phase WHEN 'retracting' THEN 'cancelling' ELSE 'accepted' END WHERE id = ?1",
                     [id.into(), receipt.thread.get().into(), receipt.run.get().into()]).await?;
                 drop(db);
@@ -812,7 +805,7 @@ impl Tasks {
             }
             Err(error) if !retracting && matches!(error.code, INVALID_PARAMS | NOT_FOUND) => {
                 let mut db = self.workspace.db.lock().await;
-                sql::exec(&mut *db,
+                sql::exec(&mut db,
                     "UPDATE agent_tasks SET status = CASE phase WHEN 'retracting' THEN 'cancelled' ELSE 'failed' END, \
                      error = CASE phase WHEN 'retracting' THEN NULL ELSE ?2 END, payload = NULL, phase = 'settled' WHERE id = ?1",
                     [id.into(), error.message.into()],
@@ -996,7 +989,7 @@ impl Tasks {
         let (parent, mode, title) = {
             let mut db = self.workspace.db.lock().await;
             let Some(mut row) = sql::row(
-                &mut *db,
+                &mut db,
                 "SELECT parent, status, delivery, wake_run, title, parent_run, thread FROM agent_tasks
                  WHERE id = ?1 AND environment = ?2",
                 [request.task.as_str().into(), request.source.as_str().into()],
@@ -1018,7 +1011,7 @@ impl Tasks {
                 ));
             }
             let stopped = if let Some(run) = row.opt_u64(5)? {
-                stop_exists(&mut *db, parent, run).await?
+                stop_exists(&mut db, parent, run).await?
             } else {
                 false
             };
@@ -1051,15 +1044,16 @@ impl Tasks {
         }
         let _delivery = self.delivery.lock().await;
         let mut db = self.workspace.db.lock().await;
-        let family = snapshot(&mut *db, thread, run).await?;
-        let mut stopped = stop_exists(&mut *db, thread, run).await?;
+        let family = snapshot(&mut db, thread, run).await?;
+        let mut stopped = stop_exists(&mut db, thread, run).await?;
         if (cancel || family.cancelled_run) && family.pending() && !stopped {
             let mut tx = db.transaction().await?;
-            StoppedTaskRun::create()
-                .thread(thread)
-                .run(run)
-                .exec(&mut tx)
-                .await?;
+            sql::exec(
+                &mut tx,
+                "INSERT INTO stopped_task_runs (thread, run, handled) VALUES (?1, ?2, 0)",
+                [thread.into(), run.into()],
+            )
+            .await?;
             suppress_descendant_wakes(&mut tx, thread, run).await?;
             tx.commit().await?;
             stopped = true;
@@ -1110,17 +1104,17 @@ impl Tasks {
         let active = {
             let _delivery = self.delivery.lock().await;
             let mut db = self.workspace.db.lock().await;
-            let family = snapshot(&mut *db, thread, run).await?;
+            let family = snapshot(&mut db, thread, run).await?;
             if !family.pending() {
                 sql::exec(
-                    &mut *db,
+                    &mut db,
                     "UPDATE stopped_task_runs SET handled = 1 WHERE thread = ?1 AND run = ?2",
                     [thread.into(), run.into()],
                 )
                 .await?;
                 return Ok(true);
             }
-            suppress_descendant_wakes(&mut *db, thread, run).await?;
+            suppress_descendant_wakes(&mut db, thread, run).await?;
             drop(db);
             family.active
         };
@@ -1147,7 +1141,7 @@ enum Advance {
 }
 
 async fn prior_request(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     parent: u64,
     request: &str,
 ) -> Result<Option<String>, RpcError> {
@@ -1161,7 +1155,7 @@ async fn prior_request(
     .transpose()
 }
 
-async fn stop_exists(db: &mut dyn Executor, thread: u64, run: u64) -> Result<bool, RpcError> {
+async fn stop_exists(db: &mut Connection, thread: u64, run: u64) -> Result<bool, RpcError> {
     Ok(sql::row(
         db,
         "SELECT handled FROM stopped_task_runs WHERE thread = ?1 AND run = ?2",
@@ -1172,7 +1166,7 @@ async fn stop_exists(db: &mut dyn Executor, thread: u64, run: u64) -> Result<boo
 }
 
 async fn suppress_descendant_wakes(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
 ) -> Result<(), RpcError> {
@@ -1188,7 +1182,7 @@ async fn suppress_descendant_wakes(
     Ok(())
 }
 
-async fn snapshot(db: &mut dyn Executor, thread: u64, run: u64) -> Result<Family, RpcError> {
+async fn snapshot(db: &mut Connection, thread: u64, run: u64) -> Result<Family, RpcError> {
     let mut root = run_from(db, thread, run).await?;
     let rows = sql::rows(
         db,

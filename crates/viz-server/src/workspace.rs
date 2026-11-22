@@ -20,8 +20,6 @@ use std::{
 };
 
 use anyhow::Context as _;
-use toasty::{Connection, Db};
-use toasty_driver_sqlite::Sqlite;
 use tokio::{
     sync::{Mutex, broadcast},
     time,
@@ -33,12 +31,11 @@ use self::{
     files::Files,
     runs::NewRun,
     runtime::Driver,
-    sql::{exec, row, rows},
+    sql::{Connection, exec, row, rows},
 };
 use crate::{
     acp::Mcp,
     config::{Config, HarnessConfig},
-    tasks::model::{StoppedTaskRun, TaskRow},
     wire::{
         Attachment, Entry, EntryPage, LiveTurn, NewEntry, Origin, RpcError, ThreadState, WaitResult,
     },
@@ -113,19 +110,8 @@ impl Workspace {
             .await
             .with_context(|| format!("creating worktree directory {}", worktrees.display()))?;
         let worktrees = tokio::fs::canonicalize(&worktrees).await?;
-        let pool = Db::builder()
-            .models(toasty::models!(TaskRow, StoppedTaskRun))
-            .max_pool_size(1)
-            .build(Sqlite::open(dir.join("workspace.sqlite3")))
-            .await?;
-        let mut db = pool.connection().await?;
-        row(&mut db, "PRAGMA locking_mode = EXCLUSIVE", []).await?;
-        row(&mut db, "PRAGMA journal_mode = WAL", []).await?;
-        exec(&mut db, "PRAGMA foreign_keys = ON", []).await?;
+        let mut db = Connection::open(dir.join("workspace.sqlite3")).await?;
         let mut tx = db.transaction().await?;
-        for ddl in include_str!("workspace/schema.sql").trim().split("\n\n") {
-            exec(&mut tx, ddl, []).await?;
-        }
         runs::recover(&mut tx).await?;
         tx.commit().await?;
         let (changes, _) = broadcast::channel(1024);
@@ -203,9 +189,9 @@ impl Workspace {
         match mode {
             WatchChange::Open => {
                 let mut db = self.db.lock().await;
-                store::require(&mut *db, thread).await?;
+                store::require(&mut db, thread).await?;
                 let updated = exec(
-                    &mut *db,
+                    &mut db,
                     "UPDATE threads SET unread = 0 WHERE id = ?1 AND unread = 1",
                     [thread.into()],
                 )
@@ -249,7 +235,7 @@ impl Workspace {
 
     pub(crate) async fn state(&self, thread: u64) -> Result<ThreadState, RpcError> {
         let mut db = self.db.lock().await;
-        let mut state = store::state(&mut *db, thread).await?;
+        let mut state = store::state(&mut db, thread).await?;
         state.live = self
             .transient
             .lock()
@@ -268,7 +254,7 @@ impl Workspace {
         limit: usize,
     ) -> Result<EntryPage, RpcError> {
         let mut db = self.db.lock().await;
-        store::entries(&mut *db, thread, before, limit.clamp(1, 200)).await
+        store::entries(&mut db, thread, before, limit.clamp(1, 200)).await
     }
 
     pub(crate) async fn entries_after(
@@ -278,7 +264,7 @@ impl Workspace {
         limit: usize,
     ) -> Result<Vec<Entry>, RpcError> {
         let mut db = self.db.lock().await;
-        store::entries_after(&mut *db, thread, after, limit.clamp(1, 200)).await
+        store::entries_after(&mut db, thread, after, limit.clamp(1, 200)).await
     }
 
     pub(crate) async fn run_origin(
@@ -287,7 +273,7 @@ impl Workspace {
         run: u64,
     ) -> Result<Option<Origin>, RpcError> {
         let mut db = self.db.lock().await;
-        runs::origin(&mut *db, thread, run).await
+        runs::origin(&mut db, thread, run).await
     }
 
     pub(crate) async fn wait_run(
@@ -305,8 +291,8 @@ impl Workspace {
             let run = {
                 let mut db = self.db.lock().await;
                 let run = match id {
-                    Some(id) => runs::run_from(&mut *db, thread, id).await?,
-                    None => runs::latest(&mut *db, thread).await?,
+                    Some(id) => runs::run_from(&mut db, thread, id).await?,
+                    None => runs::latest(&mut db, thread).await?,
                 };
                 drop(db);
                 run
@@ -351,8 +337,8 @@ impl Workspace {
         ids: &[String],
     ) -> Result<Vec<Attachment>, RpcError> {
         let mut db = self.db.lock().await;
-        store::require(&mut *db, thread).await?;
-        attachments::inputs(&mut *db, thread, ids).await
+        store::require(&mut db, thread).await?;
+        attachments::inputs(&mut db, thread, ids).await
     }
 
     fn attachment_dir(&self, thread: u64) -> PathBuf {
@@ -449,7 +435,7 @@ impl Workspace {
 
     async fn cwd_for(
         &self,
-        db: &mut dyn toasty::Executor,
+        db: &mut crate::workspace::sql::Connection,
         project: Option<&str>,
     ) -> Result<PathBuf, RpcError> {
         match project {

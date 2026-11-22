@@ -89,7 +89,7 @@
               (craneLib.fileset.commonCargoSources ./.)
               ./crates/viz-desktop/themes
               ./crates/viz-desktop/icons
-              ./crates/viz-server/src/workspace/schema.sql
+              ./crates/viz-server/migrations
             ];
           };
           commonArgs = {

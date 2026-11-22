@@ -2,14 +2,16 @@ use std::{fmt::Write as _, path::Path};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use sha2::{Digest, Sha256};
-use toasty::Executor;
 use tokio::io::AsyncWriteExt as _;
 
 use super::{
     Workspace,
     sql::{self, exec, row},
 };
-use crate::wire::{Attachment, PromptAttachment, RpcError, StoredAttachment};
+use crate::{
+    wire::{Attachment, PromptAttachment, RpcError, StoredAttachment},
+    workspace::sql::Connection,
+};
 
 const TOTAL_LIMIT: usize = 20 * 1024 * 1024;
 
@@ -73,7 +75,7 @@ fn too_large() -> RpcError {
 }
 
 pub(super) async fn save(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     uploads: Vec<Upload>,
 ) -> Result<Vec<PromptAttachment>, RpcError> {
@@ -87,7 +89,7 @@ pub(super) async fn save(
 }
 
 async fn owned(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     id: &str,
     budget: usize,
@@ -99,7 +101,7 @@ async fn owned(
 }
 
 pub(super) async fn inputs(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     ids: &[String],
 ) -> Result<Vec<Attachment>, RpcError> {
@@ -135,7 +137,7 @@ pub(super) async fn materialize(
         if !saved.iter().any(|file: &StoredAttachment| file.id == id) {
             let data = {
                 let mut db = workspace.db.lock().await;
-                owned(&mut *db, thread, &id, TOTAL_LIMIT).await?.bytes(2)?
+                owned(&mut db, thread, &id, TOTAL_LIMIT).await?.bytes(2)?
             };
             write_file(&directory, &path, &data)
                 .await

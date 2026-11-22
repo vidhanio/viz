@@ -16,7 +16,7 @@ Out of scope until a job needs it: issue tracker pages (mentioning a GitHub issu
 
 | Path                   | What                                                      |
 | ---------------------- | --------------------------------------------------------- |
-| `crates/viz-server`    | Tokio/Axum server, Toasty SQLite workspace, ACP and MCP   |
+| `crates/viz-server`    | Tokio/Axum server, SQLite workspace, ACP and MCP         |
 | `crates/viz-client`    | JSON-RPC WebSocket client and protocol re-exports        |
 | `crates/viz-protocol`  | Shared Serde wire types and method schemas               |
 | `protocol/schema.json` | JSON Schema generated from the Rust wire types            |
@@ -73,7 +73,7 @@ After changing shared wire types, run `cargo run -p viz-server -- schema --outpu
 
 - Cargo: declare all direct dependencies under `[workspace.dependencies]` in the root `Cargo.toml`. Members inherit them with `dep.workspace = true` or `{ workspace = true, features = [...] }` for crate-specific features.
 - Config: the server layers `config.toml` and `config.d/*.toml` (later wins, tables merge); clients load separate TOML files under the same config directory. Secrets are `"inline" | { file = "..." } | { env = "..." }`. Reference: the `*.example.toml` files.
-- State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); only the owning server writes its environment's workspace database. Storage changes do not use migration shims.
+- State lives in `$XDG_STATE_HOME/viz` (`$STATE_DIRECTORY` under systemd); only the owning server writes its environment's workspace database. Add every schema change as the next numbered SQL file in `crates/viz-server/migrations/` and register it in the migration list. Startup backs up existing databases before applying migrations in a transaction and records the version in `PRAGMA user_version`.
 - Comments: doc comments only (`///`, `//!`, Swift `///`). No line comments in code: if a decision needs explaining, put it in the doc comment of the item that makes it, or make the code say it.
 - Commit often, as soon as a coherent change passes verification. Each commit must stand on its own: keep an API or config change with its callers and generated artifacts; split independent work. Use lowercase Conventional Commit subjects. Do not include unrelated work or secrets. History is linear: rebase and fast-forward, never merge commits.
 

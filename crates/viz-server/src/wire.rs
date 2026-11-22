@@ -71,12 +71,6 @@ impl From<anyhow::Error> for RpcError {
     }
 }
 
-impl From<toasty::Error> for RpcError {
-    fn from(error: toasty::Error) -> Self {
-        Self::internal(error)
-    }
-}
-
 pub(crate) fn decode<T: DeserializeOwned>(params: Value) -> Result<T, RpcError> {
     serde_json::from_value(params).map_err(|error| RpcError::invalid(error.to_string()))
 }

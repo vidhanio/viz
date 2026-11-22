@@ -29,6 +29,7 @@ rmcp = { workspace = true, features = [
   "transport-streamable-http-client-reqwest",
   "reqwest",
 ] }
+rusqlite.workspace = true
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 schemars.workspace = true
 sd-notify.workspace = true
@@ -37,9 +38,6 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
-toasty = { workspace = true, features = ["sqlite", "serde"] }
-toasty-core.workspace = true
-toasty-driver-sqlite.workspace = true
 tokio = { workspace = true, features = [
   "fs",
   "io-util",

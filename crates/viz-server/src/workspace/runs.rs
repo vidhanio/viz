@@ -1,14 +1,16 @@
 use std::num::NonZeroU64;
 
-use toasty::Executor;
-
 use super::{
     rpc::Patch,
     sql::{Row, exec, row, rows},
     store,
 };
-use crate::wire::{
-    NewEntry, Origin, PromptAttachment, RpcError, Run, RunEnd, RunId, RunKind, RunStatus, ThreadId,
+use crate::{
+    wire::{
+        NewEntry, Origin, PromptAttachment, RpcError, Run, RunEnd, RunId, RunKind, RunStatus,
+        ThreadId,
+    },
+    workspace::sql::Connection,
 };
 
 pub(super) const INTERRUPTED: &str =
@@ -43,7 +45,7 @@ impl<'a> NewRun<'a> {
 }
 
 pub(super) async fn enqueue(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     new: NewRun<'_>,
 ) -> Result<u64, RpcError> {
@@ -65,7 +67,7 @@ pub(super) async fn enqueue(
 }
 
 pub(super) async fn by_request(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     request_id: &str,
 ) -> Result<Option<u64>, RpcError> {
@@ -80,7 +82,7 @@ pub(super) async fn by_request(
 }
 
 pub(super) async fn origin(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
 ) -> Result<Option<Origin>, RpcError> {
@@ -97,7 +99,7 @@ pub(super) async fn origin(
 }
 
 pub(crate) async fn run_from(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
 ) -> Result<Option<Run>, RpcError> {
@@ -111,7 +113,7 @@ pub(crate) async fn run_from(
     .transpose()
 }
 
-pub(super) async fn latest(db: &mut dyn Executor, thread: u64) -> Result<Option<Run>, RpcError> {
+pub(super) async fn latest(db: &mut Connection, thread: u64) -> Result<Option<Run>, RpcError> {
     store::require(db, thread).await?;
     row(
         db,
@@ -124,14 +126,14 @@ pub(super) async fn latest(db: &mut dyn Executor, thread: u64) -> Result<Option<
 }
 
 pub(crate) async fn active_run_from(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
 ) -> Result<Option<u64>, RpcError> {
     store::require(db, thread).await?;
     active(db, thread).await
 }
 
-pub(super) async fn active(db: &mut dyn Executor, thread: u64) -> Result<Option<u64>, RpcError> {
+pub(super) async fn active(db: &mut Connection, thread: u64) -> Result<Option<u64>, RpcError> {
     row(
         db,
         "SELECT id FROM runs WHERE thread = ?1 AND status = 'running'",
@@ -158,7 +160,7 @@ fn decode_run(thread: u64, mut row: Row) -> Result<Run, RpcError> {
 }
 
 pub(super) async fn status(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
 ) -> Result<Option<RunStatus>, RpcError> {
@@ -202,7 +204,7 @@ pub(super) struct Claimed {
 
 /// Commit the claim and corresponding prompt together before starting any
 /// external operation.
-pub(super) async fn claim(db: &mut dyn Executor, thread: u64) -> Result<Option<Claimed>, RpcError> {
+pub(super) async fn claim(db: &mut Connection, thread: u64) -> Result<Option<Claimed>, RpcError> {
     let Some(mut row) = row(db, "UPDATE runs SET status = 'running' WHERE thread = ?1 AND status = 'queued'
         AND id = (SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id LIMIT 1)
         RETURNING id, text, origin, attachments, prompt_entry", [thread.into()]).await? else { return Ok(None); };
@@ -258,7 +260,7 @@ pub(super) async fn claim(db: &mut dyn Executor, thread: u64) -> Result<Option<C
 /// prompt, and returns the run and that entry. Its caller holds the worker's
 /// slot, so the `runs_active` index cannot conflict.
 pub(super) async fn begin_unprompted(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
 ) -> Result<(u64, u64), RpcError> {
     let entry = store::append(db, thread, &NewEntry::Continued).await?;
@@ -281,7 +283,7 @@ pub(super) async fn begin_unprompted(
 }
 
 /// Whether inputs are waiting on the thread.
-pub(super) async fn queued(db: &mut dyn Executor, thread: u64) -> Result<bool, RpcError> {
+pub(super) async fn queued(db: &mut Connection, thread: u64) -> Result<bool, RpcError> {
     Ok(row(
         db,
         "SELECT 1 FROM runs WHERE thread = ?1 AND status = 'queued' LIMIT 1",
@@ -321,7 +323,7 @@ impl Settlement {
 }
 
 pub(super) async fn settle(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
     settlement: Settlement,
@@ -360,7 +362,7 @@ pub(super) async fn settle(
 /// or a wake in that task's run family. Manual inputs break this association.
 /// The outbox row commits with the run, and the parent deduplicates retries
 /// using the continuation run ID.
-async fn follow_up(db: &mut dyn Executor, thread: u64, run: u64) -> Result<(), RpcError> {
+async fn follow_up(db: &mut Connection, thread: u64, run: u64) -> Result<(), RpcError> {
     exec(
         db,
         "WITH RECURSIVE lineage(id) AS (
@@ -386,7 +388,7 @@ async fn follow_up(db: &mut dyn Executor, thread: u64, run: u64) -> Result<(), R
     Ok(())
 }
 
-pub(super) async fn recover(db: &mut dyn Executor) -> Result<(), RpcError> {
+pub(super) async fn recover(db: &mut Connection) -> Result<(), RpcError> {
     for row in rows(
         db,
         "SELECT id, thread FROM runs WHERE status = 'running'",
@@ -408,7 +410,7 @@ pub(super) async fn recover(db: &mut dyn Executor) -> Result<(), RpcError> {
 
 /// Move the existing run ahead of other queued inputs, preserving its payload.
 pub(super) async fn promote_queued(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
 ) -> Result<(), RpcError> {
@@ -427,7 +429,7 @@ pub(super) async fn promote_queued(
 }
 
 pub(super) async fn remove_queued(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
 ) -> Result<(), RpcError> {
@@ -440,7 +442,7 @@ pub(super) async fn remove_queued(
 }
 
 pub(super) async fn cancel_queued(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: Option<u64>,
 ) -> Result<(), RpcError> {
@@ -450,7 +452,7 @@ pub(super) async fn cancel_queued(
 }
 
 pub(super) async fn update_queue(
-    db: &mut dyn Executor,
+    db: &mut Connection,
     thread: u64,
     run: u64,
     text: Option<&str>,

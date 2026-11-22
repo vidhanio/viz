@@ -95,8 +95,8 @@ impl Workspace {
             "queue.remove" => {
                 let QueueRun { thread, run } = decode(params)?;
                 let mut db = self.db.lock().await;
-                store::require(&mut *db, thread.get()).await?;
-                runs::remove_queued(&mut *db, thread.get(), run.get()).await?;
+                store::require(&mut db, thread.get()).await?;
+                runs::remove_queued(&mut db, thread.get(), run.get()).await?;
                 drop(db);
                 self.settled(thread.get());
                 Ok(json!({}))
@@ -224,13 +224,13 @@ impl Workspace {
             "project.update" => {
                 let UpdateProject { project, name } = decode(params)?;
                 let mut db = self.db.lock().await;
-                store::project(&mut *db, &project).await?;
+                store::project(&mut db, &project).await?;
                 if let Some(name) = name {
                     if name.is_empty() {
                         return Err(RpcError::invalid("project name must not be empty"));
                     }
                     exec(
-                        &mut *db,
+                        &mut db,
                         "UPDATE projects SET name = ?2 WHERE path = ?1",
                         [project.into(), name.into()],
                     )
@@ -269,10 +269,10 @@ impl Workspace {
             .ok_or_else(|| RpcError::invalid("a worktree requires a project"))?;
         {
             let mut db = self.db.lock().await;
-            if let Some(found) = launched(&mut *db, args.request_id.as_deref()).await? {
+            if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
                 return Ok(found);
             }
-            store::project(&mut *db, &project).await?;
+            store::project(&mut db, &project).await?;
             drop(db);
         }
         let title = args
@@ -434,16 +434,16 @@ impl Workspace {
     async fn stop(&self, thread: u64, requested: Option<u64>) -> Result<(), RpcError> {
         let active = {
             let mut db = self.db.lock().await;
-            store::require(&mut *db, thread).await?;
+            store::require(&mut db, thread).await?;
             if let Some(run) = requested
-                && runs::status(&mut *db, thread, run).await?.is_none()
+                && runs::status(&mut db, thread, run).await?.is_none()
             {
                 return Err(RpcError::not_found(format!(
                     "no run {run} in thread {thread}"
                 )));
             }
-            runs::cancel_queued(&mut *db, thread, requested).await?;
-            let active = runs::active(&mut *db, thread)
+            runs::cancel_queued(&mut db, thread, requested).await?;
+            let active = runs::active(&mut db, thread)
                 .await?
                 .filter(|&run| requested.is_none_or(|requested| requested == run));
             if let Some(active) = active {
@@ -469,21 +469,21 @@ impl Workspace {
     async fn update(&self, args: UpdateThread) -> Result<(), RpcError> {
         let thread = args.thread.get();
         let mut db = self.db.lock().await;
-        store::require(&mut *db, thread).await?;
+        store::require(&mut db, thread).await?;
         if args.title.as_deref() == Some("") {
             return Err(RpcError::invalid("thread title must not be empty"));
         }
         if let Patch::Set(project) = &args.project {
-            store::project(&mut *db, project).await?;
+            store::project(&mut db, project).await?;
         }
         if !matches!(args.project, Patch::Keep)
-            && store::binding(&mut *db, thread).await?.worktree.is_some()
+            && store::binding(&mut db, thread).await?.worktree.is_some()
         {
             return Err(RpcError::invalid(
                 "move the thread out of its worktree before changing its project",
             ));
         }
-        exec(&mut *db, "UPDATE threads SET title = coalesce(?2, title), user_title = CASE WHEN ?2 IS NULL THEN user_title ELSE 1 END,
+        exec(&mut db, "UPDATE threads SET title = coalesce(?2, title), user_title = CASE WHEN ?2 IS NULL THEN user_title ELSE 1 END,
             archived = coalesce(?3, archived), pinned = coalesce(?4, pinned), unread = coalesce(?5, unread),
             project = CASE WHEN ?6 THEN ?7 ELSE project END WHERE id = ?1", [
             thread.into(), args.title.into(), args.archived.into(), args.pinned.into(), args.unread.into(),
@@ -502,11 +502,11 @@ impl Workspace {
     async fn delete(&self, thread: u64, remove_worktree: bool) -> Result<(), RpcError> {
         let checkout = if remove_worktree {
             let mut db = self.db.lock().await;
-            let binding = store::binding(&mut *db, thread).await?;
+            let binding = store::binding(&mut db, thread).await?;
             let path = binding
                 .worktree
                 .ok_or_else(|| RpcError::invalid("the thread runs in no worktree"))?;
-            self.removable(&mut *db, &path, Some(thread)).await?;
+            self.removable(&mut db, &path, Some(thread)).await?;
             drop(db);
             if !worktree::clean(Path::new(&path)).await? {
                 return Err(RpcError::invalid(format!(
@@ -520,7 +520,7 @@ impl Workspace {
         let driver = {
             let mut db = self.db.lock().await;
             let count = exec(
-                &mut *db,
+                &mut db,
                 "DELETE FROM threads WHERE id = ?1",
                 [thread.into()],
             )
@@ -580,7 +580,7 @@ impl Workspace {
         });
         let mut db = self.db.lock().await;
         let created_at = store::now();
-        let count = exec(&mut *db, "INSERT INTO projects (path, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
+        let count = exec(&mut db, "INSERT INTO projects (path, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
             [path.into(), name.as_str().into(), created_at.into()]).await?;
         drop(db);
         if count == 0 {
@@ -652,7 +652,7 @@ impl Workspace {
         let (_, config) = self.harness(Some(name))?;
         let stored = {
             let mut db = self.db.lock().await;
-            runtime::catalog(&mut *db, name).await?
+            runtime::catalog(&mut db, name).await?
         };
         let (options, updated) =
             acp::catalog(config, self.default_cwd(), stored.as_ref(), model).await?;
@@ -679,7 +679,7 @@ impl Workspace {
         let (project, source) = {
             let mut db = self.db.lock().await;
             if let Some(found) = receipt(
-                &mut *db,
+                &mut db,
                 [args.origin_environment.as_str(), args.task.as_str()],
             )
             .await?
@@ -687,7 +687,7 @@ impl Workspace {
                 return Ok(found);
             }
             let parent = if args.origin_environment == self.environment {
-                Some(store::binding(&mut *db, args.parent.get()).await?)
+                Some(store::binding(&mut db, args.parent.get()).await?)
             } else {
                 None
             };
@@ -697,7 +697,7 @@ impl Workspace {
                 .clone()
                 .or_else(|| parent.as_ref()?.project.clone())
                 .ok_or_else(|| RpcError::invalid("a worktree requires a project"))?;
-            store::project(&mut *db, &project).await?;
+            store::project(&mut db, &project).await?;
             let source = match parent {
                 Some(parent)
                     if args.target.project.is_none()
@@ -783,7 +783,7 @@ impl Workspace {
     /// of a local parent runs in the parent's checkout.
     async fn task_thread(
         &self,
-        db: &mut dyn toasty::Executor,
+        db: &mut crate::workspace::sql::Connection,
         args: &ReceiveTask,
         placement: Option<&Placement>,
     ) -> Result<u64, RpcError> {
@@ -880,7 +880,7 @@ impl Workspace {
 }
 
 async fn launched(
-    db: &mut dyn toasty::Executor,
+    db: &mut crate::workspace::sql::Connection,
     request_id: Option<&str>,
 ) -> Result<Option<Launched>, RpcError> {
     let Some(request_id) = request_id else {
@@ -902,7 +902,7 @@ async fn launched(
 }
 
 async fn receipt(
-    tx: &mut dyn toasty::Executor,
+    tx: &mut crate::workspace::sql::Connection,
     [environment, task]: [&str; 2],
 ) -> Result<Option<Received>, RpcError> {
     row(
