@@ -5,6 +5,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 use viz_core::{
     runs as decisions,
+    tasks::{self, Admission, Receipt},
     threads::{self, Patch},
     titles,
 };
@@ -754,18 +755,38 @@ impl Workspace {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let key = [args.origin_environment.as_str(), args.task.as_str()];
-        if let Some(found) = receipt(&mut tx, key).await? {
-            return Ok((found, false));
-        }
-        if row(
-            &mut tx,
-            "SELECT 1 FROM task_retractions WHERE environment = ?1 AND task = ?2",
-            key.map(Into::into),
-        )
-        .await?
-        .is_some()
-        {
-            return Err(RpcError::invalid("task was cancelled before admission"));
+        let found = receipt(&mut tx, key).await?;
+        let retracted = if found.is_some() {
+            false
+        } else {
+            row(
+                &mut tx,
+                "SELECT 1 FROM task_retractions WHERE environment = ?1 AND task = ?2",
+                key.map(Into::into),
+            )
+            .await?
+            .is_some()
+        };
+        match tasks::admit(
+            found.map(|found| Receipt {
+                thread: ThreadId(found.thread),
+                run: RunId(found.run),
+            }),
+            retracted,
+        ) {
+            Admission::Replay(found) => {
+                return Ok((
+                    Received {
+                        thread: found.thread.0,
+                        run: found.run.0,
+                    },
+                    false,
+                ));
+            }
+            Admission::Cancelled => {
+                return Err(RpcError::invalid("task was cancelled before admission"));
+            }
+            Admission::Create => {}
         }
         if args.text.is_empty() {
             return Err(RpcError::invalid("task text must not be empty"));

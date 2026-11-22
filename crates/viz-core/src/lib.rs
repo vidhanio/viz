@@ -5,5 +5,6 @@ pub mod handoff;
 pub mod options;
 pub mod placement;
 pub mod runs;
+pub mod tasks;
 pub mod threads;
 pub mod titles;

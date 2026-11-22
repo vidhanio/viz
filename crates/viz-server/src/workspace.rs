@@ -24,6 +24,8 @@ use tokio::{
     time,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use viz_core::tasks::{self, Wake, WakeMode};
+use viz_protocol::RunId;
 
 pub(crate) use self::runs::{active_run_from, run_from};
 use self::{
@@ -51,12 +53,6 @@ pub(crate) enum Change {
 pub(crate) enum WatchChange {
     Open,
     Close,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum WakeMode {
-    Prompt,
-    EntryOnly,
 }
 
 #[derive(Default)]
@@ -354,25 +350,30 @@ impl Workspace {
     ) -> Result<Option<u64>, RpcError> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
-        if let Some(previous) = row(
+        let previous = row(
             &mut tx,
             "SELECT run FROM task_wakes WHERE thread = ?1 AND task = ?2 AND sequence = ?3",
             [thread.into(), task.into(), sequence.into()],
         )
         .await?
-        {
-            return previous.opt_u64(0);
-        }
-        if row(
-            &mut tx,
-            "SELECT 1 FROM threads WHERE id = ?1",
-            [thread.into()],
-        )
-        .await?
-        .is_none()
-        {
-            return Ok(None);
-        }
+        .map(|row| row.opt_u64(0).map(|run| run.map(RunId)))
+        .transpose()?;
+        let exists = if previous.is_some() {
+            true
+        } else {
+            row(
+                &mut tx,
+                "SELECT 1 FROM threads WHERE id = ?1",
+                [thread.into()],
+            )
+            .await?
+            .is_some()
+        };
+        let mode = match tasks::wake(previous, exists, mode) {
+            Wake::Replay(run) => return Ok(run.map(|run| run.0)),
+            Wake::MissingThread => return Ok(None),
+            Wake::Append(mode) => mode,
+        };
         let result = NewEntry::TaskResult {
             task: task.to_owned(),
             text: text.to_owned(),
