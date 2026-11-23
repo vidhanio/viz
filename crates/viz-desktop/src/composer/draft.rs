@@ -1,11 +1,15 @@
+//! Draft harness picker and opening-session status in the composer toolbar.
+
 use rune::El;
 use rune_kit::MenuItem;
 
 use super::settings::{is_open, marked_picker, picker};
 use crate::{
-    app::{Desktop, NewThread},
+    app::Desktop,
+    model::NewThread,
     theme::{S8, Size, Theme},
     ui,
+    update::{Msg, SelectionMsg},
 };
 
 const HARNESS: &str = "harness";
@@ -19,24 +23,26 @@ pub(super) fn toolbar(
     t: &Theme,
     layer: &mut Vec<El>,
 ) -> El {
+    let harnesses = s.model.harnesses();
     if thread.sending {
         return bar
             .gap(S8)
             .child(ui::lead(ui::spinner(t), Size::Default.height()))
             .child(ui::section("Opening session…", t));
     }
-    if s.harnesses.is_empty() {
+    if harnesses.is_empty() {
         return bar.child(ui::section("No harness configured", t));
     }
-    if s.harnesses.len() > 1 {
+    if harnesses.len() > 1 {
         return bar.child(harness(s, thread, t, layer));
     }
     bar
 }
 
 fn harness(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> El {
+    let harnesses = s.model.harnesses();
     let label = "Choose harness";
-    let runner = thread.active_harness(&s.harnesses);
+    let runner = thread.active_harness(harnesses);
     let mut menu = runner.map_or_else(
         || picker(s, HARNESS, label, None, t),
         |runner| {
@@ -53,7 +59,7 @@ fn harness(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> E
     if is_open(s, HARNESS) {
         menu = ui::menu_items(
             menu,
-            s.harnesses.iter().map(|harness| {
+            harnesses.iter().map(|harness| {
                 let id = harness.id.clone();
                 let selected = thread
                     .harness
@@ -66,12 +72,10 @@ fn harness(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> E
                     item = item.badge("Default");
                 }
                 item.on_select_tx(move |s: &mut Desktop, tx| {
-                    s.open_picker = None;
-                    tx.focus("draft", false);
-                    if !selected && let Some(thread) = &mut s.new_thread {
-                        thread.harness = Some(id.clone());
-                        thread.options.clear();
-                    }
+                    s.dispatch(
+                        Msg::Selection(SelectionMsg::ChooseDraftHarness(id.clone())),
+                        tx,
+                    );
                 })
             }),
         );

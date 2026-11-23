@@ -1,5 +1,5 @@
-//! Persistent tucked Tasks Dock above the composer, replacing the old
-//! top-right tasks panel. Only mounts when the open thread has delegated tasks.
+//! Persistent tucked Tasks Dock above the composer. Only mounts when the
+//! open thread has delegated tasks.
 
 use std::{
     borrow::Cow,
@@ -10,16 +10,18 @@ use rune::{El, GrowthSpec, ScrollSpec, col, el, icon, row, text};
 use viz_client::protocol::{Task, TaskStatus, ThreadSummary};
 
 use crate::{
-    app::{Desktop, thread_title},
+    app::Desktop,
+    model::{Model, first_non_empty_line, thread_title},
     motion,
-    server::Command,
     theme::{HAIRLINE, ICON_SMALL, RADIUS_INNER, S2, S4, S6, S8, S12, S24, Theme},
     ui,
+    update::{ComposerMsg, Msg, SelectionMsg, TimelineMsg},
 };
 
-/// `Desktop::expanded` key for whether the Tasks Dock is expanded.
+/// `DisclosureState::expanded` key for whether the Tasks Dock is expanded.
 pub const DOCK_KEY: &str = "tasks-dock";
-/// `Desktop::expanded` key for revealing settled tasks past the first two.
+/// `DisclosureState::expanded` key for revealing settled tasks past the first
+/// two.
 const EARLIER_KEY: &str = "tasks-earlier";
 /// Collapsed bar height (excluding the tucked bottom overlap).
 const BAR_HEIGHT: f32 = 34.0;
@@ -32,19 +34,20 @@ const PROGRESS_WIDTH: f32 = 44.0;
 /// Number of settled tasks shown directly before folding the rest.
 const RECENT_SETTLED: usize = 2;
 
-/// Renders the persistent Tasks Dock tucked above the composer, when the
+/// Renders the persistent Tasks Dock tucked above the composer when the
 /// selected thread has at least one delegated task.
 pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
-    let parent = s.selected?;
-    let children: Vec<&Task> = s
-        .tasks
+    let m = &s.model;
+    let parent = m.selection.selected?;
+    let children: Vec<&Task> = m
+        .tasks()
         .iter()
         .filter(|task| task.parent == parent)
         .collect();
     if children.is_empty() {
         return None;
     }
-    let expanded = s.expanded.contains(DOCK_KEY);
+    let expanded = m.disclosure.expanded.contains(DOCK_KEY);
     let (active, settled): (Vec<&Task>, Vec<&Task>) = children
         .iter()
         .copied()
@@ -52,15 +55,19 @@ pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
     let any_failed = children
         .iter()
         .any(|task| task.status == TaskStatus::Failed);
-    let total = children.len();
-    let done = settled.len();
-
     let body = if expanded {
-        expanded_body(s, &active, &settled, any_failed, t)
+        expanded_body(m, &active, &settled, any_failed, t)
     } else {
-        collapsed_bar(s, &children, &active, done, total, any_failed, t)
+        collapsed_bar(
+            m,
+            &children,
+            &active,
+            settled.len(),
+            children.len(),
+            any_failed,
+            t,
+        )
     };
-
     Some(
         ui::tucked_deck(format!("tasks-dock-{parent}"), 10, t.surface, t)
             .role("group")
@@ -70,8 +77,18 @@ pub fn dock(s: &Desktop, t: &Theme) -> Option<El> {
     )
 }
 
+fn lead_mark(active: bool, any_failed: bool, t: &Theme) -> El {
+    if active {
+        ui::radar(ICON_SMALL, t.accent, t)
+    } else if any_failed {
+        ui::dot(t.danger)
+    } else {
+        ui::dot(t.success)
+    }
+}
+
 fn collapsed_bar(
-    s: &Desktop,
+    m: &Model,
     all: &[&Task],
     active: &[&Task],
     done: usize,
@@ -79,16 +96,6 @@ fn collapsed_bar(
     any_failed: bool,
     t: &Theme,
 ) -> El {
-    let lead_mark = if !active.is_empty() {
-        ui::radar(ICON_SMALL, t.accent, t)
-    } else if any_failed {
-        ui::dot(t.danger)
-    } else {
-        ui::dot(t.success)
-    };
-    let medallions = medallion_stack(s, all, t);
-    let summary = collapsed_summary(s, active, done, total, any_failed, t);
-    let progress = progress_hairline(done, total, t);
     row()
         .key("tasks-dock-collapsed")
         .role("button")
@@ -102,11 +109,15 @@ fn collapsed_bar(
         .hover_group()
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .on_press(|s: &mut Desktop| s.toggle(DOCK_KEY))
-        .child(lead_mark)
-        .child(medallions)
-        .child(summary)
-        .child(progress)
+        .on_press(|s: &mut Desktop| {
+            s.dispatch_local(Msg::Timeline(TimelineMsg::ToggleExpanded(
+                DOCK_KEY.to_owned(),
+            )));
+        })
+        .child(lead_mark(!active.is_empty(), any_failed, t))
+        .child(medallion_stack(m, all, t))
+        .child(collapsed_summary(m, active, done, total, any_failed, t))
+        .child(progress_hairline(done, total, t))
         .child(
             icon(&ui::CHEVRON_UP, ICON_SMALL + 1.0)
                 .icon_rotation(0.0)
@@ -116,10 +127,10 @@ fn collapsed_bar(
         )
 }
 
-fn medallion_stack(s: &Desktop, tasks: &[&Task], t: &Theme) -> El {
+fn medallion_stack(m: &Model, tasks: &[&Task], t: &Theme) -> El {
     let mut stack = row().gap(S4).center_y().a11y_hidden();
     for task in tasks.iter().take(3) {
-        let child = child_summary(s, task);
+        let child = child_summary(m, task);
         let glyph = child.map_or(&ui::AGENT, |thread| ui::harness_icon(&thread.harness));
         stack = stack.child(icon(glyph, ICON_SMALL).color(t.muted));
     }
@@ -127,7 +138,7 @@ fn medallion_stack(s: &Desktop, tasks: &[&Task], t: &Theme) -> El {
 }
 
 fn collapsed_summary(
-    s: &Desktop,
+    m: &Model,
     active: &[&Task],
     done: usize,
     total: usize,
@@ -136,7 +147,7 @@ fn collapsed_summary(
 ) -> El {
     if active.len() == 1 {
         let task = active[0];
-        let child = child_summary(s, task);
+        let child = child_summary(m, task);
         let title = child.map_or(task.title.as_str(), thread_title);
         let detail = child
             .and_then(model_detail)
@@ -205,19 +216,12 @@ fn progress_hairline(done: usize, total: usize, t: &Theme) -> El {
 }
 
 fn expanded_body(
-    s: &Desktop,
+    m: &Model,
     active: &[&Task],
     settled: &[&Task],
     any_failed: bool,
     t: &Theme,
 ) -> El {
-    let lead_mark = if !active.is_empty() {
-        ui::radar(ICON_SMALL, t.accent, t)
-    } else if any_failed {
-        ui::dot(t.danger)
-    } else {
-        ui::dot(t.success)
-    };
     let summary = counts_summary(
         active.len(),
         settled.len(),
@@ -237,8 +241,12 @@ fn expanded_body(
         .hover_group()
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .on_press(|s: &mut Desktop| s.toggle(DOCK_KEY))
-        .child(lead_mark)
+        .on_press(|s: &mut Desktop| {
+            s.dispatch_local(Msg::Timeline(TimelineMsg::ToggleExpanded(
+                DOCK_KEY.to_owned(),
+            )));
+        })
+        .child(lead_mark(!active.is_empty(), any_failed, t))
         .child(text("Tasks").font(t.ui_medium).color(t.text))
         .child(text("·").font(t.small).color(t.faint).a11y_hidden())
         .child(
@@ -255,7 +263,6 @@ fn expanded_body(
                 .group_color(t.text)
                 .a11y_hidden(),
         );
-
     let (recent_settled, earlier) = if settled.len() > RECENT_SETTLED {
         settled.split_at(RECENT_SETTLED)
     } else {
@@ -266,14 +273,14 @@ fn expanded_body(
         .w_full()
         .growth(GrowthSpec::default());
     for task in active.iter().chain(recent_settled) {
-        inner = inner.child(task_row(s, task, t));
+        inner = inner.child(task_row(m, task, t));
     }
     if !earlier.is_empty() {
-        let shown = s.expanded.contains(EARLIER_KEY);
+        let shown = m.disclosure.expanded.contains(EARLIER_KEY);
         inner = inner.child(earlier_toggle(earlier.len(), shown, t));
         if shown {
             for task in earlier {
-                inner = inner.child(task_row(s, task, t));
+                inner = inner.child(task_row(m, task, t));
             }
         }
     }
@@ -314,7 +321,11 @@ fn earlier_toggle(count: usize, shown: bool, t: &Theme) -> El {
         .hover_group()
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .on_press(|s: &mut Desktop| s.toggle(EARLIER_KEY))
+        .on_press(|s: &mut Desktop| {
+            s.dispatch_local(Msg::Timeline(TimelineMsg::ToggleExpanded(
+                EARLIER_KEY.to_owned(),
+            )));
+        })
         .child(
             icon(&ui::CHEVRON, ICON_SMALL)
                 .icon_rotation(if shown { FRAC_PI_2 } else { 0.0 })
@@ -331,15 +342,15 @@ fn earlier_toggle(count: usize, shown: bool, t: &Theme) -> El {
         )
 }
 
-fn task_row(s: &Desktop, task: &Task, t: &Theme) -> El {
+fn task_row(m: &Model, task: &Task, t: &Theme) -> El {
     let running = matches!(task.status, TaskStatus::Running | TaskStatus::Queued);
     let (mark, state_label) = task_status_mark(task, t);
-    let child = child_summary(s, task);
+    let child = child_summary(m, task);
     let harness = child.map(|thread| (thread.harness.as_str(), thread.harness_name.as_str()));
     let title = child.map_or(task.title.as_str(), thread_title);
-    let remote = s.environment.as_deref() != Some(task.environment.as_str());
+    let remote = m.connection.environment.as_deref() != Some(task.environment.as_str());
     let text_col = task_row_text(title, remote, &task.environment, child, task, running, t);
-    let trailing = task_row_trailing(s, task, running, state_label, t);
+    let trailing = task_row_trailing(m, task, running, state_label, t);
     let mut row_el = row()
         .key(format!("dock-task-{}", task.id))
         .description(state_label)
@@ -368,7 +379,13 @@ fn task_row(s: &Desktop, task: &Task, t: &Theme) -> El {
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .hover_group()
             .on_press_tx(move |s: &mut Desktop, tx| {
-                s.open_in_environment(environment.clone(), Some(thread), tx);
+                s.dispatch(
+                    Msg::Selection(SelectionMsg::OpenInEnvironment {
+                        environment: environment.clone(),
+                        thread: Some(thread),
+                    }),
+                    tx,
+                );
             });
     }
     row_el
@@ -404,8 +421,8 @@ fn task_row_text(
 ) -> El {
     let model = child.and_then(model_detail);
     let (preview_text, preview_is_error) = match (
-        task.error.as_deref().and_then(first_line),
-        task.result.as_deref().and_then(first_line),
+        task.error.as_deref().and_then(first_non_empty_line),
+        task.result.as_deref().and_then(first_non_empty_line),
     ) {
         (Some(err), _) => (Some(err), true),
         (None, Some(res)) => (Some(res), false),
@@ -457,7 +474,7 @@ fn task_row_text(
 }
 
 fn task_row_trailing(
-    s: &Desktop,
+    m: &Model,
     task: &Task,
     running: bool,
     state_label: &'static str,
@@ -484,7 +501,7 @@ fn task_row_trailing(
                 .a11y_hidden(),
         );
     }
-    if s.connected() && running {
+    if m.connected() && running {
         let id = task.id.clone();
         trailing = trailing.child(
             row()
@@ -500,7 +517,7 @@ fn task_row_trailing(
                 .focusable(true)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
                 .on_press_tx(move |s: &mut Desktop, tx| {
-                    s.send(Command::CancelTask(id.clone()), tx);
+                    s.dispatch(Msg::Composer(ComposerMsg::CancelTask(id.clone())), tx);
                 })
                 .child(
                     icon(&ui::STOP, ICON_SMALL - 1.0)
@@ -513,10 +530,10 @@ fn task_row_trailing(
     trailing
 }
 
-fn child_summary<'a>(s: &'a Desktop, task: &Task) -> Option<&'a ThreadSummary> {
+fn child_summary<'a>(m: &'a Model, task: &Task) -> Option<&'a ThreadSummary> {
     task.thread
-        .filter(|_| s.environment.as_deref() == Some(task.environment.as_str()))
-        .and_then(|thread| s.summary(thread))
+        .filter(|_| m.connection.environment.as_deref() == Some(task.environment.as_str()))
+        .and_then(|thread| m.summary(thread))
 }
 
 fn model_detail(thread: &ThreadSummary) -> Option<Cow<'_, str>> {
@@ -527,8 +544,4 @@ fn model_detail(thread: &ThreadSummary) -> Option<Cow<'_, str>> {
         (None, Some(thinking)) => Some(thinking),
         (None, None) => None,
     }
-}
-
-fn first_line(outcome: &str) -> Option<&str> {
-    outcome.lines().map(str::trim).find(|line| !line.is_empty())
 }

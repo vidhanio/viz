@@ -1,37 +1,22 @@
 //! viz desktop app: threads in a sidebar, the selected one's timeline,
-//! and a composer, in viz's own theme (`theme.rs`) through rune-kit. `cargo
+//! and a composer, in viz's own theme (`theme`) through `rune-kit`. `cargo
 //! run -p viz-desktop` opens the window; `-- --snap out.png --scene <name>`
 //! renders a scene headless.
 //!
+//! Architecture: functional core (`model/`, `update/`) with edge effects
+//! (`effects/`) and pure views emitting [`update::Msg`].
+//!
 //! UI rules:
 //!
-//! - Layout: sidebar and thread. A thread with delegated tasks keeps a
-//!   persistent Tasks Dock tucked above the composer. Menus, palette, dialogs
-//!   and toasts are temporary overlays.
-//! - Sidebar: pinned threads, _Recent_ (newest first, project under each title)
-//!   and _Projects_ (collapsible) modes, and an environment picker in the
-//!   footer when more than one is configured. Task status lives in the Tasks
-//!   Dock, sidebar task tree, and timeline.
-//! - Activity: reasoning, tools and delegated tasks fold into compact groups;
-//!   running commands stay visible while folded; expand only for readable
-//!   output, changes or the reasoning trace. Context use sits at the trailing
-//!   end of the composer toolbar.
-//! - Copy: short, plain, sentence case; labels name the thing, buttons name the
-//!   action. Show display names, never wire IDs.
-//! - Visuals come from `theme.rs` tokens and `ui` components, derived strictly
+//! - Layout: shell slots for sidebar, main (timeline + composer + Tasks Dock),
+//!   details, diff, terminal, and overlays (menus, palette, dialogs, toasts).
+//! - Visuals come from `theme` tokens and `ui` components, derived strictly
 //!   from the configured base16 scheme in a flat, sans-serif style with crisp
 //!   hairline borders and no blur, glow, or drop shadows. Icons are Lucide plus
-//!   monochrome harness marks. Hover lifts the ink, active controls use filled
-//!   states, and semantic accents distinguish selection, steering, remote
-//!   environments, and delegation.
-//! - Motion: tokens and reusable primitives live in `motion.rs`. Every spring
-//!   is critically damped (zero bounce) and preserves velocity on mid-flight
+//!   monochrome harness marks.
+//! - Motion: tokens and reusable primitives live in `motion`. Every spring is
+//!   critically damped (zero bounce) and preserves velocity on mid-flight
 //!   interruption; Reduce Motion removes spatial travel and stops live loops.
-//!   Changing threads moves the transcript and toolbar title, never the
-//!   composer: vertically by sidebar order, horizontally into a delegated task
-//!   (left) and back out (right).
-//! - One obvious place per action, plus the palette and a shortcut where it is
-//!   frequent.
 
 mod app;
 mod attachments;
@@ -45,12 +30,12 @@ mod motion;
 mod motion_scene;
 mod palette;
 mod scenes;
-mod server;
 mod sidebar;
 mod terminal;
 mod theme;
 mod timeline;
 mod ui;
+mod update;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -67,7 +52,9 @@ use viz_config::ClientFile;
 use crate::{
     app::Desktop,
     config::DesktopConfig,
+    model::{PaletteSearch, WINDOW_SIZE},
     theme::{S4, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT, Theme},
+    update::{ComposerMsg, Msg, PaletteMsg, SelectionMsg, ShellMsg, SidebarMsg, TimelineMsg},
 };
 
 /// Longest a headless run waits for the first connection attempt before
@@ -111,8 +98,12 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
             .h(TOOLBAR_HEIGHT),
     );
     let titlebar_inset = cx.titlebar_inset();
-    let split = SplitView::new(main).sidebar(&s.sidebar, |s: &mut Desktop| &mut s.sidebar, sidebar);
-    let split = split
+    let split = SplitView::new(main)
+        .sidebar(
+            &s.widgets.sidebar_pane,
+            |s: &mut Desktop| &mut s.widgets.sidebar_pane,
+            sidebar,
+        )
         .toolbar(header::toolbar(s, t, &mut overlays))
         .titlebar_inset(titlebar_inset)
         .frame_inset(0.0)
@@ -124,11 +115,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
                 .gap(S4)
                 .shortcut(ui::SIDEBAR_SHORTCUT)
                 .in_header()
-                .unread(
-                    s.threads
-                        .iter()
-                        .any(|thread| thread.lifecycle.unread && !thread.lifecycle.archived),
-                ),
+                .unread(s.model.has_unread()),
         )
         .pane_motion(motion::pane_motion())
         .reduced_motion(reduced)
@@ -141,7 +128,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
 
 /// The toast stack, when there's anything in it.
 fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
-    let entries = s.toasts.entries();
+    let entries = s.widgets.toasts.entries();
     if entries.is_empty() {
         return None;
     }
@@ -155,7 +142,7 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
                 &entry.options.title,
                 entry.options.detail.as_deref(),
                 ui::lead(ui::dot(t.danger), t.ui.line_height),
-                move |s: &mut Desktop, tx| s.dismiss(id, tx),
+                move |s: &mut Desktop, tx| s.dismiss_toast(id, tx),
                 t,
             ))
         });
@@ -168,49 +155,50 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
 
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if ev.is_command('k') && !ev.mods.shift && !ev.mods.alt {
-        palette::toggle(s, tx);
+        s.dispatch(Msg::Palette(PaletteMsg::Toggle), tx);
         return true;
     }
-    if s.palette.is_open() {
+    if s.model.palette.open {
         return false;
     }
     if ev.mods.shift || ev.mods.alt {
         return false;
     }
     if ev.is_command('b') {
-        s.sidebar.toggle();
+        s.dispatch(Msg::Sidebar(SidebarMsg::TogglePane), tx);
         return true;
     }
     if ev.is_command('[') {
-        s.go_back(tx);
+        s.dispatch(Msg::Selection(SelectionMsg::GoBack), tx);
         return true;
     }
     if ev.is_command(']') {
-        s.go_forward(tx);
+        s.dispatch(Msg::Selection(SelectionMsg::GoForward), tx);
         return true;
     }
     if ev.is_command('n') {
-        s.create_here(tx);
+        s.dispatch(Msg::Selection(SelectionMsg::CreateHere), tx);
         return true;
     }
-    if ev.is_command('.') && s.busy() {
-        s.abort(tx);
+    if ev.is_command('.') && s.model.busy() {
+        s.dispatch(Msg::Composer(ComposerMsg::Abort), tx);
         return true;
     }
     false
 }
 
 fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
-    let completion = composer::poll(s, clock, tx);
-    let palette = palette::poll(s, clock, tx);
-    let tool_timer = if s.thread.acp_partial.iter().any(|item| {
+    let pane_changed = sync_sidebar_pane(s, tx);
+    let completion = poll_completion(s, clock, tx);
+    let palette = poll_palette(s, clock, tx);
+    let tool_timer = if s.model.transcript().acp_partial.iter().any(|item| {
         matches!(item, model::Item::Tool(tool) if tool.status == model::ToolStatus::Running
             && tool.started_at.is_some() && tool.timeout_ms.is_some())
     }) {
         let now = theme::now_ms();
         tx.wake_after(Duration::from_millis(500));
-        if now.saturating_sub(s.tool_clock) >= 500 {
-            s.tool_clock = now;
+        if now.saturating_sub(s.model.disclosure.tool_clock) >= 500 {
+            s.dispatch(Msg::Timeline(TimelineMsg::TickToolClock(now)), tx);
             true
         } else {
             false
@@ -218,7 +206,51 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     } else {
         false
     };
-    s.expire(clock, tx) || completion || palette || tool_timer
+    s.expire_toasts(clock, tx) || pane_changed || completion || palette || tool_timer
+}
+
+fn sync_sidebar_pane(s: &mut Desktop, tx: &mut Tx) -> bool {
+    if s.widgets.sidebar_pane.is_resizing() {
+        return false;
+    }
+    let open = s.widgets.sidebar_pane.is_open();
+    let width = s.widgets.sidebar_pane.width();
+    let changed =
+        s.model.panels.sidebar.open != open || (s.model.panels.sidebar.width - width).abs() >= 0.5;
+    if changed {
+        s.dispatch(Msg::Shell(ShellMsg::SidebarPaneChanged { open, width }), tx);
+    }
+    changed
+}
+
+fn poll_completion(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
+    let before_token = s.model.composer.completion.token.clone();
+    let before_due = s.model.composer.completion.due;
+    let before_focused = s.model.composer.draft_focused;
+    let cursor = s.draft_cursor();
+    s.dispatch(
+        Msg::Composer(ComposerMsg::PollCompletion { clock, cursor }),
+        tx,
+    );
+    s.model.composer.completion.token != before_token
+        || s.model.composer.completion.due != before_due
+        || s.model.composer.draft_focused != before_focused
+}
+
+fn poll_palette(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
+    if !s.model.palette.open || s.model.palette.filter.is_empty() {
+        return false;
+    }
+    let should_step = if s.model.connected() {
+        matches!(s.model.palette.search, PaletteSearch::Idle)
+            || matches!(s.model.palette.search, PaletteSearch::Debouncing(due) if clock >= due)
+    } else {
+        !matches!(s.model.palette.search, PaletteSearch::Idle)
+    };
+    if should_step {
+        s.dispatch(Msg::Palette(PaletteMsg::Poll(clock)), tx);
+    }
+    should_step
 }
 
 #[derive(Parser)]
@@ -265,7 +297,7 @@ fn main() {
     let tooling = rune::tooling::Args::parse_from(rune_args.clone());
     let headless = tooling.headless();
     let preview = headless && tooling.scene.is_some();
-    let initial_width = tooling.size.map_or(app::WINDOW_SIZE.0, |(width, _)| width);
+    let initial_width = tooling.size.map_or(WINDOW_SIZE.0, |(width, _)| width);
     let scene_theme = preview
         .then(|| std::env::var("VIZ_SCENE_THEME").ok())
         .flatten();
@@ -292,7 +324,7 @@ fn main() {
         scenes: scenes::SCENES,
         on_key: Some(on_key),
         poll: Some(poll),
-        ..AppSpec::new("viz", app::WINDOW_SIZE, Desktop::detached, view)
+        ..AppSpec::new("viz", WINDOW_SIZE, Desktop::detached, view)
     })
     .args(rune_args)
     .chrome(Chrome {
@@ -305,28 +337,35 @@ fn main() {
     })
     .init(move || {
         let mut desktop = Desktop::new(commands);
-        desktop.window_width = initial_width;
+        desktop.model.panels.window_width = initial_width;
         if !preview {
-            desktop.navigation.restore();
+            desktop.restore_prefs();
         }
         desktop
     })
     .on_focus(terminal::scene::focus)
     .on_ime(terminal::scene::ime);
     if let Some(detail) = theme_error {
-        app.handle()
-            .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
+        app.handle().update(move |s, tx| {
+            s.dispatch(
+                Msg::Shell(ShellMsg::ShowToast {
+                    title: "Invalid desktop configuration".into(),
+                    detail: Some(detail),
+                }),
+                tx,
+            );
+        });
     }
     let ui = app.handle();
     let app = app.on_frame_drawn(move |rt| {
         let width = rt.window_viewport().0 / rt.zoom();
-        if (rt.state.window_width - width).abs() >= 1.0 {
-            ui.update(move |s, _| s.window_width = width);
+        if (rt.state.model.panels.window_width - width).abs() >= 1.0 {
+            ui.update(move |s, tx| s.dispatch(Msg::Shell(ShellMsg::WindowResized(width)), tx));
         }
     });
     if !preview {
         let (first, connected) = std::sync::mpsc::channel();
-        server::spawn(app.handle(), receiver, first, endpoint);
+        effects::server::spawn(app.handle(), receiver, first, endpoint);
         if headless {
             _ = connected.recv_timeout(HEADLESS_CONNECT_WAIT);
         }

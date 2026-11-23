@@ -1,7 +1,6 @@
 //! Where a thread runs in its Git project: the project's own checkout or a
 //! linked worktree. A draft picks its checkout beside its project; an open
-//! thread shows its branch in the toolbar, whose menu moves it. Both menus
-//! load the project's branches and worktrees when they open.
+//! thread shows its branch in the toolbar, whose menu moves it.
 
 use std::path::Path;
 
@@ -10,10 +9,11 @@ use rune_kit::{Menu, MenuItem, Placement};
 use viz_client::protocol::{Project, ThreadId, WorktreeTarget};
 
 use crate::{
-    app::{Checkouts, Desktop, NewThread},
-    server::Command,
+    app::Desktop,
+    model::{Checkouts, NewThread},
     theme::{HAIRLINE, ICON_SMALL, RADIUS_CONTROL, S6, S8, Size, Theme},
     ui,
+    update::{ComposerMsg, Msg, SelectionMsg},
 };
 
 /// The `open_picker` value of a draft's checkout picker.
@@ -26,9 +26,10 @@ const BASES: usize = 12;
 
 /// A draft's checkout picker, for a Git project.
 pub fn draft(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
-    let project = s.project().filter(|project| project.git)?;
-    let open = s.open_picker.as_deref() == Some(DRAFT_CHECKOUT) && !thread.sending;
-    let checkouts = s.checkouts.get(&project.path);
+    let m = &s.model;
+    let project = m.project().filter(|project| project.git)?;
+    let open = m.composer.open_picker.as_deref() == Some(DRAFT_CHECKOUT) && !thread.sending;
+    let checkouts = m.checkouts(&project.path);
     let (label, glyph) = draft_label(thread, checkouts);
     let trigger = trigger(DRAFT_CHECKOUT, &label, glyph, open, thread.sending, true, t)
         .on_press_tx(toggle(DRAFT_CHECKOUT, &project.path));
@@ -36,7 +37,7 @@ pub fn draft(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) ->
         .placement(Placement::Bottom)
         .min_width(ui::MENU_WIDTH)
         .open(open)
-        .on_close(|s: &mut Desktop| s.open_picker = None)
+        .on_close(|s: &mut Desktop| s.dispatch_local(Msg::Composer(ComposerMsg::ClosePicker)))
         .trigger(trigger);
     if open {
         let current = thread.worktree.as_ref();
@@ -48,11 +49,10 @@ pub fn draft(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) ->
                     item = item.description(detail);
                 }
                 item.on_select_tx(move |s: &mut Desktop, tx| {
-                    s.open_picker = None;
-                    tx.focus("draft", false);
-                    if let Some(draft) = s.new_thread.as_mut().filter(|draft| !draft.sending) {
-                        draft.worktree = (target != WorktreeTarget::Local).then(|| target.clone());
-                    }
+                    s.dispatch(
+                        Msg::Selection(SelectionMsg::ChooseDraftWorktree(target.clone())),
+                        tx,
+                    );
                 })
             };
         let head = project.branch.as_deref().unwrap_or("HEAD");
@@ -137,14 +137,15 @@ fn draft_label(thread: &NewThread, checkouts: Option<&Checkouts>) -> (String, &'
 /// The open thread's branch in the toolbar, for a Git project; its menu
 /// moves the thread between the project checkout and worktrees.
 pub fn thread(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
-    let id = s.selected?;
-    let thread = s.summary(id)?;
+    let m = &s.model;
+    let id = m.selection.selected?;
+    let thread = m.summary(id)?;
     let project = thread
         .project
         .as_deref()
-        .and_then(|path| s.projects.iter().find(|project| project.path == path))
+        .and_then(|path| m.cache().project(path))
         .filter(|project| project.git)?;
-    let open = s.open_picker.as_deref() == Some(THREAD_CHECKOUT) && s.connected();
+    let open = m.composer.open_picker.as_deref() == Some(THREAD_CHECKOUT) && m.connected();
     let worktree = thread.worktree.as_ref();
     let branch = worktree.map_or(project.branch.as_deref(), |worktree| {
         worktree.branch.as_deref()
@@ -160,7 +161,7 @@ pub fn thread(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         label,
         glyph,
         open,
-        !s.connected(),
+        !m.connected(),
         false,
         t,
     )
@@ -169,7 +170,7 @@ pub fn thread(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         .placement(Placement::Bottom)
         .min_width(ui::MENU_WIDTH)
         .open(open)
-        .on_close(|s: &mut Desktop| s.open_picker = None)
+        .on_close(|s: &mut Desktop| s.dispatch_local(Msg::Composer(ComposerMsg::ClosePicker)))
         .trigger(trigger);
     if open {
         menu = move_items(menu, s, id, project, worktree.map(|w| w.path.as_str()));
@@ -184,7 +185,7 @@ fn move_items(
     project: &Project,
     current: Option<&str>,
 ) -> Menu {
-    let busy = s.busy();
+    let busy = s.model.busy();
     let action = |label: &str,
                   detail: Option<&str>,
                   glyph: &'static Icon,
@@ -197,12 +198,11 @@ fn move_items(
         item.checked(here)
             .disabled(here || busy)
             .on_select_tx(move |s: &mut Desktop, tx| {
-                s.open_picker = None;
-                s.send(
-                    Command::Move {
+                s.dispatch(
+                    Msg::Selection(SelectionMsg::MoveThread {
                         thread: id,
                         worktree: target.clone(),
-                    },
+                    }),
                     tx,
                 );
             })
@@ -230,8 +230,7 @@ fn move_items(
                 branch: None,
             },
         ));
-    let checkouts = s.checkouts.get(&project.path);
-    if let Some(checkouts) = checkouts {
+    if let Some(checkouts) = s.model.checkouts(&project.path) {
         for worktree in checkouts.worktrees.iter().filter(|worktree| !worktree.main) {
             menu = menu.item(action(
                 &worktree_label(Some(checkouts), &worktree.path),
@@ -265,14 +264,13 @@ fn worktree_label(checkouts: Option<&Checkouts>, path: &str) -> String {
 fn toggle(key: &'static str, project: &str) -> impl Fn(&mut Desktop, &mut Tx) + 'static {
     let project = project.to_owned();
     move |s: &mut Desktop, tx| {
-        if s.open_picker.as_deref() == Some(key)
-            || (key == DRAFT_CHECKOUT && s.new_thread.as_ref().is_none_or(|draft| draft.sending))
-        {
-            s.open_picker = None;
-        } else {
-            s.open_picker = Some(key.to_owned());
-            s.send(Command::LoadCheckouts(project.clone()), tx);
-        }
+        s.dispatch(
+            Msg::Composer(ComposerMsg::ToggleCheckoutPicker {
+                key: key.to_owned(),
+                project: project.clone(),
+            }),
+            tx,
+        );
     }
 }
 

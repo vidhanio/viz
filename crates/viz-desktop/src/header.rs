@@ -7,37 +7,41 @@ use rune_kit::shell::Toolbar;
 use viz_client::protocol::{Task, ThreadId, ThreadSummary};
 
 use crate::{
-    app::{Desktop, thread_title},
+    app::{Desktop, motion_switch},
     checkout,
+    model::{first_non_empty_line, thread_title},
     motion::{Switch, TITLE_ENTER_DELAY, TRAVEL_TITLE},
     sidebar,
     theme::{
         HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
     },
     ui,
+    update::{Msg, TimelineMsg},
 };
 
 /// The widest the parent's title gets in a subagent's breadcrumb.
 const BREADCRUMB_MAX: f32 = 272.0;
 
 /// The toolbar. Its title is keyed per thread inside its own clip, so it
-/// moves with the transcript when the thread changes (`app::Switch`).
+/// moves with the transcript when the thread changes.
 pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
+    let m = &s.model;
+    let switch = motion_switch(m.selection.switch);
     let mut toolbar = Toolbar::new().center(ui::drag_guard("toolbar-drag-guard").pin(
         Some(0.0),
         Some(0.0),
         Some(0.0),
         Some(0.0),
     ));
-    let page = match (s.selected, &s.new_thread) {
+    let page = match (m.selection.selected, &m.selection.new_thread) {
         (Some(id), _) => format!("title-{id}"),
         (None, Some(draft)) => format!("title-draft-{}", draft.id),
         (None, None) => "title-none".to_owned(),
     };
     let mut entering = title(s, t)
         .key(page)
-        .transition(s.switch.title_enter(TRAVEL_TITLE));
-    if s.switch != Switch::Cut {
+        .transition(switch.title_enter(TRAVEL_TITLE));
+    if switch != Switch::Cut {
         entering = entering.enter_delay(TITLE_ENTER_DELAY);
     }
     let title = row()
@@ -47,9 +51,9 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
         .min_w(0.0)
         .shrink()
         .clip_rounded(0.0)
-        .child_exit(s.switch.title_exit(TRAVEL_TITLE))
+        .child_exit(switch.title_exit(TRAVEL_TITLE))
         .child(entering);
-    let title = if s.sidebar.is_open() {
+    let title = if s.widgets.sidebar_pane.is_open() {
         title.ml(READING_INSET - TOOLBAR_PAD)
     } else {
         toolbar = toolbar.leading(sidebar::new_thread_button(s, Size::Default, t));
@@ -72,8 +76,8 @@ pub fn task_identity(task: &Task, child: Option<&ThreadSummary>, t: &Theme) -> E
     let preview = task
         .error
         .as_deref()
-        .and_then(first_line)
-        .or_else(|| task.result.as_deref().and_then(first_line))
+        .and_then(first_non_empty_line)
+        .or_else(|| task.result.as_deref().and_then(first_non_empty_line))
         .map(|line| text(line).font(t.small).color(t.muted).truncate());
     if let Some(thread) = child {
         thread_identity(thread, preview, t)
@@ -89,10 +93,6 @@ pub fn task_identity(task: &Task, child: Option<&ThreadSummary>, t: &Theme) -> E
             t,
         )
     }
-}
-
-fn first_line(outcome: &str) -> Option<&str> {
-    outcome.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
 fn thread_identity(thread: &ThreadSummary, preview: Option<El>, t: &Theme) -> El {
@@ -160,18 +160,19 @@ fn title_text(label: &str, t: &Theme) -> El {
 }
 
 fn title(s: &Desktop, t: &Theme) -> El {
+    let m = &s.model;
     let group = row()
         .key("header-title")
         .min_w(0.0)
         .shrink()
         .gap(S8)
         .center_y();
-    let Some(id) = s.selected else {
-        return s.new_thread.as_ref().map_or_else(
+    let Some(id) = m.selection.selected else {
+        return m.selection.new_thread.as_ref().map_or_else(
             || title_text("viz", t),
             |draft| {
                 let harness = draft
-                    .active_harness(&s.harnesses)
+                    .active_harness(m.harnesses())
                     .map(|runner| (runner.id.as_str(), runner.name.as_str()));
                 group
                     .child(ui::harness_mark(harness, false, t))
@@ -179,13 +180,13 @@ fn title(s: &Desktop, t: &Theme) -> El {
             },
         );
     };
-    let thread = s.summary(id);
+    let thread = m.summary(id);
     let mark = ui::harness_mark(
         thread.map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
-        s.busy(),
+        m.busy(),
         t,
     );
-    let title = title_text(s.title(id), t);
+    let title = title_text(m.title(id), t);
     let Some((parent, environment)) = thread
         .and_then(|thread| {
             thread
@@ -193,7 +194,7 @@ fn title(s: &Desktop, t: &Theme) -> El {
                 .map(|parent| (parent, thread.parent_environment.as_deref()))
         })
         .filter(|(parent, env)| {
-            *parent != id || env.is_some_and(|env| Some(env) != s.environment.as_deref())
+            *parent != id || env.is_some_and(|env| Some(env) != m.connection.environment.as_deref())
         })
     else {
         return group.child(mark).child(title);
@@ -208,11 +209,12 @@ fn title(s: &Desktop, t: &Theme) -> El {
 /// The link back to a subagent's parent: its harness mark and title, or the
 /// parent's environment name when it runs elsewhere.
 fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Theme) -> El {
-    let remote = environment.filter(|env| Some(*env) != s.environment.as_deref());
-    let label = remote.unwrap_or_else(|| s.title(parent)).to_owned();
+    let m = &s.model;
+    let remote = environment.filter(|env| Some(*env) != m.connection.environment.as_deref());
+    let label = remote.unwrap_or_else(|| m.title(parent)).to_owned();
     let mark = remote.is_none().then(|| {
         ui::harness_mark(
-            s.summary(parent)
+            m.summary(parent)
                 .map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
             false,
             t,
@@ -232,11 +234,13 @@ fn breadcrumb(s: &Desktop, parent: ThreadId, environment: Option<&str>, t: &Them
         .focusable(true)
         .focus_ring(HAIRLINE, S2, t.accent)
         .on_press_tx(move |s: &mut Desktop, tx| {
-            if let Some(env) = &target {
-                s.open_in_environment(env.clone(), Some(parent), tx);
-            } else {
-                s.select(parent, tx);
-            }
+            s.dispatch(
+                Msg::Timeline(TimelineMsg::OpenThreadLink {
+                    thread: parent,
+                    environment: target.clone(),
+                }),
+                tx,
+            );
         })
         .children(mark)
         .child(

@@ -1,52 +1,28 @@
-//! The window's state and what the user can do to it. The server thread fills
-//! it in through the app handle; the views only read it.
+//! Imperative shell wrapper around [`Model`]: owns Rune widget state, runs
+//! [`Effect`]s, and funnels every UI event through [`Desktop::dispatch`].
 
-use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    mem,
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
-use rune::{TextEdit, Tx};
+use rune::{FileDialogOptions, TextEdit, Tx};
 use rune_kit::{ToastEffect, ToastEvent, ToastPage, ToastStack, shell::PaneState};
 use tokio::sync::mpsc;
-use viz_client::protocol::{
-    Attachment, ConfigOption, Environment, GitBranch, Harness, LaunchThread, OptionValue, Project,
-    SendInput, SendMode, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary, Worktree,
-    WorktreeTarget,
-};
 
-pub use crate::motion::Switch;
 use crate::{
-    attachments::{self, Loaded, Source, Target as AttachmentTarget},
-    composer::{Completion, ModelMenu},
-    model::Transcript as Thread,
+    effects::{self, EditSync, EditTarget, Effect, ServerEffect},
+    model::{
+        DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH, DraftCursor, Model, PaneSwitch,
+        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+    },
+    motion::Switch,
     motion_scene::MotionDemo,
-    palette::Palette,
-    server::{Command, ThreadChange},
-    sidebar::Navigation,
+    theme,
+    update::{self, Msg, ServerMsg, ShellMsg, SidebarMsg},
 };
 
 /// How long a toast stays up while unpaused.
 const TOAST_LIFE: Duration = Duration::from_secs(6);
-/// The window's size on launch, in points; headless renders use it too.
-pub const WINDOW_SIZE: (f32, f32) = (1240.0, 760.0);
 
-/// The server connection, as the sidebar footer shows it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Status {
-    /// Trying to connect.
-    Connecting,
-    /// Connected to a server of this version.
-    Connected {
-        /// Server version.
-        version: String,
-    },
-    /// Not connected, and why.
-    Error(String),
-}
-
-/// Content carried by an entry in [`Desktop::toasts`].
+/// Content carried by an entry in [`ShellWidgets::toasts`].
 #[derive(Debug, Clone)]
 pub struct ToastContent {
     /// One line.
@@ -55,860 +31,159 @@ pub struct ToastContent {
     pub detail: Option<String>,
 }
 
-/// A local draft. No ACP session is open until its first send.
-/// A Git project's branches and worktrees.
-#[derive(Debug, Clone)]
-pub struct Checkouts {
-    pub branches: Vec<GitBranch>,
-    pub worktrees: Vec<Worktree>,
-}
-
+/// Stateful Rune and `rune-kit` widget controllers kept outside the pure
+/// [`Model`].
 #[derive(Debug)]
-pub struct NewThread {
-    pub id: u64,
-    pub project: Option<String>,
-    /// Which checkout of a Git project to run in; `None` is the project's own.
-    pub worktree: Option<WorktreeTarget>,
-    pub harness: Option<String>,
-    pub options: BTreeMap<String, OptionValue>,
-    pub sending: bool,
-    loading_choices: bool,
-}
-
-impl NewThread {
-    pub fn new(id: u64, project: Option<&Project>) -> Self {
-        Self {
-            id,
-            project: project.map(|project| project.path.clone()),
-            worktree: None,
-            harness: None,
-            options: BTreeMap::new(),
-            sending: false,
-            loading_choices: false,
-        }
-    }
-
-    fn set_project(&mut self, project: Option<&Project>) {
-        self.project = project.map(|project| project.path.clone());
-        self.worktree = None;
-    }
-
-    pub fn active_harness<'a>(&self, runners: &'a [Harness]) -> Option<&'a Harness> {
-        runners.iter().find(|runner| {
-            self.harness
-                .as_deref()
-                .map_or(runner.default, |id| id == runner.id)
-        })
-    }
-}
-
-#[derive(Debug)]
-struct Draft {
-    edit: TextEdit,
-    attachments: Vec<Attachment>,
-}
-
-impl Default for Draft {
-    fn default() -> Self {
-        Self {
-            edit: TextEdit::new(""),
-            attachments: Vec::new(),
-        }
-    }
-}
-
-/// The window's state.
-#[derive(Debug)]
-pub struct Desktop {
-    commands: mpsc::UnboundedSender<Command>,
-    /// The connection.
-    pub status: Status,
-    /// Where the server is, once the config is read.
-    pub endpoint: Option<String>,
-    pub environment: Option<String>,
-    pub environments: Vec<Environment>,
-    pub tasks: Vec<Task>,
-    /// Every thread as the server lists it, titles included.
-    pub threads: Vec<ThreadSummary>,
-    pub projects: Vec<Project>,
-    /// Branches and worktrees by project path, loaded when a checkout picker
-    /// opens.
-    pub checkouts: HashMap<String, Checkouts>,
-    pub harnesses: Vec<Harness>,
-    /// The thread in the main pane.
-    pub selected: Option<ThreadId>,
-    /// Its transcript and live state, once its view arrives.
-    pub thread: Thread,
-    /// The selected thread's transcript hasn't arrived since it was shown.
-    pub loading: bool,
-    pub history_loading: bool,
-    pub state: Option<ThreadState>,
-    pub new_thread: Option<NewThread>,
-    /// How the last change of thread moves the main pane.
-    pub switch: Switch,
-    next_draft: u64,
-    /// Timeline rows the user opened (tool calls, thinking), by key.
-    pub expanded: HashSet<String>,
-    /// The composer's text.
+pub struct ShellWidgets {
+    /// Main composer text editor.
     pub draft: TextEdit,
-    pub attachments: Vec<Attachment>,
-    attachment_reads: HashSet<AttachmentTarget>,
-    environment_epoch: u64,
-    drafts: HashMap<ThreadId, Draft>,
-    inactive_drafts: HashMap<String, HashMap<ThreadId, Draft>>,
-    pub completion: Completion,
-    pub model_menu: ModelMenu,
-    pub open_picker: Option<String>,
-    pub navigation: Navigation,
-    /// The sidebar's width and whether it's open.
-    pub sidebar: PaneState,
-    pub palette: Palette,
+    /// Sidebar thread filter input.
+    pub sidebar_filter: TextEdit,
+    /// Sidebar rename dialog input.
+    pub sidebar_dialog: TextEdit,
+    /// Command palette query input.
+    pub palette_query: TextEdit,
+    /// Model picker search input.
+    pub model_query: TextEdit,
+    /// Resizable, collapsible sidebar pane state.
+    pub sidebar_pane: PaneState,
+    /// Resizable, collapsible docked diff inspector pane state.
+    pub diff_pane: PaneState,
     /// Coalesced toast stack with hover and hidden-window timer pause.
     pub toasts: ToastStack<ToastContent>,
-    /// The window has keyboard focus; notifications cover what the user can't
-    /// see.
-    focused: bool,
-    /// The window's width in view points, as last drawn; layout that has to
-    /// choose what fits reads it.
-    pub window_width: f32,
-    pub tool_clock: i64,
-    /// Threads left by navigating, newest last, for back and forward.
-    back: Vec<ThreadId>,
-    forward: Vec<ThreadId>,
+}
+
+impl Default for ShellWidgets {
+    fn default() -> Self {
+        let mut draft = TextEdit::new("");
+        draft.focused = true;
+        Self {
+            draft,
+            sidebar_filter: TextEdit::new(""),
+            sidebar_dialog: TextEdit::new(""),
+            palette_query: TextEdit::new(""),
+            model_query: TextEdit::new(""),
+            sidebar_pane: PaneState::new(SIDEBAR_DEFAULT_WIDTH)
+                .range(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
+            diff_pane: PaneState::new(DIFF_DEFAULT_WIDTH)
+                .range(DIFF_MIN_WIDTH, DIFF_MAX_WIDTH)
+                .collapsed(),
+            toasts: ToastStack::default(),
+        }
+    }
+}
+
+/// Root Rune application state: pure [`Model`] plus shell widgets and effect
+/// sinks.
+#[derive(Debug)]
+pub struct Desktop {
+    /// Pure domain and client state.
+    pub model: Model,
+    /// Rune widget controllers synced with [`Self::model`].
+    pub widgets: ShellWidgets,
+    commands: mpsc::UnboundedSender<ServerEffect>,
+    prefs_path: Option<PathBuf>,
     /// Scene-only override for Reduce Motion in headless verification.
     pub reduced_motion: Option<bool>,
-    /// Interactive motion workbench state when rendering the `motion` scenes.
+    /// Interactive motion workbench or component gallery scene state.
     pub motion_demo: Option<MotionDemo>,
 }
 
 impl Desktop {
-    /// A state sending its commands to `commands`.
-    pub fn new(commands: mpsc::UnboundedSender<Command>) -> Self {
-        let mut draft = TextEdit::new("");
-        draft.focused = true;
+    /// Constructs a live desktop shell sending server effects to `commands`.
+    #[must_use]
+    pub fn new(commands: mpsc::UnboundedSender<ServerEffect>) -> Self {
         Self {
+            model: Model::new(theme::now_ms()),
+            widgets: ShellWidgets::default(),
             commands,
-            status: Status::Connecting,
-            endpoint: None,
-            environment: None,
-            environments: Vec::new(),
-            tasks: Vec::new(),
-            threads: Vec::new(),
-            projects: Vec::new(),
-            checkouts: HashMap::new(),
-            harnesses: Vec::new(),
-            selected: None,
-            thread: Thread::default(),
-            loading: false,
-            history_loading: false,
-            state: None,
-            new_thread: None,
-            switch: Switch::Cut,
-            next_draft: 0,
-            expanded: HashSet::new(),
-            draft,
-            attachments: Vec::new(),
-            attachment_reads: HashSet::new(),
-            environment_epoch: 0,
-            drafts: HashMap::new(),
-            inactive_drafts: HashMap::new(),
-            completion: Completion::default(),
-            model_menu: ModelMenu::default(),
-            open_picker: None,
-            navigation: Navigation::default(),
-            sidebar: PaneState::new(256.0).range(220.0, 384.0),
-            palette: Palette::default(),
-            toasts: ToastStack::default(),
-            focused: true,
-            window_width: WINDOW_SIZE.0,
-            tool_clock: crate::theme::now_ms(),
-            back: Vec::new(),
-            forward: Vec::new(),
+            prefs_path: None,
             reduced_motion: None,
             motion_demo: None,
         }
     }
 
-    /// A state with no connection thread behind it, for `AppSpec::init`;
-    /// `main` replaces it.
+    /// A detached shell with no server thread behind it, for `AppSpec::init`
+    /// and headless scenes.
+    #[must_use]
     pub fn detached() -> Self {
         Self::new(mpsc::unbounded_channel().0)
     }
 
-    /// Connected to a server.
-    pub const fn connected(&self) -> bool {
-        matches!(self.status, Status::Connected { .. })
+    /// Loads persisted preferences from `$XDG_STATE_HOME/viz/desktop.json` and
+    /// enables saving future changes there.
+    pub fn restore_prefs(&mut self) {
+        let Some(path) = effects::prefs::default_path() else {
+            return;
+        };
+        let prefs = effects::prefs::load(&path);
+        self.prefs_path = Some(path);
+        self.dispatch_local(Msg::Shell(ShellMsg::ApplyPrefs(prefs)));
     }
 
-    /// Takes a new thread list. A turn that ended or failed where the
-    /// user isn't looking becomes a desktop notification.
-    pub fn set_threads(&mut self, threads: Vec<ThreadSummary>, tx: &mut Tx) {
-        use ThreadStatus::{Failed, Idle, Working};
-        for thread in &threads {
-            let Some(before) = self.summary(thread.id).map(|old| old.status) else {
-                continue;
-            };
-            let ran = before == Working;
-            let watched = self.focused && self.selected == Some(thread.id);
-            let body = match thread.status {
-                _ if before == thread.status || watched => continue,
-                _ if thread.parent.is_some() => continue,
-                Idle if ran => "Finished",
-                Failed if ran => "Failed",
-                _ => continue,
-            };
-            self.send(
-                Command::Notify {
-                    title: thread_title(thread).to_owned(),
-                    body,
-                },
-                tx,
-            );
-        }
-        let fallback = self
-            .selected
-            .and_then(|id| self.summary(id))
-            .filter(|thread| !threads.iter().any(|current| current.id == thread.id))
-            .and_then(|old| {
-                let mut ancestor = old.parent.filter(|_| {
-                    old.parent_environment
-                        .as_ref()
-                        .is_none_or(|env| Some(env) == self.environment.as_ref())
-                });
-                while let Some(id) = ancestor {
-                    if threads.iter().any(|current| current.id == id) {
-                        return Some(id);
-                    }
-                    ancestor = self.summary(id).and_then(|parent| parent.parent);
-                }
-                None
-            });
-        self.threads = threads;
-        if self.connected()
-            && self.new_thread.is_none()
-            && self.selected.is_some_and(|id| self.summary(id).is_none())
-        {
-            if let Some(id) = fallback {
-                self.select(id, tx);
-            } else {
-                self.clear_selection();
-                self.send(Command::ClearSelection, tx);
-            }
-        }
+    /// Dispatches a message through the pure reducer and executes every
+    /// returned [`Effect`] with access to Rune's [`Tx`].
+    pub fn dispatch(&mut self, msg: Msg, tx: &mut Tx) {
+        self.sync_draft_text();
+        let effects = update::update(&mut self.model, msg);
+        self.apply_effects(effects, Some(tx));
     }
 
-    /// The window gained or lost focus; coming back reads the open thread.
+    /// Dispatches a synchronous UI message from handlers that do not receive
+    /// [`Tx`].
+    pub fn dispatch_local(&mut self, msg: Msg) {
+        self.sync_draft_text();
+        let effects = update::update(&mut self.model, msg);
+        self.apply_effects(effects, None);
+    }
+
+    /// Window focus hook called by Rune's window lifecycle and terminal scene.
     pub fn set_focus(&mut self, focused: bool, tx: &mut Tx) {
-        self.focused = focused;
-        if focused
-            && self.connected()
-            && let Some(id) = self.selected.filter(|&id| {
-                self.summary(id)
-                    .is_some_and(|thread| thread.lifecycle.unread)
-            })
-        {
-            self.send(Command::Update(id, ThreadChange::Unread(false)), tx);
+        self.dispatch(Msg::Shell(ShellMsg::WindowFocus(focused)), tx);
+    }
+
+    /// Pure cursor snapshot of the main composer [`TextEdit`].
+    #[must_use]
+    pub const fn draft_cursor(&self) -> DraftCursor {
+        DraftCursor {
+            focused: self.widgets.draft.focused,
+            anchor: self.widgets.draft.anchor,
+            focus: self.widgets.draft.focus,
         }
     }
 
-    /// Shows `thread`, loading until its view arrives.
-    pub fn show(&mut self, thread: ThreadId) {
-        if self.selected != Some(thread) || self.new_thread.is_some() {
-            self.switch = if self.new_thread.is_some() {
-                Switch::Fade
-            } else {
-                self.selected
-                    .map_or(Switch::Cut, |from| self.direction(from, thread))
-            };
-            self.save_draft();
-            self.new_thread = None;
-            self.selected = Some(thread);
-            let draft = self.drafts.remove(&thread).unwrap_or_default();
-            self.draft = draft.edit;
-            self.attachments = draft.attachments;
-            self.reset_thread();
-            self.loading = true;
-            self.navigation
-                .reveal(thread, &self.threads, self.environment.as_deref());
-        }
+    /// Synchronizes all Rune widget controllers from [`Self::model`] after a
+    /// headless scene populates fixture state directly.
+    pub fn sync_widgets_from_model(&mut self) {
+        self.widgets.draft = TextEdit::new(&self.model.composer.draft.text);
+        self.widgets.draft.focused = self.model.composer.draft_focused;
+
+        self.widgets.sidebar_filter = TextEdit::new(&self.model.sidebar.filter);
+        self.widgets.sidebar_dialog = TextEdit::new(&self.model.sidebar.edit_value);
+
+        self.widgets.palette_query = TextEdit::new(&self.model.palette.query);
+        self.widgets.palette_query.focused = self.model.palette.open;
+
+        self.widgets.model_query = TextEdit::new(&self.model.composer.model_menu.query);
+        self.widgets.model_query.focused =
+            self.model.composer.open_picker.as_deref() == Some("model");
+
+        self.widgets
+            .sidebar_pane
+            .set_width(self.model.panels.sidebar.width);
+        self.widgets
+            .sidebar_pane
+            .set_open(self.model.panels.sidebar.open);
+        self.widgets
+            .diff_pane
+            .set_width(self.model.panels.diff.width);
+        self.widgets.diff_pane.set_open(self.model.panels.diff.open);
     }
 
-    /// Which way the pane moves from `from` to `to`.
-    fn direction(&self, from: ThreadId, to: ThreadId) -> Switch {
-        if self.descends(to, from) {
-            return Switch::Into;
-        }
-        if self.descends(from, to) {
-            return Switch::Out;
-        }
-        match (
-            crate::sidebar::position(self, from),
-            crate::sidebar::position(self, to),
-        ) {
-            (Some(a), Some(b)) if b > a => Switch::Down,
-            (Some(a), Some(b)) if b < a => Switch::Up,
-            _ => Switch::Fade,
-        }
-    }
-
-    /// `thread` was delegated, directly or through other tasks, by
-    /// `ancestor`.
-    fn descends(&self, thread: ThreadId, ancestor: ThreadId) -> bool {
-        let mut seen = 0;
-        let mut at = self.summary(thread).and_then(|summary| summary.parent);
-        while let Some(parent) = at {
-            if parent == ancestor {
-                return true;
-            }
-            seen += 1;
-            if seen > self.threads.len() {
-                return false;
-            }
-            at = self.summary(parent).and_then(|summary| summary.parent);
-        }
-        false
-    }
-
-    fn save_draft(&mut self) {
-        let edit = mem::replace(&mut self.draft, TextEdit::new(""));
-        let attachments = mem::take(&mut self.attachments);
-        if let Some(id) = self.selected.take()
-            && (!edit.text.is_empty() || !attachments.is_empty())
-        {
-            self.drafts.insert(id, Draft { edit, attachments });
-        }
-    }
-
-    pub fn clear_selection(&mut self) {
-        self.save_draft();
-        self.reset_thread();
-    }
-
-    fn reset_thread(&mut self) {
-        self.thread = Thread::default();
-        self.loading = false;
-        self.history_loading = false;
-        self.state = None;
-        self.expanded.clear();
-        self.completion.reset();
-        self.open_picker = None;
-    }
-
-    /// Applies a reset or appends committed ACP activity to the current
-    /// viewport.
-    pub fn apply_view(
-        &mut self,
-        id: ThreadId,
-        entries: &[viz_client::protocol::Entry],
-        reset: bool,
-        before: Option<viz_client::protocol::EntryId>,
-    ) {
-        if self.selected != Some(id) {
-            return;
-        }
-        if reset {
-            self.thread = Thread::from_entries(entries, before);
-            self.loading = false;
-            self.history_loading = false;
-        } else {
-            self.thread.append(entries);
-        }
-        self.thread
-            .sync_acp(self.state.as_ref().and_then(|state| state.live.as_ref()));
-    }
-
-    pub fn set_state(&mut self, id: ThreadId, state: ThreadState, tx: &mut Tx) {
-        if self.selected != Some(id) {
-            return;
-        }
-        let status_changed = self.state.as_ref().map(|prev| prev.status) != Some(state.status);
-        self.thread.sync_acp(state.live.as_ref());
-        self.state = Some(state);
-        self.model_menu.clear_loading();
-        if status_changed {
-            self.update_title(tx);
-        }
-    }
-
-    pub fn update_title(&self, tx: &mut Tx) {
-        tx.set_title(
-            match (&self.status, self.state.as_ref().map(|s| s.status)) {
-                (Status::Error(_), _) => "viz — Offline",
-                (Status::Connecting, _) => "viz — Connecting",
-                (_, Some(ThreadStatus::Working)) => "viz — Working",
-                (_, Some(ThreadStatus::Failed)) => "viz — Failed",
-                _ => "viz",
-            },
-        );
-    }
-
-    pub fn load_earlier(&mut self, tx: &mut Tx) {
-        if !self.history_loading
-            && self.connected()
-            && let (Some(thread), Some(before)) = (self.selected, self.thread.before)
-            && self.send(Command::LoadEarlier { thread, before }, tx)
-        {
-            self.history_loading = true;
-        }
-    }
-
-    pub fn loaded_earlier(&mut self, id: ThreadId, thread: Option<Thread>, tx: &mut Tx) {
-        if self.selected != Some(id) {
-            return;
-        }
-        self.history_loading = false;
-        if let Some(thread) = thread {
-            if let Some(first) = self.thread.items.first() {
-                tx.keep_on_screen(first.key());
-            }
-            self.thread = thread;
-            self.thread
-                .sync_acp(self.state.as_ref().and_then(|state| state.live.as_ref()));
-        }
-    }
-
-    pub fn send(&mut self, command: Command, tx: &mut Tx) -> bool {
-        if self.commands.send(command).is_ok() {
-            return true;
-        }
-        self.toast(tx, "Offline", None);
-        false
-    }
-
-    /// Opens `thread` in the main pane, remembering where it came from
-    /// for [`Desktop::go_back`].
-    pub fn select(&mut self, thread: ThreadId, tx: &mut Tx) {
-        if let Some(current) = self.selected.filter(|current| *current != thread) {
-            self.back.push(current);
-            self.forward.clear();
-        }
-        self.open(thread, tx);
-    }
-
-    /// The thread open before this one.
-    pub fn go_back(&mut self, tx: &mut Tx) {
-        self.travel(true, tx);
-    }
-
-    /// The thread [`Desktop::go_back`] left.
-    pub fn go_forward(&mut self, tx: &mut Tx) {
-        self.travel(false, tx);
-    }
-
-    fn travel(&mut self, back: bool, tx: &mut Tx) {
-        let (from, to) = if back {
-            (&mut self.back, &mut self.forward)
-        } else {
-            (&mut self.forward, &mut self.back)
-        };
-        let Some(next) = std::iter::from_fn(|| from.pop())
-            .find(|id| self.threads.iter().any(|thread| thread.id == *id))
-        else {
-            return;
-        };
-        if let Some(current) = self.selected {
-            to.push(current);
-        }
-        self.open(next, tx);
-    }
-
-    fn open(&mut self, thread: ThreadId, tx: &mut Tx) {
-        self.show(thread);
-        self.update_title(tx);
-        tx.focus("draft", false);
-        self.send(Command::Select(thread), tx);
-        if self.connected()
-            && self
-                .summary(thread)
-                .is_some_and(|thread| thread.lifecycle.unread)
-        {
-            self.send(Command::Update(thread, ThreadChange::Unread(false)), tx);
-        }
-    }
-
-    /// Prepares a draft in the open thread’s project, if any.
-    pub fn create_here(&mut self, tx: &mut Tx) {
-        let thread = NewThread::new(self.next_draft, self.project());
-        self.prepare_thread(thread, tx);
-    }
-
-    /// Open a draft for a project without creating its server session.
-    pub fn create_in_project(&mut self, id: &str, tx: &mut Tx) {
-        if let Some(project) = self.projects.iter().find(|project| project.path == id) {
-            let thread = NewThread::new(self.next_draft, Some(project));
-            self.prepare_thread(thread, tx);
-        }
-    }
-
-    /// Sets the draft project.
-    pub fn choose_draft_project(&mut self, path: Option<&str>) {
-        let project = path.and_then(|path| self.projects.iter().find(|p| p.path == path));
-        if let Some(thread) = self.new_thread.as_mut().filter(|thread| !thread.sending) {
-            thread.set_project(project);
-        }
-    }
-
-    /// The server added `project`. Listed at once (the list refresh may come
-    /// later), and an open draft takes it: a folder added while drafting is
-    /// the one the thread is meant for, whether it came from the draft's own
-    /// add button, the sidebar or the palette.
-    pub fn project_added(&mut self, project: Project) {
-        if let Some(thread) = &mut self.new_thread
-            && !thread.sending
-        {
-            thread.set_project(Some(&project));
-        }
-        if !self.projects.iter().any(|known| known.path == project.path) {
-            let at = self.projects.partition_point(|known| {
-                (&known.name, &known.path) < (&project.name, &project.path)
-            });
-            self.projects.insert(at, project);
-        }
-    }
-
-    fn prepare_thread(&mut self, mut thread: NewThread, tx: &mut Tx) {
-        if !self.connected() || self.new_thread.is_some() {
-            return;
-        }
-        self.next_draft += 1;
-        thread.loading_choices = self.send(Command::LoadDraft(thread.id), tx);
-        self.switch = Switch::Fade;
-        self.clear_selection();
-        self.send(Command::ClearSelection, tx);
-        self.new_thread = Some(thread);
-        self.update_title(tx);
-        tx.focus("draft", false);
-    }
-
-    /// The draft's runner choices arrived (or failed to).
-    pub fn draft_loaded(&mut self, id: u64) {
-        if let Some(thread) = self.new_thread.as_mut().filter(|thread| thread.id == id) {
-            thread.loading_choices = false;
-        }
-    }
-
-    /// Takes a runner's options with another model selected
-    /// (`harnesses.options`): its catalog, now with that model's thinking
-    /// levels.
-    pub fn set_harness_options(&mut self, harness: &str, options: Vec<ConfigOption>) {
-        if let Some(runner) = self
-            .harnesses
-            .iter_mut()
-            .find(|runner| runner.id == harness)
-        {
-            runner.options = options;
-        }
-        self.model_menu.clear_loading();
-    }
-
-    pub fn created(&mut self, draft: u64, id: ThreadId, tx: &mut Tx) {
-        let Some(thread) = self.new_thread.as_ref().filter(|thread| thread.id == draft) else {
-            return;
-        };
-        if let Some(project) = &thread.project {
-            self.navigation.expand_project(project);
-        }
-        self.new_thread = None;
-        self.selected = Some(id);
-        self.switch = Switch::Cut;
-        self.loading = true;
-        tx.focus("draft", false);
-        self.send(Command::Select(id), tx);
-    }
-
-    pub fn restore_first_message(&mut self, id: u64, params: LaunchThread) {
-        if let Some(thread) = self.new_thread.as_mut().filter(|thread| thread.id == id) {
-            thread.sending = false;
-            restore_draft(
-                &mut self.draft,
-                &mut self.attachments,
-                params.text.as_deref().unwrap_or_default(),
-                params.attachments,
-            );
-        }
-    }
-
-    pub fn project_path(&self) -> Option<&str> {
-        if let Some(thread) = &self.new_thread {
-            return thread.project.as_deref();
-        }
-        let id = self.selected?;
-        self.summary(id).map_or_else(
-            || self.state.as_ref().and_then(|s| s.project.as_deref()),
-            |summary| summary.project.as_deref(),
-        )
-    }
-
-    pub fn project(&self) -> Option<&Project> {
-        let id = self.project_path()?;
-        self.projects.iter().find(|project| project.path == id)
-    }
-
-    pub fn busy(&self) -> bool {
-        matches!(
-            self.state.as_ref().map(|s| s.status),
-            Some(ThreadStatus::Working)
-        )
-    }
-
-    pub fn abort(&mut self, tx: &mut Tx) {
-        if self.connected()
-            && self.busy()
-            && let Some(id) = self.selected
-        {
-            self.send(Command::Abort(id), tx);
-        }
-    }
-
-    /// Selects another environment and optionally opens a thread there.
-    pub fn open_in_environment(
-        &mut self,
-        environment: String,
-        thread: Option<ThreadId>,
-        tx: &mut Tx,
-    ) {
-        if self.environment.as_deref() == Some(&environment) {
-            if let Some(thread) = thread {
-                self.select(thread, tx);
-            }
-            return;
-        }
-        if !self.send(
-            Command::Environment {
-                environment: environment.clone(),
-                thread,
-            },
-            tx,
-        ) {
-            return;
-        }
-        self.save_draft();
-        if let Some(previous) = self.environment.take()
-            && !self.drafts.is_empty()
-        {
-            self.inactive_drafts
-                .insert(previous, mem::take(&mut self.drafts));
-        }
-        self.drafts = self
-            .inactive_drafts
-            .remove(&environment)
-            .unwrap_or_default();
-        self.status = Status::Connecting;
-        self.environment = Some(environment);
-        self.new_thread = None;
-        self.switch = Switch::Cut;
-        self.draft.clear();
-        self.attachments.clear();
-        self.attachment_reads.clear();
-        self.environment_epoch = self.environment_epoch.wrapping_add(1);
-        self.back.clear();
-        self.forward.clear();
-        self.threads.clear();
-        self.projects.clear();
-        self.checkouts.clear();
-        self.harnesses.clear();
-        self.tasks.clear();
-        self.navigation.dismiss_overlays();
-        self.palette = Palette::default();
-        self.reset_thread();
-        self.update_title(tx);
-    }
-
-    /// Tries to connect now instead of waiting for the next attempt.
-    pub fn reconnect(&mut self, tx: &mut Tx) {
-        self.status = Status::Connecting;
-        self.update_title(tx);
-        self.send(Command::Reconnect, tx);
-    }
-
-    fn attachment_target(&self) -> Option<AttachmentTarget> {
-        if !self.connected() {
-            return None;
-        }
-        if let Some(thread) = &self.new_thread {
-            return (!thread.sending).then_some(AttachmentTarget::Draft(thread.id));
-        }
-        self.state.as_ref()?;
-        self.selected.map(AttachmentTarget::Thread)
-    }
-
-    pub fn can_attach(&self) -> bool {
-        self.attachment_target()
-            .is_some_and(|target| !self.attachment_reads.contains(&target))
-    }
-
-    pub fn start_attachments(&mut self, source: Source, tx: &mut Tx) -> bool {
-        if let Some(target) = self
-            .attachment_target()
-            .filter(|target| !self.attachment_reads.contains(target))
-            && self.send(
-                Command::Attach {
-                    scope: self.environment_epoch,
-                    target,
-                    source,
-                },
-                tx,
-            )
-        {
-            self.attachment_reads.insert(target);
-            return true;
-        }
-        false
-    }
-
-    pub fn loaded_attachments(
-        &mut self,
-        scope: u64,
-        target: AttachmentTarget,
-        loaded: Loaded,
-        tx: &mut Tx,
-    ) {
-        if scope != self.environment_epoch || !self.attachment_reads.remove(&target) {
-            return;
-        }
-        let mut errors = loaded.errors;
-        if !loaded.attachments.is_empty() {
-            let existing = match target {
-                AttachmentTarget::Draft(id) => {
-                    if self
-                        .new_thread
-                        .as_ref()
-                        .is_none_or(|thread| thread.id != id)
-                    {
-                        return;
-                    }
-                    &mut self.attachments
-                }
-                AttachmentTarget::Thread(id) if self.selected == Some(id) => &mut self.attachments,
-                AttachmentTarget::Thread(id) => &mut self.drafts.entry(id).or_default().attachments,
-            };
-            let mut size = existing.iter().map(|file| file.data.len()).sum::<usize>();
-            for file in loaded.attachments {
-                if size + file.data.len() > attachments::ENCODED_LIMIT {
-                    errors.push(format!(
-                        "{}: attachments exceed the message limit",
-                        file.name
-                    ));
-                } else {
-                    size += file.data.len();
-                    existing.push(file);
-                }
-            }
-        }
-        if !errors.is_empty() {
-            self.toast(tx, "Couldn’t attach files", Some(errors.join("\n")));
-        }
-    }
-
-    pub fn can_send(&self) -> bool {
-        self.can_attach()
-            && self.new_thread.as_ref().is_none_or(|thread| {
-                !thread.loading_choices && thread.active_harness(&self.harnesses).is_some()
-            })
-            && (!self.draft.text.trim().is_empty() || !self.attachments.is_empty())
-    }
-
-    /// Creates a draft's session on first send, or sends to an existing thread
-    /// (steering at the next safe step when a turn is active).
-    pub fn send_input(&mut self, tx: &mut Tx) {
-        if !self.can_send() {
-            return;
-        }
-        let command = if let Some(thread) = &mut self.new_thread {
-            thread.sending = true;
-            Command::Create {
-                draft: thread.id,
-                params: LaunchThread {
-                    project: thread.project.clone(),
-                    worktree: thread.worktree.clone(),
-                    harness: thread.harness.clone(),
-                    options: thread.options.clone(),
-                    text: Some(self.draft.text.clone()),
-                    attachments: mem::take(&mut self.attachments),
-                    ..LaunchThread::default()
-                },
-            }
-        } else if let Some(thread) = self.selected {
-            let mode = self.busy().then_some(SendMode::Steer);
-            Command::SendInput(SendInput {
-                thread,
-                text: self.draft.text.clone(),
-                attachments: mem::take(&mut self.attachments),
-                stored: Vec::new(),
-                context: Vec::new(),
-                request_id: None,
-                origin: None,
-                mode,
-            })
-        } else {
-            return;
-        };
-        match self.commands.send(command) {
-            Ok(()) => {
-                self.draft.clear();
-                self.completion.reset();
-                self.open_picker = None;
-                tx.scroll_to_bottom("timeline");
-            }
-            Err(error) => {
-                match error.0 {
-                    Command::Create { draft, params } => {
-                        if let Some(thread) =
-                            self.new_thread.as_mut().filter(|thread| thread.id == draft)
-                        {
-                            thread.sending = false;
-                        }
-                        self.attachments = params.attachments;
-                    }
-                    Command::SendInput(send_input) => self.attachments = send_input.attachments,
-                    _ => unreachable!("only inputs are sent by the composer"),
-                }
-                self.toast(tx, "Offline", None);
-            }
-        }
-    }
-
-    pub fn restore_message(&mut self, send_input: SendInput) {
-        let thread = send_input.thread;
-        let (draft, attachments) = if self.selected == Some(thread) {
-            (&mut self.draft, &mut self.attachments)
-        } else {
-            let draft = self.drafts.entry(thread).or_default();
-            (&mut draft.edit, &mut draft.attachments)
-        };
-        restore_draft(draft, attachments, &send_input.text, send_input.attachments);
-    }
-
-    /// The thread as listed, once the list has it.
-    pub fn summary(&self, thread: ThreadId) -> Option<&ThreadSummary> {
-        self.threads.iter().find(|summary| summary.id == thread)
-    }
-
-    /// The thread's name in the sidebar and header: the server's title,
-    /// or what it is until the server has one.
-    pub fn title(&self, thread: ThreadId) -> &str {
-        self.summary(thread).map_or("New thread", thread_title)
-    }
-
-    /// Shows a toast for [`TOAST_LIFE`], coalescing identical copies in place.
-    pub fn toast(&mut self, tx: &mut Tx, title: impl Into<String>, detail: Option<String>) {
-        let title = title.into();
-        let key = format!("{title}\n{}", detail.as_deref().unwrap_or_default());
-        self.step_toasts(
-            ToastEvent::Shown {
-                key,
-                options: ToastContent { title, detail },
-                secs: Some(TOAST_LIFE.as_secs_f64()),
-                now: tx.clock(),
-            },
-            tx,
-        );
-    }
-
-    /// A persistent toast for a preview scene (no expiry clock).
+    /// Adds a persistent toast for preview scenes (no expiry clock).
     pub fn preview_toast(&mut self, title: &str, detail: &str) {
         let key = format!("{title}\n{detail}");
-        let _ = self.toasts.step(ToastEvent::Shown {
+        let _ = self.widgets.toasts.step(ToastEvent::Shown {
             key,
             options: ToastContent {
                 title: title.into(),
@@ -920,7 +195,7 @@ impl Desktop {
     }
 
     /// Closes a toast early.
-    pub fn dismiss(&mut self, id: u64, tx: &mut Tx) {
+    pub fn dismiss_toast(&mut self, id: u64, tx: &mut Tx) {
         self.step_toasts(
             ToastEvent::Dismissed {
                 id: Some(id),
@@ -941,10 +216,10 @@ impl Desktop {
         self.step_toasts(event, tx);
     }
 
-    /// Syncs window visibility and drops toasts whose timer is due; true if any
-    /// went.
-    pub fn expire(&mut self, clock: f64, tx: &mut Tx) -> bool {
-        if self.toasts.entries().is_empty() {
+    /// Syncs window visibility and expires due toasts; returns true if any
+    /// closed.
+    pub fn expire_toasts(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        if self.widgets.toasts.entries().is_empty() {
             return false;
         }
         let page = if tx.window_visible() {
@@ -952,10 +227,11 @@ impl Desktop {
         } else {
             ToastPage::Hidden
         };
-        if self.toasts.page() != page {
+        if self.widgets.toasts.page() != page {
             self.step_toasts(ToastEvent::Page { page, now: clock }, tx);
         }
         if self
+            .widgets
             .toasts
             .next_due()
             .is_some_and(|due| clock + 1e-3 >= due)
@@ -965,9 +241,268 @@ impl Desktop {
         false
     }
 
+    fn sync_draft_text(&mut self) {
+        if self.widgets.draft.text != self.model.composer.draft.text {
+            self.model
+                .composer
+                .draft
+                .text
+                .clone_from(&self.widgets.draft.text);
+        }
+        self.model.composer.draft_focused = self.widgets.draft.focused;
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single exhaustive interpreter over every Effect variant"
+    )]
+    fn apply_effects(&mut self, effects: Vec<Effect>, mut tx: Option<&mut Tx>) {
+        for effect in effects {
+            match effect {
+                Effect::Server(command) => self.send_server(command, tx.as_deref_mut()),
+                Effect::Attach {
+                    scope,
+                    target,
+                    source,
+                } => self.send_server(
+                    ServerEffect::Attach {
+                        scope,
+                        target,
+                        source,
+                    },
+                    tx.as_deref_mut(),
+                ),
+                Effect::Notify { title, body } => {
+                    self.send_server(ServerEffect::Notify { title, body }, tx.as_deref_mut());
+                }
+                Effect::SavePrefs(prefs) => {
+                    if let Some(path) = &self.prefs_path {
+                        effects::prefs::save(path, &prefs);
+                    }
+                }
+                Effect::PickProjectFolder => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        let options = FileDialogOptions {
+                            title: "Add project".into(),
+                            ..FileDialogOptions::default()
+                        };
+                        tx.open_folder(options, |s: &mut Self, result, tx| match result {
+                            Ok(Some(path)) => s.dispatch(
+                                Msg::Sidebar(SidebarMsg::ProjectFolderPicked(
+                                    path.to_string_lossy().into_owned(),
+                                )),
+                                tx,
+                            ),
+                            Ok(None) => {}
+                            Err(error) => s.dispatch(
+                                Msg::Sidebar(SidebarMsg::ProjectFolderFailed(error.to_string())),
+                                tx,
+                            ),
+                        });
+                    }
+                }
+                Effect::CopyText(text) => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.copy(text);
+                    }
+                }
+                Effect::OpenUrl(url) => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        _ = tx.open_url(&url);
+                    }
+                }
+                Effect::SetWindowTitle(title) => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.set_title(title);
+                    }
+                }
+                Effect::Toast { title, detail } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        self.show_toast(tx, title, detail);
+                    }
+                }
+                Effect::Focus {
+                    key,
+                    select_all,
+                    when_shown,
+                } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        if when_shown {
+                            tx.focus_when_shown(key, select_all);
+                        } else {
+                            tx.focus(key, select_all);
+                        }
+                    }
+                }
+                Effect::ScrollToBottom(key) => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.scroll_to_bottom(key);
+                    }
+                }
+                Effect::ScrollToInstant { key, x, y } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.scroll_to_instant(key, x, y);
+                    }
+                }
+                Effect::ScrollIntoView { list, item } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.scroll_into_view_in(list, item);
+                    }
+                }
+                Effect::ScrollCenterInstant { list, item } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.scroll_center_in_instant(list, item);
+                    }
+                }
+                Effect::KeepOnScreen(key) => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.keep_on_screen(key);
+                    }
+                }
+                Effect::WakeAfter(duration) => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.wake_after(duration);
+                    }
+                }
+                Effect::SyncEdit(sync) => self.apply_edit_sync(sync),
+                Effect::SyncSidebarPane { open, width } => {
+                    if let Some(width) = width {
+                        self.widgets.sidebar_pane.set_width(width);
+                    }
+                    if let Some(open) = open {
+                        self.widgets.sidebar_pane.set_open(open);
+                    }
+                }
+                Effect::SyncDiffPane { open, width } => {
+                    if let Some(width) = width {
+                        self.widgets.diff_pane.set_width(width);
+                    }
+                    if let Some(open) = open {
+                        self.widgets.diff_pane.set_open(open);
+                    }
+                }
+            }
+        }
+    }
+
+    fn send_server(&mut self, command: ServerEffect, mut tx: Option<&mut Tx>) {
+        if let Err(error) = self.commands.send(command) {
+            let recovery = match error.0 {
+                ServerEffect::Create { draft, params } => Some(ServerMsg::LaunchFailed {
+                    draft,
+                    params: Box::new(params),
+                    title: "Offline".into(),
+                    detail: None,
+                }),
+                ServerEffect::SendInput(input) => Some(ServerMsg::SendFailed {
+                    input: Box::new(input),
+                    title: "Offline".into(),
+                    detail: None,
+                }),
+                ServerEffect::Update { op_id, .. }
+                | ServerEffect::Project {
+                    op_id: Some(op_id), ..
+                } => Some(ServerMsg::MutationFailed {
+                    op_id,
+                    title: "Offline".into(),
+                    detail: "Server disconnected".into(),
+                }),
+                ServerEffect::LoadDraft(draft) => Some(ServerMsg::DraftHarnessesLoaded {
+                    draft,
+                    result: None,
+                }),
+                ServerEffect::SearchThreads { request, .. } => {
+                    Some(ServerMsg::ThreadSearchResult {
+                        request,
+                        result: Err("The server is offline.".into()),
+                    })
+                }
+                _ => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        self.show_toast(tx, "Offline", None);
+                    }
+                    None
+                }
+            };
+            if let Some(msg) = recovery {
+                let follow_up = update::update(&mut self.model, Msg::Server(msg));
+                self.apply_effects(follow_up, tx);
+            }
+        }
+    }
+
+    fn apply_edit_sync(&mut self, sync: EditSync) {
+        match sync {
+            EditSync::Replace {
+                target,
+                text,
+                select_all,
+            } => {
+                let edit = self.edit_mut(target);
+                edit.replace_text(&text);
+                if select_all {
+                    edit.set_selection(0, text.len());
+                }
+            }
+            EditSync::Clear(target) => {
+                self.edit_mut(target).clear();
+            }
+            EditSync::PrependDraft(text) => {
+                let draft = &mut self.widgets.draft;
+                if !text.is_empty() {
+                    if !draft.text.is_empty() {
+                        draft.set_caret(0);
+                        draft.insert("\n\n");
+                        draft.set_caret(0);
+                    }
+                    draft.insert(&text);
+                }
+            }
+            EditSync::ReplaceDraftRange {
+                start,
+                end,
+                insertion,
+            } => {
+                let draft = &mut self.widgets.draft;
+                draft.set_selection(start, end);
+                draft.insert(&insertion);
+                if !insertion.ends_with(' ')
+                    && let Some(separator) = draft.text[draft.focus..].chars().next()
+                {
+                    draft.set_caret(draft.focus + separator.len_utf8());
+                }
+                self.model.composer.draft.text.clone_from(&draft.text);
+            }
+        }
+    }
+
+    const fn edit_mut(&mut self, target: EditTarget) -> &mut TextEdit {
+        match target {
+            EditTarget::Draft => &mut self.widgets.draft,
+            EditTarget::SidebarFilter => &mut self.widgets.sidebar_filter,
+            EditTarget::SidebarDialog => &mut self.widgets.sidebar_dialog,
+            EditTarget::PaletteQuery => &mut self.widgets.palette_query,
+            EditTarget::ModelQuery => &mut self.widgets.model_query,
+        }
+    }
+
+    fn show_toast(&mut self, tx: &mut Tx, title: impl Into<String>, detail: Option<String>) {
+        let title = title.into();
+        let key = format!("{title}\n{}", detail.as_deref().unwrap_or_default());
+        self.step_toasts(
+            ToastEvent::Shown {
+                key,
+                options: ToastContent { title, detail },
+                secs: Some(TOAST_LIFE.as_secs_f64()),
+                now: tx.clock(),
+            },
+            tx,
+        );
+    }
+
     fn step_toasts(&mut self, event: ToastEvent<ToastContent>, tx: &mut Tx) -> bool {
         let mut closed = false;
-        for effect in self.toasts.step(event) {
+        for effect in self.widgets.toasts.step(event) {
             match effect {
                 ToastEffect::Closed(_) => closed = true,
                 ToastEffect::WakeAt(due) => {
@@ -979,36 +514,17 @@ impl Desktop {
         }
         closed
     }
-
-    /// Opens or closes a timeline row.
-    pub fn toggle(&mut self, key: &str) {
-        if !self.expanded.remove(key) {
-            self.expanded.insert(key.to_owned());
-        }
-    }
 }
 
-fn restore_draft(
-    draft: &mut TextEdit,
-    attachments: &mut Vec<Attachment>,
-    text: &str,
-    mut files: Vec<Attachment>,
-) {
-    if !text.is_empty() {
-        if !draft.text.is_empty() {
-            draft.set_caret(0);
-            draft.insert("\n\n");
-            draft.set_caret(0);
-        }
-        draft.insert(text);
+/// Converts the pure [`PaneSwitch`] direction to [`crate::motion::Switch`].
+#[must_use]
+pub const fn motion_switch(switch: PaneSwitch) -> Switch {
+    match switch {
+        PaneSwitch::Cut => Switch::Cut,
+        PaneSwitch::Up => Switch::Up,
+        PaneSwitch::Down => Switch::Down,
+        PaneSwitch::Into => Switch::Into,
+        PaneSwitch::Out => Switch::Out,
+        PaneSwitch::Fade => Switch::Fade,
     }
-    files.append(attachments);
-    *attachments = files;
-}
-
-pub fn thread_title(thread: &ThreadSummary) -> &str {
-    if !thread.title.is_empty() {
-        return &thread.title;
-    }
-    "New thread"
 }

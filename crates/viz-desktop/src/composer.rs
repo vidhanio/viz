@@ -6,8 +6,6 @@ mod model;
 mod settings;
 mod tasks;
 
-pub use completion::{Completion, poll};
-pub use model::{ModelMenu, preview as preview_model_menu};
 use rune::{Color, El, KeyEvent, Tx, col, el, icon, row, text_input};
 pub use tasks::DOCK_KEY as TASKS_DOCK_KEY;
 
@@ -18,6 +16,7 @@ use crate::{
         CARD_INSET, HAIRLINE, ICON_SMALL, RADIUS_CARD, READING_INSET, S2, S4, S6, S8, S48, Theme,
     },
     ui,
+    update::{ComposerMsg, Msg},
 };
 
 const MAX_LINES: usize = 8;
@@ -34,8 +33,11 @@ const STOP_GLYPH: f32 = 9.0;
 /// The gap between the composer toolbar's items.
 const TOOLBAR_GAP: f32 = S4;
 
+/// Renders the composer stack (Tasks Dock, completion drawer, editor card)
+/// when a thread or fresh draft is active.
 pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
-    if s.selected.is_none() && s.new_thread.is_none() {
+    let m = &s.model;
+    if m.selection.selected.is_none() && m.selection.new_thread.is_none() {
         return None;
     }
     let mut column = col();
@@ -58,26 +60,32 @@ fn on_draft_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
-    let placeholder = if !s.connected() {
+    let m = &s.model;
+    let placeholder = if !m.connected() {
         "Offline"
-    } else if s.busy() {
+    } else if m.busy() {
         "Steer the active turn…"
     } else {
         "Ask anything"
     };
-    let field = text_input(&s.draft, t.body)
+    let field = text_input(&s.widgets.draft, t.body)
         .key("draft")
         .label("Message")
         .w_full()
         .color(t.text)
         .caret(t.accent, t.k.selection())
         .placeholder(placeholder, t.faint)
-        .on_edit(|s: &mut Desktop| &mut s.draft)
+        .on_edit(|s: &mut Desktop| &mut s.widgets.draft)
+        .on_input_change(|s: &mut Desktop, tx| {
+            let text = s.widgets.draft.text.clone();
+            s.dispatch(Msg::Composer(ComposerMsg::DraftChanged(text)), tx);
+        })
         .on_input_paste(attachments::paste)
         .on_input_key(on_draft_key)
-        .on_submit(Desktop::send_input);
-    let attach = (s.new_thread.is_some() || s.state.is_some()).then(|| attachments::button(s, t));
-    let border = if s.draft.focused {
+        .on_submit(|s: &mut Desktop, tx| s.dispatch(Msg::Composer(ComposerMsg::SendInput), tx));
+    let attach = (m.selection.new_thread.is_some() || m.thread_state().is_some())
+        .then(|| attachments::button(s, t));
+    let border = if s.widgets.draft.focused {
         t.k.c.border_strong
     } else {
         t.hairline
@@ -113,7 +121,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .child(settings::toolbar(s, t, layer).grow(1.0).shrink().min_w(0.0))
                 .child(send_button(s, t)),
         );
-    if s.can_attach() {
+    if m.can_attach() {
         card.on_drop_files(attachments::drop_files)
     } else {
         card
@@ -126,15 +134,16 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 /// `composer-actions` wrapper with instant changes so a busy-to-idle thread
 /// switch never leaves an exiting button beside the new one.
 fn send_button(s: &Desktop, t: &Theme) -> El {
+    let m = &s.model;
     let actions = row()
         .key("composer-actions")
         .gap(S6)
         .center_y()
         .instant_changes();
-    if s.busy() {
+    if m.busy() {
         return busy_actions(actions, s, t);
     }
-    let enabled = s.can_send();
+    let enabled = m.can_send();
     let (fill, ink) = if enabled {
         (t.accent, t.on_accent)
     } else {
@@ -142,13 +151,16 @@ fn send_button(s: &Desktop, t: &Theme) -> El {
     };
     let mut send = circle_action("send", "Send", &ui::ARROW_UP, fill, ink, enabled, t);
     if enabled {
-        send = send.on_press_tx(Desktop::send_input);
+        send = send.on_press_tx(|s: &mut Desktop, tx| {
+            s.dispatch(Msg::Composer(ComposerMsg::SendInput), tx);
+        });
     }
     actions.child(send)
 }
 
 fn busy_actions(actions: El, s: &Desktop, t: &Theme) -> El {
-    if !s.can_send() {
+    let m = &s.model;
+    if !m.can_send() {
         let stop = row()
             .key("send")
             .role("button")
@@ -159,12 +171,12 @@ fn busy_actions(actions: El, s: &Desktop, t: &Theme) -> El {
             .center()
             .radius(PRIMARY_CIRCLE / 2.0)
             .fill(t.danger)
-            .disabled(!s.connected())
-            .focusable(s.connected())
+            .disabled(!m.connected())
+            .focusable(m.connected())
             .focus_ring(HAIRLINE, S2, t.accent)
             .hover_group()
             .press_scale(0.93)
-            .on_press_tx(Desktop::abort)
+            .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Composer(ComposerMsg::Abort), tx))
             .child(
                 el().size(STOP_GLYPH, STOP_GLYPH)
                     .radius(S2)
@@ -183,12 +195,12 @@ fn busy_actions(actions: El, s: &Desktop, t: &Theme) -> El {
         .center()
         .radius(SECONDARY_CIRCLE / 2.0)
         .fill(t.k.c.bg_button_neutral)
-        .disabled(!s.connected())
-        .focusable(s.connected())
+        .disabled(!m.connected())
+        .focusable(m.connected())
         .focus_ring(HAIRLINE, S2, t.accent)
         .hover_group()
         .press_scale(0.93)
-        .on_press_tx(Desktop::abort)
+        .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Composer(ComposerMsg::Abort), tx))
         .child(
             el().size(STOP_GLYPH, STOP_GLYPH)
                 .radius(S2)
@@ -205,7 +217,7 @@ fn busy_actions(actions: El, s: &Desktop, t: &Theme) -> El {
         t,
     )
     .help("Steer at the next safe step")
-    .on_press_tx(Desktop::send_input);
+    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Composer(ComposerMsg::SendInput), tx));
     actions.child(stop).child(steer)
 }
 

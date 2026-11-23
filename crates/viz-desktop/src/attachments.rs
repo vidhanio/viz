@@ -1,20 +1,17 @@
-//! File picker, drops, clipboard images, and attachment chips.
+//! Attachment button, composer draft chips, read-only timeline chips, and
+//! Rune paste/drop input adapters.
 
-use std::{
-    fs::{self, File},
-    io::{self, Read as _},
-    path::{Path, PathBuf},
-};
+use std::path::PathBuf;
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use rune::{ClipboardContent, ClipboardImage, El, Tx, icon, row, text};
+use rune::{ClipboardContent, El, Tx, icon, row, text};
 use rune_kit::IconButtonVariant;
-use viz_client::protocol::{Attachment, ThreadId};
 
 use crate::{
     app::Desktop,
+    effects::AttachmentSource,
     theme::{CARD_INSET, HAIRLINE, ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, Size, Theme},
     ui,
+    update::{ComposerMsg, Msg},
 };
 
 /// Height of an attachment chip in the composer strip.
@@ -24,133 +21,61 @@ const CHIP_NAME_MAX: f32 = 160.0;
 /// The widest a read-only attachment chip gets in the timeline.
 const CHIP_MAX: f32 = 180.0;
 
-const FILE_LIMIT: usize = 20 * 1024 * 1024;
-/// Leave room for JSON metadata and the prompt under the server's 128 MiB frame
-/// cap.
-pub const ENCODED_LIMIT: usize = 120 * 1024 * 1024;
-
-#[derive(Debug)]
-pub enum Source {
-    Picker,
-    Files(Vec<PathBuf>),
-    Clipboard(ClipboardImage),
-}
-
-/// The composer that requested a file read.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Target {
-    Draft(u64),
-    Thread(ThreadId),
-}
-
-#[derive(Debug, Default)]
-pub struct Loaded {
-    pub attachments: Vec<Attachment>,
-    pub errors: Vec<String>,
-}
-
-impl Source {
-    pub fn load(self) -> Loaded {
-        let paths = match self {
-            Self::Picker => rfd::FileDialog::new()
-                .set_title("Attach files")
-                .pick_files()
-                .unwrap_or_default(),
-            Self::Files(paths) => paths,
-            Self::Clipboard(image) => {
-                if image.png().len() > FILE_LIMIT {
-                    return Loaded {
-                        errors: vec!["Clipboard image exceeds 20 MiB".into()],
-                        ..Loaded::default()
-                    };
-                }
-                return Loaded {
-                    attachments: vec![Attachment {
-                        name: "Clipboard.png".into(),
-                        mime: "image/png".into(),
-                        data: STANDARD.encode(image.png()),
-                    }],
-                    errors: Vec::new(),
-                };
-            }
-        };
-        let mut loaded = Loaded::default();
-        let mut encoded_size = 0;
-        for path in paths {
-            match read_file(&path) {
-                Ok(file) if file.data.len() + encoded_size <= ENCODED_LIMIT => {
-                    encoded_size += file.data.len();
-                    loaded.attachments.push(file);
-                }
-                Ok(file) => loaded.errors.push(format!(
-                    "{}: attachments exceed the message limit",
-                    file.name
-                )),
-                Err(error) => loaded.errors.push(format!(
-                    "{}: {error}",
-                    path.file_name()
-                        .unwrap_or(path.as_os_str())
-                        .to_string_lossy()
-                )),
-            }
-        }
-        loaded
-    }
-}
-
-fn read_file(path: &Path) -> io::Result<Attachment> {
-    let metadata = fs::metadata(path)?;
-    if !metadata.is_file() {
-        return Err(io::Error::other("not a file"));
-    }
-    let limit = u64::try_from(FILE_LIMIT).unwrap_or(u64::MAX);
-    if metadata.len() > limit {
-        return Err(io::Error::other("exceeds 20 MiB"));
-    }
-    let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
-    File::open(path)?
-        .take(limit.saturating_add(1))
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > FILE_LIMIT {
-        return Err(io::Error::other("exceeds 20 MiB"));
-    }
-    let name = path
-        .file_name()
-        .ok_or_else(|| io::Error::other("missing file name"))?
-        .to_string_lossy();
-    Ok(Attachment {
-        name: name.into_owned(),
-        mime: mime_guess::from_path(path)
-            .first_or_octet_stream()
-            .to_string(),
-        data: STANDARD.encode(bytes),
-    })
-}
-
+/// Dispatches a file-picker attachment request.
 pub fn choose(s: &mut Desktop, tx: &mut Tx) {
-    s.start_attachments(Source::Picker, tx);
+    s.dispatch(
+        Msg::Composer(ComposerMsg::StartAttachments(AttachmentSource::Picker)),
+        tx,
+    );
 }
 
+/// Dispatches attachments for paths dropped onto the composer card.
 pub fn drop_files(s: &mut Desktop, paths: &[PathBuf], tx: &mut Tx) {
     if !paths.is_empty() {
-        s.start_attachments(Source::Files(paths.to_vec()), tx);
+        s.dispatch(
+            Msg::Composer(ComposerMsg::StartAttachments(AttachmentSource::Files(
+                paths.to_vec(),
+            ))),
+            tx,
+        );
     }
 }
 
+/// Intercepts pasted files or clipboard images and converts them into pure
+/// attachment messages.
 pub fn paste(s: &mut Desktop, clip: &ClipboardContent, tx: &mut Tx) -> bool {
     if !clip.files().is_empty() {
-        return s.start_attachments(Source::Files(clip.files().to_vec()), tx);
+        if !s.model.can_attach() {
+            return false;
+        }
+        s.dispatch(
+            Msg::Composer(ComposerMsg::StartAttachments(AttachmentSource::Files(
+                clip.files().to_vec(),
+            ))),
+            tx,
+        );
+        return true;
     }
     if let Some(image) = clip.image() {
-        return s.start_attachments(Source::Clipboard(image.clone()), tx);
+        if !s.model.can_attach() {
+            return false;
+        }
+        s.dispatch(
+            Msg::Composer(ComposerMsg::StartAttachments(
+                AttachmentSource::ClipboardPng(image.png().to_vec()),
+            )),
+            tx,
+        );
+        return true;
     }
     false
 }
 
+/// Paperclip attach button inside the composer toolbar.
 pub fn button(s: &Desktop, t: &Theme) -> El {
     let title = if s
-        .state
-        .as_ref()
+        .model
+        .thread_state()
         .is_some_and(|state| state.attachments.images)
     {
         "Attach files or paste an image"
@@ -163,14 +88,16 @@ pub fn button(s: &Desktop, t: &Theme) -> El {
         IconButtonVariant::GhostMuted,
         Size::Default,
     )
-    .disabled(!s.can_attach())
+    .disabled(!s.model.can_attach())
     .on_press_tx(choose)
     .build(&t.k)
     .key("attach")
 }
 
+/// Removable attachment chips displayed above the composer editor.
 pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
-    if s.attachments.is_empty() {
+    let attachments = &s.model.composer.draft.attachments;
+    if attachments.is_empty() {
         return None;
     }
     Some(
@@ -181,7 +108,7 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
             .pt(10.0)
             .gap(S6)
             .flex_wrap()
-            .children(s.attachments.iter().enumerate().map(|(index, attachment)| {
+            .children(attachments.iter().enumerate().map(|(index, attachment)| {
                 let bytes = decoded_size(&attachment.data);
                 let size_label = (bytes > 0).then(|| compact_bytes(bytes));
                 row()
@@ -221,9 +148,7 @@ pub fn draft_chips(s: &Desktop, t: &Theme) -> Option<El> {
                             Size::Small,
                         )
                         .on_press(move |s: &mut Desktop| {
-                            if index < s.attachments.len() {
-                                s.attachments.remove(index);
-                            }
+                            s.dispatch_local(Msg::Composer(ComposerMsg::RemoveAttachment(index)));
                         })
                         .build(&t.k)
                         .key("remove"),
