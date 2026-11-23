@@ -20,6 +20,7 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    ghostty.url = "github:ghostty-org/ghostty/108cacb17ed8990840cd14abfce43d8ed8503ca1";
     crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -62,6 +63,12 @@
             }
           );
 
+          ghosttyVt = inputs'.ghostty.packages.libghostty-vt.dev;
+          ghosttyEnv = {
+            GHOSTTY_VT_LIB_DIR = "${ghosttyVt}/lib";
+            GHOSTTY_VT_INCLUDE_DIR = "${ghosttyVt}/include";
+          };
+
           desktopBuildInputs = [
             pkgs.libxkbcommon
             pkgs.wayland
@@ -92,7 +99,7 @@
               ./crates/viz-server/migrations
             ];
           };
-          commonArgs = {
+          commonArgs = ghosttyEnv // {
             inherit src;
             strictDeps = true;
             nativeBuildInputs = [ pkgs.pkg-config ];
@@ -171,31 +178,34 @@
             );
           };
 
-          devShells.default = craneLib.devShell {
-            packages = [
-              pkgs.cargo-edit
-              pkgs.cargo-deny
-              pkgs.pkg-config
-              swiftPkgs.swift
-              swiftPkgs.swiftpm
-              swiftPkgs.swift-format
-              swiftPkgs.sourcekit-lsp
-              swiftPkgs.xtool
-              pkgs.libimobiledevice
-              pkgs.nil
-              config.treefmt.build.wrapper
-            ]
-            ++ desktopBuildInputs;
+          devShells.default = craneLib.devShell (
+            ghosttyEnv
+            // {
+              packages = [
+                pkgs.cargo-edit
+                pkgs.cargo-deny
+                pkgs.pkg-config
+                swiftPkgs.swift
+                swiftPkgs.swiftpm
+                swiftPkgs.swift-format
+                swiftPkgs.sourcekit-lsp
+                swiftPkgs.xtool
+                pkgs.libimobiledevice
+                pkgs.nil
+                config.treefmt.build.wrapper
+              ]
+              ++ desktopBuildInputs;
 
-            LD_LIBRARY_PATH = lib.makeLibraryPath desktopRuntimeLibs;
+              LD_LIBRARY_PATH = lib.makeLibraryPath desktopRuntimeLibs;
 
-            shellHook = ''
-              if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
-                && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
-                echo "viz: no Darwin SDK for iOS builds; run 'xtool setup'" >&2
-              fi
-            '';
-          };
+              shellHook = ''
+                if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
+                  && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
+                  echo "viz: no Darwin SDK for iOS builds; run 'xtool setup'" >&2
+                fi
+              '';
+            }
+          );
 
           treefmt = {
             programs = {
