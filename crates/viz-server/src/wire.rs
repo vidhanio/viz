@@ -58,7 +58,7 @@ const fn error_code(error: &Error) -> i32 {
 }
 
 const fn git_failure(error: &Error) -> Option<viz_protocol::GitFailure> {
-    use viz_git::Error as Git;
+    use viz_git::{CommandFailure as Command, Error as Git};
     use viz_protocol::GitFailure as Failure;
 
     let Error::Git(error) = error else {
@@ -73,7 +73,17 @@ const fn git_failure(error: &Error) -> Option<viz_protocol::GitFailure> {
         Git::Invalid(_) => Failure::Invalid,
         Git::StaleCheckpoint => Failure::StaleCheckpoint,
         Git::CheckpointObstruction(_) => Failure::CheckpointObstruction,
-        Git::Command { .. } => Failure::Command,
+        Git::Command { kind, .. } => match kind {
+            Command::NonFastForward => Failure::NonFastForward,
+            Command::Authentication => Failure::Authentication,
+            Command::HostKey => Failure::HostKey,
+            Command::HookRejected => Failure::HookRejected,
+            Command::NothingToCommit => Failure::NothingToCommit,
+            Command::MissingUpstream => Failure::MissingUpstream,
+            Command::MissingIdentity => Failure::MissingIdentity,
+            Command::BranchAlreadyExists => Failure::BranchAlreadyExists,
+            Command::Other => Failure::Command,
+        },
         _ => Failure::Unavailable,
     })
 }

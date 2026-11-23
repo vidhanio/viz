@@ -158,9 +158,16 @@ impl Workspace {
             git_dir,
         )
         .await?;
+        self.git_actions
+            .lock()
+            .await
+            .insert(checkout.to_owned(), "restore_checkpoint");
+        self.git_activity();
         let result = repo
             .restore_checkpoint(target, expected, CheckoutActivity::Idle, &self.closing)
             .await;
+        self.git_actions.lock().await.remove(checkout);
+        self.git_activity();
         drop(db);
         Ok(result?)
     }

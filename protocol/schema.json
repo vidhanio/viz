@@ -10493,5 +10493,30 @@
         "type": "object"
       }
     }
+  },
+  "gitErrorData": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "title": "GitFailure",
+    "type": "string",
+    "enum": [
+      "busy",
+      "dirty",
+      "conflicted",
+      "cancelled",
+      "not_repository",
+      "invalid",
+      "stale_checkpoint",
+      "checkpoint_obstruction",
+      "non_fast_forward",
+      "authentication",
+      "host_key",
+      "hook_rejected",
+      "nothing_to_commit",
+      "missing_upstream",
+      "missing_identity",
+      "branch_already_exists",
+      "command",
+      "unavailable"
+    ]
   }
 }
