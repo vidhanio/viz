@@ -344,7 +344,7 @@ impl Thread {
                         });
                     }
                 }
-                Body::Media(_) | Body::Omitted => {}
+                Body::Media(_) | Body::Compaction(_) | Body::Omitted => {}
             },
             EntryData::Omitted => {}
             EntryData::Run(end) => self.finish_run(*id, end),

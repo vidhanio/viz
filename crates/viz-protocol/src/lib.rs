@@ -81,8 +81,8 @@ pub use tool::{
     Exit, Location, Review, Terminal, ToolCall, ToolCallStatus, ToolContent, ToolDiff, VizLink,
 };
 pub use transcript::{
-    Body, ContentBlock, ContentKind, LiveDelta, LiveTurn, Media, Plan, PlanContent, Segment,
-    TextKind, TranscriptEntry,
+    Body, Compaction, CompactionStatus, ContentBlock, ContentKind, LiveDelta, LiveTurn, Media,
+    Plan, PlanContent, Segment, TextKind, TranscriptEntry,
 };
 
 /// The protocol version this crate speaks.

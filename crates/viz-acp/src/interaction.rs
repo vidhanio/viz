@@ -19,13 +19,14 @@ use crate::{
     mcp::McpEndpoint,
     schema::{
         AgentRequest, BooleanConfigOptionCapabilities, ClientCapabilities,
-        ClientSessionCapabilities, CreateElicitationRequest, CreateElicitationResponse,
-        ElicitationAcceptAction, ElicitationAction, ElicitationCapabilities,
-        ElicitationContentValue, ElicitationFormCapabilities, ElicitationMode, ElicitationScope,
-        MessageMcpRequest, MessageMcpResponse, PermissionOptionId, PermissionOptionKind,
-        PlanCapabilities, PromptSuggestionsCapabilities, RequestPermissionOutcome,
-        RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-        SessionConfigOptionsCapabilities, SessionId, SubagentCapabilities,
+        ClientSessionCapabilities, CompactionCapabilities, CreateElicitationRequest,
+        CreateElicitationResponse, ElicitationAcceptAction, ElicitationAction,
+        ElicitationCapabilities, ElicitationContentValue, ElicitationFormCapabilities,
+        ElicitationMode, ElicitationScope, MessageMcpRequest, MessageMcpResponse,
+        PermissionOptionId, PermissionOptionKind, PlanCapabilities, PromptSuggestionsCapabilities,
+        RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+        SelectedPermissionOutcome, SessionConfigOptionsCapabilities, SessionId,
+        SubagentCapabilities,
     },
 };
 
@@ -72,6 +73,7 @@ impl ClientEvents {
             .subagents(SubagentCapabilities::new())
             .session(
                 ClientSessionCapabilities::new()
+                    .compaction(CompactionCapabilities::new())
                     .prompt_suggestions(PromptSuggestionsCapabilities::new())
                     .config_options(
                         SessionConfigOptionsCapabilities::new()

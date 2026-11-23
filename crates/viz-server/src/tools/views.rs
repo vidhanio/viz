@@ -228,6 +228,13 @@ fn line(entry: Entry, text: usize, output: usize) -> Line {
                 ("plan", bounded(&text, output))
             }
             Body::Media(media) => ("media", format!("{:?}", media.block.kind)),
+            Body::Compaction(compaction) => (
+                "compaction",
+                bounded(
+                    compaction.error.as_deref().unwrap_or(&compaction.summary),
+                    output,
+                ),
+            ),
             Body::Omitted => ("transcript", "[body omitted]".to_owned()),
         },
         EntryData::Omitted => ("entry", "[body omitted]".to_owned()),

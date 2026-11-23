@@ -116,6 +116,7 @@ pub(in crate::workspace) async fn append(
         NewEntry::Transcript(entry) => match &entry.body {
             Body::Text(segment) | Body::Thought(segment) => &segment.text,
             Body::Tool(tool) => &tool.title,
+            Body::Compaction(compaction) => &compaction.summary,
             Body::Plan(_) | Body::Media(_) | Body::Omitted => return Ok(id),
         },
         _ => return Ok(id),

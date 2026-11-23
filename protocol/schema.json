@@ -1729,6 +1729,23 @@
                 ]
               },
               {
+                "description": "The harness summarised the conversation to free its context.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "compaction"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Compaction"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
                 "description": "The full body is available through `thread.entry_chunk`.",
                 "type": "object",
                 "properties": {
@@ -2337,6 +2354,54 @@
               "pending",
               "in_progress",
               "completed"
+            ]
+          },
+          "Compaction": {
+            "description": "A context compaction, live while it runs.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "The harness's id, unique within the session.",
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/CompactionStatus"
+              },
+              "summary": {
+                "description": "What the harness kept, for the user to read.",
+                "type": "string"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "description": "Unix milliseconds of the first and last report.",
+                "type": "integer",
+                "format": "int64"
+              },
+              "endedAt": {
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "startedAt",
+              "endedAt"
+            ]
+          },
+          "CompactionStatus": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "failed",
+              "cancelled"
             ]
           },
           "ContextUsage": {
@@ -9432,6 +9497,23 @@
                 ]
               },
               {
+                "description": "The harness summarised the conversation to free its context.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "compaction"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Compaction"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
                 "description": "The full body is available through `thread.entry_chunk`.",
                 "type": "object",
                 "properties": {
@@ -10040,6 +10122,54 @@
               "pending",
               "in_progress",
               "completed"
+            ]
+          },
+          "Compaction": {
+            "description": "A context compaction, live while it runs.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "The harness's id, unique within the session.",
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/$defs/CompactionStatus"
+              },
+              "summary": {
+                "description": "What the harness kept, for the user to read.",
+                "type": "string"
+              },
+              "error": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "startedAt": {
+                "description": "Unix milliseconds of the first and last report.",
+                "type": "integer",
+                "format": "int64"
+              },
+              "endedAt": {
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "id",
+              "status",
+              "summary",
+              "startedAt",
+              "endedAt"
+            ]
+          },
+          "CompactionStatus": {
+            "type": "string",
+            "enum": [
+              "in_progress",
+              "completed",
+              "failed",
+              "cancelled"
             ]
           },
           "RunEnd": {
@@ -12289,6 +12419,23 @@
             ]
           },
           {
+            "description": "The harness summarised the conversation to free its context.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "compaction"
+              },
+              "data": {
+                "$ref": "#/$defs/Compaction"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
             "description": "The full body is available through `thread.entry_chunk`.",
             "type": "object",
             "properties": {
@@ -12891,6 +13038,54 @@
           "pending",
           "in_progress",
           "completed"
+        ]
+      },
+      "Compaction": {
+        "description": "A context compaction, live while it runs.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The harness's id, unique within the session.",
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/$defs/CompactionStatus"
+          },
+          "summary": {
+            "description": "What the harness kept, for the user to read.",
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "startedAt": {
+            "description": "Unix milliseconds of the first and last report.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "endedAt": {
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "id",
+          "status",
+          "summary",
+          "startedAt",
+          "endedAt"
+        ]
+      },
+      "CompactionStatus": {
+        "type": "string",
+        "enum": [
+          "in_progress",
+          "completed",
+          "failed",
+          "cancelled"
         ]
       },
       "RunEnd": {

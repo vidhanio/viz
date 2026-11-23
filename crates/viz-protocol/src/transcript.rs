@@ -39,8 +39,34 @@ pub enum Body {
     Media(Box<Media>),
     Tool(Box<ToolCall>),
     Plan(Plan),
+    /// The harness summarised the conversation to free its context.
+    Compaction(Compaction),
     /// The full body is available through `thread.entry_chunk`.
     Omitted,
+}
+
+/// A context compaction, live while it runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Compaction {
+    /// The harness's id, unique within the session.
+    pub id: String,
+    pub status: CompactionStatus,
+    /// What the harness kept, for the user to read.
+    pub summary: String,
+    pub error: Option<String>,
+    /// Unix milliseconds of the first and last report.
+    pub started_at: i64,
+    pub ended_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CompactionStatus {
+    InProgress,
+    Completed,
+    Failed,
+    Cancelled,
 }
 
 /// A run of streamed text. Long messages are committed as several segments, so

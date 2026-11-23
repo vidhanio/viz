@@ -111,8 +111,8 @@ pub use steering::{SteerOutcome, Steering};
 pub use tool::ToolPatch;
 pub use transcript::{Output, Transcript};
 pub use viz_protocol::{
-    Body, LiveTurn, Media, Plan, PlanContent, PlanEntry, PlanPriority, PlanStatus, Segment,
-    TextKind, ToolCall, TranscriptEntry as Entry, VizLink,
+    Body, Compaction, CompactionStatus, LiveTurn, Media, Plan, PlanContent, PlanEntry,
+    PlanPriority, PlanStatus, Segment, TextKind, ToolCall, TranscriptEntry as Entry, VizLink,
 };
 
 /// An unsolicited harness notification or a local terminal completion.

@@ -180,6 +180,8 @@ pub(super) fn update_sink(
                 | SessionUpdate::ToolCallUpdate(_)
                 | SessionUpdate::Plan(_)
                 | SessionUpdate::PlanUpdate(_)
+                | SessionUpdate::CompactionUpdate(_)
+                | SessionUpdate::CompactionSummaryChunk(_)
         );
         if report {
             state.dirty |= state.apply_report(notification.update.clone());

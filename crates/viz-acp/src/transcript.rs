@@ -2,13 +2,15 @@
 
 use std::{collections::HashSet, sync::Arc};
 
+use agent_client_protocol::schema::MaybeUndefined;
+
 use crate::{
-    Body, Entry, LiveTurn, Media, ObservedUpdate, Plan, PlanContent, PlanEntry, PlanPriority,
-    PlanStatus, Receipts, Segment, TextKind, ToolCall, ToolPatch,
+    Body, Compaction, CompactionStatus, Entry, LiveTurn, Media, ObservedUpdate, Plan, PlanContent,
+    PlanEntry, PlanPriority, PlanStatus, Receipts, Segment, TextKind, ToolCall, ToolPatch,
     receipts::ReceiptBook,
     schema::{
-        ContentBlock, PlanEntryPriority, PlanEntryStatus, PlanUpdateContent, SessionUpdate,
-        ToolCallStatus as AcpStatus,
+        CompactionStatus as AcpCompaction, ContentBlock, PlanEntryPriority, PlanEntryStatus,
+        PlanUpdateContent, SessionUpdate, ToolCallStatus as AcpStatus,
     },
     tool::{ToolFields, ToolReport, block},
 };
@@ -36,6 +38,10 @@ pub struct Transcript {
     turn: String,
     receipts: Arc<Receipts>,
     tools: Vec<Entry>,
+    /// Compactions still under way.
+    compactions: Vec<Entry>,
+    /// Compactions committed this turn; harnesses repeat terminal reports.
+    finished_compactions: HashSet<String>,
     patched_tools: HashSet<String>,
     answer: String,
     prior_prose: String,
@@ -51,6 +57,8 @@ impl Transcript {
             turn,
             receipts,
             tools: Vec::new(),
+            compactions: Vec::new(),
+            finished_compactions: HashSet::new(),
             patched_tools: HashSet::new(),
             answer: String::new(),
             prior_prose: String::new(),
@@ -160,16 +168,100 @@ impl Transcript {
                         &mut output,
                     );
                 }
+                SessionUpdate::CompactionUpdate(update) => {
+                    self.compaction_update(update, observed_at, &mut output);
+                }
+                SessionUpdate::CompactionSummaryChunk(chunk)
+                    if !self
+                        .finished_compactions
+                        .contains(chunk.compaction_id.0.as_ref()) =>
+                {
+                    let compaction =
+                        self.compaction(chunk.compaction_id.0.to_string(), observed_at);
+                    compaction.summary.push_str(&text_of(vec![chunk.content]));
+                }
                 _ => {}
             }
         }
         output
     }
 
+    fn compaction_update(
+        &mut self,
+        update: crate::schema::CompactionUpdate,
+        observed_at: i64,
+        output: &mut Vec<Output>,
+    ) {
+        let status = match update.status {
+            AcpCompaction::InProgress => CompactionStatus::InProgress,
+            AcpCompaction::Completed => CompactionStatus::Completed,
+            AcpCompaction::Failed => CompactionStatus::Failed,
+            AcpCompaction::Cancelled => CompactionStatus::Cancelled,
+            _ => return,
+        };
+        let id = update.compaction_id.0.to_string();
+        if self.finished_compactions.contains(&id) {
+            return;
+        }
+        let compaction = self.compaction(id.clone(), observed_at);
+        compaction.status = status;
+        match update.summary {
+            MaybeUndefined::Value(blocks) => compaction.summary = text_of(blocks),
+            MaybeUndefined::Null => compaction.summary.clear(),
+            MaybeUndefined::Undefined => {}
+        }
+        match update.error {
+            MaybeUndefined::Value(error) => compaction.error = Some(error),
+            MaybeUndefined::Null => compaction.error = None,
+            MaybeUndefined::Undefined => {}
+        }
+        if status != CompactionStatus::InProgress
+            && let Some(index) = self
+                .compactions
+                .iter()
+                .position(|entry| matches!(&entry.body, Body::Compaction(it) if it.id == id))
+        {
+            self.commit_text(output);
+            output.push(self.compactions.remove(index).into());
+            self.finished_compactions.insert(id);
+        }
+    }
+
+    /// The compaction under way with this id, started when first seen.
+    fn compaction(&mut self, id: String, observed_at: i64) -> &mut Compaction {
+        let index = self
+            .compactions
+            .iter()
+            .position(|entry| matches!(&entry.body, Body::Compaction(it) if it.id == id))
+            .unwrap_or_else(|| {
+                let entry = self.allocate(Body::Compaction(Compaction {
+                    id,
+                    status: CompactionStatus::InProgress,
+                    summary: String::new(),
+                    error: None,
+                    started_at: observed_at,
+                    ended_at: observed_at,
+                }));
+                self.compactions.push(entry);
+                self.compactions.len() - 1
+            });
+        let Body::Compaction(compaction) = &mut self.compactions[index].body else {
+            unreachable!("compaction entries hold compactions")
+        };
+        compaction.ended_at = observed_at;
+        compaction
+    }
+
     /// The uncommitted entries in start order.
     #[must_use]
     pub fn live(&self) -> LiveTurn {
-        let mut entries: Vec<_> = self.tools.iter().chain(self.text.iter()).cloned().collect();
+        let mut entries: Vec<_> = self
+            .tools
+            .iter()
+            .chain(&self.compactions)
+            .chain(self.text.iter())
+            .cloned()
+            .collect();
         entries.sort_unstable_by_key(|entry| entry.order);
         LiveTurn {
             turn: self.turn.clone(),
@@ -189,6 +281,7 @@ impl Transcript {
         let mut output = Vec::new();
         self.commit_text(&mut output);
         output.extend(self.tools.drain(..).map(Output::from));
+        output.extend(self.compactions.drain(..).map(Output::from));
         output
     }
 
@@ -317,6 +410,17 @@ fn tool(entry: &Entry) -> &ToolCall {
         Body::Tool(call) => call,
         _ => unreachable!("tool entries contain calls"),
     }
+}
+
+fn text_of(blocks: Vec<ContentBlock>) -> String {
+    blocks
+        .into_iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
 }
 
 fn plan_items(entries: Vec<crate::schema::PlanEntry>) -> PlanContent {
