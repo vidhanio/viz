@@ -343,7 +343,10 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::send`].
-    pub async fn search_files(&self, params: &SearchFiles<'_>) -> Result<Vec<String>> {
+    pub async fn search_files(
+        &self,
+        params: &SearchFiles<'_>,
+    ) -> Result<Vec<viz_protocol::FileSearchMatch>> {
         Ok(self.request(params).await?.files)
     }
 

@@ -694,7 +694,8 @@ impl Session<'_> {
                     query: &query,
                     limit: Some(24),
                 })
-                .await;
+                .await
+                .map(|matches| matches.into_iter().map(|found| found.path).collect());
             ui.update(move |s, _| {
                 if s.selected == Some(thread) {
                     s.completion.file_result(request, result);

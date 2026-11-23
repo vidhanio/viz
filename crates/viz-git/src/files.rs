@@ -33,7 +33,7 @@ pub struct FileMatch {
     pub path: PathBuf,
     pub kind: PathKind,
     pub score: u32,
-    /// Sorted grapheme indices in the lossy display path, for highlighting.
+    /// Sorted grapheme indices in the display path, for highlighting.
     pub positions: Vec<u32>,
 }
 
@@ -145,9 +145,12 @@ fn listing(root: &Path, cancel: &CancellationToken) -> Result<Arc<[Entry]>, Erro
             .path()
             .strip_prefix(root)
             .map_err(|_| Error::Invalid("walk path"))?;
+        let Some(display) = path.to_str() else {
+            continue;
+        };
         entries.push(Entry {
             path: path.to_owned(),
-            display: path.to_string_lossy().into_owned(),
+            display: display.to_owned(),
             kind: if kind.is_dir() {
                 PathKind::Directory
             } else {

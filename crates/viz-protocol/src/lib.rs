@@ -58,11 +58,11 @@ pub use project_settings::{
     ProjectSettings, ProjectSettingsPatch, ReadProjectIcon, Setting,
 };
 pub use requests::{
-    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, GitBranch,
-    HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches, ListHarnesses, ListProjects,
-    ListWorktrees, MoveThread, Moved, ProjectList, ProjectResult, PromoteThread, PromotedThread,
-    RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode, Sent, StopThread,
-    UpdateProject, UpdateThread, Worktree, WorktreeList,
+    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, FileSearchKind,
+    FileSearchMatch, GitBranch, HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches,
+    ListHarnesses, ListProjects, ListWorktrees, MoveThread, Moved, ProjectList, ProjectResult,
+    PromoteThread, PromotedThread, RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode,
+    Sent, StopThread, UpdateProject, UpdateThread, Worktree, WorktreeList,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

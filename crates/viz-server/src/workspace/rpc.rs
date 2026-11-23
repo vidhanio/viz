@@ -38,7 +38,17 @@ handlers! {
         SearchFiles<'static>, FileSearch, |workspace, FileSearch { thread, query, limit }| {
             let cwd = row(&mut *workspace.db.lock().await, "SELECT cwd FROM threads WHERE id = ?1",
                 [thread.into()]).await?.ok_or_else(|| Error::NoThread(thread))?.str(0)?;
-            let files = workspace.files.search(&cwd, &query, page_limit(limit, 50)?).await;
+            let files = viz_git::find_files(
+                Path::new(&cwd), &query, page_limit(limit, 50)?, &workspace.closing
+            ).await?.into_iter().map(|found| viz_protocol::FileSearchMatch {
+                path: found.path.to_string_lossy().into_owned(),
+                kind: match found.kind {
+                    viz_git::PathKind::File => viz_protocol::FileSearchKind::File,
+                    viz_git::PathKind::Directory => viz_protocol::FileSearchKind::Directory,
+                },
+                score: found.score,
+                positions: found.positions,
+            }).collect();
             Ok(FileList { files })
         }
         ListProjects, Empty, |workspace, _| {

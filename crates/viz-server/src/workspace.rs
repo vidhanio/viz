@@ -6,7 +6,6 @@ mod attachments;
 mod checkouts;
 mod checkpoints;
 mod clones;
-mod files;
 mod folders;
 mod follow_ups;
 mod fork;
@@ -48,7 +47,6 @@ use viz_core::{
 use viz_protocol::{EntryId, Lifecycle, RunId, TaskId, ThreadId};
 
 use self::{
-    files::Files,
     notifications::Updates,
     runs::NewRun,
     sql::{Connection, exec, row, rows},
@@ -82,7 +80,6 @@ pub(crate) struct Workspace {
     /// Asks [`Self::keep_time`] for a new look at the clock.
     due: Notify,
     workers: Workers,
-    files: Files,
     icons: icons::Icons,
     clones: clones::Clones,
     git_actions: git::GitActions,
@@ -157,7 +154,6 @@ impl Workspace {
             pulls: pulls::Pulls::default(),
             pull_due: Notify::new(),
             github: Mutex::default(),
-            files: Files::default(),
             mcp,
             closing: CancellationToken::new(),
             jobs: TaskTracker::new(),

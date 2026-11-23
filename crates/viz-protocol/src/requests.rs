@@ -247,8 +247,25 @@ pub struct SearchFiles<'a> {
 /// Search results from `files.search`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct FileList {
-    /// Matching relative paths.
-    pub files: Vec<String>,
+    /// Matches ordered by score, then path.
+    pub files: Vec<FileSearchMatch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct FileSearchMatch {
+    /// Path relative to the thread's working directory.
+    pub path: String,
+    pub kind: FileSearchKind,
+    pub score: u32,
+    /// Sorted grapheme indices in the relative path, for highlighting.
+    pub positions: Vec<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum FileSearchKind {
+    File,
+    Directory,
 }
 
 /// `thread.send` params.
