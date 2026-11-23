@@ -208,6 +208,26 @@ pub struct CancelTask<'a> {
     pub task: &'a str,
 }
 
+/// Remove a task from its parent's list once it is over and its result
+/// delivered. Its thread stays.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+pub struct DeleteTask<'a> {
+    pub task: &'a str,
+}
+
+/// Remove every task of a thread that is over and whose result was delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ClearTasks {
+    pub parent: ThreadId,
+}
+
+/// `tasks.clear` result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Cleared {
+    /// How many tasks were removed.
+    pub count: usize,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct TaskResult {
     pub task: Task,
@@ -231,6 +251,9 @@ pub struct DelegateTask<'a> {
     pub thread: Option<ThreadId>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<&'a WorktreeTarget>,
+    /// Names the task and its new thread; defaults to the start of `text`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<&'a str>,
     pub text: &'a str,
     #[serde(skip_serializing_if = "slice_is_empty")]
     pub attachments: &'a [Attachment],

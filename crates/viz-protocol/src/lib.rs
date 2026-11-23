@@ -16,10 +16,10 @@ pub use catalog::{
     WorktreeTarget,
 };
 pub use connections::{
-    CancelTask, DelegateTask, Environment, EnvironmentList, EnvironmentStatus, ListEnvironments,
-    ListTasks, Notification, ReadProject, ReadThreadState, Run, RunKind, RunStatus, Task, TaskList,
-    TaskResult, TaskStatus, TaskStatusRequest, TaskStatusResult, ThreadStateResult, Unwatch,
-    WaitResult, WaitThread, Watch, Watching,
+    CancelTask, ClearTasks, Cleared, DelegateTask, DeleteTask, Environment, EnvironmentList,
+    EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject, ReadThreadState,
+    Run, RunKind, RunStatus, Task, TaskList, TaskResult, TaskStatus, TaskStatusRequest,
+    TaskStatusResult, ThreadStateResult, Unwatch, WaitResult, WaitThread, Watch, Watching,
 };
 pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryData, EntryPage, ListEntries, PlanEntry,
@@ -88,6 +88,8 @@ methods! {
     TaskStatusRequest<'_> => "task.status", TaskStatusResult;
     CancelTask<'_> => "task.cancel", TaskResult;
     DelegateTask<'_> => "task.delegate", TaskResult;
+    DeleteTask<'_> => "task.delete", Empty;
+    ClearTasks => "tasks.clear", Cleared;
     WaitThread => "thread.wait", WaitResult;
     ReadThreadState => "thread.state", ThreadStateResult;
     ReadProject<'_> => "project.read", ProjectResult;

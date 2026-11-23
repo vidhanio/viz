@@ -3,9 +3,10 @@
 
 mod delivery;
 mod drive;
-mod store;
+pub(crate) mod store;
 
 use std::{
+    collections::HashSet,
     sync::{Arc, Mutex},
     time::Duration,
 };
@@ -21,8 +22,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use viz_core::tasks::{self as decisions, Command, Delegator, Rejection, is_settled};
 use viz_protocol::{
-    CancelTask, DelegateTask, ListTasks, TaskId, TaskList, TaskResult, TaskStatusRequest,
-    TaskStatusResult, WorktreeTarget,
+    CancelTask, ClearTasks, Cleared, DelegateTask, DeleteTask, Empty, ListTasks, TaskId, TaskList,
+    TaskResult, TaskStatusRequest, TaskStatusResult, WorktreeTarget,
     peer::{ReceiveTask, TaskTarget},
 };
 
@@ -51,6 +52,25 @@ pub(crate) struct Tasks {
     /// Serializes a cancellation's entry-only decision against delivery of its
     /// descendants.
     delivery: AsyncMutex<()>,
+    /// Tasks whose delegating call is still waiting to see them admitted. A
+    /// refusal the call itself reports is not delivered again.
+    awaited: Mutex<HashSet<TaskId>>,
+}
+
+/// Keeps a task in [`Tasks::awaited`].
+struct Awaited<'a> {
+    tasks: &'a Tasks,
+    id: TaskId,
+}
+
+impl Drop for Awaited<'_> {
+    fn drop(&mut self) {
+        self.tasks
+            .awaited
+            .lock()
+            .expect("awaited tasks lock poisoned")
+            .remove(&self.id);
+    }
 }
 
 impl std::fmt::Debug for Tasks {
@@ -80,6 +100,10 @@ pub(crate) struct Delegate {
     attachment_ids: Vec<String>,
     #[schemars(length(min = 1, max = 256))]
     request_id: Option<String>,
+    /// A short name for the task and its new thread. Defaults to the start of
+    /// `text`.
+    #[schemars(length(min = 1, max = 200))]
+    title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -101,7 +125,7 @@ pub(crate) struct StatusRequest {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct CancelRequest {
+pub(crate) struct TaskRequest {
     #[schemars(length(min = 1))]
     task: TaskId,
 }
@@ -125,8 +149,15 @@ handlers! {
         TaskStatusRequest<'static>, StatusRequest, |tasks, StatusRequest { task, wait, timeout_ms }| {
             tasks.status(&task, None, wait, timeout_ms).await
         }
-        CancelTask<'static>, CancelRequest, |tasks, CancelRequest { task }| {
+        CancelTask<'static>, TaskRequest, |tasks, TaskRequest { task }| {
             Ok(TaskResult { task: tasks.cancel(&task, None).await? })
+        }
+        DeleteTask<'static>, TaskRequest, |tasks, TaskRequest { task }| {
+            tasks.delete(&task, None).await?;
+            Ok(Empty {})
+        }
+        ClearTasks, ClearTasks, |tasks, ClearTasks { parent }| {
+            Ok(Cleared { count: tasks.clear(parent).await? })
         }
     }
 }
@@ -155,6 +186,7 @@ impl Tasks {
             shutdown: CancellationToken::new(),
             supervisor: Mutex::new(None),
             delivery: AsyncMutex::new(()),
+            awaited: Mutex::default(),
         })
     }
 
@@ -201,6 +233,7 @@ impl Tasks {
             return Err(Rejection::UnknownEnvironment(environment.to_owned()).into());
         }
         decisions::validate_request(&input.text, input.request_id.as_deref())?;
+        let title = decisions::title(input.title.as_deref(), &input.text)?;
         if let Some(request_id) = input.request_id.as_deref() {
             let mut db = self.workspace.db.lock().await;
             if let Some(id) = prior_request(&mut db, parent, request_id).await? {
@@ -216,7 +249,7 @@ impl Tasks {
             );
         }
 
-        let id = {
+        let (id, awaited) = {
             let mut db = self.workspace.db.lock().await;
             let prior = if let Some(request_id) = input.request_id.as_deref() {
                 prior_request(&mut db, parent, request_id).await?
@@ -224,7 +257,7 @@ impl Tasks {
                 None
             };
             if let Some(id) = prior {
-                id
+                (id, None)
             } else {
                 let active = active_run_from(&mut db, parent).await?;
                 let stopping = match active {
@@ -233,7 +266,6 @@ impl Tasks {
                 };
                 let parent_run = decisions::open(Delegator { active, stopping }, turn)?;
                 let id = TaskId(Uuid::new_v4().to_string());
-                let title = decisions::title(&input.text);
                 let payload = serde_json::to_string(&ReceiveTask {
                     task: id.clone(),
                     origin_environment: self.peers.local.clone(),
@@ -246,9 +278,11 @@ impl Tasks {
                         model: input.model,
                         thinking: input.thinking,
                     },
+                    title: input.title,
                     text: input.text,
                     attachments: input.attachments,
                 })?;
+                let awaited = turn.map(|_| self.await_admission(&id));
                 store::insert(
                     &mut db,
                     New {
@@ -265,10 +299,67 @@ impl Tasks {
                 drop(db);
                 self.signal();
                 self.scan.notify_one();
-                id
+                (id, awaited)
             }
         };
-        self.admitted(&id, parent).await
+        let task = self.admitted(&id, parent).await?;
+        if awaited.is_some() {
+            self.apply(&id, Command::Seen).await?;
+        }
+        drop(awaited);
+        Ok(task)
+    }
+
+    /// Hold back the task's delivery while its delegating call waits.
+    fn await_admission(&self, id: &TaskId) -> Awaited<'_> {
+        self.awaited
+            .lock()
+            .expect("awaited tasks lock poisoned")
+            .insert(id.clone());
+        Awaited {
+            tasks: self,
+            id: id.clone(),
+        }
+    }
+
+    fn held(&self, id: &TaskId) -> bool {
+        self.awaited
+            .lock()
+            .expect("awaited tasks lock poisoned")
+            .contains(id)
+    }
+
+    /// Remove a settled task from its parent's list.
+    pub(crate) async fn delete(
+        &self,
+        task: &TaskId,
+        parent: Option<ThreadId>,
+    ) -> Result<(), Error> {
+        let mut db = self.workspace.db.lock().await;
+        let mut tx = db.transaction().await?;
+        let stored = store::read(&mut tx, task, parent).await?;
+        store::save(&mut tx, task, &decisions::dismiss(&stored.state)?).await?;
+        tx.commit().await?;
+        drop(db);
+        self.signal();
+        Ok(())
+    }
+
+    /// Remove every removable task from a thread's list.
+    pub(crate) async fn clear(&self, parent: ThreadId) -> Result<usize, Error> {
+        let mut db = self.workspace.db.lock().await;
+        let mut tx = db.transaction().await?;
+        let mut count = 0;
+        for task in store::list(&mut tx, Some(parent)).await? {
+            if let Ok(next) = decisions::dismiss(&task.state) {
+                store::save(&mut tx, &task.id, &next).await?;
+                count += 1;
+            }
+        }
+        tx.commit().await?;
+        drop(db);
+        self.signal();
+        Ok(count)
     }
 
     pub(crate) async fn status(

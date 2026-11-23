@@ -73,6 +73,25 @@ pub(crate) struct Workspace {
     jobs: TaskTracker,
 }
 
+/// A task's news for its parent thread.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct NewWake<'a> {
+    pub(crate) thread: ThreadId,
+    pub(crate) task: &'a TaskId,
+    pub(crate) source: WakeSource,
+    pub(crate) text: &'a str,
+    pub(crate) mode: WakeMode,
+}
+
+/// What became of a wake.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Woken {
+    Run(RunId),
+    Entry,
+    /// The thread is gone.
+    Deleted,
+}
+
 impl std::fmt::Debug for Workspace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Workspace")
@@ -236,64 +255,73 @@ impl Workspace {
         self.dir.join("attachments").join(thread.to_string())
     }
 
-    pub(crate) async fn wake(
+    /// Record a task's wake and whatever `then` stores with it, in one
+    /// transaction. A wake already recorded is not repeated.
+    pub(crate) async fn wake<T>(
         self: &Arc<Self>,
-        thread: ThreadId,
-        task: &TaskId,
-        source: WakeSource,
-        text: &str,
-        mode: WakeMode,
-    ) -> Result<Option<RunId>, Error> {
+        wake: NewWake<'_>,
+        then: impl AsyncFnOnce(&mut Connection, &Woken) -> Result<T, Error>,
+    ) -> Result<T, Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
+        let woken = self.append_wake(&mut tx, &wake).await?;
+        let result = then(&mut tx, &woken).await?;
+        tx.commit().await?;
+        if matches!(woken, Woken::Run(_)) {
+            self.kick(wake.thread, false);
+        }
+        drop(db);
+        if !matches!(woken, Woken::Deleted) {
+            self.relist(wake.thread);
+        }
+        Ok(result)
+    }
+
+    async fn append_wake(&self, db: &mut Connection, wake: &NewWake<'_>) -> Result<Woken, Error> {
+        let NewWake {
+            thread,
+            task,
+            source,
+            text,
+            mode,
+        } = *wake;
         let previous = row(
-            &mut tx,
+            db,
             "SELECT run FROM task_wakes WHERE thread = ?1 AND task = ?2 AND sequence = ?3",
             [thread.into(), task.into(), source.sequence().into()],
         )
         .await?
         .map(|row| row.opt_id(0))
         .transpose()?;
-        let exists = if previous.is_some() {
-            true
-        } else {
-            row(
-                &mut tx,
-                "SELECT 1 FROM threads WHERE id = ?1",
-                [thread.into()],
-            )
-            .await?
-            .is_some()
+        let exists = match store::require(db, thread).await {
+            Ok(()) => true,
+            Err(Error::NoThread(_)) => false,
+            Err(error) => return Err(error),
         };
         let mode = match tasks::wake(previous, exists, mode) {
-            Wake::Replay(run) => return Ok(run),
-            Wake::MissingThread => return Ok(None),
+            Wake::Replay(Some(run)) => return Ok(Woken::Run(run)),
+            Wake::Replay(None) => return Ok(Woken::Entry),
+            Wake::MissingThread => return Ok(Woken::Deleted),
             Wake::Append(mode) => mode,
         };
         let result = NewEntry::TaskResult {
             task: task.to_string(),
             text: text.to_owned(),
         };
-        let entry = store::append(&mut tx, thread, &result).await?;
+        let entry = store::append(db, thread, &result).await?;
         let run = if mode == WakeMode::Prompt {
-            Some(
-                runs::enqueue(
-                    &mut tx,
-                    thread,
-                    NewRun {
-                        existing_entry: Some(entry),
-                        ..NewRun::new(text)
-                    },
-                )
-                .await?,
-            )
+            let run = NewRun {
+                existing_entry: Some(entry),
+                ..NewRun::new(text)
+            };
+            Some(runs::enqueue(db, thread, run).await?)
         } else {
-            exec(&mut tx, "UPDATE threads SET updated_at = ?2, unread = CASE WHEN ?3 THEN 1 ELSE unread END WHERE id = ?1",
+            exec(db, "UPDATE threads SET updated_at = ?2, unread = CASE WHEN ?3 THEN 1 ELSE unread END WHERE id = ?1",
                 [thread.into(), store::now().into(), self.unread(thread).into()]).await?;
             None
         };
         exec(
-            &mut tx,
+            db,
             "INSERT INTO task_wakes (thread, task, sequence, run) VALUES (?1, ?2, ?3, ?4)",
             [
                 thread.into(),
@@ -303,13 +331,7 @@ impl Workspace {
             ],
         )
         .await?;
-        tx.commit().await?;
-        if run.is_some() {
-            self.kick(thread, false);
-        }
-        drop(db);
-        self.relist(thread);
-        Ok(run)
+        Ok(run.map_or(Woken::Entry, Woken::Run))
     }
 
     fn harness(&self, name: Option<&str>) -> Result<(&str, &HarnessConfig), Error> {

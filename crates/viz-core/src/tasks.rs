@@ -31,7 +31,7 @@ use viz_protocol::{
     peer::{ReceiveTask, Received},
 };
 
-use crate::runs::is_open;
+use crate::{runs::is_open, titles};
 
 /// Where a task's admission and execution stand.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +97,9 @@ pub struct Task {
     pub delivery: Delivery,
     pub result: Option<String>,
     pub error: Option<String>,
+    /// Not listed any more. The task stays, without its result, because the
+    /// runs it woke belong to its family through it.
+    pub dismissed: bool,
 }
 
 /// The step a persisted task needs.
@@ -162,6 +165,9 @@ pub enum Command<'a> {
     Vanished,
     /// The parent thread has the result, and perhaps a run for it.
     Delivered(Option<RunId>),
+    /// The agent that delegated it learned from the call itself that it was
+    /// refused.
+    Seen,
 }
 
 /// The task after a command, or `None` when the command changes nothing.
@@ -223,8 +229,69 @@ pub fn decide(task: &Task, command: Command<'_>) -> Option<Task> {
             delivery: Delivery::Delivered(wake),
             ..task.clone()
         },
+        Command::Seen => {
+            if !refused(task) || matches!(task.delivery, Delivery::Delivered(_)) {
+                return None;
+            }
+            Task {
+                delivery: Delivery::Delivered(None),
+                dismissed: true,
+                ..task.clone()
+            }
+        }
     };
     (next != *task).then_some(next)
+}
+
+/// Whether the task failed before it got a thread.
+#[must_use]
+pub const fn refused(task: &Task) -> bool {
+    matches!(
+        (task.phase, task.status),
+        (Phase::Settled(None), TaskStatus::Failed)
+    )
+}
+
+/// Remove a task from its parent's list.
+///
+/// # Errors
+/// The task must be over, and its parent must know how it ended.
+pub fn dismiss(task: &Task) -> Result<Task, Rejection> {
+    if !is_settled(task.status) {
+        return Err(Rejection::Unsettled);
+    }
+    if matches!(task.delivery, Delivery::Owed(_)) {
+        return Err(Rejection::Undelivered);
+    }
+    Ok(Task {
+        result: None,
+        error: None,
+        dismissed: true,
+        ..task.clone()
+    })
+}
+
+/// What to do with a task whose parent thread is deleted.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Orphan {
+    /// Nothing is left to stop.
+    Remove,
+    /// Stop it; its delivery, to no one, removes it.
+    Stop(Task),
+}
+
+/// Release a deleted thread's task.
+#[must_use]
+pub fn orphan(task: &Task) -> Orphan {
+    if matches!(task.phase, Phase::Settled(_)) {
+        return Orphan::Remove;
+    }
+    let stopped = cancel(task);
+    if matches!(stopped.phase, Phase::Settled(_)) {
+        Orphan::Remove
+    } else {
+        Orphan::Stop(stopped)
+    }
 }
 
 fn cancel(task: &Task) -> Task {
@@ -236,7 +303,10 @@ fn cancel(task: &Task) -> Task {
     }
 }
 
+/// Being interrupted counts as being cancelled if that is what the parent
+/// wanted.
 fn progressed(task: &Task, run: &Run) -> Option<Task> {
+    let cancelling = matches!(task.phase, Phase::Cancelling(_));
     Some(match run.status {
         RunStatus::Queued => return None,
         RunStatus::Running => Task {
@@ -249,6 +319,7 @@ fn progressed(task: &Task, run: &Run) -> Option<Task> {
             None,
             Some(run.error.as_deref().unwrap_or("run failed")),
         ),
+        RunStatus::Interrupted if cancelling => task.settled(TaskStatus::Cancelled, None, None),
         RunStatus::Interrupted => task.settled(
             TaskStatus::Failed,
             None,
@@ -273,6 +344,7 @@ impl Task {
             delivery: self.delivery,
             result: result.map(str::to_owned),
             error: error.map(str::to_owned),
+            dismissed: self.dismissed,
         }
     }
 
@@ -308,16 +380,19 @@ pub const fn is_settled(status: TaskStatus) -> bool {
     }
 }
 
-/// A task's display title: the start of its prompt's first line.
-#[must_use]
-pub fn title(text: &str) -> String {
-    text.trim()
-        .lines()
-        .next()
-        .unwrap_or_default()
-        .chars()
-        .take(60)
-        .collect()
+/// A task's display title: the one given, or one from its prompt.
+///
+/// # Errors
+/// Rejects an empty or oversized title.
+pub fn title(given: Option<&str>, text: &str) -> Result<String, Rejection> {
+    let Some(given) = given else {
+        return Ok(titles::from_prompt(text));
+    };
+    let given = given.trim();
+    if given.is_empty() || given.chars().count() > 200 {
+        return Err(Rejection::Title);
+    }
+    Ok(given.to_owned())
 }
 
 /// Why a task cannot be delegated or admitted.
@@ -341,6 +416,12 @@ pub enum Rejection {
     RetargetedThread,
     #[error("an existing task thread cannot change its worktree")]
     MovedThread,
+    #[error("the task is not over yet; cancel it first")]
+    Unsettled,
+    #[error("the task's result has not been delivered yet")]
+    Undelivered,
+    #[error("a task title must contain 1 to 200 characters")]
+    Title,
     #[error("task follow-up child does not match its receipt")]
     ForeignFollowUp,
 }
@@ -690,7 +771,7 @@ pub fn follow_up(
     let Delivery::Delivered(wake) = task.delivery else {
         return Ok(FollowUp::Later);
     };
-    if task.status != TaskStatus::Completed {
+    if task.dismissed || task.status != TaskStatus::Completed {
         return Ok(FollowUp::Discard);
     }
     if task.phase.receipt().map(|receipt| receipt.thread) != Some(child) {

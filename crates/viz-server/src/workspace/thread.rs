@@ -21,7 +21,7 @@ use super::{
     worker::Intent,
     worktree::{self, Placement},
 };
-use crate::error::Error;
+use crate::{error::Error, tasks};
 
 impl Workspace {
     /// Launches a thread; a worktree target is resolved, and a new worktree
@@ -260,8 +260,10 @@ impl Workspace {
         };
         let driver = {
             let mut db = self.db.lock().await;
+            let mut tx = db.transaction().await?;
+            tasks::store::release(&mut tx, thread).await?;
             let count = exec(
-                &mut db,
+                &mut tx,
                 "DELETE FROM threads WHERE id = ?1",
                 [thread.into()],
             )
@@ -269,6 +271,7 @@ impl Workspace {
             if count == 0 {
                 return Err(Error::NoThread(thread));
             }
+            tx.commit().await?;
             self.updates.remove(thread);
             let driver = self.workers.remove(thread);
             drop(db);

@@ -14,7 +14,10 @@ use super::{
     LOCAL_POLL, POLL, Tasks,
     store::{self, snapshot, stop_exists, suppress},
 };
-use crate::{error::Error, workspace::sql};
+use crate::{
+    error::Error,
+    workspace::{NewWake, Woken, sql},
+};
 
 impl Tasks {
     /// Give the parent thread a settled result.
@@ -25,11 +28,28 @@ impl Tasks {
             return Ok(());
         };
         let text = task.state.report(&task.id, &task.title, &task.environment);
-        let wake = self
-            .workspace
-            .wake(task.parent, &task.id, WakeSource::Result, &text, mode)
+        let wake = NewWake {
+            thread: task.parent,
+            task: &task.id,
+            source: WakeSource::Result,
+            text: &text,
+            mode,
+        };
+        self.workspace
+            .wake(wake, async |tx, woken| {
+                let run = match woken {
+                    Woken::Run(run) => Some(*run),
+                    Woken::Entry => None,
+                    Woken::Deleted => return store::remove(tx, &task.id).await,
+                };
+                match decisions::decide(&task.state, Command::Delivered(run)) {
+                    Some(next) => store::save(tx, &task.id, &next).await,
+                    None => Ok(()),
+                }
+            })
             .await?;
-        self.apply(&task.id, Command::Delivered(wake)).await
+        self.signal();
+        Ok(())
     }
 
     /// The child retains the outbox row until the parent acknowledges its
@@ -105,10 +125,14 @@ impl Tasks {
             "Task {} ({}) on {} thread {} continued.\n\n{}",
             request.task, task.title, request.source, request.thread, request.text,
         );
-        let source = WakeSource::Continuation(request.run);
-        self.workspace
-            .wake(task.parent, &request.task, source, &text, mode)
-            .await?;
+        let wake = NewWake {
+            thread: task.parent,
+            task: &request.task,
+            source: WakeSource::Continuation(request.run),
+            text: &text,
+            mode,
+        };
+        self.workspace.wake(wake, async |_, _| Ok(())).await?;
         self.signal();
         Ok(true)
     }

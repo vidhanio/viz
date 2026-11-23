@@ -22,6 +22,9 @@ pub struct ReceiveTask {
     pub parent: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadId>,
+    /// The child thread's title, when the parent named it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     pub text: String,
     #[serde(flatten)]
     pub target: TaskTarget,

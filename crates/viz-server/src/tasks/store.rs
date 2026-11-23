@@ -2,7 +2,7 @@
 
 use std::collections::HashSet;
 
-use viz_core::tasks::{self as decisions, Delivery, Family, Phase, WakeEdge, WakeMode};
+use viz_core::tasks::{self as decisions, Delivery, Family, Orphan, Phase, WakeEdge, WakeMode};
 use viz_protocol::{TaskId, peer::Received};
 
 use crate::{
@@ -40,7 +40,7 @@ macro_rules! select_task {
     ($condition:literal) => {
         concat!(
             "SELECT id, parent, parent_run, environment, title, phase, thread, run, status, ",
-            "delivery, wake_run, result, error FROM agent_tasks WHERE ",
+            "delivery, wake_run, result, error, dismissed FROM agent_tasks WHERE ",
             $condition,
         )
     };
@@ -63,14 +63,14 @@ pub(super) async fn read(
     .ok_or_else(|| Error::NoTask(id.clone()))
 }
 
-/// The tasks of `parent`, or all, newest first.
+/// The tasks listed under `parent`, or under any thread, newest first.
 pub(super) async fn list(
     db: &mut Connection,
     parent: Option<ThreadId>,
 ) -> Result<Vec<Stored>, Error> {
     sql::rows(
         db,
-        select_task!("(?1 IS NULL OR parent = ?1) ORDER BY rowid DESC"),
+        select_task!("dismissed = 0 AND (?1 IS NULL OR parent = ?1) ORDER BY rowid DESC"),
         [parent.into()],
     )
     .await?
@@ -93,12 +93,7 @@ fn decode(mut row: Row) -> Result<Stored, Error> {
         ("settled", receipt) => Phase::Settled(receipt),
         (phase, _) => return Err(Error::corrupt(format_args!("task phase {phase}"))),
     };
-    let delivery = match row.str(9)?.as_str() {
-        "prompt" => Delivery::Owed(WakeMode::Prompt),
-        "entry_only" => Delivery::Owed(WakeMode::EntryOnly),
-        "delivered" => Delivery::Delivered(row.opt_id(10)?),
-        delivery => return Err(Error::corrupt(format_args!("task delivery {delivery}"))),
-    };
+    let delivery = decode_delivery(&mut row, 9)?;
     let status = match row.str(8)?.as_str() {
         "queued" => TaskStatus::Queued,
         "running" => TaskStatus::Running,
@@ -119,8 +114,47 @@ fn decode(mut row: Row) -> Result<Stored, Error> {
             delivery,
             result: row.opt_str(11)?,
             error: row.opt_str(12)?,
+            dismissed: row.flag(13)?,
         },
     })
+}
+
+/// Read the delivery column and the wake column after it.
+fn decode_delivery(row: &mut Row, column: usize) -> Result<Delivery, Error> {
+    match row.str(column)?.as_str() {
+        "prompt" => Ok(Delivery::Owed(WakeMode::Prompt)),
+        "entry_only" => Ok(Delivery::Owed(WakeMode::EntryOnly)),
+        "delivered" => Ok(Delivery::Delivered(row.opt_id(column + 1)?)),
+        delivery => Err(Error::corrupt(format_args!("task delivery {delivery}"))),
+    }
+}
+
+/// Remove a task nothing can refer to.
+pub(super) async fn remove(db: &mut Connection, id: &TaskId) -> Result<(), Error> {
+    sql::exec(db, "DELETE FROM agent_tasks WHERE id = ?1", [id.into()]).await?;
+    Ok(())
+}
+
+/// Release what a deleted thread delegated, and its stop requests. Tasks still
+/// under way are stopped first (see [`decisions::orphan`]).
+pub(crate) async fn release(db: &mut Connection, parent: ThreadId) -> Result<(), Error> {
+    let tasks = sql::rows(db, select_task!("parent = ?1"), [parent.into()])
+        .await?
+        .map(decode)
+        .collect::<Result<Vec<_>, Error>>()?;
+    for task in tasks {
+        match decisions::orphan(&task.state) {
+            Orphan::Remove => remove(db, &task.id).await?,
+            Orphan::Stop(next) => save(db, &task.id, &next).await?,
+        }
+    }
+    sql::exec(
+        db,
+        "DELETE FROM stopped_task_runs WHERE thread = ?1",
+        [parent.into()],
+    )
+    .await?;
+    Ok(())
 }
 
 pub(super) async fn insert(db: &mut Connection, new: New<'_>) -> Result<(), Error> {
@@ -172,7 +206,8 @@ pub(super) async fn save(
     sql::exec(
         db,
         "UPDATE agent_tasks SET phase = ?2, thread = ?3, run = ?4, status = ?5, delivery = ?6,
-            wake_run = ?7, result = ?8, error = ?9, payload = CASE WHEN ?10 THEN payload END
+            wake_run = ?7, result = ?8, error = ?9, payload = CASE WHEN ?10 THEN payload END,
+            dismissed = ?11
          WHERE id = ?1",
         [
             id.into(),
@@ -185,6 +220,7 @@ pub(super) async fn save(
             task.result.as_deref().into(),
             task.error.as_deref().into(),
             task.phase.offerable().into(),
+            task.dismissed.into(),
         ],
     )
     .await?;
@@ -238,7 +274,11 @@ pub(super) async fn suppress(
     thread: ThreadId,
     run: RunId,
 ) -> Result<(), Error> {
-    for task in family(db, thread, run).await?.tasks {
+    for member in family(db, thread, run).await?.tasks {
+        if matches!(member.delivery, Delivery::Delivered(_)) {
+            continue;
+        }
+        let task = read(db, &member.id, None).await?;
         if let Some(next) = decisions::decide(&task.state, decisions::Command::Suppress) {
             save(db, &task.id, &next).await?;
         }
@@ -256,14 +296,21 @@ pub(super) async fn snapshot(
     let pending_delivery = family
         .tasks
         .iter()
-        .any(|task| matches!(task.state.delivery, Delivery::Owed(_)));
+        .any(|task| matches!(task.delivery, Delivery::Owed(_)));
     let wakes = by_ids(db, thread, &family.wakes).await?;
     Ok(Family::from_runs(root, wakes, pending_delivery))
 }
 
 struct FamilyRows {
-    tasks: Vec<Stored>,
+    tasks: Vec<Member>,
     wakes: HashSet<RunId>,
+}
+
+/// What a family needs to know of a task, which excludes its result.
+struct Member {
+    id: TaskId,
+    parent: RunId,
+    delivery: Delivery,
 }
 
 /// Original result wakes join the family after delivery is recorded. Follow-up
@@ -271,11 +318,18 @@ struct FamilyRows {
 async fn family(db: &mut Connection, thread: ThreadId, run: RunId) -> Result<FamilyRows, Error> {
     let tasks = sql::rows(
         db,
-        select_task!("parent = ?1 AND parent_run IS NOT NULL"),
+        "SELECT id, parent_run, delivery, wake_run FROM agent_tasks
+         WHERE parent = ?1 AND parent_run IS NOT NULL",
         [thread.into()],
     )
     .await?
-    .map(decode)
+    .map(|mut row| {
+        Ok(Member {
+            id: TaskId(row.str(0)?),
+            parent: row.id(1)?,
+            delivery: decode_delivery(&mut row, 2)?,
+        })
+    })
     .collect::<Result<Vec<_>, Error>>()?;
     let mut edges = sql::rows(
         db,
@@ -293,21 +347,18 @@ async fn family(db: &mut Connection, thread: ThreadId, run: RunId) -> Result<Fam
     })
     .collect::<Result<Vec<_>, Error>>()?;
     edges.extend(tasks.iter().filter_map(|task| {
-        let Delivery::Delivered(wake) = task.state.delivery else {
+        let Delivery::Delivered(wake) = task.delivery else {
             return None;
         };
         Some(WakeEdge {
-            parent: task.parent_run?,
+            parent: task.parent,
             wake: wake?,
         })
     }));
     let mut wakes = decisions::descendants(run, edges);
     let tasks = tasks
         .into_iter()
-        .filter(|task| {
-            task.parent_run
-                .is_some_and(|parent| wakes.contains(&parent))
-        })
+        .filter(|task| wakes.contains(&task.parent))
         .collect();
     wakes.remove(&run);
     Ok(FamilyRows { tasks, wakes })

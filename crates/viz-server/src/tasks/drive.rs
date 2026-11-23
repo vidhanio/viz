@@ -155,6 +155,7 @@ impl Tasks {
             Step::Send => self.offer(id, target).await,
             Step::Retract => self.retract(id, target).await,
             Step::Poll { receipt, cancel } => self.poll(id, target, receipt, cancel).await,
+            Step::Deliver(_) if self.held(id) => Ok(Advance::LocalPoll),
             Step::Deliver(_) => {
                 self.deliver(id).await?;
                 Ok(Advance::Done)

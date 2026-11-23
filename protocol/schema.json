@@ -589,6 +589,13 @@
               }
             ]
           },
+          "title": {
+            "description": "Names the task and its new thread; defaults to the start of `text`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "text": {
             "type": "string"
           },
@@ -811,6 +818,69 @@
             ]
           }
         }
+      }
+    },
+    "task.delete": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "DeleteTask",
+        "description": "Remove a task from its parent's list once it is over and its result\ndelivered. Its thread stays.",
+        "type": "object",
+        "properties": {
+          "task": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "task"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "tasks.clear": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ClearTasks",
+        "description": "Remove every task of a thread that is over and whose result was delivered.",
+        "type": "object",
+        "properties": {
+          "parent": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "parent"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Cleared",
+        "description": "`tasks.clear` result.",
+        "type": "object",
+        "properties": {
+          "count": {
+            "description": "How many tasks were removed.",
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "count"
+        ]
       }
     },
     "thread.wait": {

@@ -187,7 +187,7 @@ impl Workspace {
                 project,
                 parent: Some(args.parent),
                 parent_environment: Some(&args.origin_environment),
-                title: None,
+                title: args.title.as_deref(),
                 session,
             },
         )
