@@ -27,7 +27,7 @@ mod watch;
 
 use std::ffi::OsString;
 
-pub use branches::{Branch, Branches, Worktree};
+pub use branches::{Branch, Branches, Worktree, WorktreeRemoval};
 pub use checkpoint::CheckpointId;
 pub use command::CommandFailure;
 pub use diff::{Diff, DiffFile, DiffLine, DiffTarget, FileKind, Hunk, LineStats, RevisionId};

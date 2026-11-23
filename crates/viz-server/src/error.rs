@@ -62,6 +62,8 @@ pub(crate) enum Error {
     Json(#[from] serde_json::Error),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Git(#[from] viz_git::Error),
     /// A harness operation failed.
     #[error(transparent)]
     Harness(#[from] viz_acp::Error),
@@ -119,6 +121,7 @@ impl Error {
             | Self::Task(_)
             | Self::Triage(_)
             | Self::Fork(_)
+            | Self::Git(_)
             | Self::Placement(_)
             | Self::Invalid(_)
             | Self::Request(_) => Kind::Invalid,

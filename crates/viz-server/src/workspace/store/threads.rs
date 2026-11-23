@@ -185,44 +185,43 @@ pub(in crate::workspace) async fn list_threads(
         lifecycle::COLUMNS
     );
     let now = now();
-    let mut threads = rows(db, &query, [archived.into(), project.into()])
-        .await?
-        .map(|mut row| {
-            let harness = row.str(5)?;
-            let (lifecycle, activity, status) = lifecycle::decode(&mut row, 11)?;
-            let id = row.id(0)?;
-            let shelf = triage::shelf(&lifecycle, &activity, now);
-            let summary = ThreadSummary {
-                id,
-                title: row.str(1)?,
-                parent: row.opt_id(2)?,
-                parent_environment: row.opt_str(3)?,
-                forked_from: row
-                    .opt_id(9)?
-                    .map(|thread| {
-                        Ok::<_, Error>(ForkSource {
-                            thread,
-                            entry: row.opt_id(10)?,
-                        })
+    let records = rows(db, &query, [archived.into(), project.into()]).await?;
+    let mut threads = Vec::new();
+    for mut row in records {
+        let harness = row.str(5)?;
+        let (lifecycle, activity, status) = lifecycle::decode(&mut row, 11)?;
+        let id = row.id(0)?;
+        let shelf = triage::shelf(&lifecycle, &activity, now);
+        let summary = ThreadSummary {
+            id,
+            title: row.str(1)?,
+            parent: row.opt_id(2)?,
+            parent_environment: row.opt_str(3)?,
+            forked_from: row
+                .opt_id(9)?
+                .map(|thread| {
+                    Ok::<_, Error>(ForkSource {
+                        thread,
+                        entry: row.opt_id(10)?,
                     })
-                    .transpose()?,
-                project: row.opt_str(4)?,
-                worktree: row.opt_str(8)?.map(thread_worktree),
-                harness_name: workspace.harness_name(&harness).to_owned(),
-                harness,
-                status,
-                shelf,
-                attention: triage::attention(&lifecycle, &activity),
-                waiting_on: activity.waiting_on,
-                last_input_at: activity.last_input_at,
-                updated_at: activity.updated_at,
-                model: row.opt_str(6)?,
-                thinking: row.opt_str(7)?,
-                lifecycle,
-            };
-            Ok((summary, activity))
-        })
-        .collect::<Result<Vec<_>, Error>>()?;
+                })
+                .transpose()?,
+            project: row.opt_str(4)?,
+            worktree: thread_worktree(row.opt_str(8)?).await,
+            harness_name: workspace.harness_name(&harness).to_owned(),
+            harness,
+            status,
+            shelf,
+            attention: triage::attention(&lifecycle, &activity),
+            waiting_on: activity.waiting_on,
+            last_input_at: activity.last_input_at,
+            updated_at: activity.updated_at,
+            model: row.opt_str(6)?,
+            thinking: row.opt_str(7)?,
+            lifecycle,
+        };
+        threads.push((summary, activity));
+    }
     threads.sort_by_cached_key(|(thread, activity)| {
         triage::sort_key(thread.shelf, &thread.lifecycle, activity, thread.id)
     });
@@ -260,7 +259,7 @@ pub(in crate::workspace) async fn state(
     Ok(ThreadState {
         harness: row.str(0)?,
         project: row.opt_str(1)?,
-        worktree: row.opt_str(4)?.map(thread_worktree),
+        worktree: thread_worktree(row.opt_str(4)?).await,
         cwd: row.str(2)?,
         status,
         options: session.options,

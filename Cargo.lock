@@ -6883,6 +6883,7 @@ dependencies = [
  "viz-acp",
  "viz-config",
  "viz-core",
+ "viz-git",
  "viz-protocol",
 ]
 

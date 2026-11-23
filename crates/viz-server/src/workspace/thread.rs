@@ -58,7 +58,7 @@ impl Workspace {
             .await?;
         let result = self.launch_in(args, Some(&placement)).await;
         if !matches!(result, Ok((_, true))) {
-            worktree::discard(Path::new(&project), &placement).await;
+            worktree::discard(&self.worktrees, Path::new(&project), &placement).await;
         }
         result.map(|(launched, _)| launched)
     }
@@ -256,7 +256,7 @@ impl Workspace {
                     "worktree {path} has uncommitted changes or untracked files"
                 )));
             }
-            Some((binding.project.unwrap_or_else(|| path.clone()), path))
+            Some(path)
         } else {
             None
         };
@@ -290,8 +290,8 @@ impl Workspace {
                 tracing::warn!(%thread, %error, "removing materialized thread attachments");
             }
         }
-        if let Some((source, path)) = checkout {
-            worktree::remove(Path::new(&source), &path, false)
+        if let Some(path) = checkout {
+            worktree::remove(&self.worktrees, &path, false)
                 .await
                 .map_err(|error| {
                     Error::invalid(format!("deleted the thread, but not its worktree: {error}"))

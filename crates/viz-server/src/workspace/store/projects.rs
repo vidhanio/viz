@@ -50,15 +50,19 @@ pub(in crate::workspace) async fn project(
     )
     .await?
     .ok_or_else(|| Error::NoProject(path.to_owned()))?;
-    Ok(project_at(path.to_owned(), row.str(0)?, row.i64(1)?))
+    Ok(project_at(path.to_owned(), row.str(0)?, row.i64(1)?).await)
 }
 
 /// A project with its checkout's Git state.
-pub(in crate::workspace) fn project_at(path: String, name: String, created_at: i64) -> Project {
-    let checkout = worktree::head(Path::new(&path));
+pub(in crate::workspace) async fn project_at(
+    path: String,
+    name: String,
+    created_at: i64,
+) -> Project {
+    let checkout = worktree::head(Path::new(&path)).await;
     Project {
         git: checkout.is_some(),
-        branch: checkout.and_then(|checkout| checkout.branch),
+        branch: checkout.flatten(),
         path,
         name,
         created_at,
@@ -66,20 +70,24 @@ pub(in crate::workspace) fn project_at(path: String, name: String, created_at: i
 }
 
 /// A thread's worktree, with its branch read from disk.
-pub(in crate::workspace) fn thread_worktree(path: String) -> ThreadWorktree {
-    ThreadWorktree {
-        branch: worktree::head(Path::new(&path)).and_then(|checkout| checkout.branch),
+pub(in crate::workspace) async fn thread_worktree(path: Option<String>) -> Option<ThreadWorktree> {
+    let path = path?;
+    Some(ThreadWorktree {
+        branch: worktree::head(Path::new(&path)).await.flatten(),
         path,
-    }
+    })
 }
 
 pub(in crate::workspace) async fn projects(db: &mut Connection) -> Result<Vec<Project>, Error> {
-    rows(
+    let records = rows(
         db,
         "SELECT path, name, created_at FROM projects ORDER BY name, path",
         [],
     )
-    .await?
-    .map(|mut row| Ok(project_at(row.str(0)?, row.str(1)?, row.i64(2)?)))
-    .collect()
+    .await?;
+    let mut projects = Vec::new();
+    for mut record in records {
+        projects.push(project_at(record.str(0)?, record.str(1)?, record.i64(2)?).await);
+    }
+    Ok(projects)
 }

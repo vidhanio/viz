@@ -76,10 +76,6 @@ impl Workspace {
         }
     }
 
-    pub(super) fn managed(&self, path: &str) -> bool {
-        Path::new(path).starts_with(&self.worktrees)
-    }
-
     pub(super) async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, Error> {
         let project = store::project(&mut *self.db.lock().await, project).await?;
         let listed = worktree::list(Path::new(&project.path)).await?;
@@ -113,7 +109,7 @@ impl Workspace {
                 .collect::<Result<_, _>>()?
             };
             worktrees.push(Worktree {
-                managed: !checkout.main && self.managed(&checkout.path),
+                managed: !checkout.main && worktree::managed(&self.worktrees, &checkout.path).await,
                 path: checkout.path,
                 branch: checkout.branch,
                 main: checkout.main,
@@ -140,13 +136,17 @@ impl Workspace {
         .await?
         .map(|row| row.id(0))
         .transpose()?;
-        Ok(placement::removable(path, self.managed(path), user)?)
+        Ok(placement::removable(
+            path,
+            worktree::managed(&self.worktrees, path).await,
+            user,
+        )?)
     }
 
     pub(super) async fn remove_worktree(&self, path: &str, force: bool) -> Result<(), Error> {
         self.removable(&mut *self.db.lock().await, path, None)
             .await?;
-        worktree::remove(Path::new(path), path, force).await?;
+        worktree::remove(&self.worktrees, path, force).await?;
         self.changed(None);
         Ok(())
     }
@@ -186,15 +186,15 @@ impl Workspace {
             .place(&project, Path::new(&source), &args.worktree, &title)
             .await?;
         if placement.checkout == binding.checkout {
-            return Ok(moved(placement.checkout));
+            return Ok(moved(placement.checkout).await);
         }
         let result = self.rebind(thread, binding, placement.clone()).await;
         if result.is_err() {
-            worktree::discard(Path::new(&project), &placement).await;
+            worktree::discard(&self.worktrees, Path::new(&project), &placement).await;
         }
         result?;
         self.relist(thread);
-        Ok(moved(placement.checkout))
+        Ok(moved(placement.checkout).await)
     }
 
     async fn rebind(
@@ -256,9 +256,10 @@ impl Workspace {
     }
 }
 
-fn moved(checkout: Checkout) -> Moved {
+async fn moved(checkout: Checkout) -> Moved {
+    let worktree = store::thread_worktree(checkout.worktree).await;
     Moved {
-        worktree: checkout.worktree.map(store::thread_worktree),
+        worktree,
         cwd: checkout.cwd,
     }
 }

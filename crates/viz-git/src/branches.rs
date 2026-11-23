@@ -45,6 +45,13 @@ pub struct Worktree {
     pub bare: bool,
 }
 
+/// Whether local modifications prevent linked worktree deletion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorktreeRemoval {
+    Clean,
+    Discard,
+}
+
 impl Repository {
     /// Inspect the attached, detached, or unborn HEAD.
     ///
@@ -233,6 +240,65 @@ impl Repository {
         .await
     }
 
+    /// Create a linked worktree and a new branch without setting an upstream.
+    ///
+    /// # Errors
+    /// Returns an error for an invalid path, branch or base, or Git failure.
+    pub async fn add_worktree_from(
+        &self,
+        path: &Path,
+        branch: &str,
+        base: &str,
+        cancel: &CancellationToken,
+    ) -> Result<(), Error> {
+        let (path, branch, base) = (path.to_owned(), branch.to_owned(), base.to_owned());
+        self.write(cancel, move |repo, cwd, _| {
+            validate_branch(&branch)?;
+            if !path.is_absolute() {
+                return Err(Error::Invalid("absolute worktree path"));
+            }
+            let oid = repo
+                .revparse_single(&base)?
+                .peel_to_commit()?
+                .id()
+                .to_string();
+            run(
+                cwd,
+                "worktree",
+                [
+                    OsStr::new("add"),
+                    OsStr::new("--no-track"),
+                    OsStr::new("-b"),
+                    OsStr::new(&branch),
+                    OsStr::new("--"),
+                    path.as_os_str(),
+                    OsStr::new(&oid),
+                ],
+            )?;
+            Ok(())
+        })
+        .await
+    }
+
+    /// Delete an unused branch, for rolling back an abandoned checkout
+    /// creation.
+    ///
+    /// # Errors
+    /// Returns an error if Git refuses the deletion.
+    pub async fn discard_branch(
+        &self,
+        branch: &str,
+        cancel: &CancellationToken,
+    ) -> Result<(), Error> {
+        let branch = branch.to_owned();
+        self.write(cancel, move |_, cwd, _| {
+            validate_branch(&branch)?;
+            run(cwd, "branch", ["-D", "--", &branch])?;
+            Ok(())
+        })
+        .await
+    }
+
     /// Remove a clean linked checkout belonging to this repository.
     ///
     /// # Errors
@@ -243,26 +309,48 @@ impl Repository {
         path: &Path,
         cancel: &CancellationToken,
     ) -> Result<(), Error> {
+        self.remove_worktree_with(path, WorktreeRemoval::Clean, cancel)
+            .await
+    }
+
+    /// Remove a linked worktree using the specified cleanliness policy.
+    ///
+    /// # Errors
+    /// Returns an error if the worktree belongs to another repository or Git
+    /// refuses removal.
+    pub async fn remove_worktree_with(
+        &self,
+        path: &Path,
+        mode: WorktreeRemoval,
+        cancel: &CancellationToken,
+    ) -> Result<(), Error> {
         let path = path.to_owned();
-        self.write(cancel, move |repo, cwd, cancel| {
+        self.write(cancel, move |repo, _, cancel| {
             let path = path.canonicalize()?;
             let target = git2::Repository::open(&path)?;
             if !target.is_worktree()
                 || target.commondir().canonicalize()? != repo.commondir().canonicalize()?
                 || target.workdir() != Some(path.as_path())
-                || path == cwd
             {
                 return Err(Error::Invalid("linked worktree"));
             }
-            if !status_entries(&target, cancel)?.is_empty() {
-                return Err(Error::Dirty);
+            let mut args = vec![OsStr::new("remove")];
+            match mode {
+                WorktreeRemoval::Clean => {
+                    if !status_entries(&target, cancel)?.is_empty() {
+                        return Err(Error::Dirty);
+                    }
+                    guard_conflicts(&target)?;
+                }
+                WorktreeRemoval::Discard => args.push(OsStr::new("--force")),
             }
-            guard_conflicts(&target)?;
             check(cancel)?;
+            let main = git2::Repository::open(repo.commondir())?;
+            args.extend([OsStr::new("--"), path.as_os_str()]);
             run(
-                cwd,
+                main.workdir().unwrap_or_else(|| main.path()),
                 "worktree",
-                [OsStr::new("remove"), OsStr::new("--"), path.as_os_str()],
+                args,
             )?;
             Ok(())
         })

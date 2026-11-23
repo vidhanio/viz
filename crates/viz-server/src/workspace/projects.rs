@@ -42,7 +42,7 @@ impl Workspace {
             return Err(Error::invalid(format!("project already exists: {path}")));
         }
         self.changed(None);
-        Ok(store::project_at(path.to_owned(), name, created_at))
+        Ok(store::project_at(path.to_owned(), name, created_at).await)
     }
 
     pub(super) async fn remove_project(&self, project: &str) -> Result<(), Error> {

@@ -65,8 +65,8 @@ pub(crate) struct Workspace {
     pub(crate) environment: String,
     cwd: PathBuf,
     dir: PathBuf,
-    /// Canonical parent of the worktrees viz creates; any worktree below it
-    /// is viz's to remove.
+    /// Canonical parent of the worktrees viz creates. A checkout below it
+    /// also needs a matching ownership marker before viz can remove it.
     worktrees: PathBuf,
     default_harness: Option<String>,
     harnesses: BTreeMap<String, HarnessConfig>,

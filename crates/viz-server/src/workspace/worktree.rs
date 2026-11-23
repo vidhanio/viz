@@ -1,238 +1,110 @@
-//! Linked Git worktrees for project threads.
-//!
-//! viz runs the `git` executable rather than linking a Git library, so
-//! checkouts honour the user's configuration, hooks, filters and sparse
-//! checkouts exactly as their own `git worktree add` would. Reading a
-//! checkout's branch only reads its `HEAD` file, so listings spawn nothing.
-//!
-//! A worktree is viz's own (and may be removed by viz) when it lives under the
-//! environment's `worktrees` directory. Branches are never deleted.
+//! Interpret checkout placement using the Git edge and the core's naming rules.
 
-use std::{
-    path::{Path, PathBuf},
-    process::Stdio,
-};
+use std::path::{Path, PathBuf};
 
-use tokio::process::Command;
-use viz_core::placement::{self, Checkout, Repository};
+use tokio_util::sync::CancellationToken;
+use viz_core::placement::{self, Checkout};
+use viz_git::{Head, Repository, WorktreeRemoval};
 use viz_protocol::GitBranch;
 
+use super::store;
 use crate::error::Error;
 
-/// A Git checkout's HEAD as read from disk.
-pub(super) struct Head {
-    /// The current branch; `None` on a detached HEAD.
-    pub(super) branch: Option<String>,
-}
+const OWNER_MARKER: &str = "viz-managed-checkout";
 
-/// The HEAD of the checkout containing `path`, if any.
-pub(super) fn head(path: &Path) -> Option<Head> {
-    let git_dir = git_dir(path)?;
-    let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    Some(Head {
-        branch: head
-            .trim()
-            .strip_prefix("ref: refs/heads/")
-            .filter(|name| *name != ".invalid")
-            .map(str::to_owned),
+pub(super) async fn head(path: &Path) -> Option<Option<String>> {
+    let cancel = CancellationToken::new();
+    let repo = Repository::discover(path, &cancel).await.ok()?;
+    Some(match repo.head(&cancel).await.ok()? {
+        Head::Branch { name, .. } | Head::Unborn { name } => Some(name),
+        Head::Detached { .. } => None,
     })
 }
 
-/// The Git directory of the checkout containing `path`, following a linked
-/// worktree's `.git` file.
-fn git_dir(path: &Path) -> Option<PathBuf> {
-    for dir in path.ancestors() {
-        let dot = dir.join(".git");
-        let Ok(metadata) = std::fs::metadata(&dot) else {
-            continue;
-        };
-        if metadata.is_dir() {
-            return Some(dot);
-        }
-        let link = std::fs::read_to_string(&dot).ok()?;
-        let target = Path::new(link.trim().strip_prefix("gitdir:")?.trim());
-        return Some(dir.join(target));
-    }
-    None
+pub(super) async fn repository(path: &str) -> Option<placement::Repository> {
+    let repo = Repository::discover(Path::new(path), &CancellationToken::new())
+        .await
+        .ok()?;
+    Some(placement::Repository(
+        store::path_text(&repo.identity().common_dir)
+            .ok()?
+            .to_owned(),
+    ))
 }
 
-/// The repository containing `path`. A directory that no longer exists is in
-/// none, whatever its ancestors are in.
-pub(super) async fn repository(path: &str) -> Option<Repository> {
-    let path = tokio::fs::canonicalize(path).await.ok()?;
-    let git_dir = git_dir(&path)?;
-    let common = match tokio::fs::read_to_string(git_dir.join("commondir")).await {
-        Ok(common) => git_dir.join(common.trim()),
-        Err(_) => git_dir,
-    };
-    let common = tokio::fs::canonicalize(common).await.ok()?;
-    common.into_os_string().into_string().ok().map(Repository)
-}
-
-/// A resolved place to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Placement {
     pub(super) checkout: Checkout,
-    /// The worktree and branch were created for this placement, so a failed
-    /// registration should remove them.
     pub(super) created: Option<String>,
 }
 
-/// One entry of `git worktree list`.
 pub(super) struct Listed {
     pub(super) path: String,
     pub(super) branch: Option<String>,
     pub(super) main: bool,
 }
 
-/// Runs `git -C dir args`, returning stdout; a failure carries Git's message.
-async fn git(dir: &Path, args: &[&str]) -> Result<String, Error> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .kill_on_drop(true)
-        .output()
-        .await
-        .map_err(|error| Error::unavailable(format!("cannot run git: {error}")))?;
-    if output.status.success() {
-        String::from_utf8(output.stdout).map_err(|_| Error::invalid("git output is not UTF-8"))
-    } else {
-        let message = String::from_utf8_lossy(&output.stderr);
-        let message = message.trim();
-        Err(Error::invalid(if message.is_empty() {
-            format!("git {} failed", args.first().unwrap_or(&""))
-        } else {
-            message
-                .strip_prefix("fatal: ")
-                .unwrap_or(message)
-                .to_owned()
-        }))
-    }
-}
-
-/// Whether `git` succeeds, for checks reported through the exit status.
-async fn git_ok(dir: &Path, args: &[&str]) -> Result<bool, Error> {
-    Command::new("git")
-        .arg("-C")
-        .arg(dir)
-        .args(args)
-        .env("GIT_TERMINAL_PROMPT", "0")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .status()
-        .await
-        .map(|status| status.success())
-        .map_err(|error| Error::unavailable(format!("cannot run git: {error}")))
-}
-
-/// The checkout root containing `dir` and `dir`'s path below it, with a
-/// trailing slash unless empty.
-async fn toplevel(dir: &Path) -> Result<(PathBuf, String), Error> {
-    let output = git(dir, &["rev-parse", "--show-toplevel", "--show-prefix"]).await?;
-    let mut lines = output.lines();
-    let root = lines
-        .next()
-        .filter(|root| !root.is_empty())
-        .ok_or_else(|| Error::invalid("not a Git checkout"))?;
-    Ok((PathBuf::from(root), lines.next().unwrap_or("").to_owned()))
-}
-
-/// The worktrees of the repository containing `dir`, main checkout first.
 pub(super) async fn list(dir: &Path) -> Result<Vec<Listed>, Error> {
-    let output = git(dir, &["worktree", "list", "--porcelain", "-z"]).await?;
-    let mut worktrees = Vec::new();
-    for record in output.split("\0\0").filter(|record| !record.is_empty()) {
-        let mut path = None;
-        let mut branch = None;
-        let mut bare = false;
-        for field in record.split('\0') {
-            if let Some(value) = field.strip_prefix("worktree ") {
-                path = Some(value.to_owned());
-            } else if let Some(value) = field.strip_prefix("branch refs/heads/") {
-                branch = Some(value.to_owned());
-            } else if field == "bare" {
-                bare = true;
-            }
-        }
-        if let Some(path) = path
-            && !bare
-        {
-            worktrees.push(Listed {
-                path,
-                branch,
-                main: worktrees.is_empty(),
-            });
-        }
-    }
-    Ok(worktrees)
+    let cancel = CancellationToken::new();
+    let repo = discover(dir, &cancel).await?;
+    repo.worktrees(&cancel)
+        .await?
+        .into_iter()
+        .filter(|entry| !entry.bare)
+        .map(|entry| {
+            let main = repo.identity().main_checkout.as_ref() == Some(&entry.path);
+            Ok(Listed {
+                path: store::path_text(&entry.path)?.to_owned(),
+                branch: entry.branch,
+                main,
+            })
+        })
+        .collect()
 }
 
-/// Local branches, then remote-tracking branches, of the repository
-/// containing `dir`.
 pub(super) async fn branches(dir: &Path) -> Result<Vec<GitBranch>, Error> {
-    let output = git(
-        dir,
-        &[
-            "for-each-ref",
-            "--format=%(refname)%00%(symref)",
-            "refs/heads",
-            "refs/remotes",
-        ],
-    )
-    .await?;
-    Ok(output
-        .lines()
-        .filter_map(|line| {
-            let (name, symref) = line.split_once('\0')?;
-            if !symref.is_empty() {
-                return None;
-            }
-            let (name, remote) = match name.strip_prefix("refs/heads/") {
-                Some(local) => (local, false),
-                None => (name.strip_prefix("refs/remotes/")?, true),
-            };
-            Some(GitBranch {
-                name: name.to_owned(),
-                remote,
-            })
+    let cancel = CancellationToken::new();
+    let repo = discover(dir, &cancel).await?;
+    Ok(repo
+        .branches(&cancel)
+        .await?
+        .entries
+        .into_iter()
+        .map(|branch| GitBranch {
+            name: branch.name,
+            remote: branch.remote,
         })
         .collect())
 }
 
-/// Resolves an existing checkout of `source`'s repository: the main checkout
-/// gives no worktree.
 pub(super) async fn existing(source: &Path, path: &str) -> Result<Placement, Error> {
-    let (_, prefix) = toplevel(source).await?;
-    let requested = tokio::fs::canonicalize(path)
-        .await
-        .map_err(|error| Error::invalid(format!("cannot read worktree {path}: {error}")))?;
-    let found = list(source)
-        .await?
-        .into_iter()
-        .find(|worktree| Path::new(&worktree.path) == requested)
-        .ok_or_else(|| {
-            Error::invalid(format!(
-                "{path} is not a worktree of this project's repository"
-            ))
-        })?;
+    let cancel = CancellationToken::new();
+    let source_path = store::directory(source).await?;
+    let source = discover(&source_path, &cancel).await?;
+    let requested = store::directory(Path::new(path)).await?;
+    let target = discover(&requested, &cancel).await?;
+    if target.identity().checkout.as_ref() != Some(&requested)
+        || target.identity().common_dir != source.identity().common_dir
+    {
+        return Err(Error::invalid(
+            "not a worktree of this project's repository",
+        ));
+    }
+    let prefix = prefix(&source, &source_path)?;
+    let cwd = requested.join(prefix);
     Ok(Placement {
         checkout: Checkout {
-            cwd: below(Path::new(&found.path), &prefix)?,
-            worktree: (!found.main).then_some(found.path),
+            cwd: store::path_text(&cwd)?.to_owned(),
+            worktree: target
+                .identity()
+                .linked
+                .then(|| store::path_text(&requested).map(str::to_owned))
+                .transpose()?,
         },
         created: None,
     })
 }
 
-/// Creates a linked worktree of `source`'s repository under `root`, on a new
-/// branch from `base` (default `source`'s HEAD). An unnamed branch gets the
-/// `viz/` prefix and a slug of `title`. The branch never tracks its base, so a
-/// later push cannot land on the base's upstream.
 pub(super) async fn create(
     root: &Path,
     source: &Path,
@@ -240,149 +112,148 @@ pub(super) async fn create(
     branch: Option<&str>,
     title: &str,
 ) -> Result<Placement, Error> {
-    let (top, prefix) = toplevel(source).await?;
-    let base = base.unwrap_or("HEAD");
-    let commit = format!("{base}^{{commit}}");
-    let oid = git(
-        source,
-        &["rev-parse", "--verify", "--end-of-options", &commit],
-    )
-    .await
-    .map_err(|_| Error::invalid(format!("no commit at {base}")))?;
-    let branch = if let Some(branch) = branch {
-        let branch = git(source, &["check-ref-format", "--branch", branch])
-            .await
-            .map_err(|_| Error::invalid(format!("invalid branch name {branch:?}")))?
-            .trim()
-            .to_owned();
-        if branch_exists(source, &branch).await? {
-            return Err(Error::invalid(format!("branch {branch} already exists")));
-        }
-        branch
-    } else {
-        let stem = placement::branch_stem(title);
-        let mut suffix = 1;
-        loop {
-            let name = placement::numbered(&stem, suffix);
-            if !branch_exists(source, &name).await? {
-                break name;
-            }
-            suffix += 1;
-        }
-    };
-    let repo = top
+    let cancel = CancellationToken::new();
+    let source = store::directory(source).await?;
+    let repo = discover(&source, &cancel).await?;
+    let top = repo
+        .identity()
+        .checkout
+        .as_deref()
+        .ok_or(viz_git::Error::Bare)?;
+    let prefix = prefix(&repo, &source)?;
+    let repo_name = top
         .file_name()
         .and_then(|name| name.to_str())
-        .map_or_else(|| "repo".to_owned(), placement::repository_dir);
-    let parent = root.join(repo);
+        .unwrap_or("repo");
+    let parent = root.join(placement::repository_dir(repo_name));
     tokio::fs::create_dir_all(&parent).await?;
-    let stem = placement::worktree_stem(&branch);
-    let mut suffix = 1;
-    let path = loop {
-        let path = parent.join(placement::numbered(&stem, suffix));
-        if !tokio::fs::try_exists(&path).await.unwrap_or(true) {
-            break path;
+    let parent = tokio::fs::canonicalize(parent).await?;
+    if !parent.starts_with(root) {
+        return Err(Error::invalid(
+            "worktree directory is outside the managed root",
+        ));
+    }
+    let names = repo.branches(&cancel).await?;
+    let branch = placement::available_branch(
+        title,
+        branch,
+        names
+            .entries
+            .iter()
+            .filter(|branch| !branch.remote)
+            .map(|branch| branch.name.as_str()),
+    );
+    let path = vacant(&parent, &branch).await?;
+    let cwd = store::path_text(&path.join(prefix))?.to_owned();
+    let path_text = store::path_text(&path)?.to_owned();
+    repo.add_worktree_from(&path, &branch, base.unwrap_or("HEAD"), &cancel)
+        .await?;
+    if let Err(error) = mark(root, &path, &cancel).await {
+        if repo
+            .remove_worktree_with(&path, WorktreeRemoval::Clean, &cancel)
+            .await
+            .is_ok()
+        {
+            let _ = repo.discard_branch(&branch, &cancel).await;
         }
-        suffix += 1;
-    };
-    let path_text = path
-        .to_str()
-        .ok_or_else(|| Error::invalid("worktree path is not UTF-8"))?
-        .to_owned();
-    git(
-        source,
-        &[
-            "worktree",
-            "add",
-            "--no-track",
-            "-b",
-            &branch,
-            "--",
-            &path_text,
-            oid.trim(),
-        ],
-    )
-    .await?;
+        return Err(error);
+    }
     Ok(Placement {
         checkout: Checkout {
-            cwd: below(&path, &prefix)?,
+            cwd,
             worktree: Some(path_text),
         },
         created: Some(branch),
     })
 }
 
-async fn branch_exists(dir: &Path, branch: &str) -> Result<bool, Error> {
-    git_ok(
-        dir,
-        &[
-            "show-ref",
-            "--verify",
-            "--quiet",
-            &format!("refs/heads/{branch}"),
-        ],
-    )
-    .await
-}
-
-/// Removes the linked worktree at `path`, refusing uncommitted changes and
-/// untracked (unignored) files unless `force`. Its branch stays. A worktree
-/// already deleted from disk is pruned from `source`'s repository instead.
-pub(super) async fn remove(source: &Path, path: &str, force: bool) -> Result<(), Error> {
-    if !tokio::fs::try_exists(path).await.unwrap_or(false) {
-        if source == Path::new(path) {
-            return Err(Error::not_found(format!("no worktree at {path}")));
+async fn vacant(parent: &Path, branch: &str) -> Result<PathBuf, Error> {
+    let stem = placement::worktree_stem(branch);
+    for suffix in 1.. {
+        let path = parent.join(placement::numbered(&stem, suffix));
+        match tokio::fs::symlink_metadata(&path).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(path),
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
         }
-        return git(source, &["worktree", "prune"]).await.map(drop);
     }
-    let dir = Path::new(path);
-    if !force && !clean(dir).await? {
-        return Err(Error::invalid(format!(
-            "worktree {path} has uncommitted changes or untracked files"
-        )));
-    }
-    let mut args = vec!["worktree", "remove"];
-    if force {
-        args.push("--force");
-    }
-    args.extend(["--", path]);
-    git(dir, &args).await.map(drop)
+    Err(Error::invalid("no available worktree path"))
 }
 
-/// Whether the checkout at `dir` has no uncommitted changes or untracked
-/// files; ignored files such as build output don't count.
-pub(super) async fn clean(dir: &Path) -> Result<bool, Error> {
-    Ok(git(
-        dir,
-        &["status", "--porcelain", "-z", "--untracked-files=normal"],
+async fn mark(root: &Path, path: &Path, cancel: &CancellationToken) -> Result<(), Error> {
+    let repo = discover(path, cancel).await?;
+    tokio::fs::write(
+        repo.identity().git_dir.join(OWNER_MARKER),
+        store::path_text(root)?,
     )
-    .await?
-    .is_empty())
+    .await?;
+    Ok(())
 }
 
-/// Undoes a [`create`] whose registration failed.
-pub(super) async fn discard(source: &Path, placement: &Placement) {
+pub(super) async fn managed(root: &Path, path: &str) -> bool {
+    let path = Path::new(path);
+    if !path.starts_with(root) {
+        return false;
+    }
+    let cancel = CancellationToken::new();
+    let Ok(repo) = discover(path, &cancel).await else {
+        return false;
+    };
+    repo.identity().linked
+        && repo.identity().checkout.as_deref() == Some(path)
+        && tokio::fs::read_to_string(repo.identity().git_dir.join(OWNER_MARKER))
+            .await
+            .is_ok_and(|owner| root.to_str() == Some(owner.as_str()))
+}
+
+pub(super) async fn remove(root: &Path, path: &str, force: bool) -> Result<(), Error> {
+    if !managed(root, path).await {
+        return Err(placement::Rejection::Unmanaged(path.to_owned()).into());
+    }
+    let cancel = CancellationToken::new();
+    let path = Path::new(path);
+    let repo = discover(path, &cancel).await?;
+    let mode = if force {
+        WorktreeRemoval::Discard
+    } else {
+        WorktreeRemoval::Clean
+    };
+    Ok(repo.remove_worktree_with(path, mode, &cancel).await?)
+}
+
+pub(super) async fn clean(dir: &Path) -> Result<bool, Error> {
+    let cancel = CancellationToken::new();
+    let repo = discover(dir, &cancel).await?;
+    Ok(repo.status(&cancel).await?.is_empty())
+}
+
+pub(super) async fn discard(root: &Path, source: &Path, placement: &Placement) {
     let (Some(path), Some(branch)) = (&placement.checkout.worktree, &placement.created) else {
         return;
     };
-    if let Err(error) = remove(source, path, true).await {
-        tracing::warn!(%path, %error, "rolling back worktree");
-        return;
+    let result = async {
+        let cancel = CancellationToken::new();
+        let repo = discover(source, &cancel).await?;
+        remove(root, path, true).await?;
+        repo.discard_branch(branch, &cancel).await?;
+        Ok::<_, Error>(())
     }
-    if let Err(error) = git(source, &["branch", "-D", "--", branch]).await {
-        tracing::warn!(%branch, %error, "rolling back worktree branch");
+    .await;
+    if let Err(error) = result {
+        tracing::warn!(%path, %error, "rolling back worktree");
     }
 }
 
-/// The directory `prefix` (from `--show-prefix`) below checkout `root`.
-fn below(root: &Path, prefix: &str) -> Result<String, Error> {
-    let prefix = prefix.trim_end_matches('/');
-    let dir = if prefix.is_empty() {
-        root.to_path_buf()
-    } else {
-        root.join(prefix)
-    };
-    dir.into_os_string()
-        .into_string()
-        .map_err(|_| Error::invalid("worktree path is not UTF-8"))
+async fn discover(path: &Path, cancel: &CancellationToken) -> Result<Repository, Error> {
+    Ok(Repository::discover(path, cancel).await?)
+}
+
+fn prefix<'a>(repo: &Repository, path: &'a Path) -> Result<&'a Path, Error> {
+    let root = repo
+        .identity()
+        .checkout
+        .as_deref()
+        .ok_or(viz_git::Error::Bare)?;
+    path.strip_prefix(root)
+        .map_err(|_| Error::invalid("directory is outside the checkout"))
 }

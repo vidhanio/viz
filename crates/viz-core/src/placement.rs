@@ -147,6 +147,27 @@ pub fn branch_stem(title: &str) -> String {
     format!("{BRANCH_PREFIX}{}", slug(title, "thread"))
 }
 
+/// Pick a collision-free generated branch name from the local ref names.
+#[must_use]
+pub fn available_branch<'a>(
+    title: &str,
+    requested: Option<&str>,
+    names: impl IntoIterator<Item = &'a str>,
+) -> String {
+    if let Some(requested) = requested {
+        return requested.to_owned();
+    }
+    let names = names.into_iter().collect::<std::collections::HashSet<_>>();
+    let stem = branch_stem(title);
+    let last = u32::try_from(names.len())
+        .unwrap_or(u32::MAX)
+        .saturating_add(1);
+    (1..=last)
+        .map(|suffix| numbered(&stem, suffix))
+        .find(|candidate| !names.contains(candidate.as_str()))
+        .unwrap_or(stem)
+}
+
 /// The repository's directory under the managed worktrees root.
 #[must_use]
 pub fn repository_dir(name: &str) -> String {

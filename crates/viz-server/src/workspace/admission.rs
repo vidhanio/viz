@@ -61,7 +61,7 @@ impl Workspace {
             .await?;
         let result = self.receive_in(args, Some(&placement)).await;
         if !matches!(result, Ok((_, true))) {
-            worktree::discard(Path::new(&project), &placement).await;
+            worktree::discard(&self.worktrees, Path::new(&project), &placement).await;
         }
         result.map(|(received, _)| received)
     }
