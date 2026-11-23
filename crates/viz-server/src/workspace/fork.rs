@@ -127,6 +127,9 @@ impl Workspace {
         )
         .await?;
         let shared = store::copy_history(&mut tx, source, thread, &cut).await?;
+        if let Some(prompt) = &prompt {
+            copy_prompt_attachments(&mut tx, source, thread, &prompt.attachments).await?;
+        }
         exec(
             &mut tx,
             "UPDATE threads SET forked_from = ?2, forked_at = ?3 WHERE id = ?1",
@@ -159,4 +162,23 @@ impl Workspace {
         self.relist(thread);
         Ok((Forked { thread, prompt }, true))
     }
+}
+
+async fn copy_prompt_attachments(
+    tx: &mut super::sql::Connection,
+    source: viz_protocol::ThreadId,
+    target: viz_protocol::ThreadId,
+    attachments: &[viz_protocol::PromptAttachment],
+) -> Result<(), Error> {
+    for attachment in attachments {
+        exec(
+            tx,
+            "INSERT INTO attachments (thread, id, name, mime, data)
+            SELECT ?1, id, name, mime, data FROM attachments WHERE thread = ?2 AND id = ?3
+            ON CONFLICT DO NOTHING",
+            [target.into(), source.into(), attachment.id.as_str().into()],
+        )
+        .await?;
+    }
+    Ok(())
 }

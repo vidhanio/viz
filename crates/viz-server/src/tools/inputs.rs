@@ -134,6 +134,8 @@ impl From<SendText> for SendInput {
             request_id: input.request_id,
             origin: None,
             attachments: Vec::new(),
+            stored: Vec::new(),
+            context: Vec::new(),
         }
     }
 }

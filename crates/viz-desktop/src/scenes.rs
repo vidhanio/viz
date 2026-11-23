@@ -229,6 +229,7 @@ fn thread() -> ThreadState {
             name: "review".into(),
             description: "Review the current changes".into(),
             hint: Some("[path]".into()),
+            source: viz_client::protocol::CommandSource::Command,
         }],
         queue: Vec::new(),
         attachments: AttachmentCapabilities { images: true },
@@ -261,6 +262,7 @@ fn transcript(attachments: &[&str]) -> Thread {
             EntryData::Prompt {
                 text: "Make the markdown export preserve a final newline.".into(),
                 attachments,
+                context: Vec::new(),
                 origin: None,
             },
             response(
@@ -449,6 +451,7 @@ fn new_agent(s: &mut Desktop) {
             status: viz_client::protocol::HarnessStatus::Ready,
             checked_at: None,
             access: Vec::new(),
+            commands: Vec::new(),
             id: "omp".into(),
             name: "Oh My Pi".into(),
             default: false,
@@ -459,6 +462,7 @@ fn new_agent(s: &mut Desktop) {
             status: viz_client::protocol::HarnessStatus::Ready,
             checked_at: None,
             access: Vec::new(),
+            commands: Vec::new(),
             id: "codex".into(),
             name: "Codex".into(),
             default: false,
@@ -469,6 +473,7 @@ fn new_agent(s: &mut Desktop) {
             status: viz_client::protocol::HarnessStatus::Ready,
             checked_at: None,
             access: Vec::new(),
+            commands: Vec::new(),
             id: "agy".into(),
             name: "Google Antigravity".into(),
             default: true,
@@ -903,16 +908,19 @@ fn slash(s: &mut Desktop) {
                 name: "compact".into(),
                 description: "Summarize the conversation to free context window".into(),
                 hint: Some("[focus]".into()),
+                source: viz_client::protocol::CommandSource::Command,
             },
             SlashCommand {
                 name: "review".into(),
                 description: "Review unstaged changes in the working tree".into(),
                 hint: Some("[path]".into()),
+                source: viz_client::protocol::CommandSource::Command,
             },
             SlashCommand {
                 name: "plan".into(),
                 description: "Draft a step-by-step plan before making edits".into(),
                 hint: None,
+                source: viz_client::protocol::CommandSource::Command,
             },
         ];
     }
@@ -986,6 +994,7 @@ fn prompt(text: &str) -> EntryData {
     EntryData::Prompt {
         text: text.into(),
         attachments: Vec::new(),
+        context: Vec::new(),
         origin: None,
     }
 }

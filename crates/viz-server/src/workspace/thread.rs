@@ -116,6 +116,7 @@ impl Workspace {
                     thread,
                     NewRun {
                         attachments: &attachments,
+                        context: &args.context,
                         ..NewRun::new(args.text.as_deref().unwrap_or_default())
                     },
                 )
@@ -166,14 +167,16 @@ impl Workspace {
             decisions::Submission::Replay(run) => return Ok(Sent { run }),
             decisions::Submission::Enqueue { place, steer } => (place, steer),
         };
-        let attachments =
+        let mut attachments =
             attachments::save(&mut tx, thread, attachments::decode(args.attachments)?).await?;
+        attachments.extend(attachments::stored(&mut tx, thread, &args.stored).await?);
         let run = runs::enqueue(
             &mut tx,
             thread,
             NewRun {
                 origin: args.origin.as_ref(),
                 attachments: &attachments,
+                context: &args.context,
                 request_id: args.request_id.as_deref(),
                 place,
                 ..NewRun::new(&args.text)

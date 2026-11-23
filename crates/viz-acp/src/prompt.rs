@@ -4,6 +4,7 @@ use std::{fmt::Write as _, path::Path};
 
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use url::Url;
+use viz_protocol::PromptContext;
 
 use crate::{
     Capabilities, Error,
@@ -11,6 +12,32 @@ use crate::{
     lifecycle::require,
     schema::{AudioContent, ContentBlock, ImageContent, ResourceLink, TextContent},
 };
+
+/// Resource links for the files and links an input mentions. Relative paths
+/// are taken from `cwd`.
+#[must_use]
+pub fn context_blocks(context: &[PromptContext], cwd: &Path) -> Vec<ContentBlock> {
+    context
+        .iter()
+        .filter_map(|item| match item {
+            PromptContext::File { path } => {
+                let path = cwd.join(path);
+                let uri = Url::from_file_path(&path).ok()?;
+                let name = path.file_name().map_or_else(
+                    || path.display().to_string(),
+                    |name| name.to_string_lossy().into_owned(),
+                );
+                Some(ContentBlock::ResourceLink(ResourceLink::new(
+                    name,
+                    uri.to_string(),
+                )))
+            }
+            PromptContext::Link { uri, name, title } => Some(ContentBlock::ResourceLink(
+                ResourceLink::new(name.clone(), uri.clone()).title(title.clone()),
+            )),
+        })
+        .collect()
+}
 
 /// Creates an ordered ACP prompt from text, typed context, and loaded files.
 ///

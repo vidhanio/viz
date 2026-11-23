@@ -834,6 +834,8 @@ impl Desktop {
                 thread,
                 text: self.draft.text.clone(),
                 attachments: mem::take(&mut self.attachments),
+                stored: Vec::new(),
+                context: Vec::new(),
                 request_id: None,
                 origin: None,
                 mode,

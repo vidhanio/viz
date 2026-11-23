@@ -8,7 +8,7 @@ pub(crate) use viz_protocol::{
     Attachment, AttachmentCapabilities, ClientKind, ConfigOption, ContextUsage as Usage, Entry,
     EntryData as NewEntry, EntryId, EntryPage, Environment, EnvironmentStatus, Harness, Hello,
     HelloParams, LiveTurn, Notification, OptionValue, Origin, PROTOCOL_VERSION, Project,
-    PromptAttachment, QueuedInput, Run, RunId, RunKind, RunStatus, SearchHit,
+    PromptAttachment, PromptContext, QueuedInput, Run, RunId, RunKind, RunStatus, SearchHit,
     SlashCommand as Command, Task, TaskStatus, ThreadId, ThreadState, ThreadSummary,
     ThreadWorktree, ToolCallStatus, WaitResult,
 };

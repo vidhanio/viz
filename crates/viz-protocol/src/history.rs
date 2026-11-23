@@ -151,6 +151,9 @@ pub enum EntryData {
         text: String,
         #[serde(default)]
         attachments: Vec<PromptAttachment>,
+        /// Files and links the input mentioned.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        context: Vec<PromptContext>,
         origin: Option<Origin>,
     },
     Transcript(TranscriptEntry),
@@ -168,6 +171,22 @@ pub enum EntryData {
     TaskResult {
         task: String,
         text: String,
+    },
+}
+
+/// Something an input points the agent at, sent as an ACP resource link.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum PromptContext {
+    /// A file or directory mentioned with `@`; relative to the thread's
+    /// directory unless absolute.
+    File { path: String },
+    /// An issue, pull request, or page mentioned with `#`.
+    Link {
+        uri: String,
+        /// Short label, such as `#42`.
+        name: String,
+        title: Option<String>,
     },
 }
 

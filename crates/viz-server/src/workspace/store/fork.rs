@@ -59,8 +59,15 @@ pub(in crate::workspace) async fn fork_prompt(
     };
     Ok(match from_json(&row.str(0)?)? {
         NewEntry::Prompt {
-            text, attachments, ..
-        } => Some(ForkedPrompt { text, attachments }),
+            text,
+            attachments,
+            context,
+            ..
+        } => Some(ForkedPrompt {
+            text,
+            attachments,
+            context,
+        }),
         _ => None,
     })
 }

@@ -88,6 +88,8 @@ pub struct Harness {
     pub options: Vec<ConfigOption>,
     /// The access modes a new thread can start in.
     pub access: Vec<crate::AccessMode>,
+    /// The commands and skills its latest session offered.
+    pub commands: Vec<crate::SlashCommand>,
 }
 
 /// Whether a harness can run threads. A check runs in the background; the

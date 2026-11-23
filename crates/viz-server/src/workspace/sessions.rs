@@ -311,7 +311,55 @@ async fn update_catalog(
     if let Some(updated) = Catalog::merge(stored.as_ref(), &snapshot.options, &snapshot.opened) {
         save_catalog(db, name, &updated).await?;
     }
+    if !snapshot.commands.is_empty() {
+        let commands: Vec<_> = snapshot
+            .commands
+            .iter()
+            .cloned()
+            .map(slash_command)
+            .collect();
+        exec(
+            db,
+            "UPDATE harness_catalogs SET commands = ?2 WHERE name = ?1",
+            [name.into(), store::json(&commands)?.into()],
+        )
+        .await?;
+    }
     Ok(())
+}
+
+/// The commands a harness's latest session offered.
+pub(super) async fn harness_commands(
+    db: &mut Connection,
+    name: &str,
+) -> Result<Vec<viz_protocol::SlashCommand>, Error> {
+    Ok(row(
+        db,
+        "SELECT commands FROM harness_catalogs WHERE name = ?1",
+        [name.into()],
+    )
+    .await?
+    .and_then(|mut row| row.opt_str(0).transpose())
+    .transpose()?
+    .map(|text| store::from_json(&text))
+    .transpose()?
+    .unwrap_or_default())
+}
+
+fn slash_command(command: viz_acp::Command) -> viz_protocol::SlashCommand {
+    let source = if command.skill.is_some() {
+        viz_protocol::CommandSource::Skill
+    } else if command.name.starts_with("mcp:") {
+        viz_protocol::CommandSource::Mcp
+    } else {
+        viz_protocol::CommandSource::Command
+    };
+    viz_protocol::SlashCommand {
+        name: command.name,
+        description: command.description,
+        hint: command.hint,
+        source,
+    }
 }
 
 pub(super) async fn persist_snapshot(
@@ -320,15 +368,7 @@ pub(super) async fn persist_snapshot(
     snapshot: SessionSnapshot,
     desired: Option<&Desired>,
 ) -> Result<bool, Error> {
-    let commands: Vec<_> = snapshot
-        .commands
-        .into_iter()
-        .map(|command| viz_protocol::SlashCommand {
-            name: command.name,
-            description: command.description,
-            hint: command.hint,
-        })
-        .collect();
+    let commands: Vec<_> = snapshot.commands.into_iter().map(slash_command).collect();
     let usage = snapshot.usage.map(|usage| viz_protocol::ContextUsage {
         used: usage.used,
         size: usage.size,

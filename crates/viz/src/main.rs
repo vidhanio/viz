@@ -182,6 +182,8 @@ async fn send(
             origin: None,
             request_id: None,
             attachments: Vec::new(),
+            stored: Vec::new(),
+            context: Vec::new(),
             mode: None,
         })
         .await?;

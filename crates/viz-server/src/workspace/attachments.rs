@@ -102,6 +102,24 @@ async fn owned(
     })
 }
 
+/// References to attachments the thread already stores, to attach again.
+pub(super) async fn stored(
+    db: &mut Connection,
+    thread: ThreadId,
+    ids: &[String],
+) -> Result<Vec<PromptAttachment>, Error> {
+    let mut found = Vec::with_capacity(ids.len());
+    for id in ids {
+        let mut row = owned(db, thread, id, 0).await?;
+        found.push(PromptAttachment {
+            id: id.clone(),
+            name: row.str(0)?,
+            mime: row.str(1)?,
+        });
+    }
+    Ok(found)
+}
+
 pub(super) async fn inputs(
     db: &mut Connection,
     thread: ThreadId,

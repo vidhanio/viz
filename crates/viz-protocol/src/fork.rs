@@ -54,8 +54,11 @@ pub struct Forked {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ForkedPrompt {
     pub text: String,
-    /// Stored in the source thread.
+    /// Stored in the fork too: send their ids as `stored` to attach them
+    /// again.
     pub attachments: Vec<PromptAttachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::PromptContext>,
 }
 
 /// Where a thread was forked from.

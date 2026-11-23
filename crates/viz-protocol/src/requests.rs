@@ -290,6 +290,13 @@ pub struct SendInput {
     /// Files to attach to this input.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
+    /// Ids of attachments this thread already stores, attached again, such as
+    /// those of a forked prompt.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stored: Vec<String>,
+    /// Files and links the input mentions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::PromptContext>,
 }
 
 /// How to deliver input to a busy thread.

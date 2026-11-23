@@ -76,6 +76,8 @@ impl EventHandler for Handler {
             thread: self.thread,
             mode: None,
             attachments: Vec::new(),
+            stored: Vec::new(),
+            context: Vec::new(),
             text: msg.content,
             request_id: Some(format!("{NAME}:{}", msg.id)),
             origin: Some(Origin {

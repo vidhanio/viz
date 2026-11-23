@@ -45,7 +45,7 @@ pub use github::{
 };
 pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryChunk, EntryData, EntryPage, EntrySource,
-    ListEntries, PlanEntry, PlanPriority, PlanStatus, PromptAttachment, QueuedInput,
+    ListEntries, PlanEntry, PlanPriority, PlanStatus, PromptAttachment, PromptContext, QueuedInput,
     ReadEntryChunk, RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads,
     SteerQueuedInput, TurnTokens, TurnUsage, UpdateQueuedInput, UsageCost,
 };
@@ -73,9 +73,9 @@ pub use requests::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub use threads::{
-    ConfigOption, DependentChoice, DependentOption, LaunchThread, Launched, ListThreads,
-    OptionChoice, OptionKind, OptionValue, SlashCommand, ThreadList, ThreadState, ThreadStatus,
-    ThreadSummary,
+    CommandSource, ConfigOption, DependentChoice, DependentOption, LaunchThread, Launched,
+    ListThreads, OptionChoice, OptionKind, OptionValue, SlashCommand, ThreadList, ThreadState,
+    ThreadStatus, ThreadSummary,
 };
 pub use tool::{
     Exit, Location, Review, Terminal, ToolCall, ToolCallStatus, ToolContent, ToolDiff, VizLink,

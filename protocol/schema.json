@@ -1545,11 +1545,35 @@
                   "string",
                   "null"
                 ]
+              },
+              "source": {
+                "$ref": "#/$defs/CommandSource",
+                "default": "command"
               }
             },
             "required": [
               "name",
               "description"
+            ]
+          },
+          "CommandSource": {
+            "description": "What a slash command runs.",
+            "oneOf": [
+              {
+                "description": "One of the harness's own commands, or one it does not say more about.",
+                "type": "string",
+                "const": "command"
+              },
+              {
+                "description": "A skill, for `$`.",
+                "type": "string",
+                "const": "skill"
+              },
+              {
+                "description": "A prompt from an MCP server.",
+                "type": "string",
+                "const": "mcp"
+              }
             ]
           },
           "QueuedInput": {
@@ -7433,6 +7457,13 @@
                   "$ref": "#/$defs/Attachment"
                 }
               },
+              "context": {
+                "description": "Files and links the first input mentions.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PromptContext"
+                }
+              },
               "requestId": {
                 "type": [
                   "string",
@@ -7494,6 +7525,56 @@
               "name",
               "mime",
               "data"
+            ]
+          },
+          "PromptContext": {
+            "description": "Something an input points the agent at, sent as an ACP resource link.",
+            "oneOf": [
+              {
+                "description": "A file or directory mentioned with `@`; relative to the thread's\ndirectory unless absolute.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ]
+              },
+              {
+                "description": "An issue, pull request, or page mentioned with `#`.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "link"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Short label, such as `#42`.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "name"
+                ]
+              }
             ]
           },
           "WorktreeTarget": {
@@ -7789,6 +7870,13 @@
                 "items": {
                   "$ref": "#/$defs/AccessMode"
                 }
+              },
+              "commands": {
+                "description": "The commands and skills its latest session offered.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/SlashCommand"
+                }
               }
             },
             "required": [
@@ -7798,7 +7886,8 @@
               "icon",
               "status",
               "options",
-              "access"
+              "access",
+              "commands"
             ]
           },
           "HarnessStatus": {
@@ -8161,6 +8250,55 @@
             "required": [
               "option",
               "value"
+            ]
+          },
+          "SlashCommand": {
+            "description": "A slash command offered by the ACP session.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Command name without the slash.",
+                "type": "string"
+              },
+              "description": {
+                "description": "What the command does.",
+                "type": "string"
+              },
+              "hint": {
+                "description": "Optional argument hint.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "source": {
+                "$ref": "#/$defs/CommandSource",
+                "default": "command"
+              }
+            },
+            "required": [
+              "name",
+              "description"
+            ]
+          },
+          "CommandSource": {
+            "description": "What a slash command runs.",
+            "oneOf": [
+              {
+                "description": "One of the harness's own commands, or one it does not say more about.",
+                "type": "string",
+                "const": "command"
+              },
+              {
+                "description": "A skill, for `$`.",
+                "type": "string",
+                "const": "skill"
+              },
+              {
+                "description": "A prompt from an MCP server.",
+                "type": "string",
+                "const": "mcp"
+              }
             ]
           }
         }
@@ -8528,6 +8666,13 @@
               "$ref": "#/$defs/Attachment"
             }
           },
+          "context": {
+            "description": "Files and links the first input mentions.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PromptContext"
+            }
+          },
           "requestId": {
             "type": [
               "string",
@@ -8589,6 +8734,56 @@
               "name",
               "mime",
               "data"
+            ]
+          },
+          "PromptContext": {
+            "description": "Something an input points the agent at, sent as an ACP resource link.",
+            "oneOf": [
+              {
+                "description": "A file or directory mentioned with `@`; relative to the thread's\ndirectory unless absolute.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ]
+              },
+              {
+                "description": "An issue, pull request, or page mentioned with `#`.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "link"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Short label, such as `#42`.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "name"
+                ]
+              }
             ]
           },
           "WorktreeTarget": {
@@ -8930,10 +9125,16 @@
                 "type": "string"
               },
               "attachments": {
-                "description": "Stored in the source thread.",
+                "description": "Stored in the fork too: send their ids as `stored` to attach them\nagain.",
                 "type": "array",
                 "items": {
                   "$ref": "#/$defs/PromptAttachment"
+                }
+              },
+              "context": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PromptContext"
                 }
               }
             },
@@ -8959,6 +9160,56 @@
               "id",
               "name",
               "mime"
+            ]
+          },
+          "PromptContext": {
+            "description": "Something an input points the agent at, sent as an ACP resource link.",
+            "oneOf": [
+              {
+                "description": "A file or directory mentioned with `@`; relative to the thread's\ndirectory unless absolute.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ]
+              },
+              {
+                "description": "An issue, pull request, or page mentioned with `#`.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "link"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Short label, such as `#42`.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "name"
+                ]
+              }
             ]
           }
         }
@@ -9011,6 +9262,20 @@
             "type": "array",
             "items": {
               "$ref": "#/$defs/Attachment"
+            }
+          },
+          "stored": {
+            "description": "Ids of attachments this thread already stores, attached again, such as\nthose of a forked prompt.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "context": {
+            "description": "Files and links the input mentions.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/PromptContext"
             }
           }
         },
@@ -9093,6 +9358,56 @@
               "name",
               "mime",
               "data"
+            ]
+          },
+          "PromptContext": {
+            "description": "Something an input points the agent at, sent as an ACP resource link.",
+            "oneOf": [
+              {
+                "description": "A file or directory mentioned with `@`; relative to the thread's\ndirectory unless absolute.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ]
+              },
+              {
+                "description": "An issue, pull request, or page mentioned with `#`.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "link"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Short label, such as `#42`.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "name"
+                ]
+              }
             ]
           }
         }
@@ -9384,6 +9699,13 @@
                         },
                         "default": []
                       },
+                      "context": {
+                        "description": "Files and links the input mentioned.",
+                        "type": "array",
+                        "items": {
+                          "$ref": "#/$defs/PromptContext"
+                        }
+                      },
                       "origin": {
                         "anyOf": [
                           {
@@ -9545,6 +9867,56 @@
               "id",
               "name",
               "mime"
+            ]
+          },
+          "PromptContext": {
+            "description": "Something an input points the agent at, sent as an ACP resource link.",
+            "oneOf": [
+              {
+                "description": "A file or directory mentioned with `@`; relative to the thread's\ndirectory unless absolute.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path"
+                ]
+              },
+              {
+                "description": "An issue, pull request, or page mentioned with `#`.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "link"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Short label, such as `#42`.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "name"
+                ]
+              }
             ]
           },
           "Origin": {
@@ -12362,6 +12734,13 @@
                     },
                     "default": []
                   },
+                  "context": {
+                    "description": "Files and links the input mentioned.",
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/PromptContext"
+                    }
+                  },
                   "origin": {
                     "anyOf": [
                       {
@@ -12523,6 +12902,56 @@
           "id",
           "name",
           "mime"
+        ]
+      },
+      "PromptContext": {
+        "description": "Something an input points the agent at, sent as an ACP resource link.",
+        "oneOf": [
+          {
+            "description": "A file or directory mentioned with `@`; relative to the thread's\ndirectory unless absolute.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "file"
+              },
+              "path": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "path"
+            ]
+          },
+          {
+            "description": "An issue, pull request, or page mentioned with `#`.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "link"
+              },
+              "uri": {
+                "type": "string"
+              },
+              "name": {
+                "description": "Short label, such as `#42`.",
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "uri",
+              "name"
+            ]
+          }
         ]
       },
       "TranscriptEntry": {
@@ -13813,11 +14242,35 @@
               "string",
               "null"
             ]
+          },
+          "source": {
+            "$ref": "#/$defs/CommandSource",
+            "default": "command"
           }
         },
         "required": [
           "name",
           "description"
+        ]
+      },
+      "CommandSource": {
+        "description": "What a slash command runs.",
+        "oneOf": [
+          {
+            "description": "One of the harness's own commands, or one it does not say more about.",
+            "type": "string",
+            "const": "command"
+          },
+          {
+            "description": "A skill, for `$`.",
+            "type": "string",
+            "const": "skill"
+          },
+          {
+            "description": "A prompt from an MCP server.",
+            "type": "string",
+            "const": "mcp"
+          }
         ]
       },
       "QueuedInput": {

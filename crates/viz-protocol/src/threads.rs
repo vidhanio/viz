@@ -83,6 +83,9 @@ pub struct LaunchThread {
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachments: Vec<Attachment>,
+    /// Files and links the first input mentions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::PromptContext>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// Project directory. Omit to create a private scratch directory.
@@ -210,6 +213,21 @@ pub struct SlashCommand {
     pub description: String,
     /// Optional argument hint.
     pub hint: Option<String>,
+    #[serde(default)]
+    pub source: CommandSource,
+}
+
+/// What a slash command runs.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandSource {
+    /// One of the harness's own commands, or one it does not say more about.
+    #[default]
+    Command,
+    /// A skill, for `$`.
+    Skill,
+    /// A prompt from an MCP server.
+    Mcp,
 }
 
 /// The current application state of a watched thread.

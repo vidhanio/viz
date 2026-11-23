@@ -225,6 +225,11 @@ impl Workspace {
         if let Some(note) = &handoff {
             text = std::borrow::Cow::Owned(format!("{note}{text}"));
         }
+        let cwd = store::binding(&mut *self.db.lock().await, thread)
+            .await?
+            .checkout
+            .cwd;
+        let context = viz_acp::context_blocks(&claim.context, std::path::Path::new(&cwd));
         let id = session.id().to_owned();
         let id = id.as_str();
         let outcome = session
@@ -233,7 +238,7 @@ impl Workspace {
                     text: &text,
                     turn: claim.entry.to_string(),
                     run: claim.id,
-                    context: &[],
+                    context: &context,
                     attachments: &files,
                     cancel: turn.cancel.clone(),
                     steer: turn.steer.clone(),

@@ -15,7 +15,10 @@ use super::{
 };
 use crate::{
     error::Error,
-    wire::{EntryId, NewEntry, Origin, PromptAttachment, Run, RunId, RunKind, RunStatus, ThreadId},
+    wire::{
+        EntryId, NewEntry, Origin, PromptAttachment, PromptContext, Run, RunId, RunKind, RunStatus,
+        ThreadId,
+    },
     workspace::sql::Connection,
 };
 
@@ -23,6 +26,7 @@ pub(super) struct NewRun<'a> {
     pub(super) text: &'a str,
     pub(super) origin: Option<&'a Origin>,
     pub(super) attachments: &'a [PromptAttachment],
+    pub(super) context: &'a [PromptContext],
     pub(super) request_id: Option<&'a str>,
     /// The entry of a task's result that stands in for a prompt: the input is
     /// the agent's, not the user's.
@@ -36,6 +40,7 @@ impl<'a> NewRun<'a> {
             text,
             origin: None,
             attachments: &[],
+            context: &[],
             request_id: None,
             existing_entry: None,
             place: Place::End,
@@ -52,11 +57,14 @@ pub(super) async fn enqueue(
     let attachments = (!new.attachments.is_empty())
         .then(|| store::json(new.attachments))
         .transpose()?;
+    let context = (!new.context.is_empty())
+        .then(|| store::json(new.context))
+        .transpose()?;
     let position = queue_position(db, thread, new.place).await?;
-    let run = row(db, "INSERT INTO runs (thread, status, position, text, origin, attachments, request_id, prompt_entry)
-        VALUES (?1, 'queued', ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id", [
+    let run = row(db, "INSERT INTO runs (thread, status, position, text, origin, attachments, request_id, prompt_entry, context)
+        VALUES (?1, 'queued', ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id", [
         thread.into(), position.into(), new.text.into(), origin.into(), attachments.into(),
-        new.request_id.into(), new.existing_entry.into(),
+        new.request_id.into(), new.existing_entry.into(), context.into(),
     ]).await?.expect("run INSERT RETURNING yielded one row").id(0)?;
     let mut thread_row = row(
         db,
@@ -252,6 +260,7 @@ pub(super) struct Claimed {
     pub(super) text: String,
     pub(super) origin: Option<Origin>,
     pub(super) attachments: Vec<PromptAttachment>,
+    pub(super) context: Vec<PromptContext>,
 }
 
 /// What a worker found to do.
@@ -292,7 +301,7 @@ async fn start(db: &mut Connection, thread: ThreadId, id: RunId) -> Result<Claim
     let mut row = row(
         db,
         "UPDATE runs SET status = 'running' WHERE id = ?1
-        RETURNING text, origin, attachments, prompt_entry",
+        RETURNING text, origin, attachments, prompt_entry, context",
         [id.into()],
     )
     .await?
@@ -309,6 +318,12 @@ async fn start(db: &mut Connection, thread: ThreadId, id: RunId) -> Result<Claim
         .map(store::from_json)
         .transpose()?
         .unwrap_or_default();
+    let context: Vec<PromptContext> = row
+        .opt_str(4)?
+        .as_deref()
+        .map(store::from_json)
+        .transpose()?
+        .unwrap_or_default();
     let (entry, text, origin, attachments) = if let Some(entry) = row.opt_id(3)? {
         (entry, text, origin, attachments)
     } else {
@@ -316,6 +331,7 @@ async fn start(db: &mut Connection, thread: ThreadId, id: RunId) -> Result<Claim
             text,
             origin,
             attachments,
+            context: context.clone(),
         };
         let entry = store::append(db, thread, &data).await?;
         exec(
@@ -328,6 +344,7 @@ async fn start(db: &mut Connection, thread: ThreadId, id: RunId) -> Result<Claim
             text,
             origin,
             attachments,
+            ..
         } = data
         else {
             unreachable!()
@@ -340,6 +357,7 @@ async fn start(db: &mut Connection, thread: ThreadId, id: RunId) -> Result<Claim
         text,
         origin,
         attachments,
+        context,
     })
 }
 

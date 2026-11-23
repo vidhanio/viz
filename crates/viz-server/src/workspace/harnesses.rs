@@ -58,6 +58,7 @@ impl Workspace {
                 self.check(name);
             }
             let options = catalog.map_or_else(Vec::new, |catalog| catalog.options(config, None));
+            let commands = sessions::harness_commands(&mut db, name).await?;
             harnesses.push(Harness {
                 id: name.clone(),
                 name: self.harness_name(name).to_owned(),
@@ -67,6 +68,7 @@ impl Workspace {
                 checked_at,
                 access: requests::access_modes(&options),
                 options,
+                commands,
             });
         }
         drop(db);
