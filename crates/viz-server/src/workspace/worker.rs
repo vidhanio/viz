@@ -423,6 +423,8 @@ impl Workspace {
         };
         if let Some((claim, turn)) = claim {
             self.changed(Some(thread));
+            self.checkpoint(thread, turn.run, viz_protocol::CheckpointEdge::Before)
+                .await;
             let result = driver
                 .interpret(&turn, Box::pin(self.prompt(thread, slot, claim, &turn)))
                 .await;

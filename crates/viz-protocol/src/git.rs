@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::ThreadId;
+use crate::{RunId, ThreadId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct GitStatusRequest {
@@ -89,6 +89,8 @@ pub enum GitDiffTarget {
     Staged,
     Base { revision: String },
     Commit { revision: String },
+    Turn { run: RunId },
+    Thread,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -146,4 +148,21 @@ pub struct GitDiffLine {
     pub old_line: Option<u32>,
     pub new_line: Option<u32>,
     pub content: String,
+}
+
+/// The worktree state at the start or end of a run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointEdge {
+    Before,
+    After,
+}
+
+/// Restore worktree files only if they still match the end of the expected run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RestoreCheckpoint {
+    pub thread: ThreadId,
+    pub run: RunId,
+    pub edge: CheckpointEdge,
+    pub expected_run: RunId,
 }

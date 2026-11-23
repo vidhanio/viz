@@ -4,6 +4,7 @@
 mod admission;
 mod attachments;
 mod checkouts;
+mod checkpoints;
 mod clones;
 mod files;
 mod folders;

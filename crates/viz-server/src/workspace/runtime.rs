@@ -9,7 +9,7 @@ use viz_core::{
     handoff::{self, Reason},
     runs::{self as decisions, Signals, Stop, TurnEnd},
 };
-use viz_protocol::ThreadId;
+use viz_protocol::{CheckpointEdge, ThreadId};
 
 use super::{
     Workspace, attachments,
@@ -59,6 +59,7 @@ impl Workspace {
             (turn, entry)
         };
         let run = turn.run;
+        self.checkpoint(thread, run, CheckpointEdge::Before).await;
         let cancel = &turn.cancel;
         let mut transcript = Transcript::new(entry.to_string(), Arc::default());
         let result = driver
@@ -140,6 +141,7 @@ impl Workspace {
         end: Result<TurnEnd, String>,
     ) -> Result<(), Error> {
         let run = turn.run;
+        self.checkpoint(thread, run, CheckpointEdge::After).await;
         let mut db = self.db.lock().await;
         if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
             return Ok(());

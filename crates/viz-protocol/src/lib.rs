@@ -33,9 +33,9 @@ pub use folders::{
 };
 pub use fork::{ForkPoint, ForkSource, ForkThread, Forked, ForkedPrompt};
 pub use git::{
-    GitAction, GitActionRequest, GitActionResult, GitDiff, GitDiffFile, GitDiffLine,
-    GitDiffRequest, GitDiffTarget, GitFailure, GitFileKind, GitHunk, GitLineStats, GitStatus,
-    GitStatusRequest, UnwatchGit, WatchGit,
+    CheckpointEdge, GitAction, GitActionRequest, GitActionResult, GitDiff, GitDiffFile,
+    GitDiffLine, GitDiffRequest, GitDiffTarget, GitFailure, GitFileKind, GitHunk, GitLineStats,
+    GitStatus, GitStatusRequest, RestoreCheckpoint, UnwatchGit, WatchGit,
 };
 pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryData, EntryPage, ListEntries, PlanEntry,
@@ -134,6 +134,7 @@ methods! {
     CreateFolder => "folder.create", FolderCreated;
     GitStatusRequest => "git.status", GitStatus;
     GitActionRequest => "git.action", GitActionResult;
+    RestoreCheckpoint => "git.restoreCheckpoint", Empty;
     GitDiffRequest => "git.diff", GitDiff;
     WatchGit => "git.watch", GitStatus;
     UnwatchGit => "git.unwatch", Empty;

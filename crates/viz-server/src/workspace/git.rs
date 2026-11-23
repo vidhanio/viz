@@ -141,6 +141,14 @@ impl Workspace {
             GitDiffTarget::Staged => DiffTarget::Staged,
             GitDiffTarget::Base { revision } => DiffTarget::Against(revision),
             GitDiffTarget::Commit { revision } => DiffTarget::Commit(revision),
+            GitDiffTarget::Turn { run } => {
+                return self
+                    .checkpoint_diff(&repo, request.thread, Some(*run))
+                    .await;
+            }
+            GitDiffTarget::Thread => {
+                return self.checkpoint_diff(&repo, request.thread, None).await;
+            }
         };
         Ok(wire_diff(repo.diff(target, &self.closing).await?))
     }

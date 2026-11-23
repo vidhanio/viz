@@ -4847,6 +4847,62 @@
         }
       }
     },
+    "git.restoreCheckpoint": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RestoreCheckpoint",
+        "description": "Restore worktree files only if they still match the end of the expected run.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "edge": {
+            "$ref": "#/$defs/CheckpointEdge"
+          },
+          "expected_run": {
+            "$ref": "#/$defs/RunId"
+          }
+        },
+        "required": [
+          "thread",
+          "run",
+          "edge",
+          "expected_run"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "CheckpointEdge": {
+            "description": "The worktree state at the start or end of a run.",
+            "type": "string",
+            "enum": [
+              "before",
+              "after"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
     "git.diff": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -4928,8 +4984,42 @@
                   "kind",
                   "revision"
                 ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "turn"
+                  },
+                  "run": {
+                    "$ref": "#/$defs/RunId"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "run"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "thread"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
               }
             ]
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
           }
         }
       },

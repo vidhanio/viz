@@ -65,6 +65,10 @@ handlers! {
         viz_protocol::GitActionRequest, viz_protocol::GitActionRequest, |workspace, args| {
             workspace.git_action(args).await
         }
+        viz_protocol::RestoreCheckpoint, viz_protocol::RestoreCheckpoint, |workspace, args| {
+            workspace.restore_checkpoint(args).await?;
+            Ok(Empty {})
+        }
         viz_protocol::GitDiffRequest, viz_protocol::GitDiffRequest, |workspace, args| {
             workspace.git_diff(args).await
         }
