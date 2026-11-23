@@ -269,7 +269,11 @@ fn subagent_copy(
     standing: AgentStanding,
     t: &Theme,
 ) -> El {
-    let subtitle = subagent_subtitle(task, child);
+    let remote_env = task
+        .map(|task| task.environment.as_str())
+        .or(tool.child_environment.as_deref())
+        .filter(|env| s.model.connection.environment.as_deref() != Some(*env));
+    let subtitle = subagent_subtitle(task, child, remote_env.is_some());
     let preview = task
         .and_then(|task| {
             task.error
@@ -278,10 +282,6 @@ fn subagent_copy(
                 .or_else(|| task.result.as_deref().and_then(first_non_empty_line))
         })
         .or_else(|| first_non_empty_line(&tool.output));
-    let remote_env = task
-        .map(|task| task.environment.as_str())
-        .or(tool.child_environment.as_deref())
-        .filter(|env| s.model.connection.environment.as_deref() != Some(*env));
 
     let mut title_line = row().gap(S6).center_y().min_w(0.0).child(
         text(title)
@@ -380,6 +380,7 @@ fn standing_trailing(standing: AgentStanding, t: &Theme) -> El {
 fn subagent_subtitle<'a>(
     task: Option<&'a Task>,
     child: Option<&'a ThreadSummary>,
+    has_env_badge: bool,
 ) -> Option<Cow<'a, str>> {
     if let Some(thread) = child {
         let thinking = thread.thinking.as_deref().map(ui::thinking_label);
@@ -389,6 +390,9 @@ fn subagent_subtitle<'a>(
             (None, Some(thinking)) => thinking,
             (None, None) => Cow::Borrowed(thread.harness_name.as_str()),
         });
+    }
+    if has_env_badge {
+        return None;
     }
     task.map(|task| Cow::Borrowed(task.environment.as_str()))
 }

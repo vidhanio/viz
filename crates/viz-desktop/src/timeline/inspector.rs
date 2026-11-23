@@ -372,6 +372,7 @@ fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
                 } else {
                     "Load full output"
                 })
+                .icon(&ui::DOWNLOAD)
                 .style(InlineStyle::Wash)
                 .disabled(loading || !s.model.connected())
                 .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {

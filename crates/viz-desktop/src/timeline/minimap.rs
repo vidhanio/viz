@@ -47,7 +47,12 @@ pub fn minimap(s: &Desktop, turns: &[TurnView<'_>], t: &Theme, layer: &mut Vec<E
     } else {
         0.0
     };
-    let main_w = (m.panels.window_width - sidebar_w - diff_w).max(0.0);
+    let details_w = if m.selection.selected.is_some() && crate::model::git::inline(m) {
+        crate::model::git::CARD_WIDTH + crate::model::git::CARD_INSET
+    } else {
+        0.0
+    };
+    let main_w = (m.panels.window_width - sidebar_w - diff_w - details_w).max(0.0);
     let gutter = (main_w - CHAT_CONTENT_MAX_WIDTH) * 0.5;
     if gutter < MIN_GUTTER_WIDTH {
         return None;
@@ -191,8 +196,8 @@ fn minimap_tick(
 }
 
 fn preview_popover(anchor_key: &str, turn: &TurnView<'_>, total: usize, t: &Theme) -> El {
-    let prompt = turn.prompt_preview();
-    let reply = turn.reply_preview();
+    let prompt = clean_preview(turn.prompt_preview());
+    let reply = clean_preview(turn.reply_preview());
     let clock = turn.ended_at.or(turn.started_at).and_then(format_clock_hm);
 
     let mut header = row()
@@ -252,4 +257,12 @@ fn preview_popover(anchor_key: &str, turn: &TurnView<'_>, total: usize, t: &Them
         body,
         t,
     )
+}
+
+fn clean_preview(text: &str) -> String {
+    text.replace("**", "")
+        .replace("__", "")
+        .replace('`', "")
+        .trim()
+        .to_owned()
 }

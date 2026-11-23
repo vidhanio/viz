@@ -84,6 +84,10 @@ fn changed_files_header(
 ) -> El {
     let (total_add, total_del) = turn.total_diff_stats();
     let count = turn.changed_files.len();
+    let title = format!(
+        "{count} changed {}",
+        crate::model::plural(count, "file", "files")
+    );
     let mut header = row()
         .key("header")
         .w_full()
@@ -91,12 +95,10 @@ fn changed_files_header(
         .py(S8)
         .gap(S8)
         .center_y()
-        .fill(t.surface_recessed)
-        .child(icon(&ui::FILE_DIFF, ICON_MD).color(t.muted).a11y_hidden())
         .child(
-            text(format!("Changed files ({count})"))
+            text(title)
                 .font(t.small_medium)
-                .color(t.text)
+                .color(t.text_strong)
                 .truncate()
                 .shrink(),
         )

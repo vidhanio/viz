@@ -153,6 +153,19 @@ impl ToolAction {
 /// Converts an unknown MCP or harness tool identifier into readable words.
 #[must_use]
 pub fn humanize_tool(name: &str) -> String {
+    if let Some(rest) = name.strip_prefix("mcp__")
+        && let Some((server, tool)) = rest.split_once("__")
+        && !server.is_empty()
+        && !tool.is_empty()
+    {
+        let action = tool
+            .split(['_', '-', ' ', '.'])
+            .filter(|word| !word.is_empty())
+            .map(str::to_lowercase)
+            .collect::<Vec<_>>()
+            .join(" ");
+        return format!("{server} · {action}");
+    }
     let name = name.rsplit("__").next().unwrap_or(name);
     let mut words = name
         .split(['_', '-', ' ', '.'])

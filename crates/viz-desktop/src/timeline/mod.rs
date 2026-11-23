@@ -170,7 +170,7 @@ fn render_turn(
 
     if !turn.users.is_empty() {
         let len = turn.users.len();
-        let mut users = col().key("users").w_full().pb(S12);
+        let mut users = col().key("users").w_full().pb(S4);
         for (i, user) in turn.users.iter().enumerate() {
             let pos = match (len, i) {
                 (1, _) => StackPos::Single,

@@ -183,12 +183,21 @@ fn thinking_header(
     t: &Theme,
 ) -> El {
     let preview = first_non_empty_line(trimmed)
-        .map(|line| line.trim_matches(['*', '_', '#', '`', ' ']))
+        .map(|line| {
+            line.replace("**", "")
+                .replace("__", "")
+                .replace('`', "")
+                .trim_start_matches(['#', '>', '-', '*', ' '])
+                .trim()
+                .to_owned()
+        })
         .filter(|line| !line.is_empty());
-    let label_text = if streaming {
-        preview.map_or_else(|| "Thinking…".to_owned(), str::to_owned)
+    let label_text = if streaming && !open && expandable {
+        "Thinking".to_owned()
+    } else if streaming {
+        preview.unwrap_or_else(|| "Thinking…".to_owned())
     } else {
-        preview.map_or_else(|| "Reasoning hidden".to_owned(), str::to_owned)
+        preview.unwrap_or_else(|| "Reasoning hidden".to_owned())
     };
     let header_key = format!("{key}-row");
     let mut head = row()
@@ -445,7 +454,7 @@ fn tool_display_label(s: &Desktop, tool: &Tool, action: ToolAction) -> (String, 
     } else {
         humanize_tool(name)
     };
-    if detail.is_empty() || detail == human {
+    if detail.is_empty() || detail == human || detail == name {
         (human, None)
     } else {
         (format!("{human} {detail}"), None)

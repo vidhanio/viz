@@ -9,7 +9,9 @@ use viz_client::protocol::{
 };
 
 use super::{
-    data::{THREAD, preview_text, preview_thread, preview_tool, preview_tool_entry, prompt},
+    data::{
+        THREAD, now_ms, preview_text, preview_thread, preview_tool, preview_tool_entry, prompt,
+    },
     fixtures::seed_workspace,
 };
 use crate::{app::Desktop, model::Model};
@@ -54,99 +56,6 @@ fn seed_populated(m: &mut Model) {
 }
 
 fn populated_turn_one() -> Vec<EntryData> {
-    let table_and_code = "Updated the export pipeline and verified all line-ending modes.\n\n\
-        | Format | Trailing newline | Line endings | Status |\n\
-        | :--- | :--- | :--- | :--- |\n\
-        | CommonMark | Preserved | LF / CRLF | Passing |\n\
-        | GFM Table | Preserved | LF | Passing |\n\
-        | Frontmatter | Normalized | Source | Passing |\n\n\
-        ```rust\n\
-        pub fn join_blocks(blocks: &[Block], ending: LineEnding) -> String {\n\
-            let sep = ending.repeat(2);\n\
-            format!(\"{}{}\", blocks.join(&sep), ending.as_str())\n\
-        }\n\
-        ```\n\n\
-        The helper stays allocation-minimal and preserves `ending` verbatim.";
-
-    vec![
-        EntryData::Prompt {
-            text: "Audit the markdown exporter and add nested folder support.".into(),
-            attachments: vec![PromptAttachment {
-                id: "att-1".into(),
-                name: "export-spec.pdf".into(),
-                mime: "application/pdf".into(),
-            }],
-            context: vec![
-                PromptContext::File {
-                    path: "crates/export/src/markdown.rs".into(),
-                },
-                PromptContext::Link {
-                    uri: "https://example.invalid/issues/42".into(),
-                    name: "#42".into(),
-                    title: Some("Preserve final newline".into()),
-                },
-            ],
-            origin: None,
-        },
-        prompt("Keep the public function signature unchanged if possible."),
-        timed_tool(
-            "read-1",
-            "Read",
-            "read",
-            Some(r#"{"path":"/work/workbench/crates/export/src/markdown.rs"}"#),
-            None,
-            Vec::new(),
-            BASE_TS,
-            BASE_TS + 1_200,
-        ),
-        timed_tool(
-            "edit-1",
-            "Edit",
-            "edit",
-            Some(r#"{"path":"/work/workbench/crates/export/src/markdown.rs"}"#),
-            Some("Updated 1 file."),
-            vec![ToolContent::Diff(ToolDiff {
-                path: "/work/workbench/crates/export/src/markdown.rs".into(),
-                old_text: Some("let body = blocks.join(\"\\n\\n\");\nbody\n".into()),
-                new_text: "let sep = ending.repeat(2);\nlet body = blocks.join(&sep);\nformat!(\"{body}{}\", ending.as_str())\n".into(),
-            })],
-            BASE_TS + 1_500,
-            BASE_TS + 4_100,
-        ),
-        timed_tool(
-            "edit-2",
-            "Edit",
-            "edit",
-            Some(r#"{"path":"/work/workbench/crates/export/src/line_ending.rs"}"#),
-            Some("Created helper."),
-            vec![ToolContent::Diff(ToolDiff {
-                path: "/work/workbench/crates/export/src/line_ending.rs".into(),
-                old_text: None,
-                new_text: "pub enum LineEnding { Lf, Crlf }\nimpl LineEnding {\n    pub fn as_str(&self) -> &'static str { match self { Self::Lf => \"\\n\", Self::Crlf => \"\\r\\n\" } }\n}\n".into(),
-            })],
-            BASE_TS + 4_200,
-            BASE_TS + 6_300,
-        ),
-        timed_tool(
-            "edit-3",
-            "Edit",
-            "edit",
-            Some(r#"{"path":"/work/workbench/Cargo.toml"}"#),
-            Some("Updated metadata."),
-            vec![ToolContent::Diff(ToolDiff {
-                path: "/work/workbench/Cargo.toml".into(),
-                old_text: Some("version = \"0.1.0\"\n".into()),
-                new_text: "version = \"0.2.0\"\n".into(),
-            })],
-            BASE_TS + 6_400,
-            BASE_TS + 8_100,
-        ),
-        timed_text("1:1", table_and_code, false, BASE_TS + 8_100, BASE_TS + 9_400),
-        run_end(Some("end_turn"), Some(usage(12_400, 1_850, 0.14)), None),
-    ]
-}
-
-fn populated_turn_two() -> Vec<EntryData> {
     let long_prompt = "Please also verify every edge case in the export pipeline:\n\
         1. Trailing CRLF preservation across Windows-authored documents.\n\
         2. Nested fenced code blocks containing triple backticks inside four-backtick fences.\n\
@@ -172,17 +81,116 @@ fn populated_turn_two() -> Vec<EntryData> {
             Some(r#"{"command":"cargo clippy --workspace -- -D warnings"}"#),
             Some("Finished dev profile in 3.2s"),
             Vec::new(),
-            BASE_TS + 15_000,
-            BASE_TS + 20_200,
+            BASE_TS,
+            BASE_TS + 5_200,
+        ),
+        timed_text(
+            "1:1",
+            "All nine edge cases are covered and the workspace builds cleanly with zero warnings.",
+            false,
+            BASE_TS + 5_200,
+            BASE_TS + 6_000,
+        ),
+        run_end(Some("end_turn"), Some(usage(4_210, 620, 0.04)), None),
+    ]
+}
+
+fn populated_turn_two() -> Vec<EntryData> {
+    let table_and_code = "Updated the export pipeline and verified all line-ending modes.\n\n\
+        | Format | Trailing newline | Line endings | Status |\n\
+        | :--- | :--- | :--- | :--- |\n\
+        | CommonMark | Preserved | LF / CRLF | Passing |\n\
+        | GFM Table | Preserved | LF | Passing |\n\
+        | Frontmatter | Normalized | Source | Passing |\n\n\
+        ```rust\n\
+        pub fn join_blocks(blocks: &[Block], ending: LineEnding) -> String {\n\
+            let sep = ending.repeat(2);\n\
+            format!(\"{}{}\", blocks.join(&sep), ending.as_str())\n\
+        }\n\
+        ```\n\n\
+        The helper stays allocation-minimal and preserves `ending` verbatim.";
+
+    vec![
+        EntryData::Prompt {
+            text: "Audit `markdown.rs` and add nested folder support.".into(),
+            attachments: vec![PromptAttachment {
+                id: "att-1".into(),
+                name: "export-spec.pdf".into(),
+                mime: "application/pdf".into(),
+            }],
+            context: vec![
+                PromptContext::File {
+                    path: "crates/export/src/markdown.rs".into(),
+                },
+                PromptContext::Link {
+                    uri: "https://example.invalid/issues/42".into(),
+                    name: "#42".into(),
+                    title: Some("Preserve final newline".into()),
+                },
+            ],
+            origin: None,
+        },
+        prompt("Keep the public `join_blocks` signature unchanged if possible."),
+        timed_tool(
+            "read-1",
+            "Read",
+            "read",
+            Some(r#"{"path":"/work/workbench/crates/export/src/markdown.rs"}"#),
+            None,
+            Vec::new(),
+            BASE_TS + 10_000,
+            BASE_TS + 11_200,
+        ),
+        timed_tool(
+            "edit-1",
+            "Edit",
+            "edit",
+            Some(r#"{"path":"/work/workbench/crates/export/src/markdown.rs"}"#),
+            Some("Updated 1 file."),
+            vec![ToolContent::Diff(ToolDiff {
+                path: "/work/workbench/crates/export/src/markdown.rs".into(),
+                old_text: Some("let body = blocks.join(\"\\n\\n\");\nbody\n".into()),
+                new_text: "let sep = ending.repeat(2);\nlet body = blocks.join(&sep);\nformat!(\"{body}{}\", ending.as_str())\n".into(),
+            })],
+            BASE_TS + 11_500,
+            BASE_TS + 14_100,
+        ),
+        timed_tool(
+            "edit-2",
+            "Edit",
+            "edit",
+            Some(r#"{"path":"/work/workbench/crates/export/src/line_ending.rs"}"#),
+            Some("Created helper."),
+            vec![ToolContent::Diff(ToolDiff {
+                path: "/work/workbench/crates/export/src/line_ending.rs".into(),
+                old_text: None,
+                new_text: "pub enum LineEnding { Lf, Crlf }\nimpl LineEnding {\n    pub fn as_str(&self) -> &'static str { match self { Self::Lf => \"\\n\", Self::Crlf => \"\\r\\n\" } }\n}\n".into(),
+            })],
+            BASE_TS + 14_200,
+            BASE_TS + 16_300,
+        ),
+        timed_tool(
+            "edit-3",
+            "Edit",
+            "edit",
+            Some(r#"{"path":"/work/workbench/Cargo.toml"}"#),
+            Some("Updated metadata."),
+            vec![ToolContent::Diff(ToolDiff {
+                path: "/work/workbench/Cargo.toml".into(),
+                old_text: Some("version = \"0.1.0\"\n".into()),
+                new_text: "version = \"0.2.0\"\n".into(),
+            })],
+            BASE_TS + 16_400,
+            BASE_TS + 18_100,
         ),
         timed_text(
             "2:1",
-            "All nine edge cases are covered and the workspace builds cleanly with zero warnings.",
+            table_and_code,
             false,
-            BASE_TS + 20_200,
-            BASE_TS + 21_000,
+            BASE_TS + 18_100,
+            BASE_TS + 19_400,
         ),
-        run_end(Some("end_turn"), Some(usage(4_210, 620, 0.04)), None),
+        run_end(Some("end_turn"), Some(usage(12_400, 1_850, 0.14)), None),
     ]
 }
 
@@ -293,10 +301,12 @@ fn seed_expanded(m: &mut Model) {
 fn seed_working(m: &mut Model) {
     seed_workspace(m);
     m.disclosure.expanded.clear();
-    m.disclosure.tool_clock = BASE_TS + 14_000;
+    let now = now_ms();
+    let start = now - 14_000;
+    m.disclosure.tool_clock = now;
 
-    let live = working_live_turn();
-    let mut transcript = preview_thread(working_committed_entries(), None);
+    let live = working_live_turn(start, now);
+    let mut transcript = preview_thread(working_committed_entries(start), None);
     transcript.sync_acp(Some(&live));
 
     let open = m.cache_mut().open_thread_mut(THREAD);
@@ -309,7 +319,7 @@ fn seed_working(m: &mut Model) {
         .set_fold(Some(THREAD), "acp-1-run-live".into(), true);
 }
 
-fn working_live_turn() -> LiveTurn {
+fn working_live_turn(start: i64, now: i64) -> LiveTurn {
     let mut running_cmd = preview_tool(
         "run-live",
         "Run build",
@@ -325,7 +335,7 @@ fn working_live_turn() -> LiveTurn {
          \x1b[36m    Checking\x1b[0m viz-desktop v0.1.0"
             .into(),
     ));
-    running_cmd.started_at = Some(BASE_TS + 2_000);
+    running_cmd.started_at = Some(start + 2_000);
 
     LiveTurn {
         turn: "1".into(),
@@ -336,8 +346,8 @@ fn working_live_turn() -> LiveTurn {
                 body: Body::Thought(Segment {
                     text: "Verifying that the timeline projection keeps live active work rows visible while earlier read steps fold cleanly under the working header.".into(),
                     message: "1:5".into(),
-                    started_at: Some(BASE_TS + 1_500),
-                    ended_at: Some(BASE_TS + 14_000),
+                    started_at: Some(start + 1_500),
+                    ended_at: Some(now),
                 }),
                 more: false,
             },
@@ -353,8 +363,8 @@ fn working_live_turn() -> LiveTurn {
                 body: Body::Text(Segment {
                     text: "Compiling the workspace to verify every timeline module passes strict clippy lints".into(),
                     message: "1:7".into(),
-                    started_at: Some(BASE_TS + 12_000),
-                    ended_at: Some(BASE_TS + 14_000),
+                    started_at: Some(start + 12_000),
+                    ended_at: Some(now),
                 }),
                 more: false,
             },
@@ -362,7 +372,7 @@ fn working_live_turn() -> LiveTurn {
     }
 }
 
-fn working_committed_entries() -> Vec<EntryData> {
+fn working_committed_entries(start: i64) -> Vec<EntryData> {
     vec![
         prompt("Rebuild the timeline view and verify strict clippy passes."),
         timed_tool(
@@ -372,8 +382,8 @@ fn working_committed_entries() -> Vec<EntryData> {
             Some(r#"{"path":"/work/workbench/src/main.rs"}"#),
             None,
             Vec::new(),
-            BASE_TS,
-            BASE_TS + 300,
+            start,
+            start + 300,
         ),
         timed_tool(
             "r2",
@@ -382,8 +392,8 @@ fn working_committed_entries() -> Vec<EntryData> {
             Some(r#"{"path":"/work/workbench/src/shell.rs"}"#),
             None,
             Vec::new(),
-            BASE_TS + 300,
-            BASE_TS + 600,
+            start + 300,
+            start + 600,
         ),
         timed_tool(
             "r3",
@@ -392,8 +402,8 @@ fn working_committed_entries() -> Vec<EntryData> {
             Some(r#"{"path":"/work/workbench/src/model/mod.rs"}"#),
             None,
             Vec::new(),
-            BASE_TS + 600,
-            BASE_TS + 900,
+            start + 600,
+            start + 900,
         ),
         timed_tool(
             "r4",
@@ -402,8 +412,8 @@ fn working_committed_entries() -> Vec<EntryData> {
             Some(r#"{"path":"/work/workbench/src/ui/mod.rs"}"#),
             None,
             Vec::new(),
-            BASE_TS + 900,
-            BASE_TS + 1_200,
+            start + 900,
+            start + 1_200,
         ),
     ]
 }

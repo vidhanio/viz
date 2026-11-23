@@ -2,7 +2,7 @@
 //! prompts, steer header, attachment cards, `176pt` auto-collapse with gradient
 //! fade, and hover action strip (Copy, Edit from here, Fork, Restore hook).
 
-use rune::{Color, El, Tx, col, el, icon, row, text};
+use rune::{El, Span, Tx, col, el, icon, rich, row, text};
 use rune_kit::IconButtonVariant;
 use viz_client::protocol::{PromptAttachment, PromptContext};
 
@@ -72,6 +72,9 @@ pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
             false,
         );
 
+    let side_actions = matches!(pos, StackPos::First | StackPos::Middle);
+    let actions = hover_actions(s, user, t);
+
     let mut column = col().min_w(0.0).shrink().items_end().gap(S4);
 
     if user.steered {
@@ -83,11 +86,25 @@ pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
     }
 
     if !user.text.is_empty() || !user.context.is_empty() {
-        column = column.child(bubble(user, pos, collapsible, expanded, &fold_key, t));
-    }
-
-    if let Some(actions) = hover_actions(s, user, t) {
-        column = column.child(actions);
+        let card = bubble(user, pos, collapsible, expanded, &fold_key, t);
+        if side_actions && let Some(strip) = actions {
+            column = column.child(
+                row()
+                    .min_w(0.0)
+                    .shrink()
+                    .gap(S4)
+                    .center_y()
+                    .child(strip)
+                    .child(card),
+            );
+        } else {
+            column = column.child(card);
+            if let Some(strip) = actions {
+                column = column.child(strip);
+            }
+        }
+    } else if let Some(strip) = actions {
+        column = column.child(strip);
     }
 
     row()
@@ -136,28 +153,15 @@ fn bubble(
     }
 
     if !user.text.is_empty() {
-        let body = text(&user.text)
-            .key("text")
-            .font(t.body)
-            .color(t.text)
-            .wrap()
-            .selectable(true)
-            .selection_color(t.k.selection());
+        let body = user_body_text(&user.text, t);
 
         if collapsible && !expanded {
-            let fade = el()
-                .key("fade")
-                .pin(Some(0.0), None, Some(0.0), Some(0.0))
-                .h(FADE_HEIGHT)
-                .linear_gradient(0.0, [(0.0, Color::TRANSPARENT), (1.0, t.mine)])
-                .a11y_hidden();
             let clipped = col()
                 .key("clipped")
                 .w_full()
                 .max_h(COLLAPSE_HEIGHT)
-                .clip_rounded(0.0)
-                .child(body)
-                .child(fade);
+                .clip_fade_linear(0.0, 0.0, 0.0, FADE_HEIGHT)
+                .child(body);
             card = card.child(clipped);
         } else {
             card = card.child(body);
@@ -421,6 +425,65 @@ pub fn copy_morph_button(
             Size::Small.icon_size(),
             color,
         ))
+}
+
+fn user_body_text(source: &str, t: &Theme) -> El {
+    let (plain, spans) = parse_inline_code(source, t);
+    if spans.is_empty() {
+        text(source)
+            .key("text")
+            .font(t.body)
+            .color(t.text)
+            .wrap()
+            .selectable(true)
+            .selection_color(t.k.selection())
+    } else {
+        rich(plain, spans)
+            .key("text")
+            .font(t.body)
+            .color(t.text)
+            .wrap()
+            .selectable(true)
+            .selection_color(t.k.selection())
+    }
+}
+
+fn parse_inline_code(source: &str, t: &Theme) -> (String, Vec<Span>) {
+    if !source.contains('`') {
+        return (String::new(), Vec::new());
+    }
+    let mut out = String::with_capacity(source.len());
+    let mut spans = Vec::new();
+    let mut rest = source;
+    while let Some(open) = rest.find('`') {
+        let after_open = &rest[open + 1..];
+        let Some(close) = after_open.find('`') else {
+            break;
+        };
+        let code = &after_open[..close];
+        if code.is_empty() || code.contains('\n') {
+            out.push_str(&rest[..=open]);
+            rest = after_open;
+            continue;
+        }
+        out.push_str(&rest[..open]);
+        let start = out.len();
+        out.push_str(code);
+        let end = out.len();
+        spans.push(Span {
+            mono: true,
+            size: Some(t.mono_small.size),
+            bg: Some(t.canvas.alpha(0.55)),
+            bg_pad: 4.0,
+            ..Span::new(start, end)
+        });
+        rest = &after_open[close + 1..];
+    }
+    if spans.is_empty() {
+        return (String::new(), Vec::new());
+    }
+    out.push_str(rest);
+    (out, spans)
 }
 
 fn should_collapse(text: &str) -> bool {

@@ -223,16 +223,10 @@ fn markdown_body(s: &Desktop, key: &str, source: &str, t: &Theme) -> El {
 
     let mut content = col().w_full().padding(CARD_INSET).child(md);
     if collapsible && !expanded {
-        let fade = el()
-            .key("plan-fade")
-            .h(PLAN_FADE_HEIGHT)
-            .pin(Some(0.0), None, Some(0.0), Some(0.0))
-            .gradient(t.surface.alpha(0.0), t.surface)
-            .a11y_hidden();
-        content = content
-            .max_h(PLAN_COLLAPSE_HEIGHT)
-            .clip_rounded(0.0)
-            .child(fade);
+        content =
+            content
+                .max_h(PLAN_COLLAPSE_HEIGHT)
+                .clip_fade_linear(0.0, 0.0, 0.0, PLAN_FADE_HEIGHT);
     }
 
     if !collapsible {
