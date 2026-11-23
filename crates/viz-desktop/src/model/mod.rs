@@ -92,8 +92,7 @@ pub use self::{
         SearchMatch, TaskResult, Tool, ToolStatus, Transcript, TurnEnd, User,
     },
     turn_format::{
-        diff_line_stats, format_clock_hm, format_turn_duration, format_usage_summary,
-        work_group_summary,
+        diff_line_stats, format_clock_hm, format_cost, format_turn_duration, work_group_summary,
     },
     turns::{ChangedFile, TurnView, project_turns},
 };

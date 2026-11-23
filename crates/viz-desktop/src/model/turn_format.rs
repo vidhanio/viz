@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use viz_client::protocol::{ToolDiff, TurnUsage, UsageCost};
+use viz_client::protocol::{ToolDiff, UsageCost};
 
 use super::{Item, ToolAction};
 
@@ -198,25 +198,6 @@ pub fn format_clock_hm(unix_ms: i64) -> Option<String> {
     Some(format!("{hours:02}:{mins:02}"))
 }
 
-/// Formats token counts compactly (`840`, `14.2k`, `1.25M`).
-#[must_use]
-#[expect(
-    clippy::cast_precision_loss,
-    reason = "human-readable token counts show at most two decimals"
-)]
-pub fn format_tokens(tokens: u64) -> String {
-    if tokens < 1_000 {
-        format!("{tokens}")
-    } else if tokens < 1_000_000 {
-        let k = tokens as f64 / 1_000.0;
-        let text = format!("{k:.1}");
-        format!("{}k", text.trim_end_matches(".0"))
-    } else {
-        let m = tokens as f64 / 1_000_000.0;
-        format!("{m:.2}M")
-    }
-}
-
 /// Formats wire [`UsageCost`] cleanly (e.g. `"$0.04"`).
 #[must_use]
 pub fn format_cost(cost: &UsageCost) -> Option<String> {
@@ -233,19 +214,4 @@ pub fn format_cost(cost: &UsageCost) -> Option<String> {
     } else {
         Some(format!("{amount:.2} {}", cost.currency))
     }
-}
-
-/// Formats combined token and cost metadata from [`TurnUsage`].
-#[must_use]
-pub fn format_usage_summary(usage: &TurnUsage) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(tokens) = &usage.tokens
-        && tokens.total_tokens > 0
-    {
-        parts.push(format!("{} tokens", format_tokens(tokens.total_tokens)));
-    }
-    if let Some(cost) = usage.cost.as_ref().and_then(format_cost) {
-        parts.push(cost);
-    }
-    (!parts.is_empty()).then(|| parts.join(" · "))
 }

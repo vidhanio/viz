@@ -11,7 +11,7 @@ use viz_client::protocol::EntrySource;
 use super::user_row::copy_morph_button;
 use crate::{
     app::Desktop,
-    model::{TurnView, format_clock_hm, format_turn_duration, format_usage_summary},
+    model::{TurnView, format_clock_hm, format_cost, format_turn_duration},
     theme::{
         CHAT_CONTENT_MAX_WIDTH, CHAT_LANE_PADDING_X, HAIRLINE, ICON_MD, RADIUS_CONTROL, S2, S4, S6,
         S12, Size, Theme,
@@ -104,7 +104,12 @@ pub fn prose(
 pub fn turn_footer(s: &Desktop, turn: &TurnView<'_>, is_latest: bool, t: &Theme) -> Option<El> {
     let end = turn.end?;
     let answer = &end.answer;
-    if answer.is_empty() && end.usage.is_none() && !turn.interrupted {
+    let cost = end
+        .usage
+        .as_ref()
+        .and_then(|usage| usage.cost.as_ref())
+        .and_then(format_cost);
+    if answer.is_empty() && cost.is_none() && !turn.interrupted {
         return None;
     }
 
@@ -191,7 +196,7 @@ pub fn turn_footer(s: &Desktop, turn: &TurnView<'_>, is_latest: bool, t: &Theme)
         );
     }
 
-    let meta_parts = build_meta_parts(s, turn);
+    let meta_parts = build_meta_parts(s, turn, cost);
     if !meta_parts.is_empty() {
         bar = bar.child(
             text(meta_parts.join(" · "))
@@ -207,7 +212,7 @@ pub fn turn_footer(s: &Desktop, turn: &TurnView<'_>, is_latest: bool, t: &Theme)
     Some(bar)
 }
 
-fn build_meta_parts(s: &Desktop, turn: &TurnView<'_>) -> Vec<String> {
+fn build_meta_parts(s: &Desktop, turn: &TurnView<'_>, cost: Option<String>) -> Vec<String> {
     let mut parts = Vec::new();
     if let Some(summary) = s
         .model
@@ -227,12 +232,8 @@ fn build_meta_parts(s: &Desktop, turn: &TurnView<'_>) -> Vec<String> {
     if let Some(ms) = turn.duration_ms().filter(|&ms| ms > 0) {
         parts.push(format_turn_duration(ms));
     }
-    if let Some(usage) = turn
-        .end
-        .and_then(|end| end.usage.as_ref())
-        .and_then(format_usage_summary)
-    {
-        parts.push(usage);
+    if let Some(cost) = cost {
+        parts.push(cost);
     }
     if let Some(clock) = turn.ended_at.and_then(format_clock_hm) {
         parts.push(clock);
