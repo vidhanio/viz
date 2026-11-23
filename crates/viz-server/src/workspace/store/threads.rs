@@ -166,9 +166,11 @@ pub(in crate::workspace) struct NewThread<'a> {
 }
 
 pub(in crate::workspace) async fn create_thread(
+    workspace: &Workspace,
     db: &mut Connection,
     new: &NewThread<'_>,
 ) -> Result<ThreadId, Error> {
+    workspace.admit_checkout(new.checkout).await?;
     let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
         new.harness.into(), new.checkout.cwd.as_str().into(), new.project.into(), new.parent.into(), new.parent_environment.into(),

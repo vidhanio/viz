@@ -74,6 +74,7 @@ impl Workspace {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let thread = store::create_thread(
+            self,
             &mut tx,
             &NewThread {
                 harness,

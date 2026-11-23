@@ -5,7 +5,11 @@
 //! whichever checkout root it runs in. Moving never touches files in either
 //! checkout and never removes the one left behind.
 
-use std::{path::Path, sync::Arc};
+use std::{
+    collections::hash_map::Entry,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use viz_core::{
     placement::{self, Checkout, Placed, Site},
@@ -14,7 +18,9 @@ use viz_core::{
 use viz_protocol::{MoveThread, Moved, ThreadId, Worktree, WorktreeList, WorktreeTarget};
 
 use super::{
-    Workspace, runs,
+    Workspace,
+    git::CheckoutAction,
+    runs,
     sql::{exec, row, rows},
     store::{self, Handoff},
     worktree::{self, Placement},
@@ -22,6 +28,19 @@ use super::{
 use crate::error::Error;
 
 impl Workspace {
+    /// Validates a thread's destination under the database lock. A removal
+    /// reserves its root under the same lock before releasing it for Git.
+    pub(super) async fn admit_checkout(&self, checkout: &Checkout) -> Result<(), Error> {
+        let path = Path::new(checkout.worktree.as_deref().unwrap_or(&checkout.cwd));
+        let canonical = tokio::fs::canonicalize(path).await?;
+        if self.git_actions.lock().await.iter().any(|(root, action)| {
+            matches!(action, CheckoutAction::RemoveWorktree) && canonical.starts_with(root)
+        }) {
+            return Err(viz_git::Error::Busy.into());
+        }
+        Ok(())
+    }
+
     /// Whether a thread's checkout is a place in the project it is filed
     /// under.
     pub(super) async fn within(&self, binding: &store::Binding) -> bool {
@@ -137,6 +156,17 @@ impl Workspace {
         path: &str,
         except: Option<ThreadId>,
     ) -> Result<(), Error> {
+        if !worktree::managed(&self.worktrees, path).await {
+            return Err(placement::Rejection::Unmanaged(path.to_owned()).into());
+        }
+        Self::require_unused(db, path, except).await
+    }
+
+    async fn require_unused(
+        db: &mut crate::workspace::sql::Connection,
+        path: &str,
+        except: Option<ThreadId>,
+    ) -> Result<(), Error> {
         let user = row(
             db,
             "SELECT id FROM threads
@@ -148,11 +178,7 @@ impl Workspace {
         .await?
         .map(|row| row.id(0))
         .transpose()?;
-        Ok(placement::removable(
-            path,
-            worktree::managed(&self.worktrees, path).await,
-            user,
-        )?)
+        Ok(placement::removable(path, true, user)?)
     }
 
     pub(super) async fn remove_worktree(
@@ -164,18 +190,26 @@ impl Workspace {
         let path = path.to_owned();
         self.jobs
             .spawn(async move {
-                let mut db = workspace.db.lock().await;
-                workspace.removable(&mut db, &path, None).await?;
-                if workspace
-                    .git_actions
-                    .lock()
-                    .await
-                    .contains_key(Path::new(&path))
+                if !worktree::managed(&workspace.worktrees, &path).await {
+                    return Err(placement::Rejection::Unmanaged(path).into());
+                }
+                let root = PathBuf::from(&path);
                 {
-                    return Err(viz_git::Error::Busy.into());
+                    let mut db = workspace.db.lock().await;
+                    Self::require_unused(&mut db, &path, None).await?;
+                    let mut actions = workspace.git_actions.lock().await;
+                    let Entry::Vacant(slot) = actions.entry(root.clone()) else {
+                        return Err(viz_git::Error::Busy.into());
+                    };
+                    slot.insert(CheckoutAction::RemoveWorktree);
+                    drop(actions);
                 }
                 let result = worktree::remove(&workspace.worktrees, &path, force).await;
-                drop(db);
+                {
+                    let db = workspace.db.lock().await;
+                    workspace.git_actions.lock().await.remove(&root);
+                    drop(db);
+                }
                 result?;
                 workspace.changed(None);
                 Ok(())
@@ -260,6 +294,7 @@ impl Workspace {
             return Err(threads::Rejection::Moved.into());
         }
         runs::idle(&mut tx, thread).await?;
+        self.admit_checkout(&placement.checkout).await?;
         let prompted = row(
             &mut tx,
             "SELECT 1 FROM runs WHERE thread = ?1 LIMIT 1",

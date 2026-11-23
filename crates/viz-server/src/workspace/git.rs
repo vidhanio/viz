@@ -49,7 +49,7 @@ impl Workspace {
             .lock()
             .await
             .get(checkout)
-            .map(|name| (*name).to_owned())
+            .map(|action| action.label().to_owned())
             .or(operation);
         Ok(GitStatus {
             checkout: store::path_text(checkout)?.to_owned(),
@@ -94,7 +94,7 @@ impl Workspace {
             else {
                 return Err(viz_git::Error::Busy.into());
             };
-            entry.insert(action_name(&action));
+            entry.insert(CheckoutAction::Git(action_name(&action)));
             drop(actions);
         }
         self.git_activity();
@@ -159,7 +159,22 @@ impl Workspace {
     }
 }
 
-pub(super) type GitActions = tokio::sync::Mutex<HashMap<PathBuf, &'static str>>;
+pub(super) type GitActions = tokio::sync::Mutex<HashMap<PathBuf, CheckoutAction>>;
+
+/// Exclusive operations on a checkout, including removal with no bound thread.
+pub(super) enum CheckoutAction {
+    Git(&'static str),
+    RemoveWorktree,
+}
+
+impl CheckoutAction {
+    const fn label(&self) -> &'static str {
+        match self {
+            Self::Git(label) => label,
+            Self::RemoveWorktree => "remove_worktree",
+        }
+    }
+}
 
 pub(super) fn checkout_path(repo: &Repository) -> Result<&Path, viz_git::Error> {
     repo.identity()

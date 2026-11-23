@@ -114,6 +114,7 @@ impl Workspace {
             ..SavedSession::default()
         };
         let thread = store::create_thread(
+            self,
             &mut tx,
             &NewThread {
                 harness,
