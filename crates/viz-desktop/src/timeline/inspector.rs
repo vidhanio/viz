@@ -1,0 +1,401 @@
+//! Expanded tool detail inspectors (command ANSI terminal output, file diffs,
+//! search matches, MCP structured I/O, and reasoning traces).
+
+use rune::{El, ScrollSpec, Tx, col, el, rich, row, text};
+use rune_kit::{IconButtonVariant, Markdown, ScrollBar, ScrollBarStyle};
+use viz_client::protocol::EntrySource;
+
+use super::{ansi::parse_ansi, diff_card::file_diffs_inspector, search_card::search_inspector};
+use crate::{
+    app::Desktop,
+    model::{Tool, ToolAction, ToolStatus, is_command, relative_path},
+    theme::{HAIRLINE, RADIUS_CONTROL, S2, S4, S6, S10, S12, S28, Size, Theme},
+    ui::{self, InlineStyle},
+    update::{Msg, TimelineMsg},
+};
+
+/// Maximum command output viewport height (`max-h-80` = `320pt`).
+const CMD_OUTPUT_MAX_H: f32 = 320.0;
+/// Maximum reasoning trace height (`max-h-96` = `384pt`).
+const REASONING_MAX_H: f32 = 384.0;
+
+/// Returns whether `tool` has inspectable detail content.
+#[must_use]
+pub fn has_inspector(tool: &Tool) -> bool {
+    !tool.output.is_empty()
+        || !tool.diffs.is_empty()
+        || !tool.search_matches.is_empty()
+        || tool.raw_input_pretty.is_some()
+        || tool.more
+        || tool.exit_code.is_some_and(|code| code != 0)
+        || tool.exit_signal.is_some()
+}
+
+/// Renders the indented inspector panel for an expanded `tool` row.
+pub fn tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let action = ToolAction::of(tool);
+    let content = if !tool.diffs.is_empty() {
+        file_diffs_inspector(s, tool, t)
+    } else if is_command(&tool.name) {
+        command_inspector(s, tool, t)
+    } else if action == ToolAction::Search && !tool.search_matches.is_empty() {
+        search_inspector(s, tool, t)
+    } else if action == ToolAction::Other && tool.raw_input_pretty.is_some() {
+        dynamic_tool_inspector(s, tool, t)
+    } else {
+        plain_output_inspector(s, tool, action == ToolAction::Read, t)
+    };
+    col()
+        .key(format!("{}-inspector", tool.key))
+        .w_full()
+        .pl(S28)
+        .pt(S2)
+        .pb(S6)
+        .child(content)
+}
+
+/// Renders an expanded reasoning trace beside a `2pt` hairline rule.
+pub fn thought_inspector(key: &str, body: &str, streaming: bool, t: &Theme) -> El {
+    let md = Markdown::new(body.to_owned())
+        .style(t.markdown().body_font(t.ui).text(t.muted).link(t.text))
+        .streaming(streaming)
+        .selectable(true)
+        .on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
+            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
+        })
+        .build(&t.k)
+        .w_full();
+    let scrolled = col()
+        .key(format!("{key}-thought-scroll"))
+        .w_full()
+        .max_h(REASONING_MAX_H)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: streaming,
+        })
+        .child(md)
+        .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k));
+    row()
+        .key(format!("{key}-thought-detail"))
+        .w_full()
+        .pl(S28)
+        .pt(S2)
+        .pb(S6)
+        .gap(S12)
+        .items_stretch()
+        .child(el().w(S2).radius(HAIRLINE).fill(t.hairline).a11y_hidden())
+        .child(scrolled.grow(1.0).shrink().min_w(0.0))
+}
+
+fn command_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let mut card = inspector_frame("cmd-card", t)
+        .child(cmd_header(s, tool, t))
+        .child(ui::rule(t));
+
+    if tool.terminal_truncated {
+        card = card.child(
+            text("Earlier output not shown")
+                .font(t.micro)
+                .color(t.faint)
+                .px(S10)
+                .pt(S6),
+        );
+    }
+
+    let trimmed = tool.output.trim_end();
+    if !trimmed.is_empty() {
+        let (plain, spans) = parse_ansi(trimmed, t);
+        let output_el = if spans.is_empty() {
+            ui::code(&plain, t).font(t.mono_small)
+        } else {
+            rich(plain, spans)
+                .font(t.mono_small)
+                .color(t.text)
+                .wrap_anywhere()
+                .w_full()
+                .selectable(true)
+                .selection_color(t.k.selection())
+        };
+        card = card.child(
+            col()
+                .key("cmd-scroll")
+                .w_full()
+                .max_h(CMD_OUTPUT_MAX_H)
+                .min_h(0.0)
+                .scroll(ScrollSpec {
+                    stick_bottom: tool.status == ToolStatus::Running,
+                })
+                .child(col().w_full().padding(S10).child(output_el))
+                .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k)),
+        );
+    }
+
+    if let Some(chunk_bar) = load_more_bar(s, tool, t) {
+        card = card.child(ui::rule(t)).child(chunk_bar);
+    }
+
+    if let Some(exit_text) = exit_footer_text(tool) {
+        card = card.child(ui::rule(t)).child(
+            row()
+                .key("cmd-exit")
+                .w_full()
+                .px(S10)
+                .py(S4)
+                .child(text(exit_text).font(t.mono_small).color(t.danger)),
+        );
+    }
+
+    card
+}
+
+fn cmd_header(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let cmd = tool
+        .input
+        .as_deref()
+        .unwrap_or(&tool.summary)
+        .trim_start_matches("$ ");
+    let cmd_copy = cmd.to_owned();
+    let copy_id = format!("copy-cmd-{}", tool.key);
+    let copied = s.model.timeline.copied_key.as_deref() == Some(copy_id.as_str());
+
+    let mut header = row()
+        .key("cmd-header")
+        .w_full()
+        .px(S10)
+        .py(S6)
+        .gap(S6)
+        .center_y()
+        .fill(t.surface_recessed)
+        .child(
+            text(format!("$ {cmd}"))
+                .font(t.mono_small)
+                .color(t.text_secondary)
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .truncate()
+                .help_when_truncated(cmd),
+        );
+
+    if let Some(term_id) = tool.terminal_id.clone() {
+        header = header.child(
+            ui::icon_button(
+                &ui::TERMINAL,
+                "Open in terminal",
+                IconButtonVariant::GhostMuted,
+                Size::Micro,
+            )
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::OpenTerminal(term_id.clone())),
+                    tx,
+                );
+            })
+            .build(&t.k)
+            .key("open-terminal"),
+        );
+    }
+
+    header.child(
+        ui::icon_button(
+            if copied { &ui::CHECK } else { &ui::COPY },
+            "Copy command",
+            IconButtonVariant::GhostMuted,
+            Size::Micro,
+        )
+        .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+            s.dispatch(
+                Msg::Timeline(TimelineMsg::CopyWithFeedback {
+                    key: copy_id.clone(),
+                    text: cmd_copy.clone(),
+                }),
+                tx,
+            );
+        })
+        .build(&t.k)
+        .key("copy-cmd"),
+    )
+}
+
+fn dynamic_tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+    let mut card = inspector_frame("mcp-card", t);
+
+    if let Some(args) = &tool.raw_input_pretty {
+        card = card
+            .child(section_head("Arguments", t))
+            .child(ui::rule(t))
+            .child(text_scroll("mcp-args", args, t.mono_small, 180.0, false, t));
+    }
+
+    let trimmed = tool.output.trim_end();
+    if !trimmed.is_empty() {
+        if tool.raw_input_pretty.is_some() {
+            card = card.child(ui::rule(t));
+        }
+        card = card
+            .child(section_head("Output", t))
+            .child(ui::rule(t))
+            .child(text_scroll(
+                "mcp-out",
+                trimmed,
+                t.mono_small,
+                240.0,
+                false,
+                t,
+            ));
+    }
+
+    if let Some(chunk_bar) = load_more_bar(s, tool, t) {
+        card = card.child(ui::rule(t)).child(chunk_bar);
+    }
+    card
+}
+
+fn inspector_frame(key: &str, t: &Theme) -> El {
+    col()
+        .key(key)
+        .w_full()
+        .radius(RADIUS_CONTROL)
+        .fill(t.surface)
+        .border(HAIRLINE, t.hairline)
+        .clip_rounded(RADIUS_CONTROL)
+}
+
+fn plain_output_inspector(s: &Desktop, tool: &Tool, mono: bool, t: &Theme) -> El {
+    let copied = tool.output.clone();
+    let header_title = if mono && !tool.summary.is_empty() {
+        relative_path(&s.model, &tool.summary).to_owned()
+    } else {
+        "Output".to_owned()
+    };
+    let head = row()
+        .w_full()
+        .px(S10)
+        .py(S6)
+        .gap(S6)
+        .center_y()
+        .fill(t.surface_recessed)
+        .child(
+            text(header_title)
+                .font(t.mono_small)
+                .color(t.muted)
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .truncate(),
+        )
+        .child(
+            ui::icon_button(
+                &ui::COPY,
+                "Copy output",
+                IconButtonVariant::GhostMuted,
+                Size::Micro,
+            )
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(Msg::Timeline(TimelineMsg::CopyText(copied.clone())), tx);
+            })
+            .build(&t.k)
+            .key("copy"),
+        );
+    let mut card = inspector_frame("plain-card", t)
+        .child(head)
+        .child(ui::rule(t))
+        .child(text_scroll(
+            "plain-scroll",
+            tool.output.trim_end(),
+            if mono { t.mono_small } else { t.ui },
+            CMD_OUTPUT_MAX_H,
+            tool.status == ToolStatus::Running,
+            t,
+        ));
+    if let Some(chunk_bar) = load_more_bar(s, tool, t) {
+        card = card.child(ui::rule(t)).child(chunk_bar);
+    }
+    card
+}
+
+fn section_head(label: &str, t: &Theme) -> El {
+    row()
+        .w_full()
+        .px(S10)
+        .py(S6)
+        .fill(t.surface_recessed)
+        .child(text(label).font(t.micro_medium).color(t.muted))
+}
+
+fn text_scroll(
+    key: &str,
+    body: &str,
+    font: rune::TextStyle,
+    max_h: f32,
+    stick_bottom: bool,
+    t: &Theme,
+) -> El {
+    col()
+        .key(key)
+        .w_full()
+        .max_h(max_h)
+        .min_h(0.0)
+        .scroll(ScrollSpec { stick_bottom })
+        .child(
+            text(body)
+                .font(font)
+                .color(t.text)
+                .wrap_anywhere()
+                .padding(S10)
+                .selectable(true)
+                .selection_color(t.k.selection()),
+        )
+        .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
+}
+
+fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
+    if !tool.more {
+        return None;
+    }
+    let source = tool
+        .entry
+        .map(|entry| EntrySource::Stored { entry })
+        .or_else(|| tool.live_key.clone().map(|key| EntrySource::Live { key }))?;
+    let loading = s.model.timeline.loading_chunks.contains(&tool.key);
+    let key = tool.key.clone();
+    Some(
+        row()
+            .key("load-more-bar")
+            .w_full()
+            .px(S10)
+            .py(S6)
+            .center_y()
+            .child(
+                ui::inline_button(if loading {
+                    "Loading full output…"
+                } else {
+                    "Load full output"
+                })
+                .style(InlineStyle::Wash)
+                .disabled(loading || !s.model.connected())
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(
+                        Msg::Timeline(TimelineMsg::LoadEntryChunk {
+                            key: key.clone(),
+                            source: source.clone(),
+                        }),
+                        tx,
+                    );
+                })
+                .build(t)
+                .key("load-chunk"),
+            ),
+    )
+}
+
+fn exit_footer_text(tool: &Tool) -> Option<String> {
+    tool.exit_code.filter(|&code| code != 0).map_or_else(
+        || {
+            tool.exit_signal
+                .as_deref()
+                .map(|signal| format!("killed by {signal}"))
+        },
+        |code| Some(format!("exit {code}")),
+    )
+}

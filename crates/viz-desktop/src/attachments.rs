@@ -18,8 +18,6 @@ use crate::{
 const CHIP_HEIGHT: f32 = 26.0;
 /// The widest an attachment chip's name gets before truncating.
 const CHIP_NAME_MAX: f32 = 160.0;
-/// The widest a read-only attachment chip gets in the timeline.
-const CHIP_MAX: f32 = 180.0;
 
 /// Dispatches a file-picker attachment request.
 pub fn choose(s: &mut Desktop, tx: &mut Tx) {
@@ -174,28 +172,4 @@ fn compact_bytes(bytes: usize) -> String {
         let tenths = (bytes * 10 + MIB / 2) / MIB;
         format!("{}.{}MB", tenths / 10, tenths % 10)
     }
-}
-
-/// An attachment's name with a file mark, one small control tall.
-pub fn chip(name: &str, t: &Theme) -> El {
-    row()
-        .h(Size::Small.height())
-        .px(S8)
-        .gap(S4)
-        .center_y()
-        .max_w(CHIP_MAX)
-        .min_w(0.0)
-        .shrink()
-        .radius(RADIUS_CONTROL)
-        .fill(t.chip_fill)
-        .border(HAIRLINE, t.hairline)
-        .child(icon(&ui::FILE_READ, ICON_SMALL).color(t.muted))
-        .child(
-            text(name)
-                .font(t.small)
-                .color(t.text)
-                .shrink()
-                .truncate()
-                .help_when_truncated(name),
-        )
 }

@@ -364,7 +364,7 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
         SidebarMsg::ForkThread(thread) => {
             model.sidebar.menu = None;
             if model.connected() {
-                effects.push(Effect::Server(ServerEffect::Fork(thread)));
+                effects.push(Effect::Server(ServerEffect::fork_head(thread)));
             }
         }
         SidebarMsg::CopyText { label, value } => {

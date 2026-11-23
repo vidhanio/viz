@@ -131,6 +131,11 @@ impl Desktop {
                         tx.scroll_center_in_instant(list, item);
                     }
                 }
+                Effect::ScrollKeyCenterAt { key, center_y } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.scroll_key_center_at(key, center_y);
+                    }
+                }
                 Effect::KeepOnScreen(key) => {
                     if let Some(tx) = tx.as_deref_mut() {
                         tx.keep_on_screen(key);
@@ -156,6 +161,15 @@ impl Desktop {
                     }
                     if let Some(open) = open {
                         self.widgets.diff_pane.set_open(open);
+                    }
+                }
+                Effect::RevealDiffFile(path) => {
+                    crate::git::diff_panel::sync(self);
+                    if let Some(tx) = tx.as_deref_mut()
+                        && let Some(index) = self.widgets.git_diff.file_index(&path)
+                    {
+                        self.widgets.git_diff.set_collapsed(index, false);
+                        self.widgets.git_diff.scroll_to_file(index, tx);
                     }
                 }
             }

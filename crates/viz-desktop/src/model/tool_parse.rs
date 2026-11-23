@@ -1,29 +1,36 @@
 //! Pure projection from wire [`ToolCall`] records into renderable [`Tool`]
 //! rows: command extraction, Antigravity terminal-envelope stripping, readable
-//! JSON unwrapping, and output length capping.
+//! JSON unwrapping, search result parsing, and output length capping.
 
 use std::borrow::Cow;
 
 use serde_json::Value;
-use viz_client::protocol::{ToolCall, ToolCallStatus};
+use viz_client::protocol::{ToolCall, ToolCallStatus, ToolContent};
 
-use super::transcript::{Tool, ToolStatus};
+use super::transcript::{SearchMatch, Tool, ToolStatus};
 
 /// Longest tool-call summary, in characters.
 const SUMMARY_CHARS: usize = 96;
-/// Longest command text shown in a tooltip, in characters.
+/// Longest command text shown in a header or tooltip, in characters.
 const COMMAND_CHARS: usize = 4_000;
-/// Longest tool output an expanded row shows, in characters (its tail for
-/// running output, its head for a result).
-const OUTPUT_CHARS: usize = 6_000;
+/// Longest tool output kept inline before capping, in characters.
+const OUTPUT_CHARS: usize = 12_000;
+/// Longest formatted JSON arguments block kept for MCP/dynamic tool inspection.
+const ARGS_CHARS: usize = 4_000;
+/// Maximum structured search hits extracted for the search inspector.
+const MAX_SEARCH_MATCHES: usize = 60;
 
 /// Projects an ACP [`ToolCall`] into a renderable [`Tool`] row.
 #[must_use]
+#[expect(
+    clippy::too_many_lines,
+    reason = "projects every rich Track A ToolCall field in one cohesive pass"
+)]
 pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
     let name = match record.name.as_deref() {
         Some(
             "bash" | "read" | "read_file" | "write" | "write_file" | "edit" | "edit_file"
-            | "apply_patch" | "grep" | "glob",
+            | "apply_patch" | "grep" | "glob" | "web_search" | "web_fetch",
         ) => record.name.as_deref(),
         _ => record
             .kind
@@ -48,6 +55,9 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
             .or_else(|| record.title.strip_prefix("$ "))
             .map(|text| cap_head(text, COMMAND_CHARS));
     }
+    let raw_input_pretty = arguments
+        .and_then(|value| serde_json::to_string_pretty(value).ok())
+        .map(|text| cap_head(&text, ARGS_CHARS));
     let rendered = record.output_text();
     let output = rendered.as_deref().unwrap_or_default();
     let delegation = record
@@ -59,13 +69,28 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
     } else {
         (output, None)
     };
-    let exit_code = record
-        .exit
-        .as_ref()
+    let terminal_exit = record
+        .terminals
+        .iter()
+        .rev()
+        .find_map(|term| term.exit.as_ref());
+    let exit_ref = record.exit.as_ref().or(terminal_exit);
+    let exit_code = exit_ref
         .and_then(|exit| exit.code)
         .and_then(|code| i32::try_from(code).ok())
         .or(legacy_exit);
-    let preserve_output = command || matches!(name, "read" | "read_file");
+    let exit_signal = exit_ref.and_then(|exit| exit.signal.clone());
+    let terminal_id = record
+        .content
+        .iter()
+        .find_map(|block| match block {
+            ToolContent::Terminal(id) => Some(id.clone()),
+            _ => None,
+        })
+        .or_else(|| record.terminals.first().map(|term| term.id.clone()));
+    let terminal_truncated = record.terminals.iter().any(|term| term.truncated);
+    let preserve_output =
+        command || matches!(name, "read" | "read_file" | "search" | "grep" | "glob");
     let (output, task_id) = readable_output(output, preserve_output, delegation);
     let status = match record.status {
         ToolCallStatus::Pending => ToolStatus::Pending,
@@ -96,26 +121,48 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
     } else {
         summary
     };
+    let search_matches = if matches!(
+        name,
+        "search" | "grep" | "glob" | "web_search" | "fetch" | "web_fetch"
+    ) {
+        parse_search_matches(
+            &output,
+            matches!(name, "web_search" | "fetch" | "web_fetch"),
+        )
+    } else {
+        Vec::new()
+    };
     Tool {
         key: format!("acp-{}-{}", turn.unwrap_or_default(), record.id),
         call_id: record.id.clone(),
         entry: None,
+        live_key: None,
         name: name.to_owned(),
+        raw_name: record.name.clone(),
+        title: record.title.clone(),
         summary,
         input,
         pending_input: (status == ToolStatus::Running)
             .then(|| record.raw_input.as_ref().map(serde_json::Value::to_string))
             .flatten(),
+        raw_input_pretty,
         timeout_ms,
         started_at: record.started_at,
+        ended_at: record.ended_at,
         status,
         exit_code,
+        exit_signal,
         output: cap_output(output, status),
+        terminal_id,
+        terminal_truncated,
+        more: record.more,
+        review: record.review.clone(),
         task_id,
         child: record.viz.as_ref().and_then(|viz| viz.child),
         child_environment: record.viz.as_ref().and_then(|viz| viz.environment.clone()),
         viz: record.viz.as_ref().map(|viz| viz.tool.clone()),
         diffs: record.diffs().cloned().collect(),
+        search_matches,
     }
 }
 
@@ -123,6 +170,78 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
 #[must_use]
 pub fn is_command(name: &str) -> bool {
     matches!(name, "bash" | "execute" | "shell" | "terminal")
+}
+
+/// Extracts structured `path:line:snippet` or URL lines from search tool
+/// output.
+fn parse_search_matches(output: &str, web: bool) -> Vec<SearchMatch> {
+    let mut matches = Vec::new();
+    for raw in output.lines() {
+        if matches.len() >= MAX_SEARCH_MATCHES {
+            break;
+        }
+        let line = raw.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if (web || line.starts_with("http://") || line.starts_with("https://"))
+            && let Some(url_start) = line.find("https://").or_else(|| line.find("http://"))
+        {
+            let prefix = line[..url_start]
+                .trim()
+                .trim_end_matches([':', '-', '—', '|']);
+            let rest = &line[url_start..];
+            let (url, trailing) = rest
+                .split_once(char::is_whitespace)
+                .map_or((rest, ""), |(u, r)| (u, r.trim()));
+            let snippet = if prefix.is_empty() {
+                trailing.to_owned()
+            } else {
+                prefix.to_owned()
+            };
+            matches.push(SearchMatch {
+                target: url.trim_end_matches([')', ']', ',', '.']).to_owned(),
+                line: None,
+                snippet,
+                is_url: true,
+            });
+            continue;
+        }
+        if let Some((path, rest)) = line.split_once(':')
+            && !path.is_empty()
+            && !path.contains(char::is_whitespace)
+        {
+            if let Some((num_str, snippet)) = rest.split_once(':')
+                && let Ok(num) = num_str.parse::<u32>()
+            {
+                matches.push(SearchMatch {
+                    target: path.to_owned(),
+                    line: Some(num),
+                    snippet: snippet.trim().to_owned(),
+                    is_url: false,
+                });
+                continue;
+            }
+            if let Ok(num) = rest.trim().parse::<u32>() {
+                matches.push(SearchMatch {
+                    target: path.to_owned(),
+                    line: Some(num),
+                    snippet: String::new(),
+                    is_url: false,
+                });
+                continue;
+            }
+        }
+        if !line.contains(char::is_whitespace) && (line.contains('/') || line.contains('.')) {
+            matches.push(SearchMatch {
+                target: line.to_owned(),
+                line: None,
+                snippet: String::new(),
+                is_url: false,
+            });
+        }
+    }
+    matches
 }
 
 /// Antigravity sends the model-facing terminal envelope as ACP content:
@@ -213,7 +332,7 @@ fn readable_output(
         Cow::Borrowed(output)
     } else {
         match parsed {
-            Ok(value) => Cow::Owned(json_text(value).unwrap_or_default()),
+            Ok(value) => Cow::Owned(json_text(value).unwrap_or_else(|| output.to_owned())),
             Err(error) if error.is_eof() => Cow::Borrowed(""),
             Err(_) => Cow::Borrowed(output),
         }
@@ -239,8 +358,7 @@ fn json_text(value: Value) -> Option<String> {
     }
 }
 
-/// Project tool-specific fields out of ACP arguments. Unknown structure stays
-/// in the transcript record, not in the presentation.
+/// Project tool-specific fields out of ACP arguments.
 fn tool_input(name: &str, arguments: Option<&Value>) -> (String, Option<String>, Option<u64>) {
     let Some(args) = arguments else {
         return (String::new(), None, None);

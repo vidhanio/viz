@@ -10,12 +10,13 @@ pub mod requests;
 mod runner;
 pub mod server;
 mod terminal;
+mod timeline_rpc;
 
 use std::{path::PathBuf, time::Duration};
 
 use viz_client::protocol::{
-    Attachment, EntryId, LaunchThread, OptionValue, SendInput, ThreadId, TriageAction,
-    WorktreeTarget,
+    Attachment, EntryId, EntrySource, ForkPoint, ForkThread, LaunchThread, OptionValue, SendInput,
+    ThreadId, TriageAction, WorktreeTarget,
 };
 
 use crate::model::{AttachmentTarget, Prefs, UndoTriage};
@@ -120,6 +121,14 @@ pub enum Effect {
         /// Target item key.
         item: String,
     },
+    /// Scroll the enclosing viewport so `key`'s vertical midpoint sits at
+    /// `center_y` points below the viewport's top.
+    ScrollKeyCenterAt {
+        /// Target element key.
+        key: String,
+        /// Vertical center position in viewport points.
+        center_y: f32,
+    },
     /// Anchor element `key` in place across the next layout update.
     KeepOnScreen(String),
     /// Schedule a poll wakeup after `duration`.
@@ -142,6 +151,8 @@ pub enum Effect {
         /// Set width in points when `Some`.
         width: Option<f32>,
     },
+    /// Expand and scroll to `path` inside the docked Diff panel.
+    RevealDiffFile(String),
 }
 
 /// Which shell-owned [`rune::TextEdit`] widget to synchronize.
@@ -258,8 +269,6 @@ pub enum ServerEffect {
     },
     /// Regenerate a thread's title from the harness or conversation.
     Retitle(ThreadId),
-    /// Fork a thread from its head and open the resulting copy.
-    Fork(ThreadId),
     /// Read a project's image icon if its `ETag` changed.
     ReadProjectIcon {
         /// Project path id.
@@ -326,6 +335,23 @@ pub enum ServerEffect {
     },
     /// Send a prompt or steering message to an existing thread.
     SendInput(SendInput),
+    /// Fork a thread from a specific transcript point.
+    Fork {
+        /// Fork parameters.
+        params: ForkThread,
+        /// Whether to populate the new thread's composer with the excluded
+        /// prompt.
+        load_prompt: bool,
+    },
+    /// Lazily download a truncated or omitted transcript entry in chunks.
+    ReadEntryChunk {
+        /// Thread id owning the entry.
+        thread: ThreadId,
+        /// Stable UI key for clearing loading state.
+        key: String,
+        /// Stored entry id or live key selector.
+        source: EntrySource,
+    },
     /// Reconnect immediately instead of waiting for the retry timer.
     Reconnect,
     /// Load attachments on the runtime's blocking pool.
@@ -344,6 +370,24 @@ pub enum ServerEffect {
         /// Short body string.
         body: &'static str,
     },
+}
+
+impl ServerEffect {
+    /// Builds a [`ServerEffect::Fork`] cloning `thread` from its head.
+    #[must_use]
+    pub const fn fork_head(thread: ThreadId) -> Self {
+        Self::Fork {
+            params: ForkThread {
+                thread,
+                point: ForkPoint::Head,
+                worktree: None,
+                harness: None,
+                title: None,
+                request_id: None,
+            },
+            load_prompt: false,
+        }
+    }
 }
 
 /// Thread metadata or lifecycle change sent over RPC.

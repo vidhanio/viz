@@ -7,6 +7,8 @@ mod git;
 mod overlays;
 mod sidebar;
 mod terminal_panel;
+mod timeline;
+mod timeline_cards;
 
 use crate::{app::Desktop, motion_scene::MotionDemo};
 
@@ -40,6 +42,11 @@ pub const SCENES: &[Scene] = &[
     ("motion-reduced", motion_reduced),
     ("activity", activity),
     ("worklog", worklog),
+    ("timeline-populated", timeline::populated),
+    ("timeline-expanded", timeline::expanded),
+    ("timeline-working", timeline::working),
+    ("timeline-cards", timeline_cards::cards),
+    ("timeline-minimap", timeline_cards::minimap),
     ("selectors", overlays::selectors),
     ("model-search", overlays::model_search),
     ("new-agent", overlays::new_agent),

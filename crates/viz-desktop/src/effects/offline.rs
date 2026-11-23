@@ -14,6 +14,10 @@ use crate::{
 };
 
 /// Handles a command while disconnected; returns `false` to reconnect now.
+#[expect(
+    clippy::too_many_lines,
+    reason = "single exhaustive offline fallback match over ServerEffect variants"
+)]
 pub(super) fn handle(
     ui: &AppHandle<Desktop>,
     command: ServerEffect,
@@ -77,6 +81,21 @@ pub(super) fn handle(
                 ServerMsg::EarlierLoaded {
                     thread,
                     transcript: None,
+                },
+            );
+        }
+        ServerEffect::ReadEntryChunk {
+            thread,
+            key,
+            source,
+        } => {
+            dispatch_ui(
+                ui,
+                ServerMsg::EntryChunkLoaded {
+                    thread,
+                    key,
+                    source,
+                    result: Err("Server disconnected".into()),
                 },
             );
         }

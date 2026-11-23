@@ -1,18 +1,15 @@
-//! Thread toolbar and shared task identity formatting.
+//! Thread toolbar.
 
-use std::borrow::Cow;
-
-use rune::{El, col, icon, row, text};
+use rune::{El, icon, row, text};
 use rune_kit::shell::Toolbar;
-use viz_client::protocol::{Task, ThreadId, ThreadSummary};
+use viz_client::protocol::ThreadId;
 
 use crate::{
     app::{Desktop, motion_switch},
     git,
-    model::{first_non_empty_line, thread_title},
     motion::{Switch, TITLE_ENTER_DELAY, TRAVEL_TITLE},
     sidebar,
-    theme::{HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_PAD, Theme},
+    theme::{HAIRLINE, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_PAD, Theme},
     ui,
     update::{Msg, TimelineMsg},
 };
@@ -138,88 +135,6 @@ fn project_mark(project: &viz_client::protocol::Project, t: &Theme) -> El {
                 .truncate(),
         )
         .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint).a11y_hidden())
-}
-
-/// Identity for older timeline entries that have no durable task.
-pub fn agent_identity(thread: &ThreadSummary, t: &Theme) -> El {
-    thread_identity(thread, None, t)
-}
-
-/// Identity shared by durable task rows in the panel and the timeline.
-pub fn task_identity(task: &Task, child: Option<&ThreadSummary>, t: &Theme) -> El {
-    let preview = task
-        .error
-        .as_deref()
-        .and_then(first_non_empty_line)
-        .or_else(|| task.result.as_deref().and_then(first_non_empty_line))
-        .map(|line| text(line).font(t.small).color(t.muted).truncate());
-    if let Some(thread) = child {
-        thread_identity(thread, preview, t)
-    } else {
-        identity(
-            &task.title,
-            &task.environment,
-            icon(&ui::AGENT, ICON)
-                .color(t.muted)
-                .group_color(t.text)
-                .a11y_hidden(),
-            preview,
-            t,
-        )
-    }
-}
-
-fn thread_identity(thread: &ThreadSummary, preview: Option<El>, t: &Theme) -> El {
-    let label = thread_title(thread);
-    let thinking = thread.thinking.as_deref().map(ui::thinking_label);
-    let detail = match (thread.model.as_deref(), thinking) {
-        (Some(model), Some(thinking)) => Cow::Owned(format!("{model} · {thinking}")),
-        (Some(model), None) => Cow::Borrowed(model),
-        (None, Some(thinking)) => thinking,
-        (None, None) => Cow::Borrowed(thread.harness_name.as_str()),
-    };
-    identity(
-        label,
-        &detail,
-        icon(ui::harness_icon(&thread.harness), ICON)
-            .color(t.muted)
-            .group_color(t.text)
-            .a11y_hidden(),
-        preview,
-        t,
-    )
-}
-
-fn identity(label: &str, detail: &str, avatar: El, preview: Option<El>, t: &Theme) -> El {
-    row()
-        .grow(1.0)
-        .shrink()
-        .min_w(0.0)
-        .center_y()
-        .gap(S8)
-        .child(avatar)
-        .child(
-            col()
-                .grow(1.0)
-                .shrink()
-                .min_w(0.0)
-                .child(
-                    text(label)
-                        .font(t.ui_medium)
-                        .color(t.text)
-                        .truncate()
-                        .help_when_truncated(label),
-                )
-                .child(
-                    text(detail)
-                        .font(t.small)
-                        .color(t.muted)
-                        .group_color(t.text)
-                        .truncate()
-                        .help_when_truncated(detail),
-                )
-                .children(preview),
-        )
 }
 
 fn title_text(label: &str, t: &Theme) -> El {

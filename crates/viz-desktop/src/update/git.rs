@@ -281,6 +281,9 @@ fn accept_reply(
         Ok(Reply::Diff(diff)) => {
             model.git.diff = Some(diff.into());
             model.git.diff_error = None;
+            if let Some(path) = model.timeline.selected_diff_file.clone() {
+                effects.push(Effect::RevealDiffFile(path));
+            }
         }
         Ok(Reply::Preview(diff)) => model.git.preview = Some(diff),
         Ok(Reply::Checks(checks)) => model.git.checks = Some(checks),

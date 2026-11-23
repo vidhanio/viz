@@ -20,6 +20,9 @@ pub mod terminal;
 pub mod timeline;
 pub mod tool_parse;
 pub mod transcript;
+mod transcript_fold;
+pub mod turn_format;
+pub mod turns;
 
 use std::{collections::BTreeMap, sync::OnceLock};
 
@@ -62,11 +65,19 @@ pub use self::{
         subagent_call, subagent_title,
     },
     timeline::{
-        ActivityMark, ActivityTally, ToolAction, first_non_empty_line, humanize_tool, is_activity,
-        relative_path, split_path,
+        TimelineState, ToolAction, first_non_empty_line, humanize_tool, plural, relative_path,
+        split_path,
     },
     tool_parse::is_command,
-    transcript::{Item, PlanStep, TaskResult, Tool, ToolStatus, Transcript, TurnEnd, User},
+    transcript::{
+        CompactionNotice, ErrorKind, Item, LoadedEntry, MediaItem, PlanBody, PlanCard, PlanStep,
+        SearchMatch, TaskResult, Tool, ToolStatus, Transcript, TurnEnd, User,
+    },
+    turn_format::{
+        diff_line_stats, format_clock_hm, format_turn_duration, format_usage_summary,
+        work_group_summary,
+    },
+    turns::{ChangedFile, TurnView, project_turns},
 };
 
 /// Default key used in per-environment maps before the server reports an
@@ -95,6 +106,9 @@ pub struct Model {
     pub palette: PaletteState,
     /// Timeline disclosure toggles, tool clock, and window focus.
     pub disclosure: DisclosureState,
+    /// Per-thread timeline fold memory, scroll/minimap tracking, and chunk
+    /// loads.
+    pub timeline: TimelineState,
     /// In-flight optimistic updates carrying undo snapshots for rollback.
     pub optimistic: OptimisticLedger,
 }
@@ -124,6 +138,7 @@ impl Model {
                 tool_clock: now_ms,
                 ..DisclosureState::default()
             },
+            timeline: TimelineState::default(),
             optimistic: OptimisticLedger::default(),
         };
         model.composer.draft_focused = true;

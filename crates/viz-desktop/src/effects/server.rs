@@ -10,7 +10,7 @@ use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, DeleteThread, Entry, EntryId,
-        ListEnvironments, ListTasks, MoveThread, Notification, ThreadId,
+        ListEnvironments, MoveThread, Notification, ThreadId,
     },
 };
 
@@ -289,7 +289,6 @@ impl Session<'_> {
                 change,
             } => self.update_thread(op_id, thread, &change).await,
             ServerEffect::Retitle(thread) => self.retitle_thread(thread).await,
-            ServerEffect::Fork(thread) => self.fork_thread(thread).await,
             ServerEffect::ReadProjectIcon { project, etag } => {
                 self.read_project_icon(project, etag);
                 Ok(())
@@ -355,6 +354,18 @@ impl Session<'_> {
                 Ok(())
             }
             ServerEffect::SendInput(send_input) => self.send_input(send_input).await,
+            ServerEffect::Fork {
+                params,
+                load_prompt,
+            } => self.fork_thread(params, load_prompt).await,
+            ServerEffect::ReadEntryChunk {
+                thread,
+                key,
+                source,
+            } => {
+                self.read_entry_chunk(thread, key, source);
+                Ok(())
+            }
             ServerEffect::Reconnect | ServerEffect::Git { .. } => Ok(()),
         }
     }
@@ -468,30 +479,6 @@ impl Session<'_> {
             }
             toast(self.ui, "Couldn’t release thread watch", error.to_string());
         }
-        Ok(())
-    }
-
-    async fn refresh_tasks(&self) -> viz_client::Result<()> {
-        let tasks = self.client.request(&ListTasks::default()).await?.tasks;
-        self.dispatch(ServerMsg::TasksSynced {
-            environment: self.environment.to_string(),
-            tasks,
-        });
-        Ok(())
-    }
-
-    pub(super) async fn refresh_list(&self) -> viz_client::Result<()> {
-        let (threads, mut projects, ()) = tokio::try_join!(
-            self.client.list_threads(),
-            self.client.list_projects(),
-            self.refresh_tasks(),
-        )?;
-        projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
-        self.dispatch(ServerMsg::WorkspaceSynced {
-            environment: self.environment.to_string(),
-            projects,
-            threads,
-        });
         Ok(())
     }
 }

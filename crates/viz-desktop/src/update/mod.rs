@@ -11,6 +11,7 @@ mod palette;
 pub mod requests;
 mod selection;
 mod server;
+mod server_msg;
 mod server_sync;
 mod shell;
 mod sidebar;

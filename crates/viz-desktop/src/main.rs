@@ -76,12 +76,25 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     }
     let mut overlays = Vec::new();
     let dock = composer::composer(s, t, &mut overlays);
+    let approvals: Vec<El> = requests::approval_rows(s, t).collect();
+    let pending_requests = (!approvals.is_empty()).then(|| {
+        col()
+            .key("approval-rows")
+            .w_full()
+            .gap(theme::S8)
+            .children(approvals)
+    });
     let mut main = col()
         .key("main")
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(timeline::timeline(s, t, &mut overlays));
+        .child(timeline::timeline(
+            s,
+            timeline::TimelineSlots { pending_requests },
+            t,
+            &mut overlays,
+        ));
     if let Some(dock) = dock {
         main = main.child(dock);
     }
@@ -201,13 +214,23 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     }
     let completion = poll_completion(s, clock, tx);
     let palette = poll_palette(s, clock, tx);
-    let tool_timer = if s.model.transcript().acp_partial.iter().any(|item| {
+    let has_tool_timeout = s.model.transcript().acp_partial.iter().any(|item| {
         matches!(item, model::Item::Tool(tool) if tool.status == model::ToolStatus::Running
             && tool.started_at.is_some() && tool.timeout_ms.is_some())
-    }) {
+    });
+    let tick_ms: Option<i64> = if has_tool_timeout {
+        Some(500)
+    } else if s.model.busy() {
+        Some(1_000)
+    } else {
+        None
+    };
+    let tool_timer = if let Some(interval_ms) = tick_ms {
         let now = theme::now_ms();
-        tx.wake_after(Duration::from_millis(500));
-        if now.saturating_sub(s.model.disclosure.tool_clock) >= 500 {
+        tx.wake_after(Duration::from_millis(
+            u64::try_from(interval_ms).unwrap_or(1_000),
+        ));
+        if now.saturating_sub(s.model.disclosure.tool_clock) >= interval_ms {
             s.dispatch(Msg::Timeline(TimelineMsg::TickToolClock(now)), tx);
             true
         } else {

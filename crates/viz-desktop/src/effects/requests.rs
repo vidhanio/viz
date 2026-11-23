@@ -7,10 +7,9 @@ use rune::AppHandle;
 use viz_client::{
     Client, Error, Result,
     protocol::{
-        CreateProject, EntryId, ForkPoint, ForkThread, HarnessOptions, LaunchThread, ListBranches,
-        ListEntries, ListWorktrees, ProjectIconResult, ReadProjectIcon, RemoveProject,
-        RetitleThread, SearchFiles, SearchThreads, SendInput, ThreadId, TriageThread,
-        UpdateProject, UpdateThread,
+        CreateProject, EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks,
+        ListWorktrees, ProjectIconResult, ReadProjectIcon, RemoveProject, RetitleThread,
+        SearchFiles, SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
@@ -149,24 +148,6 @@ impl Session<'_> {
         self.dispatch(ServerMsg::ThreadRetitled {
             thread,
             title: updated.title,
-        });
-        Ok(())
-    }
-
-    pub(super) async fn fork_thread(&self, thread: ThreadId) -> Result<()> {
-        let forked = self
-            .client
-            .request(&ForkThread {
-                thread,
-                point: ForkPoint::Head,
-                worktree: None,
-                harness: None,
-                title: None,
-                request_id: None,
-            })
-            .await?;
-        self.dispatch(ServerMsg::ThreadForked {
-            thread: forked.thread,
         });
         Ok(())
     }
@@ -448,6 +429,30 @@ impl Session<'_> {
         if closed {
             return Err(viz_client::Error::Closed);
         }
+        Ok(())
+    }
+
+    pub(super) async fn refresh_tasks(&self) -> Result<()> {
+        let tasks = self.client.request(&ListTasks::default()).await?.tasks;
+        self.dispatch(ServerMsg::TasksSynced {
+            environment: self.environment.to_string(),
+            tasks,
+        });
+        Ok(())
+    }
+
+    pub(super) async fn refresh_list(&self) -> Result<()> {
+        let (threads, mut projects, ()) = tokio::try_join!(
+            self.client.list_threads(),
+            self.client.list_projects(),
+            self.refresh_tasks(),
+        )?;
+        projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
+        self.dispatch(ServerMsg::WorkspaceSynced {
+            environment: self.environment.to_string(),
+            projects,
+            threads,
+        });
         Ok(())
     }
 }
