@@ -7,6 +7,7 @@ mod checkouts;
 mod files;
 mod follow_ups;
 mod fork;
+mod icons;
 mod notifications;
 mod projects;
 pub(crate) mod rpc;
@@ -75,6 +76,7 @@ pub(crate) struct Workspace {
     due: Notify,
     workers: Workers,
     files: Files,
+    icons: icons::Icons,
     mcp: Mcp,
     closing: CancellationToken,
     jobs: TaskTracker,
@@ -137,6 +139,7 @@ impl Workspace {
             updates: Updates::default(),
             due: Notify::new(),
             workers: Workers::default(),
+            icons: icons::Icons::default(),
             files: Files::default(),
             mcp,
             closing: CancellationToken::new(),

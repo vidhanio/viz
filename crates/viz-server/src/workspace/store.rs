@@ -13,7 +13,7 @@ use serde::{Serialize, de::DeserializeOwned};
 pub(super) use self::{
     fork::{copy_history, fork_prompt, turns},
     lifecycle::{lifecycle, save_lifecycle, standings, touch},
-    projects::{directory, path_text, project, project_at, projects, thread_worktree},
+    projects::{directory, path_text, preferences, project, project_at, projects, thread_worktree},
     threads::{
         Binding, Handoff, NewThread, SavedSession, binding, create_thread, list_threads, metadata,
         require, save_metadata, state, updated,

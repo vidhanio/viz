@@ -1730,6 +1730,10 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
+              "settings": {
+                "description": "Project preferences shared by all clients.",
+                "$ref": "#/$defs/ProjectSettings"
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -1756,10 +1760,232 @@
               }
             },
             "required": [
+              "settings",
               "name",
               "path",
               "createdAt",
               "git"
+            ]
+          },
+          "ProjectSettings": {
+            "description": "Stored project preferences. Optional defaults inherit from the environment.",
+            "type": "object",
+            "properties": {
+              "icon": {
+                "$ref": "#/$defs/ProjectIcon",
+                "default": {
+                  "kind": "automatic"
+                }
+              },
+              "pinned": {
+                "type": "boolean",
+                "default": false
+              },
+              "order": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "default": null
+              },
+              "archived": {
+                "type": "boolean",
+                "default": false
+              },
+              "defaultHarness": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultModel": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultOptions": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/OptionValue"
+                },
+                "default": {}
+              },
+              "defaultCheckout": {
+                "$ref": "#/$defs/DefaultCheckout",
+                "default": "local"
+              },
+              "baseBranch": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "branchPrefix": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "additionalDirectories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "autoSettle": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ProjectAutoSettle"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            }
+          },
+          "ProjectIcon": {
+            "description": "Icon selection advertised in project summaries. Image bytes are read\nseparately.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "automatic"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "ownerAvatar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "lucide"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "color": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "color"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "emoji"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "emoji"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "uploaded"
+                  },
+                  "mediaType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mediaType"
+                ]
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "DefaultCheckout": {
+            "type": "string",
+            "enum": [
+              "local",
+              "newWorktree"
+            ]
+          },
+          "ProjectAutoSettle": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "never"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "afterDays"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                },
+                "required": [
+                  "kind",
+                  "days"
+                ]
+              }
             ]
           }
         }
@@ -3141,6 +3367,10 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
+              "settings": {
+                "description": "Project preferences shared by all clients.",
+                "$ref": "#/$defs/ProjectSettings"
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -3167,10 +3397,232 @@
               }
             },
             "required": [
+              "settings",
               "name",
               "path",
               "createdAt",
               "git"
+            ]
+          },
+          "ProjectSettings": {
+            "description": "Stored project preferences. Optional defaults inherit from the environment.",
+            "type": "object",
+            "properties": {
+              "icon": {
+                "$ref": "#/$defs/ProjectIcon",
+                "default": {
+                  "kind": "automatic"
+                }
+              },
+              "pinned": {
+                "type": "boolean",
+                "default": false
+              },
+              "order": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "default": null
+              },
+              "archived": {
+                "type": "boolean",
+                "default": false
+              },
+              "defaultHarness": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultModel": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultOptions": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/OptionValue"
+                },
+                "default": {}
+              },
+              "defaultCheckout": {
+                "$ref": "#/$defs/DefaultCheckout",
+                "default": "local"
+              },
+              "baseBranch": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "branchPrefix": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "additionalDirectories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "autoSettle": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ProjectAutoSettle"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            }
+          },
+          "ProjectIcon": {
+            "description": "Icon selection advertised in project summaries. Image bytes are read\nseparately.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "automatic"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "ownerAvatar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "lucide"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "color": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "color"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "emoji"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "emoji"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "uploaded"
+                  },
+                  "mediaType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mediaType"
+                ]
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "DefaultCheckout": {
+            "type": "string",
+            "enum": [
+              "local",
+              "newWorktree"
+            ]
+          },
+          "ProjectAutoSettle": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "never"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "afterDays"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                },
+                "required": [
+                  "kind",
+                  "days"
+                ]
+              }
             ]
           }
         }
@@ -3218,6 +3670,10 @@
             "description": "A working directory shared by a group of threads.",
             "type": "object",
             "properties": {
+              "settings": {
+                "description": "Project preferences shared by all clients.",
+                "$ref": "#/$defs/ProjectSettings"
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -3244,10 +3700,232 @@
               }
             },
             "required": [
+              "settings",
               "name",
               "path",
               "createdAt",
               "git"
+            ]
+          },
+          "ProjectSettings": {
+            "description": "Stored project preferences. Optional defaults inherit from the environment.",
+            "type": "object",
+            "properties": {
+              "icon": {
+                "$ref": "#/$defs/ProjectIcon",
+                "default": {
+                  "kind": "automatic"
+                }
+              },
+              "pinned": {
+                "type": "boolean",
+                "default": false
+              },
+              "order": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "default": null
+              },
+              "archived": {
+                "type": "boolean",
+                "default": false
+              },
+              "defaultHarness": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultModel": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultOptions": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/OptionValue"
+                },
+                "default": {}
+              },
+              "defaultCheckout": {
+                "$ref": "#/$defs/DefaultCheckout",
+                "default": "local"
+              },
+              "baseBranch": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "branchPrefix": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "additionalDirectories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "autoSettle": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ProjectAutoSettle"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            }
+          },
+          "ProjectIcon": {
+            "description": "Icon selection advertised in project summaries. Image bytes are read\nseparately.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "automatic"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "ownerAvatar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "lucide"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "color": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "color"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "emoji"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "emoji"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "uploaded"
+                  },
+                  "mediaType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mediaType"
+                ]
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "DefaultCheckout": {
+            "type": "string",
+            "enum": [
+              "local",
+              "newWorktree"
+            ]
+          },
+          "ProjectAutoSettle": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "never"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "afterDays"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                },
+                "required": [
+                  "kind",
+                  "days"
+                ]
+              }
             ]
           }
         }
@@ -3260,6 +3938,17 @@
         "description": "Update a project's display name.",
         "type": "object",
         "properties": {
+          "changes": {
+            "description": "Preferences to merge into the project settings.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProjectSettingsPatch"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "project": {
             "description": "Project id.",
             "type": "string"
@@ -3274,13 +3963,463 @@
         },
         "required": [
           "project"
-        ]
+        ],
+        "$defs": {
+          "ProjectSettingsPatch": {
+            "description": "A patch omits untouched fields. Nullable preferences use explicit set or\nclear.",
+            "type": "object",
+            "properties": {
+              "icon": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ProjectIconChange"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "pinned": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "default": null
+              },
+              "order": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Setting"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "archived": {
+                "type": [
+                  "boolean",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultHarness": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Setting2"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "defaultModel": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Setting2"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "defaultOptions": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": {
+                  "$ref": "#/$defs/OptionValue"
+                },
+                "default": null
+              },
+              "defaultCheckout": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/DefaultCheckout"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "baseBranch": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Setting2"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "branchPrefix": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Setting2"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "additionalDirectories": {
+                "type": [
+                  "array",
+                  "null"
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "default": null
+              },
+              "autoSettle": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Setting3"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            }
+          },
+          "ProjectIconChange": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "automatic"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "ownerAvatar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "lucide"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "color": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "color"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "emoji"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "emoji"
+                ]
+              },
+              {
+                "description": "Base64-encoded raster or SVG image.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "uploaded"
+                  },
+                  "mediaType": {
+                    "type": "string"
+                  },
+                  "data": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mediaType",
+                  "data"
+                ]
+              }
+            ]
+          },
+          "Setting": {
+            "description": "Replace a nullable preference or resume inheriting its default.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "set"
+                  },
+                  "value": {
+                    "type": "integer",
+                    "format": "int64"
+                  }
+                },
+                "required": [
+                  "op",
+                  "value"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "clear"
+                  }
+                },
+                "required": [
+                  "op"
+                ]
+              }
+            ]
+          },
+          "Setting2": {
+            "description": "Replace a nullable preference or resume inheriting its default.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "set"
+                  },
+                  "value": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "op",
+                  "value"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "clear"
+                  }
+                },
+                "required": [
+                  "op"
+                ]
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "DefaultCheckout": {
+            "type": "string",
+            "enum": [
+              "local",
+              "newWorktree"
+            ]
+          },
+          "Setting3": {
+            "description": "Replace a nullable preference or resume inheriting its default.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "set"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/ProjectAutoSettle"
+                  }
+                },
+                "required": [
+                  "op",
+                  "value"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "op": {
+                    "type": "string",
+                    "const": "clear"
+                  }
+                },
+                "required": [
+                  "op"
+                ]
+              }
+            ]
+          },
+          "ProjectAutoSettle": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "never"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "afterDays"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                },
+                "required": [
+                  "kind",
+                  "days"
+                ]
+              }
+            ]
+          }
+        }
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Empty",
         "description": "Empty successful response or notification params.",
         "type": "object"
+      }
+    },
+    "project.icon": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ReadProjectIcon",
+        "description": "Read an image icon only when it differs from an already cached\nrepresentation.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "etag": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "project"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ProjectIconResult",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "none"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "unchanged"
+              },
+              "etag": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "etag"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "image"
+              },
+              "etag": {
+                "type": "string"
+              },
+              "mediaType": {
+                "type": "string"
+              },
+              "data": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "etag",
+              "mediaType",
+              "data"
+            ]
+          }
+        ]
       }
     },
     "project.remove": {

@@ -66,6 +66,22 @@ impl Default for Policy {
     }
 }
 
+/// Apply the project's automatic-settlement override to the environment policy.
+#[must_use]
+pub fn project_policy(override_: Option<viz_protocol::ProjectAutoSettle>) -> Policy {
+    match override_ {
+        None => Policy::default(),
+        Some(viz_protocol::ProjectAutoSettle::Never) => Policy {
+            idle: None,
+            finished_pull_request: false,
+        },
+        Some(viz_protocol::ProjectAutoSettle::AfterDays { days }) => Policy {
+            idle: Some(i64::from(days) * DAY),
+            ..Policy::default()
+        },
+    }
+}
+
 /// Why a thread cannot be triaged as asked.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum Rejection {

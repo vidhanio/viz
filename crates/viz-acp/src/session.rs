@@ -6,7 +6,6 @@ mod state;
 
 use std::{
     fmt,
-    path::Path,
     sync::{Arc, Mutex},
 };
 
@@ -50,7 +49,7 @@ impl Session {
     /// Returns handshake or session request errors.
     pub async fn open(
         config: &HarnessConfig,
-        cwd: &Path,
+        setup: SessionSetup,
         saved: Option<&str>,
         mcp: Option<&McpEndpoint>,
     ) -> Result<Self> {
@@ -58,14 +57,7 @@ impl Session {
             id,
             replay: None,
         });
-        Self::open_with(
-            config,
-            SessionSetup::new(cwd),
-            operation,
-            mcp,
-            ClientEvents::default(),
-        )
-        .await
+        Self::open_with(config, setup, operation, mcp, ClientEvents::default()).await
     }
 
     /// Starts a process and opens, restores, or forks a session.
@@ -93,6 +85,9 @@ impl Session {
             && !setup.mcp_servers.contains(&endpoint.acp_server())
         {
             setup.mcp_servers.push(declaration(&agent, endpoint)?);
+        }
+        if !agent.capabilities().additional_directories {
+            setup.additional_directories.clear();
         }
         let opened = agent.open(&setup, operation).await?;
         let session_id = opened.id.0.to_string();

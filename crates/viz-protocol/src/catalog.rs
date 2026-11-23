@@ -80,6 +80,8 @@ pub struct ContextUsage {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Project {
+    /// Project preferences shared by all clients.
+    pub settings: crate::ProjectSettings,
     /// Display name.
     pub name: String,
     /// Absolute directory path.

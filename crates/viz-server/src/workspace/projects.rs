@@ -3,6 +3,8 @@
 use std::path::Path;
 
 use futures_util::{StreamExt as _, stream::FuturesUnordered};
+use viz_core::projects;
+use viz_protocol::{ProjectSettings, ProjectSettingsPatch, Setting};
 
 use super::{
     Workspace, sessions,
@@ -42,7 +44,59 @@ impl Workspace {
             return Err(Error::invalid(format!("project already exists: {path}")));
         }
         self.changed(None);
-        Ok(store::project_at(path.to_owned(), name, created_at).await)
+        Ok(store::project_at(
+            path.to_owned(),
+            name,
+            created_at,
+            ProjectSettings::default(),
+        )
+        .await)
+    }
+
+    pub(super) async fn update_project(
+        &self,
+        path: &str,
+        name: Option<String>,
+        mut changes: ProjectSettingsPatch,
+    ) -> Result<(), Error> {
+        if name.as_deref().is_some_and(|name| name.trim().is_empty()) {
+            return Err(projects::Rejection::EmptyName.into());
+        }
+        if let Some(Setting::Set(harness)) = &changes.default_harness {
+            self.harness(Some(harness))?;
+        }
+        if let Some(dirs) = &mut changes.additional_directories {
+            for dir in dirs.iter_mut() {
+                let candidate = Path::new(dir);
+                let absolute = if candidate.starts_with("~") {
+                    candidate.to_owned()
+                } else {
+                    Path::new(path).join(candidate)
+                };
+                store::path_text(&store::directory(&absolute).await?)?.clone_into(dir);
+            }
+            dirs.sort_unstable();
+            dirs.dedup();
+        }
+        super::icons::validate_upload(changes.icon.as_ref())?;
+        let mut db = self.db.lock().await;
+        let mut tx = db.transaction().await?;
+        let (current_name, _, current) = store::preferences(&mut tx, path).await?;
+        let updated = projects::edit(current, changes)?;
+        exec(
+            &mut tx,
+            "UPDATE projects SET name = ?2, settings = ?3 WHERE path = ?1",
+            [
+                path.into(),
+                name.unwrap_or(current_name).into(),
+                store::json(&updated)?.into(),
+            ],
+        )
+        .await?;
+        tx.commit().await?;
+        drop(db);
+        self.changed(None);
+        Ok(())
     }
 
     pub(super) async fn remove_project(&self, project: &str) -> Result<(), Error> {

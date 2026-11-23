@@ -10,6 +10,7 @@ mod history;
 mod ids;
 mod lifecycle;
 pub mod peer;
+mod project_settings;
 mod requests;
 mod threads;
 
@@ -33,6 +34,10 @@ pub use ids::{EntryId, RunId, TaskId, ThreadId};
 pub use lifecycle::{
     Attention, AutoSettle, Lifecycle, Position, RetitleThread, SettledBy, Shelf, Standing,
     ThreadUpdated, TriageAction, TriageThread, Triaged,
+};
+pub use project_settings::{
+    DefaultCheckout, ProjectAutoSettle, ProjectIcon, ProjectIconChange, ProjectIconResult,
+    ProjectSettings, ProjectSettingsPatch, ReadProjectIcon, Setting,
 };
 pub use requests::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, GitBranch,
@@ -112,6 +117,7 @@ methods! {
     ListProjects => "projects.list", ProjectList;
     CreateProject<'_> => "project.create", ProjectResult;
     UpdateProject<'_> => "project.update", Empty;
+    ReadProjectIcon => "project.icon", ProjectIconResult;
     RemoveProject<'_> => "project.remove", Empty;
     ListHarnesses => "harnesses.list", HarnessList;
     HarnessOptions => "harnesses.options", HarnessOptionsResult;

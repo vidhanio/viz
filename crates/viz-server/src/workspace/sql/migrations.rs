@@ -18,6 +18,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0002_dismissed_tasks.sql"),
     include_str!("../../../migrations/0003_lifecycle.sql"),
     include_str!("../../../migrations/0004_forks.sql"),
+    include_str!("../../../migrations/0005_project_settings.sql"),
 ];
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

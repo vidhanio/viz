@@ -4,7 +4,7 @@ use std::{sync::Arc, time::Duration};
 
 use tokio::time;
 use viz_core::{
-    lifecycle::{self, List, Policy},
+    lifecycle::{self, List},
     threads,
 };
 use viz_protocol::{
@@ -98,7 +98,7 @@ impl Workspace {
             let mut db = self.db.lock().await;
             let mut tx = db.transaction().await?;
             for thread in store::standings(&mut tx).await? {
-                let policy = Policy::default();
+                let policy = lifecycle::project_policy(thread.auto_settle);
                 let current = &thread.lifecycle;
                 if let Some(next) = lifecycle::on_time(current, &thread.activity, policy, now) {
                     store::save_lifecycle(&mut tx, thread.thread, &next).await?;

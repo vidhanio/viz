@@ -5,8 +5,12 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use viz_core::projects::Preferences;
+use viz_protocol::ProjectSettings;
+
 use super::super::{
     sql::{Connection, row, rows},
+    store::from_json,
     worktree,
 };
 use crate::{
@@ -43,14 +47,22 @@ pub(in crate::workspace) async fn project(
     db: &mut Connection,
     path: &str,
 ) -> Result<Project, Error> {
+    let (name, created_at, prefs) = preferences(db, path).await?;
+    Ok(project_at(path.to_owned(), name, created_at, prefs.settings).await)
+}
+
+pub(in crate::workspace) async fn preferences(
+    db: &mut Connection,
+    path: &str,
+) -> Result<(String, i64, Preferences), Error> {
     let mut row = row(
         db,
-        "SELECT name, created_at FROM projects WHERE path = ?1",
+        "SELECT name, created_at, settings FROM projects WHERE path = ?1",
         [path.into()],
     )
     .await?
     .ok_or_else(|| Error::NoProject(path.to_owned()))?;
-    Ok(project_at(path.to_owned(), row.str(0)?, row.i64(1)?).await)
+    Ok((row.str(0)?, row.i64(1)?, from_json(&row.str(2)?)?))
 }
 
 /// A project with its checkout's Git state.
@@ -58,9 +70,11 @@ pub(in crate::workspace) async fn project_at(
     path: String,
     name: String,
     created_at: i64,
+    settings: ProjectSettings,
 ) -> Project {
     let checkout = worktree::head(Path::new(&path)).await;
     Project {
+        settings,
         git: checkout.is_some(),
         branch: checkout.flatten(),
         path,
@@ -81,13 +95,28 @@ pub(in crate::workspace) async fn thread_worktree(path: Option<String>) -> Optio
 pub(in crate::workspace) async fn projects(db: &mut Connection) -> Result<Vec<Project>, Error> {
     let records = rows(
         db,
-        "SELECT path, name, created_at FROM projects ORDER BY name, path",
+        "SELECT path, name, created_at, settings FROM projects ORDER BY name, path",
         [],
     )
     .await?;
     let mut projects = Vec::new();
     for mut record in records {
-        projects.push(project_at(record.str(0)?, record.str(1)?, record.i64(2)?).await);
+        let prefs: Preferences = from_json(&record.str(3)?)?;
+        projects.push(
+            project_at(
+                record.str(0)?,
+                record.str(1)?,
+                record.i64(2)?,
+                prefs.settings,
+            )
+            .await,
+        );
     }
+    projects.sort_by_key(|project| {
+        (
+            !project.settings.pinned,
+            project.settings.order.unwrap_or(i64::MAX),
+        )
+    });
     Ok(projects)
 }

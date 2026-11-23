@@ -6,6 +6,7 @@ pub mod handoff;
 pub mod lifecycle;
 pub mod options;
 pub mod placement;
+pub mod projects;
 pub mod runs;
 pub mod tasks;
 pub mod threads;

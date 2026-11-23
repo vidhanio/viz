@@ -8,17 +8,14 @@ use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, ForkThread,
     HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches, ListEntries, ListProjects,
-    ListWorktrees, MoveThread, ProjectList, ProjectResult, ReadProject, ReadThreadState,
-    RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId, SearchFiles,
-    SearchHits, SearchThreads, SendInput, SteerQueuedInput, StopThread, ThreadId, ThreadList,
-    ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
+    ListWorktrees, MoveThread, ProjectList, ProjectResult, ReadProject, ReadProjectIcon,
+    ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId,
+    SearchFiles, SearchHits, SearchThreads, SendInput, SteerQueuedInput, StopThread, ThreadId,
+    ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread,
+    WaitThread,
 };
 
-use super::{
-    Workspace, runs,
-    sql::{exec, row},
-    store, worktree,
-};
+use super::{Workspace, runs, sql::row, store, worktree};
 use crate::{error::Error, rpc::handlers, wire::OptionValue};
 
 handlers! {
@@ -54,19 +51,12 @@ handlers! {
         CreateProject<'static>, ProjectCreate, |workspace, ProjectCreate { path, name }| {
             Ok(ProjectResult { project: workspace.create_project(&path, name).await? })
         }
-        UpdateProject<'static>, ProjectUpdate, |workspace, ProjectUpdate { project, name }| {
-            let mut db = workspace.db.lock().await;
-            store::project(&mut db, &project).await?;
-            if let Some(name) = name {
-                if name.is_empty() {
-                    return Err(Error::invalid("project name must not be empty"));
-                }
-                exec(&mut db, "UPDATE projects SET name = ?2 WHERE path = ?1",
-                    [project.into(), name.into()]).await?;
-                drop(db);
-                workspace.changed(None);
-            }
+        UpdateProject<'static>, ProjectUpdate, |workspace, ProjectUpdate { project, name, changes }| {
+            workspace.update_project(&project, name, changes.unwrap_or_default()).await?;
             Ok(Empty {})
+        }
+        ReadProjectIcon, ReadProjectIcon, |workspace, args| {
+            workspace.project_icon(args).await
         }
         RemoveProject<'static>, ProjectKey, |workspace, ProjectKey { project }| {
             workspace.remove_project(&project).await?;
@@ -243,6 +233,7 @@ pub(crate) struct ProjectCreate {
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub(crate) struct ProjectUpdate {
+    pub(crate) changes: Option<viz_protocol::ProjectSettingsPatch>,
     pub(crate) project: String,
     pub(crate) name: Option<String>,
 }

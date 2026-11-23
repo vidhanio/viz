@@ -29,8 +29,16 @@ impl Workspace {
     /// Launches a thread; a worktree target is resolved, and a new worktree
     /// created, before the thread is recorded, and removed again if the
     /// launch fails or repeats an earlier request.
-    pub(super) async fn launch(self: &Arc<Self>, args: LaunchThread) -> Result<Launched, Error> {
+    pub(super) async fn launch(
+        self: &Arc<Self>,
+        mut args: LaunchThread,
+    ) -> Result<Launched, Error> {
         threads::validate_request_id(args.request_id.as_deref())?;
+        if let Some(project) = &args.project {
+            let (_, _, preferences) =
+                store::preferences(&mut *self.db.lock().await, project).await?;
+            viz_core::projects::launch_defaults(&mut args, preferences.settings);
+        }
         let Some(target) = args.worktree.clone() else {
             return self
                 .launch_in(args, None)

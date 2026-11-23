@@ -152,13 +152,17 @@ pub fn branch_stem(title: &str) -> String {
 pub fn available_branch<'a>(
     title: &str,
     requested: Option<&str>,
+    prefix: Option<&str>,
     names: impl IntoIterator<Item = &'a str>,
 ) -> String {
     if let Some(requested) = requested {
         return requested.to_owned();
     }
     let names = names.into_iter().collect::<std::collections::HashSet<_>>();
-    let stem = branch_stem(title);
+    let stem = prefix.map_or_else(
+        || branch_stem(title),
+        |prefix| format!("{prefix}{}", slug(title, "thread")),
+    );
     let last = u32::try_from(names.len())
         .unwrap_or(u32::MAX)
         .saturating_add(1);

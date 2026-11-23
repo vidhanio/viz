@@ -4,7 +4,7 @@
 //! JSON-RPC codes.
 
 use viz_core::{
-    fork, lifecycle, placement,
+    fork, lifecycle, placement, projects,
     runs::{Busy, QueueRejection},
     tasks, threads,
 };
@@ -36,6 +36,8 @@ pub(crate) enum Error {
     Triage(#[from] lifecycle::Rejection),
     #[error(transparent)]
     Task(#[from] tasks::Rejection),
+    #[error(transparent)]
+    Project(#[from] projects::Rejection),
     /// Input that violates a documented constraint.
     #[error("{0}")]
     Invalid(String),
@@ -64,6 +66,8 @@ pub(crate) enum Error {
     Io(#[from] std::io::Error),
     #[error(transparent)]
     Git(#[from] viz_git::Error),
+    #[error(transparent)]
+    GitHub(#[from] viz_github::Error),
     /// A harness operation failed.
     #[error(transparent)]
     Harness(#[from] viz_acp::Error),
@@ -122,10 +126,11 @@ impl Error {
             | Self::Triage(_)
             | Self::Fork(_)
             | Self::Git(_)
+            | Self::Project(_)
             | Self::Placement(_)
             | Self::Invalid(_)
             | Self::Request(_) => Kind::Invalid,
-            Self::Unavailable(_) => Kind::Unavailable,
+            Self::Unavailable(_) | Self::GitHub(_) => Kind::Unavailable,
             Self::Peer { kind, .. } => *kind,
             Self::Storage(_)
             | Self::WriterStopped

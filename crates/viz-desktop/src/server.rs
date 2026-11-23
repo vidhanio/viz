@@ -670,6 +670,7 @@ impl Session<'_> {
             ProjectChange::Rename { id, name } => {
                 self.client
                     .update_project(&UpdateProject {
+                        changes: None,
                         project: id,
                         name: Some(name),
                     })

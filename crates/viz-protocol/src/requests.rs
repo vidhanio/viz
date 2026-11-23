@@ -169,8 +169,11 @@ pub struct CreateProject<'a> {
 }
 
 /// Update a project's display name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct UpdateProject<'a> {
+    /// Preferences to merge into the project settings.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub changes: Option<crate::ProjectSettingsPatch>,
     /// Project id.
     pub project: &'a str,
     /// New display name.

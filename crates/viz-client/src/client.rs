@@ -201,7 +201,19 @@ impl Client {
         Ok(self.request(params).await?.project)
     }
 
-    /// Updates a project's name.
+    /// Get a project's image icon, or confirm that the caller’s `ETag` still
+    /// matches.
+    ///
+    /// # Errors
+    /// Returns an error when the server cannot resolve the icon.
+    pub async fn project_icon(
+        &self,
+        params: &viz_protocol::ReadProjectIcon,
+    ) -> Result<viz_protocol::ProjectIconResult> {
+        self.request(params).await
+    }
+
+    /// Updates a project's name and preferences.
     ///
     /// # Errors
     ///

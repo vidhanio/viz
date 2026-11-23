@@ -6743,6 +6743,7 @@ dependencies = [
 name = "viz-core"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "thiserror 2.0.21",
  "viz-protocol",
 ]
@@ -6884,6 +6885,7 @@ dependencies = [
  "viz-config",
  "viz-core",
  "viz-git",
+ "viz-github",
  "viz-protocol",
 ]
 

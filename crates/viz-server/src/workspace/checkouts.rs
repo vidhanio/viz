@@ -64,11 +64,15 @@ impl Workspace {
             }),
             WorktreeTarget::Existing { path } => worktree::existing(source, path).await,
             WorktreeTarget::New { base, branch } => {
+                let (_, _, preferences) =
+                    store::preferences(&mut *self.db.lock().await, project).await?;
                 worktree::create(
                     &self.worktrees,
                     source,
-                    base.as_deref(),
+                    base.as_deref()
+                        .or(preferences.settings.base_branch.as_deref()),
                     branch.as_deref(),
+                    preferences.settings.branch_prefix.as_deref(),
                     title,
                 )
                 .await

@@ -110,6 +110,7 @@ pub(super) async fn create(
     source: &Path,
     base: Option<&str>,
     branch: Option<&str>,
+    branch_prefix: Option<&str>,
     title: &str,
 ) -> Result<Placement, Error> {
     let cancel = CancellationToken::new();
@@ -137,6 +138,7 @@ pub(super) async fn create(
     let branch = placement::available_branch(
         title,
         branch,
+        branch_prefix,
         names
             .entries
             .iter()

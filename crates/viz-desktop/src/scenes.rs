@@ -100,6 +100,7 @@ fn workspace(s: &mut Desktop) {
         ("Field notes", "/work/field-notes"),
     ]
     .map(|(name, path)| Project {
+        settings: viz_client::protocol::ProjectSettings::default(),
         name: name.into(),
         path: path.into(),
         created_at: 0,
@@ -738,6 +739,7 @@ fn subagent(s: &mut Desktop) {
 fn projects(s: &mut Desktop) {
     workspace(s);
     s.projects.push(Project {
+        settings: viz_client::protocol::ProjectSettings::default(),
         name: "Release scripts".into(),
         path: "/work/release-scripts".into(),
         created_at: 0,

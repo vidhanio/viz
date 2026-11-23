@@ -79,6 +79,7 @@ viz-acp = { path = "crates/viz-acp" }
 viz-client = { path = "crates/viz-client" }
 viz-config = { path = "crates/viz-config" }
 viz-git = { path = "crates/viz-git" }
+viz-github = { path = "crates/viz-github" }
 viz-core = { path = "crates/viz-core" }
 viz-protocol = { path = "crates/viz-protocol" }
 viz-terminal = { path = "crates/viz-terminal" }

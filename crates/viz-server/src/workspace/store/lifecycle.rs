@@ -26,6 +26,7 @@ pub(in crate::workspace) struct Standings {
     pub(in crate::workspace) thread: ThreadId,
     pub(in crate::workspace) lifecycle: Lifecycle,
     pub(in crate::workspace) activity: Activity,
+    pub(in crate::workspace) auto_settle: Option<viz_protocol::ProjectAutoSettle>,
 }
 
 /// Read [`COLUMNS`] starting at column `first`.
@@ -92,13 +93,21 @@ pub(in crate::workspace) async fn lifecycle(
 
 /// Every thread that is not archived.
 pub(in crate::workspace) async fn standings(db: &mut Connection) -> Result<Vec<Standings>, Error> {
-    let query = format!("SELECT t.id, {COLUMNS} FROM threads AS t WHERE t.archived = 0");
+    let query = format!(
+        "SELECT t.id, json_extract(p.settings, '$.autoSettle'), {COLUMNS}
+        FROM threads AS t LEFT JOIN projects AS p ON p.path = t.project WHERE t.archived = 0"
+    );
     rows(db, &query, [])
         .await?
         .map(|mut row| {
-            let (lifecycle, activity, _) = decode(&mut row, 1)?;
+            let (lifecycle, activity, _) = decode(&mut row, 2)?;
             Ok(Standings {
                 thread: row.id(0)?,
+                auto_settle: row
+                    .opt_str(1)?
+                    .as_deref()
+                    .map(super::from_json)
+                    .transpose()?,
                 lifecycle,
                 activity,
             })

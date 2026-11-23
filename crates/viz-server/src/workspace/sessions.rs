@@ -1,8 +1,6 @@
 //! Open and configure the worker's ACP session and persist its latest view.
 //! Session notifications are read by the worker that owns the process.
 
-use std::path::Path;
-
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use viz_core::{options::Labels, titles};
@@ -59,6 +57,7 @@ impl Workspace {
             harness,
             checkout,
             session,
+            project,
             ..
         } = {
             let mut db = self.db.lock().await;
@@ -74,10 +73,20 @@ impl Workspace {
         slot.clear();
         let (_, config) = self.harness(Some(&harness))?;
         let endpoint = self.mcp.endpoint(thread);
+        let mut setup = viz_acp::SessionSetup::new(&checkout.cwd);
+        if let Some(project) = project {
+            let (_, _, prefs) = store::preferences(&mut *self.db.lock().await, &project).await?;
+            setup.additional_directories = prefs
+                .settings
+                .additional_directories
+                .into_iter()
+                .map(Into::into)
+                .collect();
+        }
         let running = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::from(viz_acp::Error::Cancelled)),
-            result = Session::open(config, Path::new(&checkout.cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
+            result = Session::open(config, setup, session.session_id.as_deref(), Some(&endpoint)) => result?,
         };
         if session.session_id.as_deref() != Some(running.id()) {
             exec(
