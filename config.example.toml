@@ -1,11 +1,17 @@
 # Copy to ~/.config/viz/config.toml ($XDG_CONFIG_HOME/viz/config.toml).
-# One file for every viz program; each reads only its own table and ignores the rest.
+# One file for every viz program; each reads only its own table (clients also read [client]) and ignores the rest.
 # Override the path with $VIZ_SERVER_CONFIG, $VIZ_DESKTOP_CONFIG or $VIZ_CLI_CONFIG
 # (or --config). A missing file or table uses defaults.
 # With Home Manager, use programs.viz.settings instead.
 #
 # Secrets accept "inline", { file = "/run/secrets/x" } (one trailing line ending
 # is removed), or { env = "NAME" }. Prefer file or env for real credentials.
+
+[client.server]
+# Shared by every client (desktop, CLI): the server to connect to.
+# Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
+# url = "https://viz.example.com"
+# token = { file = "/run/secrets/viz-token" }
 
 [server]
 # Defaults to 127.0.0.1:7420. Clients use a URL; there is no Unix socket.
@@ -53,11 +59,6 @@
 # command = "omp"
 # args = ["acp"]
 
-[desktop.server]
-# Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
-# url = "https://viz.example.com"
-# token = { file = "/run/secrets/viz-token" }
-
 [desktop.theme]
 # Follows the system appearance. Pick a built-in base16 scheme for each side.
 # Defaults: dark = "github-dark", light = "github".
@@ -76,8 +77,3 @@ light = "tokyo-night-light"
 # thread = 42
 # Optional peer environment, otherwise the server you connect to.
 # environment = "workstation"
-
-[cli.server]
-# Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
-# url = "https://viz.example.com"
-# token = { file = "/run/secrets/viz-token" }

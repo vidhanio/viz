@@ -378,20 +378,21 @@ fn main() {
     let scene_theme = preview
         .then(|| std::env::var("VIZ_SCENE_THEME").ok())
         .flatten();
-    let (theme_error, endpoint) = match Component::Desktop.load::<DesktopConfig>(file.as_deref()) {
-        Ok(config) => {
-            let endpoint = Endpoint::from_connection(&config.server).map_err(|e| e.to_string());
-            (
-                theme::install(&config.theme, scene_theme.as_deref()),
-                endpoint,
-            )
-        }
-        Err(error) => {
-            let _ = theme::install(&DesktopConfig::default().theme, scene_theme.as_deref());
-            let detail = error.to_string();
-            (Some(detail.clone()), Err(detail))
-        }
-    };
+    let (theme_error, endpoint) =
+        match Component::Desktop.load_client::<DesktopConfig>(file.as_deref()) {
+            Ok((client, config)) => {
+                let endpoint = Endpoint::from_connection(&client.server).map_err(|e| e.to_string());
+                (
+                    theme::install(&config.theme, scene_theme.as_deref()),
+                    endpoint,
+                )
+            }
+            Err(error) => {
+                let _ = theme::install(&DesktopConfig::default().theme, scene_theme.as_deref());
+                let detail = error.to_string();
+                (Some(detail.clone()), Err(detail))
+            }
+        };
     rune::text::set_icon_swap(Some(ui::swap_kit_icon));
     let (commands, receiver) = mpsc::unbounded_channel();
     let app = App::new(AppSpec {

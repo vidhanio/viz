@@ -1,7 +1,8 @@
 //! Locating and loading viz's single TOML configuration file.
 //!
 //! Every component reads the same file and deserializes only its own top-level
-//! table (`[server]`, `[desktop]`, `[cli]`). The file location is, in order: an
+//! table (`[server]`, `[desktop]`, `[cli]`). Clients also read the shared
+//! `[client]` table. The file location is, in order: an
 //! explicit `--config` path, the component's environment variable
 //! (`$VIZ_SERVER_CONFIG`, `$VIZ_DESKTOP_CONFIG`, `$VIZ_CLI_CONFIG`), then
 //! `$XDG_CONFIG_HOME/viz/config.toml` (default `~/.config/viz/config.toml`).
@@ -16,7 +17,7 @@ use std::{
 use serde::de::DeserializeOwned;
 
 use crate::{
-    Error, Result,
+    Client, Error, Result,
     paths::{config_dir, var},
 };
 
@@ -74,17 +75,56 @@ impl Component {
     /// be read or deserialized.
     pub fn load<T: DeserializeOwned + Default>(self, explicit: Option<&Path>) -> Result<T> {
         let path = self.path(explicit)?;
-        let text = match fs::read_to_string(&path) {
-            Ok(text) => text,
-            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(T::default()),
-            Err(source) => return Err(Error::Read { path, source }),
-        };
-        let parse = |source| Error::Parse {
-            path: path.clone(),
-            source: Box::new(source),
-        };
-        let mut file: toml::Table = toml::from_str(&text).map_err(parse)?;
-        file.remove(self.table())
-            .map_or_else(|| Ok(T::default()), |table| table.try_into().map_err(parse))
+        let mut file = read(&path)?;
+        take(&mut file, self.table(), &path)
+    }
+
+    /// Loads the shared `[client]` table together with this component's own
+    /// table, for programs that connect to a server.
+    ///
+    /// # Errors
+    /// As [`Component::load`].
+    pub fn load_client<T: DeserializeOwned + Default>(
+        self,
+        explicit: Option<&Path>,
+    ) -> Result<(Client, T)> {
+        let path = self.path(explicit)?;
+        let mut file = read(&path)?;
+        Ok((
+            take(&mut file, "client", &path)?,
+            take(&mut file, self.table(), &path)?,
+        ))
+    }
+}
+
+fn read(path: &Path) -> Result<toml::Table> {
+    let text = match fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(toml::Table::new()),
+        Err(source) => {
+            return Err(Error::Read {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    toml::from_str(&text).map_err(|source| parse_error(path, source))
+}
+
+fn take<T: DeserializeOwned + Default>(
+    file: &mut toml::Table,
+    key: &str,
+    path: &Path,
+) -> Result<T> {
+    file.remove(key).map_or_else(
+        || Ok(T::default()),
+        |table| table.try_into().map_err(|source| parse_error(path, source)),
+    )
+}
+
+fn parse_error(path: &Path, source: toml::de::Error) -> Error {
+    Error::Parse {
+        path: path.to_path_buf(),
+        source: Box::new(source),
     }
 }

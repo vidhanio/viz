@@ -47,7 +47,6 @@ enum Command {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 struct CliConfig {
-    server: Connection,
     thread: Option<ThreadId>,
     environment: Option<String>,
 }
@@ -62,10 +61,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_writer(io::stderr)
         .init();
-    let config: CliConfig = Component::Cli.load(cli.config.as_deref())?;
-    let endpoint = || Endpoint::from_connection(&config.server);
+    let (client, config): (_, CliConfig) = Component::Cli.load_client(cli.config.as_deref())?;
+    let endpoint = || Endpoint::from_connection(&client.server);
     match cli.command {
-        Command::Config => print_config(cli.config.as_deref(), config),
+        Command::Config => print_config(cli.config.as_deref(), &client.server, config),
         Command::Status => status(&endpoint()?, config.environment).await,
         Command::Send { thread, text } => {
             let thread = thread
@@ -78,16 +77,19 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-fn print_config(explicit: Option<&Path>, config: CliConfig) -> anyhow::Result<()> {
+fn print_config(
+    explicit: Option<&Path>,
+    server: &Connection,
+    config: CliConfig,
+) -> anyhow::Result<()> {
     print_path("server", &Component::Server.path(None)?)?;
     print_path("desktop", &Component::Desktop.path(None)?)?;
     print_path("cli", &Component::Cli.path(explicit)?)?;
     let CliConfig {
-        server,
         thread,
         environment,
     } = config;
-    println!("\n[cli.server]");
+    println!("\n[client.server]");
     let url = server.url.as_deref().unwrap_or(DEFAULT_URL);
     println!(
         "url: {}",

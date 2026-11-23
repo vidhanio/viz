@@ -9,7 +9,7 @@ mod paths;
 mod secret;
 
 pub use crate::{
-    connection::{Connection, DEFAULT_URL},
+    connection::{Client, Connection, DEFAULT_URL},
     error::{Error, Result},
     file::Component,
     paths::Paths,
