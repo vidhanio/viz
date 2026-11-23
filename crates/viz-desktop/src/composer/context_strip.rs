@@ -280,56 +280,11 @@ fn worktree_mode_selector(
         );
     });
     if open {
-        let is_local = matches!(current, None | Some(WorktreeTarget::Local));
-        let is_new = matches!(current, Some(WorktreeTarget::New { .. }));
-        let mut items = vec![
-            mode_row(
-                "mode-local",
-                "Current checkout",
-                "Work directly in the project folder",
-                &ui::FOLDER,
-                is_local,
-                WorktreeTarget::Local,
-                t,
-            ),
-            mode_row(
-                "mode-new",
-                "New worktree",
-                "Isolate changes on a new branch",
-                &ui::GIT_BRANCH,
-                is_new,
-                WorktreeTarget::New {
-                    base: project.branch.clone(),
-                    branch: None,
-                },
-                t,
-            ),
-        ];
-        if let Some(checkouts) = checkouts {
-            for worktree in checkouts.worktrees.iter().filter(|w| !w.main) {
-                let name = worktree_branch_name(Some(checkouts), &worktree.path);
-                let active = matches!(
-                    current,
-                    Some(WorktreeTarget::Existing { path }) if path == &worktree.path
-                );
-                items.push(mode_row(
-                    &format!("mode-prev-{}", worktree.path),
-                    &format!("Previous worktree ({name})"),
-                    "Reuse existing worktree",
-                    &ui::GIT_BRANCH,
-                    active,
-                    WorktreeTarget::Existing {
-                        path: worktree.path.clone(),
-                    },
-                    t,
-                ));
-            }
-        }
         let body = col()
             .w_full()
             .padding(ui::MENU_INSET)
             .gap(S2)
-            .children(items);
+            .children(mode_rows(project, checkouts, current, t));
         layer.push(scrim("draft-checkout-scrim", close_picker));
         layer.push(
             ui::anchored_popover(
@@ -347,6 +302,62 @@ fn worktree_mode_selector(
         );
     }
     trigger
+}
+
+/// The checkout menu's rows: current checkout, new worktree, then each
+/// existing non-main worktree.
+fn mode_rows(
+    project: &Project,
+    checkouts: Option<&Checkouts>,
+    current: Option<&WorktreeTarget>,
+    t: &Theme,
+) -> Vec<El> {
+    let is_local = matches!(current, None | Some(WorktreeTarget::Local));
+    let is_new = matches!(current, Some(WorktreeTarget::New { .. }));
+    let mut items = vec![
+        mode_row(
+            "mode-local",
+            "Current checkout",
+            "Work directly in the project folder",
+            &ui::FOLDER,
+            is_local,
+            WorktreeTarget::Local,
+            t,
+        ),
+        mode_row(
+            "mode-new",
+            "New worktree",
+            "Isolate changes on a new branch",
+            &ui::GIT_BRANCH,
+            is_new,
+            WorktreeTarget::New {
+                base: project.branch.clone(),
+                branch: None,
+            },
+            t,
+        ),
+    ];
+    if let Some(checkouts) = checkouts {
+        for worktree in checkouts.worktrees.iter().filter(|w| !w.main) {
+            let name = worktree_branch_name(Some(checkouts), &worktree.path);
+            let active = matches!(
+                current,
+                Some(WorktreeTarget::Existing { path }) if path == &worktree.path
+            );
+            items.push(mode_row(
+                &format!("mode-prev-{}", worktree.path),
+                &format!("Previous worktree ({name})"),
+                "Reuse existing worktree",
+                &ui::GIT_BRANCH,
+                active,
+                WorktreeTarget::Existing {
+                    path: worktree.path.clone(),
+                },
+                t,
+            ));
+        }
+    }
+    items
 }
 
 fn mode_row(
