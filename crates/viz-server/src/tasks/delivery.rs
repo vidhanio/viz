@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use tokio::time;
-use viz_core::tasks::{self as decisions, WakeMode, WakeSource};
+use viz_core::tasks::{self as decisions, Command, Step, WakeSource};
 use viz_protocol::{
     RunId, TaskId, ThreadId,
     peer::{FollowUp, ProgressRequest, ProgressResult},
@@ -12,51 +12,24 @@ use viz_protocol::{
 
 use super::{
     LOCAL_POLL, POLL, Tasks,
-    store::{snapshot, stop_exists, suppress_descendant_wakes},
+    store::{self, snapshot, stop_exists, suppress},
 };
 use crate::{error::Error, workspace::sql};
 
 impl Tasks {
-    pub(super) async fn deliver(&self, id: &TaskId) -> Result<(), Error> {
+    /// Give the parent thread a settled result.
+    pub(super) async fn deliver(&self, task: &TaskId) -> Result<(), Error> {
         let _delivery = self.delivery.lock().await;
-        let mut row = sql::row(&mut *self.workspace.db.lock().await,
-            "SELECT parent, environment, thread, status, title, result, error, delivery FROM agent_tasks WHERE id = ?1 AND delivery != 'delivered'",
-            [id.into()],
-        ).await?.ok_or_else(|| Error::corrupt("task vanished before delivery"))?;
-        let target = row.str(1)?;
-        let location = match row.opt_id::<ThreadId>(2)? {
-            Some(child) => format!("{target} thread {child}"),
-            None => target,
+        let task = store::read(&mut *self.workspace.db.lock().await, task, None).await?;
+        let Step::Deliver(mode) = decisions::next(&task.state) else {
+            return Ok(());
         };
-        let status = row.str(3)?;
-        let title = row.str(4)?;
-        let details = row.opt_str(5)?.or(row.opt_str(6)?);
-        let mut text = format!("Task {id} ({title}) on {location} {status}.");
-        if let Some(details) = details {
-            text.push_str("\n\n");
-            text.push_str(&details);
-        }
-        let mode = match row.str(7)?.as_str() {
-            "entry_only" => WakeMode::EntryOnly,
-            "prompt" => WakeMode::Prompt,
-            mode => {
-                return Err(Error::corrupt(format!(
-                    "invalid persisted task delivery {mode}"
-                )));
-            }
-        };
+        let text = task.state.report(&task.id, &task.title, &task.environment);
         let wake = self
             .workspace
-            .wake(row.id(0)?, id, WakeSource::Result, &text, mode)
+            .wake(task.parent, &task.id, WakeSource::Result, &text, mode)
             .await?;
-        sql::exec(
-            &mut *self.workspace.db.lock().await,
-            "UPDATE agent_tasks SET delivery = 'delivered', wake_run = ?2 WHERE id = ?1",
-            [id.into(), wake.into()],
-        )
-        .await?;
-        self.signal();
-        Ok(())
+        self.apply(&task.id, Command::Delivered(wake)).await
     }
 
     /// The child retains the outbox row until the parent acknowledges its
@@ -101,50 +74,40 @@ impl Tasks {
     /// transcript entries, but cannot be woken by a follow-up.
     pub(crate) async fn follow_up(&self, request: FollowUp) -> Result<bool, Error> {
         let _delivery = self.delivery.lock().await;
-        let (parent, mode, title) = {
+        let (task, stopped) = {
             let mut db = self.workspace.db.lock().await;
-            let Some(mut row) = sql::row(
-                &mut db,
-                "SELECT parent, status, delivery, wake_run, title, parent_run, thread FROM agent_tasks
-                 WHERE id = ?1 AND environment = ?2",
-                [(&request.task).into(), request.source.as_str().into()],
-            )
-            .await?
-            else {
-                return Ok(true);
+            let task = match store::read(&mut db, &request.task, None).await {
+                Ok(task) if task.environment == request.source => Some(task),
+                Ok(_) | Err(Error::NoTask(_)) => None,
+                Err(error) => return Err(error),
             };
-            let parent = row.id(0)?;
-            if row.str(2)? != "delivered" {
-                return Ok(false);
-            }
-            if row.str(1)? != "completed" {
-                return Ok(true);
-            }
-            if row.opt_id(6)? != Some(request.thread) {
-                return Err(Error::invalid(
-                    "task follow-up child does not match its receipt",
-                ));
-            }
-            let stopped = if let Some(run) = row.opt_id(5)? {
-                stop_exists(&mut db, parent, run).await?
-            } else {
-                false
+            let stopped = match &task {
+                Some(task) => match task.parent_run {
+                    Some(run) => stop_exists(&mut db, task.parent, run).await?,
+                    None => false,
+                },
+                None => false,
             };
-            let mode = decisions::follow_up_mode(row.opt_id(3)?, stopped);
-            (parent, mode, row.str(4)?)
+            drop(db);
+            (task, stopped)
+        };
+        let decision = decisions::follow_up(
+            task.as_ref().map(|task| &task.state),
+            request.thread,
+            stopped,
+        )?;
+        let (task, mode) = match (decision, task) {
+            (decisions::FollowUp::Later, _) => return Ok(false),
+            (decisions::FollowUp::Discard, _) | (_, None) => return Ok(true),
+            (decisions::FollowUp::Wake(mode), Some(task)) => (task, mode),
         };
         let text = format!(
-            "Task {} ({title}) on {} thread {} continued.\n\n{}",
-            request.task, request.source, request.thread, request.text,
+            "Task {} ({}) on {} thread {} continued.\n\n{}",
+            request.task, task.title, request.source, request.thread, request.text,
         );
+        let source = WakeSource::Continuation(request.run);
         self.workspace
-            .wake(
-                parent,
-                &request.task,
-                WakeSource::Continuation(request.run),
-                &text,
-                mode,
-            )
+            .wake(task.parent, &request.task, source, &text, mode)
             .await?;
         self.signal();
         Ok(true)
@@ -168,7 +131,7 @@ impl Tasks {
                 [thread.into(), run.into()],
             )
             .await?;
-            suppress_descendant_wakes(&mut tx, thread, run).await?;
+            suppress(&mut tx, thread, run).await?;
             tx.commit().await?;
             stopped = true;
             self.scan.notify_one();
@@ -208,7 +171,7 @@ impl Tasks {
                 return Ok(true);
             }
             let mut tx = db.transaction().await?;
-            suppress_descendant_wakes(&mut tx, thread, run).await?;
+            suppress(&mut tx, thread, run).await?;
             tx.commit().await?;
             drop(db);
             family.active

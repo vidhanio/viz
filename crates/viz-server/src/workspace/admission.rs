@@ -5,7 +5,7 @@ use std::{path::Path, sync::Arc};
 
 use viz_core::{
     placement::{self, Place, Placed},
-    tasks::{self, Admission},
+    tasks::{self, Admission, Rejection, Reuse},
     titles,
 };
 use viz_protocol::{
@@ -32,9 +32,7 @@ impl Workspace {
                 .map(|(received, _)| received);
         };
         if args.thread.is_some() {
-            return Err(Error::invalid(
-                "an existing task thread cannot change its worktree",
-            ));
+            return Err(Rejection::MovedThread.into());
         }
         let parent = {
             let mut db = self.db.lock().await;
@@ -88,17 +86,12 @@ impl Workspace {
             .await?
             .is_some()
         };
-        match tasks::admit(found, retracted) {
-            Admission::Replay(found) => {
-                return Ok((found, false));
-            }
-            Admission::Cancelled => {
-                return Err(Error::invalid("task was cancelled before admission"));
-            }
+        match tasks::admit(found, retracted)? {
+            Admission::Replay(found) => return Ok((found, false)),
             Admission::Create => {}
         }
         if args.text.is_empty() {
-            return Err(Error::invalid("task text must not be empty"));
+            return Err(Rejection::EmptyText.into());
         }
         let decoded = attachments::decode(std::mem::take(&mut args.attachments))?;
         let thread = self.task_thread(&mut tx, &args, placement).await?;
@@ -154,30 +147,13 @@ impl Workspace {
     ) -> Result<ThreadId, Error> {
         if let Some(thread) = args.thread {
             let binding = store::binding(db, thread).await?;
-            if binding.parent != Some(args.parent)
-                || binding.parent_environment.as_deref() != Some(args.origin_environment.as_str())
-            {
-                return Err(Error::invalid(
-                    "target thread is not owned by this task parent",
-                ));
-            }
-            if args
-                .target
-                .harness
-                .as_ref()
-                .is_some_and(|requested| *requested != binding.harness)
-                || args
-                    .target
-                    .project
-                    .as_ref()
-                    .is_some_and(|requested| Some(requested) != binding.project.as_ref())
-                || args.target.model.is_some()
-                || args.target.thinking.is_some()
-            {
-                return Err(Error::invalid(
-                    "existing task thread cannot change its harness, project, model, or thinking",
-                ));
-            }
+            tasks::reuse(Reuse {
+                offer: args,
+                parent: binding.parent,
+                parent_environment: binding.parent_environment.as_deref(),
+                harness: &binding.harness,
+                project: binding.project.as_deref(),
+            })?;
             return Ok(thread);
         }
         let parent = self.parent(db, args).await?;

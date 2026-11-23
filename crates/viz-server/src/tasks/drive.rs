@@ -1,24 +1,20 @@
-//! Retry admission and progress asynchronously. The worker reloads a durable
-//! phase after each peer request before applying the reply.
+//! Drive persisted tasks to delivery. Each job repeats until its durable
+//! record is done, across restarts and partitions.
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::{task::JoinHandle, time};
-use viz_core::tasks::{self as decisions, Command, Phase, Progress, Transition};
+use viz_core::{
+    runs::is_open,
+    tasks::{self as decisions, Command, Step},
+};
 use viz_protocol::{
-    RunId, TaskId, ThreadId,
-    peer::{ProgressRequest, ReceiveTask, RetractTask},
+    TaskId,
+    peer::{ProgressRequest, ReceiveTask, Received, RetractTask},
 };
 
-use super::{
-    Job, LOCAL_POLL, POLL, Tasks,
-    store::{finish_task, parse_status, task_phase},
-};
-use crate::{
-    error::Error,
-    wire::{Run, TaskStatus},
-    workspace::sql,
-};
+use super::{Job, LOCAL_POLL, POLL, Tasks, store};
+use crate::{error::Error, workspace::sql};
 
 impl Tasks {
     pub(super) async fn supervise(self: Arc<Self>) {
@@ -142,229 +138,150 @@ impl Tasks {
         }
     }
 
+    /// Take the persisted task's next step, and record what came of it.
     async fn advance(&self, id: &TaskId) -> Result<Advance, Error> {
-        let Some(mut row) = sql::row(&mut *self.workspace.db.lock().await,
-            "SELECT environment, thread, run, status, phase FROM agent_tasks WHERE id = ?1 AND delivery != 'delivered'",
-            [id.into()],
-        ).await? else { return Ok(Advance::Done) };
-        let phase = row.str(4)?.parse::<Phase>().map_err(Error::corrupt)?;
-        if phase == Phase::Settled {
-            self.deliver(id).await?;
-            return Ok(Advance::Done);
-        }
-        let target = row.str(0)?;
-        let cancel = phase == Phase::Cancelling;
-        let local = target == self.peers.local;
-        let was_reachable = self.peers.reachable(&target);
-        let poll = if local {
-            Advance::LocalPoll
-        } else {
-            Advance::PeerPoll
+        let task = match store::read(&mut *self.workspace.db.lock().await, id, None).await {
+            Ok(task) => task,
+            Err(Error::NoTask(_)) => return Ok(Advance::Done),
+            Err(error) => return Err(error),
         };
-        if matches!(phase, Phase::Pending | Phase::Offered | Phase::Retracting) {
-            return self.advance_admission(id, &target, phase, poll).await;
-        }
-        let (Some(thread), Some(run)) = (row.opt_id::<ThreadId>(1)?, row.opt_id::<RunId>(2)?)
-        else {
-            return Err(Error::corrupt("accepted task has no run receipt"));
-        };
-        let status = parse_status(&row.str(3)?)?;
-        let request = ProgressRequest {
-            thread,
-            run,
-            cancel,
-        };
-        let reply = if local {
-            self.progress(request).await.map(|progress| progress.run)
-        } else {
-            self.peers
-                .call::<ProgressRequest>(&target, &request, Duration::ZERO)
-                .await
-                .map(|progress| progress.run)
-        };
-        if was_reachable != self.peers.reachable(&target) {
-            self.signal();
-        }
-        match reply {
-            Ok(Some(progress)) if progress.thread == thread && progress.id == run => {
-                self.update_from_run(id, status, &progress, poll).await
-            }
-            Ok(Some(_)) => {
-                self.peers.mark(&target, false);
-                self.signal();
-                Ok(poll)
-            }
-            Ok(None) => {
-                if cancel {
-                    self.finish(id, TaskStatus::Cancelled, None, None).await?;
-                } else {
-                    self.finish(
-                        id,
-                        TaskStatus::Failed,
-                        None,
-                        Some("the assigned run no longer exists"),
-                    )
-                    .await?;
-                }
+        let target = task.environment.as_str();
+        let was_reachable = self.peers.reachable(target);
+        let advance = match decisions::next(&task.state) {
+            Step::Offer => {
+                self.apply(id, Command::Offer).await?;
                 Ok(Advance::Immediate)
             }
-            Err(error) if local => Err(error),
-            Err(_) => Ok(poll),
-        }
-    }
-
-    async fn advance_admission(
-        &self,
-        id: &TaskId,
-        target: &str,
-        phase: Phase,
-        poll: Advance,
-    ) -> Result<Advance, Error> {
-        let was_reachable = self.peers.reachable(target);
-        let retracting = phase == Phase::Retracting;
-        let result = if retracting {
-            let request = RetractTask {
-                origin_environment: self.peers.local.clone(),
-                task: id.clone(),
-            };
-            if target == self.peers.local {
-                self.workspace.retract(request).await
-            } else {
-                self.peers
-                    .call::<RetractTask>(target, &request, Duration::ZERO)
-                    .await
+            Step::Send => self.offer(id, target).await,
+            Step::Retract => self.retract(id, target).await,
+            Step::Poll { receipt, cancel } => self.poll(id, target, receipt, cancel).await,
+            Step::Deliver(_) => {
+                self.deliver(id).await?;
+                Ok(Advance::Done)
             }
-        } else {
-            let payload = {
-                let mut db = self.workspace.db.lock().await;
-                let Some(current) = task_phase(&mut db, id).await? else {
-                    return Ok(Advance::Done);
-                };
-                if let Transition::Move(next) = decisions::decide(current, Command::Offer) {
-                    sql::exec(
-                        &mut db,
-                        "UPDATE agent_tasks SET phase = ?2 WHERE id = ?1",
-                        [id.into(), next.as_str().into()],
-                    )
-                    .await?;
-                } else if current != Phase::Offered {
-                    return Ok(Advance::Immediate);
-                }
-                let payload = sql::row(
-                    &mut db,
-                    "SELECT payload FROM agent_tasks WHERE id = ?1 AND phase = 'offered'",
-                    [id.into()],
-                )
-                .await?;
-                drop(db);
-                let Some(mut row) = payload else {
-                    return Ok(Advance::Immediate);
-                };
-                row.str(0)?
-            };
-            let request: ReceiveTask = serde_json::from_str(&payload)?;
-            if target == self.peers.local {
-                self.workspace.receive(request).await.map(Some)
-            } else {
-                self.peers
-                    .call::<ReceiveTask>(target, &request, Duration::ZERO)
-                    .await
-                    .map(Some)
-            }
+            Step::Done => Ok(Advance::Done),
         };
         if was_reachable != self.peers.reachable(target) {
             self.signal();
         }
+        advance
+    }
+
+    /// An answer that never arrives decides nothing: the offer is repeated
+    /// until the receiver admits or refuses it, or it is retracted.
+    async fn offer(&self, id: &TaskId, target: &str) -> Result<Advance, Error> {
+        let payload = store::payload(&mut *self.workspace.db.lock().await, id).await?;
+        let Some(payload) = payload else {
+            return Ok(Advance::Immediate);
+        };
+        let request: ReceiveTask = serde_json::from_str(&payload).map_err(Error::corrupt)?;
+        let result = if self.is_local(target) {
+            self.workspace.receive(request).await
+        } else {
+            self.peers
+                .call::<ReceiveTask>(target, &request, Duration::ZERO)
+                .await
+        };
         match result {
-            Ok(Some(receipt)) => {
-                let mut db = self.workspace.db.lock().await;
-                if let Some(current) = task_phase(&mut db, id).await?
-                    && let Transition::Move(next) = decisions::decide(current, Command::Receipt)
-                {
-                    sql::exec(&mut db, "UPDATE agent_tasks SET thread = ?2, run = ?3, payload = NULL, phase = ?4 WHERE id = ?1",
-                        [id.into(), receipt.thread.into(), receipt.run.into(), next.as_str().into()]).await?;
-                }
-                drop(db);
-                self.signal();
-                Ok(Advance::Immediate)
+            Ok(receipt) => self.apply(id, Command::Admitted(receipt)).await?,
+            Err(error) if error.rejected() => {
+                self.apply(id, Command::Refused(&error.to_string())).await?;
             }
-            Ok(None) if retracting => {
-                self.admission_failed(id, Command::Retracted, None).await?;
-                Ok(Advance::Immediate)
-            }
-            Err(error) if !retracting && error.rejected() => {
-                self.admission_failed(id, Command::Rejected, Some(&error.to_string()))
-                    .await?;
-                Ok(Advance::Immediate)
-            }
-            _ => Ok(poll),
+            Err(_) => return Ok(self.pause(target)),
         }
+        Ok(Advance::Immediate)
     }
 
-    async fn admission_failed(
-        &self,
-        id: &TaskId,
-        command: Command,
-        error: Option<&str>,
-    ) -> Result<(), Error> {
-        let mut db = self.workspace.db.lock().await;
-        if let Some(current) = task_phase(&mut db, id).await?
-            && let Transition::Settle(status) = decisions::decide(current, command)
-        {
-            let error = error.filter(|_| status == TaskStatus::Failed);
-            finish_task(&mut db, id, status, None, error).await?;
+    async fn retract(&self, id: &TaskId, target: &str) -> Result<Advance, Error> {
+        let request = RetractTask {
+            origin_environment: self.peers.local.clone(),
+            task: id.clone(),
+        };
+        let result = if self.is_local(target) {
+            self.workspace.retract(request).await
+        } else {
+            self.peers
+                .call::<RetractTask>(target, &request, Duration::ZERO)
+                .await
+        };
+        match result {
+            Ok(Some(receipt)) => self.apply(id, Command::Admitted(receipt)).await?,
+            Ok(None) => self.apply(id, Command::Retracted).await?,
+            Err(_) => return Ok(self.pause(target)),
         }
-        drop(db);
-        self.signal();
-        Ok(())
+        Ok(Advance::Immediate)
     }
 
-    async fn update_from_run(
+    async fn poll(
         &self,
         id: &TaskId,
-        previous: TaskStatus,
-        run: &Run,
-        poll: Advance,
+        target: &str,
+        receipt: Received,
+        cancel: bool,
     ) -> Result<Advance, Error> {
-        match decisions::record_progress(previous, run) {
-            Progress::Wait => Ok(poll),
-            Progress::Started => {
-                sql::exec(
-                    &mut *self.workspace.db.lock().await,
-                    "UPDATE agent_tasks SET status = 'running' WHERE id = ?1",
-                    [id.into()],
-                )
-                .await?;
-                self.signal();
-                Ok(poll)
+        let request = ProgressRequest {
+            thread: receipt.thread,
+            run: receipt.run,
+            cancel,
+        };
+        let reply = if self.is_local(target) {
+            self.progress(request).await?
+        } else {
+            match self
+                .peers
+                .call::<ProgressRequest>(target, &request, Duration::ZERO)
+                .await
+            {
+                Ok(reply) => reply,
+                Err(_) => return Ok(self.pause(target)),
             }
-            Progress::Settled {
-                status,
-                answer,
-                error,
-            } => {
-                self.finish(id, status, answer, error).await?;
-                Ok(Advance::Immediate)
+        };
+        match reply.run {
+            None => self.apply(id, Command::Vanished).await?,
+            Some(run) if (run.thread, run.id) == (receipt.thread, receipt.run) => {
+                self.apply(id, Command::Progressed(&run)).await?;
+                if is_open(run.status) {
+                    return Ok(self.pause(target));
+                }
             }
+            Some(_) => {
+                self.peers.mark(target, false);
+                return Ok(self.pause(target));
+            }
+        }
+        Ok(Advance::Immediate)
+    }
+
+    fn is_local(&self, target: &str) -> bool {
+        target == self.peers.local
+    }
+
+    fn pause(&self, target: &str) -> Advance {
+        if self.is_local(target) {
+            Advance::LocalPoll
+        } else {
+            Advance::PeerPoll
         }
     }
 
-    async fn finish(
-        &self,
-        id: &TaskId,
-        status: TaskStatus,
-        result: Option<&str>,
-        error: Option<&str>,
-    ) -> Result<(), Error> {
-        finish_task(
-            &mut *self.workspace.db.lock().await,
-            id,
-            status,
-            result,
-            error,
-        )
-        .await?;
-        self.signal();
+    /// Decide and store what `command` does to the task as it is now, which
+    /// may differ from when the step was chosen.
+    pub(super) async fn apply(&self, id: &TaskId, command: Command<'_>) -> Result<(), Error> {
+        let changed = {
+            let mut db = self.workspace.db.lock().await;
+            let mut tx = db.transaction().await?;
+            let task = store::read(&mut tx, id, None).await?;
+            let next = decisions::decide(&task.state, command);
+            if let Some(next) = &next {
+                store::save(&mut tx, id, next).await?;
+            }
+            tx.commit().await?;
+            drop(db);
+            next.is_some()
+        };
+        if changed {
+            self.signal();
+        }
         Ok(())
     }
 }

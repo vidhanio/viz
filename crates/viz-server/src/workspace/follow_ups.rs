@@ -1,8 +1,8 @@
 //! Record a continuation's outbox rows in the same transaction as its run end.
 //! The receiver deduplicates each wake by the continuation's run ID.
 
-use viz_core::tasks::{self, WakeEdge};
-use viz_protocol::{RunId, RunKind, RunStatus, ThreadId};
+use viz_core::tasks::{self, Receipt, WakeEdge};
+use viz_protocol::{RunId, RunKind, TaskId, ThreadId};
 
 use super::{
     runs,
@@ -14,7 +14,7 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
     let Some(continuation) = runs::run_from(db, thread, run).await? else {
         return Ok(());
     };
-    if continuation.kind != RunKind::Unprompted || continuation.status != RunStatus::Completed {
+    if continuation.kind != RunKind::Unprompted {
         return Ok(());
     }
     let preceding = row(
@@ -27,9 +27,6 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
     .await?
     .map(|mut row| Ok::<_, Error>((row.id(0)?, runs::decode_status(&row.str(1)?)?)))
     .transpose()?;
-    let Some((parent, text)) = tasks::continuation_parent(&continuation, preceding) else {
-        return Ok(());
-    };
     let edges = rows(
         db,
         "SELECT a.parent_run, w.run FROM task_wakes w
@@ -45,8 +42,7 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
         })
     })
     .collect::<Result<Vec<_>, Error>>()?;
-    let ancestry = tasks::ancestors(parent, edges);
-    for mut receipt in rows(
+    let receipts = rows(
         db,
         "SELECT tr.environment, tr.task, tr.run,
             EXISTS(SELECT 1 FROM stopped_task_runs s WHERE s.thread = tr.thread AND s.run = tr.run)
@@ -54,22 +50,32 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
         [thread.into()],
     )
     .await?
-    {
-        if !receipt.flag(3)? && ancestry.contains(&receipt.id(2)?) {
-            exec(
-                db,
-                "INSERT OR IGNORE INTO task_follow_ups (environment, task, run, thread, text)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-                [
-                    receipt.str(0)?.into(),
-                    receipt.str(1)?.into(),
-                    run.into(),
-                    thread.into(),
-                    text.into(),
-                ],
-            )
-            .await?;
-        }
+    .map(|mut row| {
+        Ok(Receipt {
+            environment: row.str(0)?,
+            task: TaskId(row.str(1)?),
+            run: row.id(2)?,
+            stopped: row.flag(3)?,
+        })
+    })
+    .collect::<Result<Vec<_>, Error>>()?;
+    let Some((text, owed)) = tasks::continued(&continuation, preceding, edges, receipts) else {
+        return Ok(());
+    };
+    for receipt in owed {
+        exec(
+            db,
+            "INSERT OR IGNORE INTO task_follow_ups (environment, task, run, thread, text)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            [
+                receipt.environment.into(),
+                receipt.task.into(),
+                run.into(),
+                thread.into(),
+                text.into(),
+            ],
+        )
+        .await?;
     }
     Ok(())
 }
