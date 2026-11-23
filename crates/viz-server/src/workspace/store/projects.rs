@@ -55,7 +55,7 @@ pub(in crate::workspace) async fn project(
 
 /// A project with its checkout's Git state.
 pub(in crate::workspace) fn project_at(path: String, name: String, created_at: i64) -> Project {
-    let checkout = worktree::checkout(Path::new(&path));
+    let checkout = worktree::head(Path::new(&path));
     Project {
         git: checkout.is_some(),
         branch: checkout.and_then(|checkout| checkout.branch),
@@ -68,7 +68,7 @@ pub(in crate::workspace) fn project_at(path: String, name: String, created_at: i
 /// A thread's worktree, with its branch read from disk.
 pub(in crate::workspace) fn thread_worktree(path: String) -> ThreadWorktree {
     ThreadWorktree {
-        branch: worktree::checkout(Path::new(&path)).and_then(|checkout| checkout.branch),
+        branch: worktree::head(Path::new(&path)).and_then(|checkout| checkout.branch),
         path,
     }
 }

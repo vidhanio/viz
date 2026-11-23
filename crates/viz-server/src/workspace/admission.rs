@@ -4,6 +4,7 @@
 use std::{path::Path, sync::Arc};
 
 use viz_core::{
+    placement::{self, Place, Placed},
     tasks::{self, Admission},
     titles,
 };
@@ -16,7 +17,7 @@ use super::{
     Workspace, attachments,
     runs::{self, NewRun},
     sql::{Connection, exec, row},
-    store::{self, NewThread, SavedSession},
+    store::{self, Binding, NewThread, SavedSession},
     worktree::{self, Placement},
 };
 use crate::{acp::Selection, error::Error};
@@ -35,37 +36,23 @@ impl Workspace {
                 "an existing task thread cannot change its worktree",
             ));
         }
-        let (project, source) = {
+        let parent = {
             let mut db = self.db.lock().await;
             if let Some(found) =
                 receipt(&mut db, (args.origin_environment.as_str(), &args.task)).await?
             {
                 return Ok(found);
             }
-            let parent = if args.origin_environment == self.environment {
-                Some(store::binding(&mut db, args.parent).await?)
-            } else {
-                None
-            };
-            let project = args
-                .target
-                .project
-                .clone()
-                .or_else(|| parent.as_ref()?.project.clone())
-                .ok_or_else(|| Error::invalid("a worktree requires a project"))?;
-            store::project(&mut db, &project).await?;
-            let source = match parent {
-                Some(parent)
-                    if args.target.project.is_none()
-                        || parent.project.as_ref() == Some(&project) =>
-                {
-                    parent.cwd
-                }
-                _ => project.clone(),
-            };
+            let parent = self.parent(&mut db, &args).await?;
             drop(db);
-            (project, source)
+            parent
         };
+        let (project, source) = placement::child_worktree(
+            args.target.project.as_deref(),
+            parent.as_ref().map(Parent::placed),
+        )?;
+        store::project(&mut *self.db.lock().await, project).await?;
+        let (project, source) = (project.to_owned(), source.to_owned());
         let placement = self
             .place(
                 &project,
@@ -143,13 +130,27 @@ impl Workspace {
         Ok((Received { thread, run }, true))
     }
 
-    /// The thread a task runs in. Without a placement or project, a child
-    /// of a local parent runs in the parent's checkout.
+    /// The local thread an offer came from.
+    async fn parent(
+        &self,
+        db: &mut Connection,
+        offer: &ReceiveTask,
+    ) -> Result<Option<Parent>, Error> {
+        if offer.origin_environment != self.environment {
+            return Ok(None);
+        }
+        let binding = store::binding(db, offer.parent).await?;
+        let within = self.within(&binding).await;
+        Ok(Some(Parent { binding, within }))
+    }
+
+    /// The thread a task runs in: the child it names, or a new one in its
+    /// resolved worktree or wherever [`placement::child`] places it.
     async fn task_thread(
         &self,
-        db: &mut crate::workspace::sql::Connection,
+        db: &mut Connection,
         args: &ReceiveTask,
-        placement: Option<&Placement>,
+        resolved: Option<&Placement>,
     ) -> Result<ThreadId, Error> {
         if let Some(thread) = args.thread {
             let binding = store::binding(db, thread).await?;
@@ -179,35 +180,24 @@ impl Workspace {
             }
             return Ok(thread);
         }
-        let inherited = if args.origin_environment == self.environment {
-            Some(store::binding(db, args.parent).await?)
-        } else {
-            None
-        };
-        let project = args
-            .target
-            .project
-            .as_deref()
-            .or_else(|| inherited.as_ref()?.project.as_deref());
-        if placement.is_none() && args.target.worktree.is_some() {
+        let parent = self.parent(db, args).await?;
+        let placed = parent.as_ref().map(Parent::placed);
+        let target = args.target.project.as_deref();
+        let project = placement::child_project(target, placed);
+        if resolved.is_none() && args.target.worktree.is_some() {
             return Err(Error::invalid("unresolved worktree target"));
         }
-        let selected = args
-            .target
-            .harness
-            .as_deref()
-            .or_else(|| inherited.as_ref().map(|parent| parent.harness.as_str()));
+        let selected = args.target.harness.as_deref().or_else(|| {
+            parent
+                .as_ref()
+                .map(|parent| parent.binding.harness.as_str())
+        });
         let (harness, _) = self.harness(selected)?;
-        let resolved;
-        let (cwd, worktree) = if let Some(placement) = placement {
-            (placement.cwd.as_str(), placement.worktree.as_deref())
-        } else if args.target.project.is_none()
-            && let Some(parent) = &inherited
-        {
-            (parent.cwd.as_str(), parent.worktree.as_deref())
-        } else {
-            resolved = self.cwd_for(db, args.target.project.as_deref()).await?;
-            (store::path_text(&resolved)?, None)
+        let checkout = match (resolved, placement::child(target, placed)) {
+            (Some(resolved), _) => resolved.checkout.clone(),
+            (None, Place::Parent(checkout)) => checkout.clone(),
+            (None, Place::Project(project)) => self.checkout_for(db, Some(project)).await?,
+            (None, Place::Default) => self.checkout_for(db, None).await?,
         };
         let session = SavedSession {
             selection: selection(args.target.model.clone(), args.target.thinking.clone()),
@@ -217,9 +207,8 @@ impl Workspace {
             db,
             &NewThread {
                 harness,
-                cwd,
+                checkout: &checkout,
                 project,
-                worktree,
                 parent: Some(args.parent),
                 parent_environment: Some(&args.origin_environment),
                 title: None,
@@ -240,6 +229,22 @@ impl Workspace {
         tx.commit().await?;
         drop(db);
         Ok(None)
+    }
+}
+
+/// A local parent as found on disk.
+struct Parent {
+    binding: Binding,
+    within: bool,
+}
+
+impl Parent {
+    fn placed(&self) -> Placed<'_> {
+        Placed {
+            project: self.binding.project.as_deref(),
+            checkout: &self.binding.checkout,
+            within: self.within,
+        }
     }
 }
 

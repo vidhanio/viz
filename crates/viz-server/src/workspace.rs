@@ -28,7 +28,10 @@ use std::{
 use anyhow::Context as _;
 use tokio::{sync::Mutex, time};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use viz_core::tasks::{self, Wake, WakeMode, WakeSource};
+use viz_core::{
+    placement::Checkout,
+    tasks::{self, Wake, WakeMode, WakeSource},
+};
 use viz_protocol::{EntryId, RunId, TaskId, ThreadId};
 
 use self::{
@@ -331,15 +334,20 @@ impl Workspace {
             .unwrap_or(id)
     }
 
-    async fn cwd_for(
+    /// The checkout of `project`, or the default directory.
+    async fn checkout_for(
         &self,
-        db: &mut crate::workspace::sql::Connection,
+        db: &mut Connection,
         project: Option<&str>,
-    ) -> Result<PathBuf, Error> {
-        match project {
-            Some(project) => Ok(PathBuf::from(store::project(db, project).await?.path)),
-            None => Ok(self.cwd.clone()),
-        }
+    ) -> Result<Checkout, Error> {
+        let cwd = match project {
+            Some(project) => store::project(db, project).await?.path,
+            None => store::path_text(&self.cwd)?.to_owned(),
+        };
+        Ok(Checkout {
+            cwd,
+            worktree: None,
+        })
     }
 
     fn default_cwd(&self) -> &Path {

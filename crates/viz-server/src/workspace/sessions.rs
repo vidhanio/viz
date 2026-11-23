@@ -57,7 +57,7 @@ impl Workspace {
     ) -> anyhow::Result<Bound<'slot>> {
         let Binding {
             harness,
-            cwd,
+            checkout,
             session,
             ..
         } = {
@@ -77,7 +77,7 @@ impl Workspace {
         let running = tokio::select! {
             biased;
             () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
-            result = Session::open(config, Path::new(&cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
+            result = Session::open(config, Path::new(&checkout.cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
         };
         if session.session_id.as_deref() != Some(running.id()) {
             exec(

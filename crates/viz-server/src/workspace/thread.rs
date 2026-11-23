@@ -4,7 +4,7 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use viz_core::{
-    runs as decisions,
+    placement, runs as decisions,
     threads::{self, Patch},
     titles,
 };
@@ -38,7 +38,7 @@ impl Workspace {
         let project = args
             .project
             .clone()
-            .ok_or_else(|| Error::invalid("a worktree requires a project"))?;
+            .ok_or(placement::Rejection::NoProject)?;
         {
             let mut db = self.db.lock().await;
             if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
@@ -75,9 +75,9 @@ impl Workspace {
         }
         threads::validate_title(args.title.as_deref())?;
         let (harness, _) = self.harness(args.harness.as_deref())?;
-        let cwd = match placement {
-            Some(placement) => placement.cwd.clone().into(),
-            None => self.cwd_for(&mut tx, args.project.as_deref()).await?,
+        let checkout = match placement {
+            Some(placement) => placement.checkout.clone(),
+            None => self.checkout_for(&mut tx, args.project.as_deref()).await?,
         };
         let attachments = attachments::decode(args.attachments)?;
         let session = SavedSession {
@@ -89,9 +89,8 @@ impl Workspace {
             &mut tx,
             &NewThread {
                 harness,
-                cwd: store::path_text(&cwd)?,
+                checkout: &checkout,
                 project: args.project.as_deref(),
-                worktree: placement.and_then(|placement| placement.worktree.as_deref()),
                 parent: None,
                 parent_environment: None,
                 title: args.title.as_deref(),
@@ -271,6 +270,7 @@ impl Workspace {
             let mut db = self.db.lock().await;
             let binding = store::binding(&mut db, thread).await?;
             let path = binding
+                .checkout
                 .worktree
                 .ok_or_else(|| Error::invalid("the thread runs in no worktree"))?;
             self.removable(&mut db, &path, Some(thread)).await?;

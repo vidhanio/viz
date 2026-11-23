@@ -204,7 +204,9 @@ impl Workspace {
             let mut db = self.db.lock().await;
             let binding = store::binding(&mut db, thread).await?;
             let note = match binding.session.handoff {
-                Some(from) => Some(handoff_note(&mut db, thread, &binding.cwd, &from).await?),
+                Some(from) => {
+                    Some(handoff_note(&mut db, thread, &binding.checkout.cwd, &from).await?)
+                }
                 None => None,
             };
             drop(db);

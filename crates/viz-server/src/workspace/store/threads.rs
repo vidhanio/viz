@@ -1,7 +1,7 @@
 //! Thread bindings, persisted session metadata, and projected summaries.
 
 use serde::{Deserialize, Serialize};
-use viz_core::threads;
+use viz_core::{placement::Checkout, threads};
 
 use super::{
     super::{
@@ -38,9 +38,8 @@ pub(in crate::workspace) struct SavedSession {
 #[derive(Debug)]
 pub(in crate::workspace) struct Binding {
     pub(in crate::workspace) harness: String,
-    pub(in crate::workspace) cwd: String,
+    pub(in crate::workspace) checkout: Checkout,
     pub(in crate::workspace) project: Option<String>,
-    pub(in crate::workspace) worktree: Option<String>,
     pub(in crate::workspace) parent: Option<ThreadId>,
     pub(in crate::workspace) parent_environment: Option<String>,
     pub(in crate::workspace) session: SavedSession,
@@ -54,9 +53,11 @@ pub(in crate::workspace) async fn binding(
         .ok_or_else(|| Error::NoThread(thread))?;
     Ok(Binding {
         harness: row.str(0)?,
-        cwd: row.str(1)?,
+        checkout: Checkout {
+            cwd: row.str(1)?,
+            worktree: row.opt_str(3)?,
+        },
         project: row.opt_str(2)?,
-        worktree: row.opt_str(3)?,
         parent: row.opt_id(4)?,
         parent_environment: row.opt_str(5)?,
         session: from_json(&row.str(6)?)?,
@@ -75,9 +76,8 @@ pub(in crate::workspace) async fn require(
 
 pub(in crate::workspace) struct NewThread<'a> {
     pub(in crate::workspace) harness: &'a str,
-    pub(in crate::workspace) cwd: &'a str,
+    pub(in crate::workspace) checkout: &'a Checkout,
     pub(in crate::workspace) project: Option<&'a str>,
-    pub(in crate::workspace) worktree: Option<&'a str>,
     pub(in crate::workspace) parent: Option<ThreadId>,
     pub(in crate::workspace) parent_environment: Option<&'a str>,
     pub(in crate::workspace) title: Option<&'a str>,
@@ -90,8 +90,8 @@ pub(in crate::workspace) async fn create_thread(
 ) -> Result<ThreadId, Error> {
     let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
-        new.harness.into(), new.cwd.into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
-        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(), new.worktree.into(),
+        new.harness.into(), new.checkout.cwd.as_str().into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
+        new.title.unwrap_or_default().into(), new.title.is_some().into(), json(&new.session)?.into(), now().into(), new.checkout.worktree.as_deref().into(),
     ]).await?.expect("thread INSERT RETURNING yielded one row");
     row.id(0)
 }

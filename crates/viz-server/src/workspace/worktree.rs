@@ -14,22 +14,22 @@ use std::{
 };
 
 use tokio::process::Command;
-use viz_core::placement;
+use viz_core::placement::{self, Checkout, Repository};
 use viz_protocol::GitBranch;
 
 use crate::error::Error;
 
-/// A Git checkout as read from disk.
-pub(super) struct Checkout {
+/// A Git checkout's HEAD as read from disk.
+pub(super) struct Head {
     /// The current branch; `None` on a detached HEAD.
     pub(super) branch: Option<String>,
 }
 
-/// The checkout containing `path`, if any.
-pub(super) fn checkout(path: &Path) -> Option<Checkout> {
+/// The HEAD of the checkout containing `path`, if any.
+pub(super) fn head(path: &Path) -> Option<Head> {
     let git_dir = git_dir(path)?;
     let head = std::fs::read_to_string(git_dir.join("HEAD")).ok()?;
-    Some(Checkout {
+    Some(Head {
         branch: head
             .trim()
             .strip_prefix("ref: refs/heads/")
@@ -56,12 +56,23 @@ fn git_dir(path: &Path) -> Option<PathBuf> {
     None
 }
 
-/// Where a thread runs: its working directory, and the linked worktree root
-/// containing it, if any.
+/// The repository containing `path`. A directory that no longer exists is in
+/// none, whatever its ancestors are in.
+pub(super) async fn repository(path: &str) -> Option<Repository> {
+    let path = tokio::fs::canonicalize(path).await.ok()?;
+    let git_dir = git_dir(&path)?;
+    let common = match tokio::fs::read_to_string(git_dir.join("commondir")).await {
+        Ok(common) => git_dir.join(common.trim()),
+        Err(_) => git_dir,
+    };
+    let common = tokio::fs::canonicalize(common).await.ok()?;
+    common.into_os_string().into_string().ok().map(Repository)
+}
+
+/// A resolved place to run.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct Placement {
-    pub(super) cwd: String,
-    pub(super) worktree: Option<String>,
+    pub(super) checkout: Checkout,
     /// The worktree and branch were created for this placement, so a failed
     /// registration should remove them.
     pub(super) created: Option<String>,
@@ -210,8 +221,10 @@ pub(super) async fn existing(source: &Path, path: &str) -> Result<Placement, Err
             ))
         })?;
     Ok(Placement {
-        cwd: below(Path::new(&found.path), &prefix)?,
-        worktree: (!found.main).then_some(found.path),
+        checkout: Checkout {
+            cwd: below(Path::new(&found.path), &prefix)?,
+            worktree: (!found.main).then_some(found.path),
+        },
         created: None,
     })
 }
@@ -291,8 +304,10 @@ pub(super) async fn create(
     )
     .await?;
     Ok(Placement {
-        cwd: below(&path, &prefix)?,
-        worktree: Some(path_text.clone()),
+        checkout: Checkout {
+            cwd: below(&path, &prefix)?,
+            worktree: Some(path_text),
+        },
         created: Some(branch),
     })
 }
@@ -347,7 +362,7 @@ pub(super) async fn clean(dir: &Path) -> Result<bool, Error> {
 
 /// Undoes a [`create`] whose registration failed.
 pub(super) async fn discard(source: &Path, placement: &Placement) {
-    let (Some(path), Some(branch)) = (&placement.worktree, &placement.created) else {
+    let (Some(path), Some(branch)) = (&placement.checkout.worktree, &placement.created) else {
         return;
     };
     if let Err(error) = remove(source, path, true).await {

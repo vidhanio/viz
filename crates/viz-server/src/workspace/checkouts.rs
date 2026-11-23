@@ -7,6 +7,7 @@
 
 use std::{path::Path, sync::Arc};
 
+use viz_core::placement::{self, Checkout, Placed, Site};
 use viz_protocol::{MoveThread, Moved, ThreadId, Worktree, WorktreeList, WorktreeTarget};
 
 use super::{
@@ -18,6 +19,29 @@ use super::{
 use crate::error::Error;
 
 impl Workspace {
+    /// Whether a thread's checkout is a place in the project it is filed
+    /// under.
+    pub(super) async fn within(&self, binding: &store::Binding) -> bool {
+        let Some(project) = &binding.project else {
+            return false;
+        };
+        let cwd = &binding.checkout.cwd;
+        if cwd == project {
+            return true;
+        }
+        let (here, there) = tokio::join!(worktree::repository(cwd), worktree::repository(project));
+        placement::within(
+            Site {
+                path: cwd,
+                repository: here.as_ref(),
+            },
+            Site {
+                path: project,
+                repository: there.as_ref(),
+            },
+        )
+    }
+
     /// Resolves `target` in `project`'s repository. `source` is the checkout
     /// a new worktree branches from by default, and `title` names its branch.
     pub(super) async fn place(
@@ -29,8 +53,10 @@ impl Workspace {
     ) -> Result<Placement, Error> {
         match target {
             WorktreeTarget::Local => Ok(Placement {
-                cwd: project.to_owned(),
-                worktree: None,
+                checkout: Checkout {
+                    cwd: project.to_owned(),
+                    worktree: None,
+                },
                 created: None,
             }),
             WorktreeTarget::Existing { path } => worktree::existing(source, path).await,
@@ -94,24 +120,15 @@ impl Workspace {
         path: &str,
         except: Option<ThreadId>,
     ) -> Result<(), Error> {
-        if !self.managed(path) {
-            return Err(Error::invalid(format!(
-                "{path} is not a worktree viz created"
-            )));
-        }
-        if let Some(user) = row(
+        let user = row(
             db,
             "SELECT id FROM threads WHERE worktree = ?1 AND id IS NOT ?2 LIMIT 1",
             [path.into(), except.into()],
         )
         .await?
-        {
-            return Err(Error::invalid(format!(
-                "thread {} still runs in {path}",
-                user.id::<ThreadId>(0)?
-            )));
-        }
-        Ok(())
+        .map(|row| row.id(0))
+        .transpose()?;
+        Ok(placement::removable(path, self.managed(path), user)?)
     }
 
     pub(super) async fn remove_worktree(&self, path: &str, force: bool) -> Result<(), Error> {
@@ -146,11 +163,18 @@ impl Workspace {
             .project
             .clone()
             .ok_or_else(|| Error::invalid("only a project thread can move to a worktree"))?;
+        let source = Placed {
+            project: Some(&project),
+            checkout: &binding.checkout,
+            within: self.within(&binding).await,
+        }
+        .source(&project)
+        .to_owned();
         let placement = self
-            .place(&project, Path::new(&binding.cwd), &args.worktree, &title)
+            .place(&project, Path::new(&source), &args.worktree, &title)
             .await?;
-        if placement.cwd == binding.cwd && placement.worktree == binding.worktree {
-            return Ok(moved(placement));
+        if placement.checkout == binding.checkout {
+            return Ok(moved(placement.checkout));
         }
         let result = self.rebind(thread, binding, placement.clone()).await;
         if result.is_err() {
@@ -158,7 +182,7 @@ impl Workspace {
         }
         result?;
         self.relist(thread);
-        Ok(moved(placement))
+        Ok(moved(placement.checkout))
     }
 
     async fn rebind(
@@ -187,7 +211,7 @@ impl Workspace {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let current = store::binding(&mut tx, thread).await?;
-        if current.cwd != before.cwd || current.worktree != before.worktree {
+        if current.checkout != before.checkout {
             return Err(Error::invalid("the thread moved concurrently"));
         }
         idle(&mut tx, thread).await?;
@@ -201,7 +225,7 @@ impl Workspace {
         let handoff = viz_core::threads::handoff_from(
             prompted,
             current.session.handoff.as_deref(),
-            &current.cwd,
+            &current.checkout.cwd,
         );
         exec(
             &mut tx,
@@ -210,8 +234,8 @@ impl Workspace {
              WHERE id = ?1",
             [
                 thread.into(),
-                placement.cwd.as_str().into(),
-                placement.worktree.as_deref().into(),
+                placement.checkout.cwd.as_str().into(),
+                placement.checkout.worktree.as_deref().into(),
                 handoff.into(),
             ],
         )
@@ -236,9 +260,9 @@ async fn idle(db: &mut crate::workspace::sql::Connection, thread: ThreadId) -> R
     Ok(())
 }
 
-fn moved(placement: Placement) -> Moved {
+fn moved(checkout: Checkout) -> Moved {
     Moved {
-        worktree: placement.worktree.map(store::thread_worktree),
-        cwd: placement.cwd,
+        worktree: checkout.worktree.map(store::thread_worktree),
+        cwd: checkout.cwd,
     }
 }
