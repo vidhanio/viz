@@ -9,6 +9,7 @@ publish.workspace = true
 
 [dependencies]
 chrono.workspace = true
+tokio-stream = { workspace = true, features = ["sync"] }
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, features = ["ws"] }

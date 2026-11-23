@@ -612,7 +612,11 @@ impl Session<'_> {
                 }
                 Ok(())
             }
-            Notification::Reply { .. } | Notification::GitChanged { .. } => Ok(()),
+            Notification::Reply { .. }
+            | Notification::GitChanged { .. }
+            | Notification::TerminalUpdate { .. }
+            | Notification::TerminalSnapshot { .. }
+            | Notification::TerminalsChanged(_) => Ok(()),
         }
     }
 

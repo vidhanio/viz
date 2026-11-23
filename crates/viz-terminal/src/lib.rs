@@ -21,8 +21,10 @@
 pub mod pty;
 #[cfg(feature = "emulator")]
 mod screen;
-mod wire;
 
 #[cfg(feature = "emulator")]
 pub use screen::{EmulationError, LiveScreen, Viewer};
-pub use wire::{CellSize, Change, Exit, Sequence, Size, Snapshot, TerminalId, Update};
+pub use viz_protocol::{
+    CellSize, Sequence, Size, Snapshot, TerminalChange as Change, TerminalExit as Exit, TerminalId,
+    Update,
+};

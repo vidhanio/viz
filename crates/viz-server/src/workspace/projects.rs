@@ -5,11 +5,7 @@ use std::path::Path;
 use viz_core::projects;
 use viz_protocol::{ProjectSettings, ProjectSettingsPatch, Setting};
 
-use super::{
-    Workspace,
-    sql::{exec, rows},
-    store,
-};
+use super::{Workspace, sql::exec, store};
 use crate::{error::Error, wire::Project};
 
 impl Workspace {
@@ -109,12 +105,8 @@ impl Workspace {
     pub(super) async fn remove_project(&self, project: &str) -> Result<(), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
-        let threads = rows(
-            &mut tx,
-            "SELECT id FROM threads WHERE project = ?1",
-            [project.into()],
-        )
-        .await?;
+        let threads = super::terminals::project_threads(&mut tx, project).await?;
+        let mut terminals = self.terminals.lock().await;
         let count = exec(
             &mut tx,
             "DELETE FROM projects WHERE path = ?1",
@@ -125,10 +117,12 @@ impl Workspace {
             return Err(Error::NoProject(project.to_owned()));
         }
         tx.commit().await?;
+        terminals.release_project(project, &threads).await;
+        drop(terminals);
         drop(db);
         self.changed(None);
         for thread in threads {
-            self.changed(Some(thread.id(0)?));
+            self.changed(Some(thread));
         }
         Ok(())
     }

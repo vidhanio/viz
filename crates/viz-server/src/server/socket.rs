@@ -21,10 +21,11 @@ use tokio_tungstenite::{
 };
 use tokio_util::sync::CancellationToken;
 use viz_protocol::{
-    Empty, ListEnvironments, Method, SendInput, Unwatch, UnwatchGit, Watch, WatchGit, Watching,
+    AttachTerminal, DetachTerminal, Empty, ListEnvironments, Method, ResizeTerminal, SendInput,
+    Unwatch, UnwatchGit, Watch, WatchGit, Watching,
 };
 
-use super::{Server, parse_request, peer_rpc};
+use super::{Server, parse_request, peer_rpc, terminals::TerminalWatches};
 use crate::{
     error::{Error, RequestError},
     rpc,
@@ -107,7 +108,7 @@ fn notification(value: Notification) -> serde_json::Result<Message> {
     })
 }
 
-fn json_message(value: &impl Serialize) -> serde_json::Result<Message> {
+pub(super) fn json_message(value: &impl Serialize) -> serde_json::Result<Message> {
     serde_json::to_string(value).map(|text| Message::Text(text.into()))
 }
 
@@ -146,7 +147,7 @@ async fn watch_thread(
     Ok(WatchCursor { last, state })
 }
 
-async fn send_note(outgoing: &mpsc::Sender<Message>, value: Notification) -> Result<()> {
+pub(super) async fn send_note(outgoing: &mpsc::Sender<Message>, value: Notification) -> Result<()> {
     outgoing
         .send(notification(value)?)
         .await
@@ -225,6 +226,7 @@ async fn local_session(
     let writer = tokio::spawn(write_frames(write, messages, server.stop.clone()));
     let mut workspace_events = server.workspace.subscribe();
     let mut tasks = server.tasks.subscribe();
+    let mut terminal_watches = TerminalWatches::new(server.workspace.terminal_changes().await);
     let mut calls = JoinSet::new();
     let mut watches = HashMap::new();
     let mut git_watches: HashMap<ThreadId, AbortHandle> = HashMap::new();
@@ -239,6 +241,10 @@ async fn local_session(
                     if !handle_workspace_event(event, &server, &mut watches, &outgoing, app).await? {
                         break;
                     }
+                },
+                event = terminal_watches.next() => match event {
+                    Some(event) => terminal_watches.forward(event, &outgoing).await?,
+                    None => break,
                 },
                 change = tasks.recv(), if app => match change {
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_note(&outgoing, Notification::TasksChanged(Empty {})).await?,
@@ -273,6 +279,10 @@ async fn local_session(
                             let result = update_git_watch(&server, &request, &mut git_watches, &mut git_jobs, &outgoing).await;
                             outgoing.send(json_message(&Response::new(request.id, result))?).await?;
                         }
+                        AttachTerminal::NAME | DetachTerminal::NAME | ResizeTerminal::NAME => {
+                            let response = terminal_watches.request(&server, request).await?;
+                            outgoing.send(response).await?;
+                        }
                         HelloParams::NAME => {
                             outgoing.send(json_message(&Response::<Value>::new(request.id, Err(Error::invalid("hello already sent"))))?).await?;
                         }
@@ -301,6 +311,7 @@ async fn local_session(
         }
         Ok::<(), anyhow::Error>(())
     }.await;
+    drop(terminal_watches);
     calls.abort_all();
     git_jobs.abort_all();
     writer.abort();

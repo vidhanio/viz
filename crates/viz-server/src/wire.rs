@@ -88,6 +88,25 @@ const fn git_failure(error: &Error) -> Option<viz_protocol::GitFailure> {
     })
 }
 
+const fn terminal_failure(error: &Error) -> Option<viz_protocol::TerminalFailure> {
+    use viz_protocol::TerminalFailure;
+    match error {
+        Error::Terminal(viz_terminal::pty::PtyError::ResizeLease) => {
+            Some(TerminalFailure::ResizeLease)
+        }
+        Error::TerminalNotAttached => Some(TerminalFailure::NotAttached),
+        Error::ActiveTerminals => Some(TerminalFailure::ActiveTerminals),
+        _ => None,
+    }
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+enum Failure {
+    Git(viz_protocol::GitFailure),
+    Terminal(viz_protocol::TerminalFailure),
+}
+
 pub(crate) fn decode<T: DeserializeOwned>(params: Value) -> Result<T, Error> {
     serde_json::from_value(params).map_err(|error| Error::invalid(error.to_string()))
 }
@@ -118,7 +137,9 @@ impl<'a, T: Clone> Response<'a, T> {
             Err(error) => ResponsePayload::error(ErrorObject::owned(
                 error_code(&error),
                 error.to_string(),
-                git_failure(&error),
+                git_failure(&error)
+                    .map(Failure::Git)
+                    .or_else(|| terminal_failure(&error).map(Failure::Terminal)),
             )),
         };
         Self(JsonResponse::new(payload, id))

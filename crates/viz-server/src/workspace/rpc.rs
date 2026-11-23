@@ -6,14 +6,15 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
-    BranchList, BrowseFolders, CancelClone, ConfigureThread, CreateFolder, CreateProject,
-    DeleteThread, Empty, FileList, ForkThread, GitHubRepositories, HarnessList, HarnessOptions,
-    HarnessOptionsResult, InitRepository, ListBranches, ListEntries, ListProjects, ListWorktrees,
-    MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone, ReadEntryChunk, ReadProject,
-    ReadProjectIcon, ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree,
-    RetitleThread, RunId, SearchFiles, SearchHits, SearchThreads, SendInput, StartClone,
-    SteerQueuedInput, StopThread, ThreadId, ThreadList, ThreadStateResult, TriageThread,
-    UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
+    BranchList, BrowseFolders, CancelClone, CloseTerminal, ConfigureThread, CreateFolder,
+    CreateProject, CreateTerminal, DeleteThread, Empty, FileList, ForkThread, GitHubRepositories,
+    HarnessList, HarnessOptions, HarnessOptionsResult, InitRepository, ListBranches, ListEntries,
+    ListProjects, ListTerminals, ListWorktrees, MoveThread, ProjectList, ProjectResult,
+    PromoteThread, ReadClone, ReadEntryChunk, ReadProject, ReadProjectIcon, ReadThreadState,
+    RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId, SearchFiles,
+    SearchHits, SearchThreads, SendInput, StartClone, SteerQueuedInput, StopThread, TerminalInput,
+    ThreadId, ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput,
+    UpdateThread, WaitThread,
 };
 
 use super::{Workspace, runs, sql::row, store};
@@ -21,6 +22,16 @@ use crate::{error::Error, rpc::handlers, wire::OptionValue};
 
 handlers! {
     ROUTES for Arc<Workspace> {
+        ListTerminals, ListTerminals, |workspace, args| { workspace.list_terminals(args).await }
+        CreateTerminal, CreateTerminal, |workspace, args| { workspace.create_terminal(args).await }
+        TerminalInput, TerminalInput, |workspace, TerminalInput { id, bytes }| {
+            workspace.terminal(id).await?.write(bytes).await?;
+            Ok(Empty {})
+        }
+        CloseTerminal, CloseTerminal, |workspace, CloseTerminal { id }| {
+            workspace.close_terminal(id).await?;
+            Ok(Empty {})
+        }
         viz_protocol::ListThreads<'static>, ListThreads, |workspace, ListThreads { project, archived }| {
             let threads = store::list_threads(&mut *workspace.db.lock().await, archived, project.as_deref(), workspace).await?;
             Ok(ThreadList { threads })

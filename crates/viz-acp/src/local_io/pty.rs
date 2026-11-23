@@ -16,7 +16,7 @@ use std::{
 
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
-use viz_protocol::ThreadId;
+use viz_protocol::{TerminalScope, ThreadId};
 use viz_terminal::{
     CellSize, Exit, Size,
     pty::{Launch, Program, TerminalHandle, Terminals},
@@ -100,12 +100,17 @@ impl Ptys {
             size: Size::new(COLUMNS, ROWS),
             cell: CellSize::default(),
         };
-        let handle = self
+        let (_, handle) = self
             .owner
             .registry
             .lock()
             .await
-            .create(self.owner.thread, launch)
+            .create(
+                TerminalScope::Agent {
+                    thread: self.owner.thread,
+                },
+                launch,
+            )
             .await?;
         let id = TerminalId::new(handle.id().0.to_string());
         let view = Arc::new(Mutex::new(TerminalOutputResponse::new(
@@ -177,7 +182,8 @@ impl Ptys {
             .registry
             .lock()
             .await
-            .release(self.owner.thread, terminal.handle.id());
+            .release(terminal.handle.id())
+            .await;
         true
     }
 
@@ -210,8 +216,9 @@ impl Ptys {
         tokio::spawn(async move {
             let mut registry = owner.registry.lock().await;
             for id in ids {
-                registry.release(owner.thread, id);
+                registry.release(id).await;
             }
+            drop(registry);
         });
     }
 }

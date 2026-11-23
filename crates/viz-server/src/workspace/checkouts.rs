@@ -174,7 +174,19 @@ impl Workspace {
                 {
                     return Err(viz_git::Error::Busy.into());
                 }
+                let checkout = tokio::fs::canonicalize(&path).await?;
+                let mut terminals = workspace.terminals.lock().await;
+                if !force {
+                    if terminals.active_in(&checkout) {
+                        return Err(Error::ActiveTerminals);
+                    }
+                    if !worktree::clean(&checkout).await? {
+                        return Err(viz_git::Error::Dirty.into());
+                    }
+                }
+                terminals.release_checkout(&checkout).await;
                 let result = worktree::remove(&workspace.worktrees, &path, force).await;
+                drop(terminals);
                 drop(db);
                 result?;
                 workspace.changed(None);

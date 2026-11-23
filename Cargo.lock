@@ -6173,6 +6173,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -6847,9 +6848,11 @@ dependencies = [
 name = "viz-protocol"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "schemars 1.2.3",
  "serde",
  "serde_json",
+ "uuid",
 ]
 
 [[package]]
@@ -6878,6 +6881,7 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-stream",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",
@@ -6897,12 +6901,9 @@ dependencies = [
 name = "viz-terminal"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
  "ghostty-vt",
  "pty-process",
  "rustix 1.1.6",
- "schemars 1.2.3",
- "serde",
  "thiserror 2.0.21",
  "tokio",
  "uuid",

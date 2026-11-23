@@ -157,7 +157,7 @@ pub struct Worktree {
 pub struct RemoveWorktree<'a> {
     /// Absolute path of the worktree root.
     pub path: &'a str,
-    /// Discard uncommitted changes and untracked files in it.
+    /// Discard local changes and close running terminals in the checkout.
     #[serde(skip_serializing_if = "is_false")]
     pub force: bool,
 }

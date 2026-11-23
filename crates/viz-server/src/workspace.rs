@@ -25,6 +25,7 @@ mod scratch;
 mod sessions;
 pub(crate) mod sql;
 mod store;
+mod terminals;
 mod thread;
 mod triage;
 mod worker;

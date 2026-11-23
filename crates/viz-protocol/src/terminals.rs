@@ -170,3 +170,127 @@ mod binary {
             .map_err(de::Error::custom)
     }
 }
+
+/// The owner of a terminal.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TerminalScope {
+    Thread {
+        thread: crate::ThreadId,
+    },
+    Project {
+        project: String,
+    },
+    /// The terminal id is also the id in the ACP tool's terminal content.
+    Agent {
+        thread: crate::ThreadId,
+    },
+}
+
+impl TerminalScope {
+    /// The conversation owning a shell or agent command.
+    #[must_use]
+    pub const fn thread(&self) -> Option<crate::ThreadId> {
+        match self {
+            Self::Thread { thread } | Self::Agent { thread } => Some(*thread),
+            Self::Project { .. } => None,
+        }
+    }
+}
+
+/// The owner of a new interactive shell.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InteractiveScope {
+    Thread { thread: crate::ThreadId },
+    Project { project: String },
+}
+
+/// Session metadata that remains available without a viewer.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct TerminalSummary {
+    pub id: TerminalId,
+    pub scope: TerminalScope,
+    pub cwd: String,
+    pub title: String,
+    /// Unix epoch milliseconds.
+    pub created_at: i64,
+    /// Absent while the process is running.
+    pub exit: Option<Exit>,
+}
+
+/// Which sessions to list.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TerminalFilter {
+    Thread { thread: crate::ThreadId },
+    Project { project: String },
+}
+
+/// Lists retained terminals in the selected environment.
+#[derive(Clone, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct ListTerminals {
+    pub filter: Option<TerminalFilter>,
+}
+
+/// Retained sessions in creation order.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct TerminalList {
+    pub terminals: Vec<TerminalSummary>,
+}
+
+/// Starts a shell. Attach separately to obtain its screen and updates.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct CreateTerminal {
+    pub scope: InteractiveScope,
+    pub size: Size,
+    pub cell: CellSize,
+}
+
+macro_rules! terminal_request {
+    ($(#[$doc:meta] $name:ident),+ $(,)?) => {
+        $(
+            #[$doc]
+            #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+            pub struct $name {
+                pub id: TerminalId,
+            }
+        )+
+    };
+}
+
+terminal_request! {
+    /// Starts streaming after the snapshot returned on this connection.
+    AttachTerminal,
+    /// Detaches this connection and relinquishes any resize lease.
+    DetachTerminal,
+    /// Terminates the session and discards its retained output.
+    CloseTerminal,
+}
+
+/// Sends bytes to a live PTY.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct TerminalInput {
+    pub id: TerminalId,
+    #[serde(with = "binary")]
+    #[schemars(with = "String")]
+    pub bytes: Vec<u8>,
+}
+
+/// Resizes through this connection's attachment.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct ResizeTerminal {
+    pub id: TerminalId,
+    pub size: Size,
+    pub cell: CellSize,
+}
+
+/// Machine-readable RPC error data for terminal operations and checkout
+/// removal.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TerminalFailure {
+    ResizeLease,
+    NotAttached,
+    ActiveTerminals,
+}

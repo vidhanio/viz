@@ -438,7 +438,10 @@ impl Client {
                 method,
                 code,
                 message,
-                git_failure: data.and_then(|data| serde_json::from_value(data).ok()),
+                git_failure: data
+                    .as_ref()
+                    .and_then(|data| serde_json::from_value(data.clone()).ok()),
+                terminal_failure: data.and_then(|data| serde_json::from_value(data).ok()),
             });
         }
         response.result.ok_or_else(|| Error::Decode {

@@ -6,10 +6,10 @@ use std::{
     ffi::OsString,
     io,
     os::unix::process::ExitStatusExt as _,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Weak},
     thread,
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use pty_process::{Command, Pty};
@@ -22,7 +22,7 @@ use tokio::{
     sync::{broadcast, mpsc, oneshot, watch},
     time::{self, Instant},
 };
-use viz_protocol::ThreadId;
+use viz_protocol::{TerminalScope, TerminalSummary, ThreadId};
 
 use crate::{CellSize, EmulationError, Exit, LiveScreen, Size, Snapshot, TerminalId, Update};
 
@@ -131,15 +131,23 @@ pub struct CapturedOutput {
 /// An atomic attachment boundary followed by live updates.
 #[derive(Debug)]
 pub struct Attachment {
-    /// State preceding all subsequent updates.
-    pub snapshot: Snapshot,
-    /// A lagged receiver needs a fresh attachment.
-    pub updates: broadcast::Receiver<Arc<Update>>,
     lease: Arc<()>,
     terminal: TerminalHandle,
 }
 
+/// State at the subscription boundary and the updates following it.
+pub type TerminalStream = (Snapshot, broadcast::Receiver<Arc<Update>>);
+
 impl Attachment {
+    /// Replaces a lagged stream without surrendering the resize lease.
+    ///
+    /// # Errors
+    /// Returns an error if the session closed or the snapshot cannot be
+    /// encoded.
+    pub async fn refresh(&self) -> Result<TerminalStream, PtyError> {
+        self.terminal.request(Request::Attach).await
+    }
+
     /// Resizes the PTY and claims the lease until this viewer detaches.
     ///
     /// # Errors
@@ -174,14 +182,15 @@ impl TerminalHandle {
     /// # Errors
     /// Returns an error if the session closed or its snapshot could not be
     /// encoded.
-    pub async fn attach(&self) -> Result<Attachment, PtyError> {
-        let (snapshot, updates) = self.request(Request::Attach).await?;
-        Ok(Attachment {
-            snapshot,
-            updates,
-            lease: Arc::new(()),
-            terminal: self.clone(),
-        })
+    pub async fn attach(&self) -> Result<(TerminalStream, Attachment), PtyError> {
+        let stream = self.request(Request::Attach).await?;
+        Ok((
+            stream,
+            Attachment {
+                lease: Arc::new(()),
+                terminal: self.clone(),
+            },
+        ))
     }
 
     /// Writes encoded input to the PTY.
@@ -236,28 +245,67 @@ impl TerminalHandle {
 }
 
 /// The environment registry shared by ACP and interactive terminals.
-#[derive(Debug, Default)]
-pub struct Terminals(HashMap<TerminalId, (ThreadId, TerminalHandle)>);
+#[derive(Debug)]
+pub struct Terminals {
+    sessions: HashMap<TerminalId, (TerminalSummary, TerminalHandle)>,
+    changes: broadcast::Sender<()>,
+}
+
+impl Default for Terminals {
+    fn default() -> Self {
+        Self {
+            sessions: HashMap::new(),
+            changes: broadcast::channel(16).0,
+        }
+    }
+}
 
 impl Terminals {
-    /// Starts a thread-owned terminal.
+    /// Watches membership and process status, including when nobody is
+    /// attached.
+    #[must_use]
+    pub fn subscribe(&self) -> broadcast::Receiver<()> {
+        self.changes.subscribe()
+    }
+
+    /// Starts a terminal in an existing directory.
     ///
     /// # Errors
     /// Returns an error if there are no slots or the worker or process fails to
     /// start.
     pub async fn create(
         &mut self,
-        thread: ThreadId,
-        launch: Launch,
-    ) -> Result<TerminalHandle, PtyError> {
-        if self.0.len() == MAX_SESSIONS {
+        scope: TerminalScope,
+        mut launch: Launch,
+    ) -> Result<(TerminalSummary, TerminalHandle), PtyError> {
+        if self.sessions.len() >= MAX_SESSIONS {
             return Err(PtyError::Capacity);
         }
+        launch.cwd = tokio::fs::canonicalize(&launch.cwd).await?;
         let id = TerminalId(uuid::Uuid::new_v4());
+        let title = match &launch.program {
+            Program::LoginShell => "Shell".to_owned(),
+            Program::Command { executable, .. } => executable.to_string_lossy().into_owned(),
+        };
+        let mut summary = TerminalSummary {
+            id,
+            scope,
+            cwd: launch.cwd.to_string_lossy().into_owned(),
+            title,
+            created_at: i64::try_from(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis(),
+            )
+            .unwrap_or(i64::MAX),
+            exit: None,
+        };
         let (requests, commands) = mpsc::channel(16);
         let (stop, stopping) = watch::channel(false);
         let (exited, exit) = watch::channel(None);
         let (ready, started) = oneshot::channel();
+        let changes = self.changes.clone();
         thread::Builder::new()
             .name("viz-pty".into())
             .spawn(move || {
@@ -265,7 +313,9 @@ impl Terminals {
                     .enable_all()
                     .build()
                 {
-                    Ok(runtime) => runtime.block_on(run(launch, commands, stopping, exited, ready)),
+                    Ok(runtime) => {
+                        runtime.block_on(run(launch, commands, stopping, exited, ready, changes));
+                    }
                     Err(error) => {
                         let _ = ready.send(Err(error.into()));
                     }
@@ -278,60 +328,101 @@ impl Terminals {
             stop,
             exit,
         };
-        self.0.insert(id, (thread, terminal.clone()));
-        Ok(terminal)
+        summary.exit = *terminal.exit.borrow();
+        self.sessions
+            .insert(id, (summary.clone(), terminal.clone()));
+        let _ = self.changes.send(());
+        Ok((summary, terminal))
     }
 
-    /// Looks up an id owned by this thread.
+    /// Looks up a session in the environment.
     #[must_use]
-    pub fn get(&self, thread: ThreadId, id: TerminalId) -> Option<&TerminalHandle> {
-        self.0
-            .get(&id)
-            .filter(|(owner, _)| *owner == thread)
-            .map(|(_, terminal)| terminal)
+    pub fn get(&self, id: TerminalId) -> Option<&TerminalHandle> {
+        self.sessions.get(&id).map(|(_, terminal)| terminal)
     }
 
-    /// Lists the terminal ids owned by this thread.
-    pub fn for_thread(&self, thread: ThreadId) -> impl Iterator<Item = TerminalId> + '_ {
-        self.0
-            .iter()
-            .filter_map(move |(id, (owner, _))| (*owner == thread).then_some(*id))
+    /// Reads metadata with the latest observed process status.
+    pub fn summaries(&self) -> impl Iterator<Item = TerminalSummary> + '_ {
+        self.sessions.values().map(|(summary, terminal)| {
+            let mut summary = summary.clone();
+            summary.exit = *terminal.exit.borrow();
+            summary
+        })
     }
 
     /// Stops a terminal and discards its history.
-    pub fn release(&mut self, thread: ThreadId, id: TerminalId) {
-        if self.get(thread, id).is_some()
-            && let Some((_, terminal)) = self.0.remove(&id)
-        {
+    pub async fn release(&mut self, id: TerminalId) {
+        if let Some((_, terminal)) = self.sessions.remove(&id) {
             terminal.stop.send_replace(true);
+            let _ = self.changes.send(());
+            terminal.stop.closed().await;
         }
     }
 
-    /// Releases all terminals belonging to the thread.
-    pub fn release_thread(&mut self, thread: ThreadId) {
-        self.0.retain(|_, (owner, terminal)| {
-            if *owner != thread {
+    /// Releases shells and agent commands belonging to a conversation.
+    pub async fn release_thread(&mut self, thread: ThreadId) {
+        self.release_matching(|summary| summary.scope.thread() == Some(thread))
+            .await;
+    }
+
+    /// Releases the project's shells and the sessions of its filed
+    /// conversations.
+    pub async fn release_project(&mut self, project: &str, threads: &[ThreadId]) {
+        self.release_matching(|summary| match &summary.scope {
+            TerminalScope::Project { project: owner } => owner == project,
+            scope => scope
+                .thread()
+                .is_some_and(|thread| threads.contains(&thread)),
+        })
+        .await;
+    }
+
+    /// Checks for live sessions rooted at or below the checkout.
+    #[must_use]
+    pub fn active_in(&self, checkout: &Path) -> bool {
+        self.sessions.values().any(|(summary, terminal)| {
+            Path::new(&summary.cwd).starts_with(checkout) && terminal.exit.borrow().is_none()
+        })
+    }
+
+    /// Releases sessions in the checkout and waits until their workers drop the
+    /// PTYs.
+    pub async fn release_checkout(&mut self, checkout: &Path) {
+        self.release_matching(|summary| Path::new(&summary.cwd).starts_with(checkout))
+            .await;
+    }
+
+    async fn release_matching(&mut self, matches: impl Fn(&TerminalSummary) -> bool) {
+        let mut stops = Vec::new();
+        self.sessions.retain(|_, (summary, terminal)| {
+            if !matches(summary) {
                 return true;
             }
             terminal.stop.send_replace(true);
+            stops.push(terminal.stop.clone());
             false
         });
+        if !stops.is_empty() {
+            let _ = self.changes.send(());
+        }
+        for stop in stops {
+            stop.closed().await;
+        }
     }
 }
 
 impl Drop for Terminals {
     fn drop(&mut self) {
-        for (_, terminal) in self.0.values() {
+        for (_, terminal) in self.sessions.values() {
             terminal.stop.send_replace(true);
         }
     }
 }
 
 type Reply<T> = oneshot::Sender<Result<T, PtyError>>;
-type Attach = (Snapshot, broadcast::Receiver<Arc<Update>>);
 
 enum Request {
-    Attach(Reply<Attach>),
+    Attach(Reply<TerminalStream>),
     Output(usize, Reply<CapturedOutput>),
     Resize(Size, CellSize, Weak<()>, Reply<()>),
     Write(Vec<u8>, Reply<()>),
@@ -461,6 +552,7 @@ async fn run(
     mut stopping: watch::Receiver<bool>,
     exited: watch::Sender<Option<Exit>>,
     ready: Reply<()>,
+    changes: broadcast::Sender<()>,
 ) {
     let (mut pty, mut child, mut session) = match start(launch) {
         Ok(started) => started,
@@ -496,6 +588,7 @@ async fn run(
             closing = None;
             let _ = session.updates.send(Arc::new(update));
             exited.send_replace(Some(status));
+            let _ = changes.send(());
         }
 
         let live = session.exit.is_none() && closing.is_none();
