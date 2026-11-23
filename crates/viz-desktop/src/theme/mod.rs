@@ -9,6 +9,7 @@
 mod palette;
 mod scheme;
 mod tokens;
+mod typography;
 
 use std::sync::OnceLock;
 
