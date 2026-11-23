@@ -147,12 +147,12 @@ fn popover(
         .empty(text(empty_text).font(t.small).color(t.faint).role("status"));
     if is_new_worktree {
         shell = shell.footer(
-            ui::switch(remote_base)
+            rune_kit::Switch::new(remote_base)
                 .label("Start from remote")
                 .on_toggle_tx(|s: &mut Desktop, tx| {
                     s.dispatch(Msg::Selection(SelectionMsg::ToggleDraftRemoteBase), tx);
                 })
-                .build(t),
+                .build(&t.k),
         );
     }
     let popover = shell

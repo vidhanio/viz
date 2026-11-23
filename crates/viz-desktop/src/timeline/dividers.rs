@@ -16,7 +16,7 @@ use crate::{
         CARD_INSET, HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_CARD, RADIUS_SM, S4, S6, S8, S12, Size,
         Theme,
     },
-    ui::{self, BadgeSize, InlineStyle, Tone},
+    ui::{self, InlineStyle, Tone},
     update::{Msg, TimelineMsg},
 };
 
@@ -292,13 +292,7 @@ pub fn media_card(media: &MediaItem, t: &Theme) -> El {
         .fill(t.surface)
         .border(HAIRLINE, t.hairline)
         .child(icon(glyph, ICON_MD).color(t.muted).a11y_hidden())
-        .child(
-            ui::badge(label)
-                .tone(Tone::Neutral)
-                .size(BadgeSize::Nano)
-                .build(t)
-                .key("kind"),
-        )
+        .child(rune_kit::Badge::new(label).build(&t.k).key("kind"))
         .child(
             text(name)
                 .font(t.small)

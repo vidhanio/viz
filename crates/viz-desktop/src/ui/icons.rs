@@ -226,8 +226,6 @@ lucide! {
     /// Theme palette.
     /// Model / compute processor.
     CPU = Cpu;
-    /// Multi-step plan list.
-    PLAN = ListChecks;
     /// Run that ended early.
     CIRCLE_STOP = CircleStop;
     /// Delegated task result arriving.

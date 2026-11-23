@@ -82,9 +82,11 @@ impl OptionRow {
         }
         if !self.badges.is_empty() {
             item = item.trailing(
-                row()
-                    .gap(S4)
-                    .children(self.badges.into_iter().map(|tag| ui::badge(tag).build(t))),
+                row().gap(S4).children(
+                    self.badges
+                        .into_iter()
+                        .map(|tag| rune_kit::Badge::new(tag).build(&t.k)),
+                ),
             );
         }
         if let Some(action) = self.action {
@@ -339,7 +341,7 @@ pub fn context(s: &Desktop, page: &ProjectPage, count: usize, t: &Theme) -> El {
                 body = body.child(status(&format!("Clone into {}/{}", data.path.trim_end_matches('/'), name), t));
             }
             let mut location = row().gap(S8).center_y().child(text(&data.path).font(t.mono_small).color(t.muted).truncate().grow(1.0).min_w(0.0));
-            for tag in folder_badges(data.git, data.project) { location = location.child(ui::badge(tag).build(t)); }
+            for tag in folder_badges(data.git, data.project) { location = location.child(rune_kit::Badge::new(tag).build(&t.k)); }
             body = body.child(location);
             let mut tools = row().gap(S4);
             for (label, path) in [("Home", &data.home), ("Up", &data.parent)] {

@@ -14,16 +14,22 @@ use crate::{
 };
 
 pub fn view(s: &Desktop, pr: &GitHubPull, t: &Theme, overlays: &mut Vec<El>) -> El {
-    let (state, tone) = match (pr.state, pr.draft) {
-        (GitHubPullState::Open, true) => ("Draft", ui::Tone::Neutral),
-        (GitHubPullState::Open, false) => ("Open", ui::Tone::Success),
-        (GitHubPullState::Merged, _) => ("Merged", ui::Tone::Delegated),
-        (GitHubPullState::Closed, _) => ("Closed", ui::Tone::Danger),
+    let (state, variant) = match (pr.state, pr.draft) {
+        (GitHubPullState::Open, true) => ("Draft", rune_kit::BadgeVariant::Subtle),
+        (GitHubPullState::Open, false) => ("Open", rune_kit::BadgeVariant::Accent),
+        (GitHubPullState::Merged | GitHubPullState::Closed, _) => (
+            if pr.state == GitHubPullState::Merged {
+                "Merged"
+            } else {
+                "Closed"
+            },
+            rune_kit::BadgeVariant::Neutral,
+        ),
     };
     let url = pr.url.clone();
     let title = ui::list_row("git-pr", &pr.title)
         .leading_icon(&ui::GIT_FORK)
-        .trailing(ui::badge(state).tone(tone).build(t))
+        .trailing(rune_kit::Badge::new(state).variant(variant).build(&t.k))
         .on_press_tx(move |s: &mut Desktop, tx| {
             s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.clone())), tx);
         })

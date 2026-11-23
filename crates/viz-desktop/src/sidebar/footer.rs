@@ -281,11 +281,23 @@ fn info_button(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     if open {
         let close = |s: &mut Desktop| s.dispatch_local(Msg::Sidebar(SidebarMsg::CloseInfoMenu));
         let shortcuts = [
-            ("Command palette", ui::kbd("K", t)),
-            ("Toggle sidebar", ui::kbd("B", t)),
-            ("New thread", ui::kbd("N", t)),
-            ("Jump to thread", ui::kbd("1–9", t)),
-            ("Rename thread", ui::kbd_cap("F2", t)),
+            (
+                "Command palette",
+                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "K"]).build(&t.k),
+            ),
+            (
+                "Toggle sidebar",
+                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "B"]).build(&t.k),
+            ),
+            (
+                "New thread",
+                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "N"]).build(&t.k),
+            ),
+            (
+                "Jump to thread",
+                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "1–9"]).build(&t.k),
+            ),
+            ("Rename thread", rune_kit::Keybind::new(&["F2"]).build(&t.k)),
         ];
         let mut body = col().w_full().padding(S12).gap(S8).child(
             text("Keyboard shortcuts")

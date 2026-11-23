@@ -8,7 +8,7 @@ use super::{GalleryState, edit_gallery, gallery_card, with_gallery};
 use crate::{
     app::Desktop,
     theme::{HAIRLINE, RADIUS_CARD, S4, S6, S8, Size, Theme},
-    ui::{self, BadgeSize, Card, LoadingDelay, RowDensity, SearchStyle, Tone},
+    ui::{self, Card, LoadingDelay, RowDensity, SearchStyle, Tone},
 };
 
 pub(super) fn rows_card(state: &GalleryState, t: &Theme) -> El {
@@ -46,12 +46,7 @@ pub(super) fn rows_card(state: &GalleryState, t: &Theme) -> El {
     let row_selected = ui::list_row("gal-row-1", "Selected thread with monogram")
         .density(RowDensity::Default)
         .leading(ui::project_monogram("viz", 18.0, Some(0), t))
-        .trailing(
-            ui::badge("PR #42")
-                .size(BadgeSize::Nano)
-                .tone(Tone::Success)
-                .build(t),
-        )
+        .trailing(rune_kit::Badge::new("PR #42").build(&t.k))
         .selected(state.selected_row == 1)
         .on_press(|s: &mut Desktop| with_gallery(s, |g| g.selected_row = 1))
         .build(t);
@@ -64,7 +59,7 @@ pub(super) fn rows_card(state: &GalleryState, t: &Theme) -> El {
         "crates/viz-desktop/src/ui/row.rs — verifying min_w(0) shrink behavior across narrow columns",
     )
     .leading_icon(&ui::THREAD)
-    .trailing(ui::kbd_group(&["⌘", "2"], t))
+    .trailing(rune_kit::Keybind::new(&["⌘", "2"]).build(&t.k))
     .selected(state.selected_row == 2)
     .on_press(|s: &mut Desktop| with_gallery(s, |g| g.selected_row = 2))
     .build(t);
@@ -147,10 +142,9 @@ fn combobox_specimen(state: &GalleryState, t: &Theme) -> El {
                 .focus_ring_for("gallery-combo-search");
             if default {
                 item = item.trailing(
-                    ui::badge("Default")
-                        .size(BadgeSize::Nano)
-                        .tone(Tone::Accent)
-                        .build(t),
+                    rune_kit::Badge::new("Default")
+                        .variant(rune_kit::BadgeVariant::Accent)
+                        .build(&t.k),
                 );
             } else {
                 item = item.detail("ready");
@@ -180,7 +174,7 @@ fn combobox_specimen(state: &GalleryState, t: &Theme) -> El {
                 .gap(S6)
                 .child(text("↑↓ navigate").font(t.micro).color(t.faint))
                 .child(rune::spacer())
-                .child(ui::kbd_cap("↵", t)),
+                .child(rune_kit::Keybind::new(&["↵"]).build(&t.k)),
         )
         .build(t)
 }
@@ -214,10 +208,9 @@ fn tucked_preview(t: &Theme) -> El {
         .gap(S6)
         .center_y()
         .child(
-            ui::badge("@file")
-                .size(BadgeSize::Nano)
-                .tone(Tone::Info)
-                .build(t),
+            rune_kit::Badge::new("@file")
+                .variant(rune_kit::BadgeVariant::Subtle)
+                .build(&t.k),
         )
         .child(
             text("crates/viz-desktop/src/ui/surface.rs")

@@ -11,7 +11,7 @@ use crate::{
         matching_github, matching_mentions, matching_skills,
     },
     theme::{HAIRLINE, ICON, ICON_MD, ICON_SMALL, RADIUS_SM, S6, S8, S10, S12, S16, Theme},
-    ui::{self, BadgeSize, Tone},
+    ui::{self},
     update::{ComposerMsg, Msg},
 };
 
@@ -252,14 +252,13 @@ fn mention_row(entry: &MentionEntry, index: usize, highlighted: bool, t: &Theme)
                         .a11y_hidden(),
                 )
                 .child(
-                    ui::badge(if *reachable { "Online" } else { "Offline" })
-                        .tone(if *reachable {
-                            Tone::Info
+                    rune_kit::Badge::new(if *reachable { "Online" } else { "Offline" })
+                        .variant(if *reachable {
+                            rune_kit::BadgeVariant::Neutral
                         } else {
-                            Tone::Neutral
+                            rune_kit::BadgeVariant::Subtle
                         })
-                        .size(BadgeSize::Nano)
-                        .build(t)
+                        .build(&t.k)
                         .a11y_hidden(),
                 )
         }
@@ -396,10 +395,8 @@ fn skill_row(entry: &SkillEntry, index: usize, highlighted: bool, t: &Theme) -> 
             .a11y_hidden(),
     )
     .child(
-        ui::badge(entry.origin.label())
-            .tone(Tone::Neutral)
-            .size(BadgeSize::Nano)
-            .build(t)
+        rune_kit::Badge::new(entry.origin.label())
+            .build(&t.k)
             .a11y_hidden(),
     )
 }
@@ -407,13 +404,13 @@ fn skill_row(entry: &SkillEntry, index: usize, highlighted: bool, t: &Theme) -> 
 fn github_row(entry: &GitHubEntry, index: usize, highlighted: bool, t: &Theme) -> El {
     let item = &entry.item;
     let state_lower = item.state.to_ascii_lowercase();
-    let (glyph, tone, color) = match (item.kind, state_lower.as_str()) {
-        (GitHubItemKind::PullRequest, "merged") => (&ui::GIT_MERGE, Tone::Delegated, t.delegated),
-        (GitHubItemKind::PullRequest, "draft") => (&ui::PR_DRAFT, Tone::Neutral, t.muted),
-        (GitHubItemKind::PullRequest, "closed") => (&ui::PR_CLOSED, Tone::Danger, t.danger),
-        (GitHubItemKind::PullRequest, _) => (&ui::PR_OPEN, Tone::Success, t.success),
-        (GitHubItemKind::Issue, "closed") => (&ui::CIRCLE_CHECK, Tone::Delegated, t.delegated),
-        (GitHubItemKind::Issue, _) => (&ui::CIRCLE_DOT, Tone::Success, t.success),
+    let (glyph, color) = match (item.kind, state_lower.as_str()) {
+        (GitHubItemKind::PullRequest, "merged") => (&ui::GIT_MERGE, t.delegated),
+        (GitHubItemKind::PullRequest, "draft") => (&ui::PR_DRAFT, t.muted),
+        (GitHubItemKind::PullRequest, "closed") => (&ui::PR_CLOSED, t.danger),
+        (GitHubItemKind::PullRequest, _) => (&ui::PR_OPEN, t.success),
+        (GitHubItemKind::Issue, "closed") => (&ui::CIRCLE_CHECK, t.delegated),
+        (GitHubItemKind::Issue, _) => (&ui::CIRCLE_DOT, t.success),
     };
     let num = format!("#{}", item.number);
     let badge_text = if entry.linked {
@@ -421,7 +418,11 @@ fn github_row(entry: &GitHubEntry, index: usize, highlighted: bool, t: &Theme) -
     } else {
         item.state.as_str()
     };
-    let badge_tone = if entry.linked { Tone::Accent } else { tone };
+    let badge_variant = if entry.linked {
+        rune_kit::BadgeVariant::Accent
+    } else {
+        rune_kit::BadgeVariant::Neutral
+    };
     base_row(
         format!("gh-{:?}-{}", item.kind, item.number),
         &format!("{num} {}", item.title),
@@ -448,10 +449,9 @@ fn github_row(entry: &GitHubEntry, index: usize, highlighted: bool, t: &Theme) -
             .a11y_hidden(),
     )
     .child(
-        ui::badge(badge_text)
-            .tone(badge_tone)
-            .size(BadgeSize::Nano)
-            .build(t)
+        rune_kit::Badge::new(badge_text)
+            .variant(badge_variant)
+            .build(&t.k)
             .a11y_hidden(),
     )
 }

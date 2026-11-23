@@ -10,7 +10,7 @@ use crate::{
     model::{PlanBody, PlanCard, PlanStep, ToolStatus, relative_path},
     motion,
     theme::{CARD_INSET, HAIRLINE, ICON_MD, RADIUS_CARD, S4, S6, S8, Size, Theme},
-    ui::{self, BadgeSize, InlineStyle, Tone},
+    ui::{self, InlineStyle},
     update::{Msg, TimelineMsg},
 };
 
@@ -75,11 +75,9 @@ pub fn plan_card(s: &Desktop, plan: &PlanCard, t: &Theme, layer: &mut Vec<El>) -
         .center_y()
         .fill(t.surface_recessed)
         .child(
-            ui::badge("Plan")
-                .tone(Tone::Accent)
-                .size(BadgeSize::Nano)
-                .icon(&ui::PLAN)
-                .build(t)
+            rune_kit::Badge::new("Plan")
+                .variant(rune_kit::BadgeVariant::Accent)
+                .build(&t.k)
                 .key("plan-badge"),
         )
         .child(subtitle)
@@ -188,13 +186,7 @@ fn checklist_body(steps: &[PlanStep], t: &Theme) -> El {
                         .min_w(0.0),
                 );
             if step.priority == PlanPriority::High && step.status != ToolStatus::Done {
-                r = r.child(
-                    ui::badge("High")
-                        .tone(Tone::Warning)
-                        .size(BadgeSize::Nano)
-                        .build(t)
-                        .key("priority"),
-                );
+                r = r.child(rune_kit::Badge::new("High").build(&t.k).key("priority"));
             }
             r
         }))

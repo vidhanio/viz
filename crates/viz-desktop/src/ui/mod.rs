@@ -8,7 +8,6 @@
 
 mod badge;
 mod button;
-mod controls;
 mod dialog;
 mod feedback;
 pub mod gallery;
@@ -28,12 +27,8 @@ use rune_kit::Spinner;
     reason = "complete ui component API is exported for Phase 1 feature tracks and gallery"
 )]
 pub use self::{
-    badge::{
-        Badge, BadgeSize, Tone, ToneColors, badge, diff_stat, diff_stat_rolling, dot, kbd, kbd_cap,
-        kbd_group, tooltip_text, with_tooltip,
-    },
+    badge::{Tone, ToneColors, diff_stat, diff_stat_rolling, dot, tooltip_text, with_tooltip},
     button::{Button, button},
-    controls::{Segmented, Switch, segmented, switch},
     dialog::{
         Dialog, DialogForm, ToastCard, dialog, dialog_actions, dialog_body, sheet, toast_card,
     },
@@ -51,7 +46,7 @@ pub use self::{
         GIT_BRANCH, GIT_BRANCH_PLUS, GIT_COMMIT, GIT_FORK, GIT_MERGE, GLOBE, HARNESS, INBOX, INFO,
         LAPTOP, LAYERS, LINK, LIST_FILTER, LIST_PLUS, LOCK, MAIL, MAIL_OPEN, MESSAGE_SQUARE_DASHED,
         MINIMIZE2, MINUS, MONITOR, MORE, OMP, PANEL_RIGHT, PAPERCLIP, PENCIL, PI, PIN, PIN_OFF,
-        PLAN, PLUS, PR_CLOSED, PR_DRAFT, PR_OPEN, REDO2, REFRESH_CW, REPLY, ROTATE_CCW, ROTATE_CW,
+        PLUS, PR_CLOSED, PR_DRAFT, PR_OPEN, REDO2, REFRESH_CW, REPLY, ROTATE_CCW, ROTATE_CW,
         SEARCH, SERVER, SETTINGS, SHIELD, SHIELD_CHECK, SIDEBAR, SPARKLES, STAR, STAR_FILLED, STOP,
         TERMINAL, TEXT_WRAP, THREAD, TIMER, TRASH, TRIANGLE_ALERT, UNLOCK, UPLOAD, WRENCH, ZAP,
         harness_glyph, harness_icon, harness_mark, kit_glyphs, swap_kit_icon,

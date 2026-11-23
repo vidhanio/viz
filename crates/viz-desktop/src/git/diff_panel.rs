@@ -199,7 +199,8 @@ fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .child(el_spacer())
         .children(git.diff.as_ref().map(|d| stat(d.stats, t)))
         .child(
-            ui::segmented(&["Unified", "Split"], Some(selected))
+            rune_kit::SegmentedControl::new(&["Unified", "Split"], Some(selected))
+                .fit()
                 .label("Diff layout")
                 .on_pick(|s: &mut Desktop, index, _| {
                     s.widgets.git_diff.set_mode(if index == 0 {
@@ -208,7 +209,7 @@ fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                         DiffMode::Split
                     });
                 })
-                .build(t),
+                .build(&t.k),
         )
         .child(
             ui::icon_button(

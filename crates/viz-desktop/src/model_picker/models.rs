@@ -157,7 +157,7 @@ fn model_row(
         );
     }
     if model.disabled {
-        trailing = trailing.child(ui::badge("Unavailable").build(t));
+        trailing = trailing.child(rune_kit::Badge::new("Unavailable").build(&t.k));
     }
     let star = if model.favorite {
         &ui::STAR_FILLED
@@ -193,7 +193,7 @@ fn model_row(
             ),
     );
     if let Some(hint) = hint {
-        trailing = trailing.child(ui::kbd_cap(&hint.to_string(), t));
+        trailing = trailing.child(rune_kit::Keybind::new(&[hint.to_string()]).build(&t.k));
     }
     let mut item = ui::list_row(key, model.label)
         .leading(

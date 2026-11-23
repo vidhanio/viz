@@ -214,7 +214,11 @@ fn editor(
                     .children(
                         description.map(|hint| text(hint).font(t.small).color(t.muted).grow(1.0)),
                     )
-                    .children((index < 9).then(|| ui::kbd_cap(&(index + 1).to_string(), t)))
+                    .children(
+                        (index < 9).then(|| {
+                            rune_kit::Keybind::new(&[(index + 1).to_string()]).build(&t.k)
+                        }),
+                    )
             },
         ))
         .on_key(move |app: &mut Desktop, event, tx| {

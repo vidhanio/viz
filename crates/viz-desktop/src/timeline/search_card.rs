@@ -8,7 +8,7 @@ use crate::{
     app::Desktop,
     model::{SearchMatch, Tool, plural, relative_path},
     theme::{HAIRLINE, ICON_SMALL, RADIUS_CONTROL, RADIUS_SM, S2, S4, S6, S8, S10, Theme},
-    ui::{self, Tone},
+    ui::{self},
     update::{Msg, TimelineMsg},
 };
 
@@ -26,10 +26,9 @@ pub fn search_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         .center_y()
         .fill(t.surface_recessed)
         .child(
-            ui::badge(&tool.summary)
-                .tone(Tone::Info)
-                .mono()
-                .build(t)
+            rune_kit::Badge::new(&tool.summary)
+                .variant(rune_kit::BadgeVariant::Subtle)
+                .build(&t.k)
                 .key("query"),
         )
         .child(

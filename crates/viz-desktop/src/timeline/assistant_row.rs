@@ -16,7 +16,7 @@ use crate::{
         CHAT_CONTENT_MAX_WIDTH, CHAT_LANE_PADDING_X, HAIRLINE, ICON_MD, RADIUS_CONTROL, S2, S4, S6,
         S12, Size, Theme,
     },
-    ui::{self, BadgeSize, InlineStyle, Tone},
+    ui::{self, InlineStyle},
     update::{Msg, TimelineMsg},
 };
 
@@ -130,10 +130,8 @@ pub fn turn_footer(s: &Desktop, turn: &TurnView<'_>, is_latest: bool, t: &Theme)
 
     if turn.interrupted {
         bar = bar.child(
-            ui::badge("Interrupted")
-                .tone(Tone::Warning)
-                .size(BadgeSize::Nano)
-                .build(t)
+            rune_kit::Badge::new("Interrupted")
+                .build(&t.k)
                 .key("interrupted")
                 .mr(S4),
         );

@@ -14,7 +14,7 @@ use crate::{
         CARD_INSET, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_SM, RADIUS_SURFACE, S2, S4, S6,
         S8, S12, Size, Theme,
     },
-    ui::{self, BadgeSize, InlineStyle, Tone},
+    ui::{self, InlineStyle},
     update::{Msg, TimelineMsg},
 };
 
@@ -208,25 +208,18 @@ fn context_chips(
     let mut strip = row().key("context-chips").gap(S4).flex_wrap().center_y();
     if let Some(origin) = origin {
         strip = strip.child(
-            ui::badge(format!("via {}", origin.connector))
-                .tone(Tone::Neutral)
-                .size(BadgeSize::Nano)
-                .build(t)
+            rune_kit::Badge::new(format!("via {}", origin.connector))
+                .build(&t.k)
                 .key("origin"),
         );
     }
     for (idx, ctx) in context.iter().enumerate() {
         let chip = match ctx {
-            PromptContext::File { path } => ui::badge(format!("@{path}"))
-                .tone(Tone::Info)
-                .size(BadgeSize::Nano)
-                .mono()
-                .build(t),
+            PromptContext::File { path } => rune_kit::Badge::new(format!("@{path}"))
+                .variant(rune_kit::BadgeVariant::Subtle)
+                .build(&t.k),
             PromptContext::Link { name, title, .. } => {
-                let mut badge = ui::badge(name)
-                    .tone(Tone::Delegated)
-                    .size(BadgeSize::Nano)
-                    .build(t);
+                let mut badge = rune_kit::Badge::new(name).build(&t.k);
                 if let Some(title) = title {
                     badge = badge.help(title.clone());
                 }

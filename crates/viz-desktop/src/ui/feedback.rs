@@ -220,7 +220,7 @@ impl Banner {
             Tone::Danger => &CIRCLE_ALERT,
             Tone::Warning => &TRIANGLE_ALERT,
             Tone::Success => &CIRCLE_CHECK,
-            Tone::Neutral | Tone::Accent | Tone::Info | Tone::Steer | Tone::Delegated => &INFO,
+            Tone::Neutral | Tone::Accent | Tone::Info => &INFO,
         };
         let mut copy = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(
             text(&self.title)

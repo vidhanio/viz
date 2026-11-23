@@ -1,12 +1,11 @@
-//! Flat semantic badges, keyboard keycaps, diff statistics, and tooltip
+//! Semantic tones, diff statistics, and tooltip
 //! helpers.
 
-use rune::{Color, El, Icon, el, icon, row, text};
+use rune::{Color, El, el, row, text};
 
-use super::COMMAND_KEY;
 use crate::{
     motion,
-    theme::{DOT, HAIRLINE, RADIUS_PILL, RADIUS_SM, RADIUS_XS, S2, S4, S6, Theme},
+    theme::{DOT, S6, Theme},
 };
 
 /// Semantic accent role for badges, banners, and inline status elements.
@@ -25,10 +24,6 @@ pub enum Tone {
     Warning,
     /// Informational / remote / `@file` accent (`base0C`).
     Info,
-    /// Steer mode / `$skill` / extra-high effort (`base09`).
-    Steer,
-    /// Delegated subagent / merged PR / `/command` (`base0E`).
-    Delegated,
 }
 
 /// Resolved flat fill and ink for a [`Tone`].
@@ -53,8 +48,6 @@ impl Tone {
             Self::Danger => tinted(t.danger, t.danger),
             Self::Warning => tinted(t.warning, t.warning),
             Self::Info => tinted(t.info, t.info),
-            Self::Steer => tinted(t.steer, t.steer),
-            Self::Delegated => tinted(t.delegated, t.delegated),
         }
     }
 }
@@ -64,152 +57,6 @@ fn tinted(fg: Color, tint: Color) -> ToneColors {
         fg,
         bg: tint.alpha(0.12),
     }
-}
-
-/// Height and typography density for [`Badge`].
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum BadgeSize {
-    /// Standard compact tag (`20pt` tall, `12/16` medium).
-    #[default]
-    Small,
-    /// Micro inline tag (`16pt` tall, `10/12` nano) for PR state and refs.
-    Nano,
-}
-
-/// Flat base16 badge with optional leading dot or Lucide icon.
-#[derive(Debug)]
-pub struct Badge {
-    label: String,
-    tone: Tone,
-    size: BadgeSize,
-    icon: Option<&'static Icon>,
-    dot: bool,
-    pill: bool,
-    mono: bool,
-}
-
-/// Starts a flat semantic [`Badge`].
-pub fn badge(label: impl Into<String>) -> Badge {
-    Badge {
-        label: label.into(),
-        tone: Tone::Neutral,
-        size: BadgeSize::Small,
-        icon: None,
-        dot: false,
-        pill: false,
-        mono: false,
-    }
-}
-
-impl Badge {
-    /// Sets the semantic [`Tone`].
-    pub const fn tone(mut self, tone: Tone) -> Self {
-        self.tone = tone;
-        self
-    }
-
-    /// Sets [`BadgeSize::Small`] or [`BadgeSize::Nano`].
-    pub const fn size(mut self, size: BadgeSize) -> Self {
-        self.size = size;
-        self
-    }
-
-    /// Adds a leading Lucide icon tinted with the badge's tone.
-    pub const fn icon(mut self, glyph: &'static Icon) -> Self {
-        self.icon = Some(glyph);
-        self
-    }
-
-    /// Adds a leading status dot tinted with the badge's tone.
-    pub const fn dot(mut self) -> Self {
-        self.dot = true;
-        self
-    }
-
-    /// Uses a full capsule radius (`RADIUS_PILL`) instead of `RADIUS_SM`.
-    pub const fn pill(mut self) -> Self {
-        self.pill = true;
-        self
-    }
-
-    /// Renders the badge label in tabular monospace.
-    pub const fn mono(mut self) -> Self {
-        self.mono = true;
-        self
-    }
-
-    /// Builds the flat badge element.
-    pub fn build(self, t: &Theme) -> El {
-        let colors = self.tone.colors(t);
-        let (height, px, icon_size, font) = match self.size {
-            BadgeSize::Small => (
-                20.0,
-                S6,
-                11.0,
-                if self.mono {
-                    t.mono_small
-                } else {
-                    t.small_medium
-                },
-            ),
-            BadgeSize::Nano => (
-                16.0,
-                S4,
-                10.0,
-                if self.mono { t.mono_micro } else { t.nano },
-            ),
-        };
-        let radius = if self.pill { RADIUS_PILL } else { RADIUS_SM };
-        let mut el = row()
-            .h(height)
-            .px(px)
-            .gap(S4)
-            .center_y()
-            .radius(radius)
-            .fill(colors.bg);
-        if self.dot {
-            el = el.child(
-                rune::el()
-                    .size(DOT, DOT)
-                    .radius(DOT / 2.0)
-                    .fill(colors.fg)
-                    .a11y_hidden(),
-            );
-        } else if let Some(glyph) = self.icon {
-            el = el.child(icon(glyph, icon_size).color(colors.fg).a11y_hidden());
-        }
-        el.child(text(self.label).font(font).color(colors.fg).truncate())
-    }
-}
-
-/// Single flat base16 keycap (`18pt` tall, `RADIUS_XS`, `chip_fill` + `1px`
-/// hairline).
-pub fn kbd_cap(label: &str, t: &Theme) -> El {
-    row()
-        .min_w(18.0)
-        .h(18.0)
-        .px(S4)
-        .center()
-        .radius(RADIUS_XS)
-        .fill(t.chip_fill)
-        .border(HAIRLINE, t.hairline)
-        .a11y_hidden()
-        .child(text(label).font(t.mono_micro).color(t.muted))
-}
-
-/// Row of flat keycaps separated by `2pt` for shortcuts (`⌘ K`, `Shift ↵`).
-pub fn kbd_group(keys: &[&str], t: &Theme) -> El {
-    row()
-        .gap(S2)
-        .center_y()
-        .a11y_hidden()
-        .children(keys.iter().map(|key| kbd_cap(key, t)))
-}
-
-/// Platform command shortcut keycap group (`⌘` + `key` on macOS, `Ctrl` + `key`
-/// elsewhere).
-pub fn kbd(key: &str, t: &Theme) -> El {
-    kbd_group(&[COMMAND_KEY, key], t)
 }
 
 /// Static tabular `+added -removed` diff stat pair (`mono_small`, `success` /

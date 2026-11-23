@@ -130,11 +130,11 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
         .child(ui::rule(t))
         .child(list)
         .children(git.new_worktree.then(|| {
-            ui::switch(git.remote_base)
+            rune_kit::Switch::new(git.remote_base)
                 .label("Start from remote")
                 .description("Use the tracked remote branch or the matching branch on origin")
                 .on_toggle_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::RemoteBase, tx))
-                .build(t)
+                .build(&t.k)
         }))
 }
 

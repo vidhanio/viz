@@ -16,7 +16,7 @@ use crate::{
     theme::{
         HAIRLINE, ICON_SMALL, RADIUS_SM, RADIUS_SURFACE, S4, S8, S10, S14, S16, S40, S44, Theme,
     },
-    ui::{self, InlineStyle, Tone},
+    ui::{self, InlineStyle},
     update::{ComposerMsg, Msg},
 };
 
@@ -134,7 +134,7 @@ fn length_warning(s: &Desktop, t: &Theme) -> Option<El> {
     let char_count = s.model.composer.draft.text.chars().count();
     (char_count > PROMPT_WARN_LIMIT).then(|| {
         let over = char_count > PROMPT_CHAR_LIMIT;
-        let tone = if over { Tone::Danger } else { Tone::Warning };
+        let color = if over { t.danger } else { t.warning };
         let label = if over {
             format!("Prompt exceeds limit ({char_count} / {PROMPT_CHAR_LIMIT} chars)")
         } else {
@@ -145,7 +145,7 @@ fn length_warning(s: &Desktop, t: &Theme) -> Option<El> {
             .w_full()
             .px(S16)
             .pb(S4)
-            .child(ui::badge(label).tone(tone).build(t))
+            .child(text(label).font(t.small).color(color).role("status"))
     })
 }
 

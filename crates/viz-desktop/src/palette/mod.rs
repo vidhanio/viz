@@ -160,7 +160,7 @@ fn result_row(result: PaletteRow<'_>, active: bool, s: &Desktop, t: &Theme) -> E
     if let PaletteRow::Command(command) = result
         && let Some(shortcut) = command.shortcut()
     {
-        item = item.child(ui::kbd(shortcut, t));
+        item = item.child(rune_kit::Keybind::new(&[ui::COMMAND_KEY, shortcut]).build(&t.k));
     }
     item
 }

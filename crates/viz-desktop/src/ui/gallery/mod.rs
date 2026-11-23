@@ -18,7 +18,7 @@ use crate::{
     motion,
     motion_scene::MotionDemo,
     theme::{CARD_INSET, DIALOG_MAX_WIDTH, HAIRLINE, RADIUS_CARD, S4, S8, S12, S16, Size, Theme},
-    ui::{self, BadgeSize, ScrollMode, Tone},
+    ui::{self, ScrollMode, Tone},
 };
 
 #[derive(Debug, Default)]
@@ -184,16 +184,9 @@ pub fn view(state: &GalleryState, reduced: bool, t: &Theme) -> El {
 
 fn gallery_toolbar(state: &GalleryState, reduced: bool, t: &Theme) -> El {
     let mode_badge = if reduced {
-        ui::badge("Reduced motion")
-            .tone(Tone::Warning)
-            .size(BadgeSize::Small)
-            .dot()
-            .build(t)
+        rune_kit::Badge::new("Reduced motion").build(&t.k)
     } else {
-        ui::badge("Flat base16 · 1px hairlines")
-            .tone(Tone::Neutral)
-            .size(BadgeSize::Small)
-            .build(t)
+        rune_kit::Badge::new("Flat base16 · 1px hairlines").build(&t.k)
     };
     row()
         .key("gallery-toolbar")
@@ -289,7 +282,7 @@ fn gallery_popover(t: &Theme) -> El {
                 .center_y()
                 .child(text("Anchored popover").font(t.title).color(t.text_strong))
                 .child(rune::spacer())
-                .child(ui::kbd("K", t)),
+                .child(rune_kit::Keybind::new(&[ui::COMMAND_KEY, "K"]).build(&t.k)),
         )
         .child(ui::rule(t))
         .child(

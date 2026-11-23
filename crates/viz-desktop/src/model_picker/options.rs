@@ -229,7 +229,12 @@ fn extra_row(extra: ExtraOption<'_>, highlighted: bool, editable: bool, t: &Them
                 .checked(on)
                 .on_press_tx(toggle.clone())
                 .child(stack(&option.name, if on { "On" } else { "Off" }, t))
-                .child(ui::switch(on).on_toggle_tx(toggle).build(t).a11y_hidden())
+                .child(
+                    rune_kit::Switch::new(on)
+                        .on_toggle_tx(toggle)
+                        .build(&t.k)
+                        .a11y_hidden(),
+                )
         }
         ExtraOption::Select { value, .. } => item
             .role("button")

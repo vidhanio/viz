@@ -8,7 +8,7 @@ use super::{GalleryState, edit_gallery, gallery_card, with_gallery};
 use crate::{
     app::Desktop,
     theme::{S6, S8, Size, Theme},
-    ui::{self, BadgeSize, InlineStyle, SearchStyle, Tone},
+    ui::{self, InlineStyle, SearchStyle, Tone},
 };
 
 const DIFF_STEPS: [(u32, u32); 3] = [(42, 13), (128, 29), (7, 2)];
@@ -220,56 +220,20 @@ fn icon_and_inline_buttons(t: &Theme) -> El {
 }
 
 pub(super) fn badges_card(state: &GalleryState, t: &Theme) -> El {
-    let tones_a = row()
+    let variants = row()
         .w_full()
         .gap(S6)
         .center_y()
-        .child(ui::badge("Neutral").tone(Tone::Neutral).build(t))
-        .child(ui::badge("Accent").tone(Tone::Accent).dot().build(t))
+        .child(rune_kit::Badge::new("Neutral").build(&t.k))
         .child(
-            ui::badge("Open")
-                .tone(Tone::Success)
-                .icon(&ui::PR_OPEN)
-                .build(t),
+            rune_kit::Badge::new("Accent")
+                .variant(rune_kit::BadgeVariant::Accent)
+                .build(&t.k),
         )
         .child(
-            ui::badge("Failed")
-                .tone(Tone::Danger)
-                .icon(&ui::CIRCLE_X)
-                .build(t),
-        )
-        .child(ui::badge("Approval").tone(Tone::Warning).dot().build(t));
-
-    let tones_b = row()
-        .w_full()
-        .gap(S6)
-        .center_y()
-        .child(
-            ui::badge("Remote")
-                .tone(Tone::Info)
-                .icon(&ui::SERVER)
-                .pill()
-                .build(t),
-        )
-        .child(
-            ui::badge("Steer")
-                .tone(Tone::Steer)
-                .icon(&ui::CORNER_UP_RIGHT)
-                .build(t),
-        )
-        .child(
-            ui::badge("Merged")
-                .tone(Tone::Delegated)
-                .icon(&ui::GIT_MERGE)
-                .build(t),
-        )
-        .child(ui::badge("v2.4").size(BadgeSize::Nano).mono().build(t))
-        .child(
-            ui::badge("Draft")
-                .tone(Tone::Neutral)
-                .size(BadgeSize::Nano)
-                .pill()
-                .build(t),
+            rune_kit::Badge::new("Subtle")
+                .variant(rune_kit::BadgeVariant::Subtle)
+                .build(&t.k),
         );
 
     let (add, del) = DIFF_STEPS[state.diff_step % DIFF_STEPS.len()];
@@ -277,10 +241,10 @@ pub(super) fn badges_card(state: &GalleryState, t: &Theme) -> El {
         .w_full()
         .gap(S8)
         .center_y()
-        .child(ui::kbd("K", t))
-        .child(ui::kbd_group(&["Shift", "↵"], t))
+        .child(rune_kit::Keybind::new(&[ui::COMMAND_KEY, "K"]).build(&t.k))
+        .child(rune_kit::Keybind::new(&["Shift", "↵"]).build(&t.k))
         .child(ui::with_tooltip(
-            ui::kbd_cap("Esc", t),
+            rune_kit::Keybind::new(&["Esc"]).build(&t.k),
             "Dismiss overlay",
             Some("Esc"),
         ))
@@ -295,16 +259,11 @@ pub(super) fn badges_card(state: &GalleryState, t: &Theme) -> El {
                 .key("btn-gallery-diff"),
         );
 
-    let body = col()
-        .w_full()
-        .gap(S8)
-        .child(tones_a)
-        .child(tones_b)
-        .child(kbd_diff);
+    let body = col().w_full().gap(S8).child(variants).child(kbd_diff);
     gallery_card(
         "card-badges",
         "Badges, keycaps & diff stats",
-        "8 tones + rolling",
+        "rune-kit + rolling",
         body,
         t,
     )
@@ -330,7 +289,7 @@ pub(super) fn controls_card(state: &GalleryState, t: &Theme) -> El {
         )
         .child(
             ui::search_input(&state.search_empty, "Disabled search")
-                .trailing(ui::kbd_cap("/", t))
+                .trailing(rune_kit::Keybind::new(&["/"]).build(&t.k))
                 .disabled(true)
                 .build(t)
                 .grow(1.0)
@@ -343,36 +302,45 @@ pub(super) fn controls_card(state: &GalleryState, t: &Theme) -> El {
         .gap(S8)
         .items_start()
         .child(
-            ui::switch(state.switches.auto_scroll)
+            rune_kit::Switch::new(state.switches.auto_scroll)
                 .label("Auto-scroll")
                 .description("Follow live turns")
                 .on_toggle(|s: &mut Desktop| {
                     with_gallery(s, |g| g.switches.auto_scroll = !g.switches.auto_scroll);
                 })
-                .build(t)
+                .build(&t.k)
                 .key("sw-gallery-on")
                 .grow(1.0)
                 .shrink()
                 .min_w(0.0),
         )
         .child(
-            ui::switch(state.switches.plan_mode)
+            rune_kit::Switch::new(state.switches.plan_mode)
                 .label("Plan mode")
                 .on_toggle(|s: &mut Desktop| {
                     with_gallery(s, |g| g.switches.plan_mode = !g.switches.plan_mode);
                 })
-                .build(t)
+                .build(&t.k)
                 .key("sw-gallery-off"),
         )
-        .child(ui::switch(true).label("Locked").disabled(true).build(t));
+        .child(
+            rune_kit::Switch::new(true)
+                .label("Locked")
+                .disabled(true)
+                .build(&t.k),
+        );
 
     let seg_row = row().w_full().gap(S8).center_y().child(
-        ui::segmented(&["Local", "Worktree", "Remote"], Some(state.segmented_mode))
-            .label("Checkout mode")
-            .disable_segment(2)
-            .on_pick(|s: &mut Desktop, idx, _tx| with_gallery(s, |g| g.segmented_mode = idx))
-            .build(t)
-            .key("seg-gallery-mode"),
+        rune_kit::SegmentedControl::new(
+            &["Local", "Worktree", "Remote"],
+            Some(state.segmented_mode),
+        )
+        .label("Checkout mode")
+        .fit()
+        .segment_state(2, rune_kit::State::Disabled)
+        .on_pick(|s: &mut Desktop, idx, _tx| with_gallery(s, |g| g.segmented_mode = idx))
+        .build(&t.k)
+        .key("seg-gallery-mode"),
     );
 
     let body = col()
@@ -406,12 +374,7 @@ fn fields_row(state: &GalleryState, t: &Theme) -> El {
             )
             .required()
             .description("Shown in sidebar and headers.")
-            .trailing(
-                ui::badge("Git")
-                    .size(BadgeSize::Nano)
-                    .tone(Tone::Success)
-                    .build(t),
-            )
+            .trailing(rune_kit::Badge::new("Git").build(&t.k))
             .build(t)
             .grow(1.0)
             .shrink()

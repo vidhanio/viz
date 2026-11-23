@@ -9,7 +9,7 @@ use crate::{
     app::Desktop,
     motion,
     theme::{HAIRLINE, RADIUS_SURFACE, S2, S4, S8, S12, Size, Theme},
-    ui::{self, BadgeSize, InlineStyle, Tone},
+    ui::{self, InlineStyle},
     update::{ComposerMsg, Msg},
 };
 
@@ -91,10 +91,9 @@ fn queued_card(s: &Desktop, item: &QueuedInput, t: &Theme) -> El {
         let mut meta = row().gap(S4).center_y();
         if editing {
             meta = meta.child(
-                ui::badge("Editing")
-                    .tone(Tone::Accent)
-                    .size(BadgeSize::Nano)
-                    .build(t),
+                rune_kit::Badge::new("Editing")
+                    .variant(rune_kit::BadgeVariant::Accent)
+                    .build(&t.k),
             );
         }
         if item.attachment_count > 0 {
@@ -103,13 +102,7 @@ fn queued_card(s: &Desktop, item: &QueuedInput, t: &Theme) -> El {
             } else {
                 format!("{} attachments", item.attachment_count)
             };
-            meta = meta.child(
-                ui::badge(label)
-                    .icon(&ui::PAPERCLIP)
-                    .tone(Tone::Neutral)
-                    .size(BadgeSize::Nano)
-                    .build(t),
-            );
+            meta = meta.child(rune_kit::Badge::new(label).build(&t.k));
         }
         bubble = bubble.child(meta);
     }

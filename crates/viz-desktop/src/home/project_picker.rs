@@ -11,7 +11,7 @@ use crate::{
     model::{HomeProjectOption, home_project_options},
     motion,
     theme::{HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_SM, S4, S6, S8, Size, Theme},
-    ui::{self, BadgeSize, RowDensity, SearchStyle, Tone},
+    ui::{self, RowDensity, SearchStyle},
     update::{ComposerMsg, HOME_PROJECT_SEARCH, Msg, NavKey, SelectionMsg},
 };
 
@@ -169,10 +169,9 @@ fn picker_row(
             let mut trailing = row().gap(S4).center_y();
             if let Some(env) = remote_env {
                 trailing = trailing.child(
-                    ui::badge(env)
-                        .tone(Tone::Info)
-                        .size(BadgeSize::Nano)
-                        .build(t)
+                    rune_kit::Badge::new(env)
+                        .variant(rune_kit::BadgeVariant::Subtle)
+                        .build(&t.k)
                         .a11y_hidden(),
                 );
             }

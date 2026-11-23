@@ -195,12 +195,13 @@ fn popover(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .gap(S8)
         .center_y()
         .children(speed(&list.scope).map(|speed| {
-            ui::segmented(&["Standard", "Fast"], Some(usize::from(speed.is_fast)))
+            rune_kit::SegmentedControl::new(&["Standard", "Fast"], Some(usize::from(speed.is_fast)))
+                .fit()
                 .label("Speed")
                 .on_pick(|s: &mut Desktop, index, tx| {
                     s.dispatch(Msg::ModelPicker(ModelPickerMsg::SetFast(index == 1)), tx);
                 })
-                .build(t)
+                .build(&t.k)
         }))
         .child(rune::spacer())
         .children(access::footer_trigger(s, t));
