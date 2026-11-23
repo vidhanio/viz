@@ -114,6 +114,10 @@
                     preInstall = ''
                       find . -name Cargo.toml.orig -delete
                       rm -rf spikes
+                      mkdir -p crates/rune-text/assets
+                      cp crates/rune/assets/Inter-{Regular,Medium,SemiBold}.ttf crates/rune-text/assets/
+                      substituteInPlace crates/rune-text/src/fonts/default_fonts.rs \
+                        --replace-fail '../../../rune/assets/' '../../assets/'
                     '';
                   }
                 else
