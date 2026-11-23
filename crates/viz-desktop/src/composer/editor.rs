@@ -44,6 +44,7 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
         .caret(t.accent, t.k.selection())
         .placeholder(placeholder, t.faint)
         .pill_style(move |id| pill_theme.style(id))
+        .spellcheck(true)
         .on_edit(|s: &mut Desktop| &mut s.widgets.draft)
         .on_input_change(|s: &mut Desktop, tx| {
             s.sync_draft_text();
