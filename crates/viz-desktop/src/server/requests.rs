@@ -10,7 +10,7 @@ use viz_client::{
 };
 
 use super::Session;
-use crate::{app::Desktop, attachments::Source, thread::Thread};
+use crate::{app::Desktop, attachments::Source, model::Transcript as Thread};
 
 impl Session<'_> {
     pub(super) async fn load_earlier(&mut self, thread: ThreadId, before: EntryId) -> Result<()> {

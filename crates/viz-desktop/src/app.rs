@@ -20,11 +20,11 @@ pub use crate::motion::Switch;
 use crate::{
     attachments::{self, Loaded, Source, Target as AttachmentTarget},
     composer::{Completion, ModelMenu},
+    model::Transcript as Thread,
     motion_scene::MotionDemo,
     palette::Palette,
     server::{Command, ThreadChange},
     sidebar::Navigation,
-    thread::Thread,
 };
 
 /// How long a toast stays up while unpaused.

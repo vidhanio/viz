@@ -23,12 +23,13 @@ use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSumma
 
 use crate::{
     app::{Desktop, NewThread, Status},
-    attachments, checkout, header, motion, sidebar,
+    attachments, checkout, header,
+    model::{Item, PlanStep, TaskResult, Tool, ToolStatus, TurnEnd, User, is_command},
+    motion, sidebar,
     theme::{
         self, CARD_INSET, EMPTY_TOP, EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL,
         RADIUS_INNER, S2, S4, S6, S8, S12, S16, S24, S32, Size, Theme,
     },
-    thread::{Item, PlanStep, TaskResult, Tool, ToolStatus, TurnEnd, User, is_command},
     ui::{self, Card},
 };
 

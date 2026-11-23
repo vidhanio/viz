@@ -14,10 +14,9 @@ use viz_client::protocol::{
 use crate::{
     app::{Checkouts, Desktop, NewThread, Status},
     checkout, composer,
+    model::Transcript as Thread,
     motion_scene::MotionDemo,
-    palette, sidebar,
-    thread::Thread,
-    timeline,
+    palette, sidebar, timeline,
 };
 
 type Scene = (&'static str, fn(&mut Desktop));

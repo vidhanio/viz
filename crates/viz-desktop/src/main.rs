@@ -38,7 +38,9 @@ mod attachments;
 mod checkout;
 mod composer;
 mod config;
+mod effects;
 mod header;
+mod model;
 mod motion;
 mod motion_scene;
 mod palette;
@@ -47,7 +49,6 @@ mod server;
 mod sidebar;
 mod terminal;
 mod theme;
-mod thread;
 mod timeline;
 mod ui;
 
@@ -203,7 +204,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     let completion = composer::poll(s, clock, tx);
     let palette = palette::poll(s, clock, tx);
     let tool_timer = if s.thread.acp_partial.iter().any(|item| {
-        matches!(item, thread::Item::Tool(tool) if tool.status == thread::ToolStatus::Running
+        matches!(item, model::Item::Tool(tool) if tool.status == model::ToolStatus::Running
             && tool.started_at.is_some() && tool.timeout_ms.is_some())
     }) {
         let now = theme::now_ms();

@@ -6,19 +6,20 @@ mod actions;
 
 use std::{
     borrow::Cow,
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
 };
 
 use rune::{Color, El, LineCap, Shape, TextEdit, Tx, canvas, col, el, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement, shell::Sidebar};
-use serde_json::{Value, json};
 use viz_client::protocol::{
     EnvironmentStatus, Project, TaskStatus, ThreadId, ThreadStatus, ThreadSummary,
 };
 
 use crate::{
     app::{Desktop, Status, thread_title},
+    effects,
+    model::{Prefs, SidebarMode as Mode},
     theme::{
         self, HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL, RADIUS_INNER, ROW_INSET, S2, S4, S6, S8,
         S12, Size, TREE_ROW_CHILD, TREE_STEP, Theme,
@@ -26,37 +27,19 @@ use crate::{
     ui::{self, TreeLine},
 };
 
-/// How the sidebar lists top-level threads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Mode {
-    /// Newest first, each with its project under the title.
-    #[default]
-    Recent,
-    /// Under their collapsible projects, newest first.
-    Projects,
-}
-
-impl Mode {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::Recent => "recent",
-            Self::Projects => "projects",
-        }
-    }
-}
-
 #[derive(Debug)]
 pub struct Navigation {
     filter: TextEdit,
     mode: Mode,
-    collapsed_projects: HashSet<String>,
+    collapsed_projects: BTreeSet<String>,
     collapsed_parents: HashSet<ThreadId>,
     env_menu: bool,
     menu: Option<actions::Context>,
     edit: Option<actions::Edit>,
     value: TextEdit,
-    /// Where the mode and collapsed projects persist, once restored from it.
+    /// Where preferences persist, once restored from disk.
     store: Option<PathBuf>,
+    prefs: Prefs,
 }
 
 impl Default for Navigation {
@@ -64,13 +47,14 @@ impl Default for Navigation {
         Self {
             filter: TextEdit::new(""),
             mode: Mode::default(),
-            collapsed_projects: HashSet::new(),
+            collapsed_projects: BTreeSet::new(),
             collapsed_parents: HashSet::new(),
             env_menu: false,
             menu: None,
             edit: None,
             value: TextEdit::new(""),
             store: None,
+            prefs: Prefs::default(),
         }
     }
 }
@@ -86,43 +70,28 @@ impl Navigation {
     /// `$XDG_STATE_HOME/viz/desktop.json` and keeps them there from now on.
     /// A missing or unreadable file leaves the defaults.
     pub fn restore(&mut self) {
-        let Ok(paths) = viz_config::Paths::from_env() else {
+        let Some(path) = effects::prefs::default_path() else {
             return;
         };
-        let path = paths.state_dir.join("desktop.json");
-        if let Some(saved) = std::fs::read(&path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        {
-            self.mode = match saved.get("sidebar").and_then(Value::as_str) {
-                Some("projects") => Mode::Projects,
-                _ => Mode::Recent,
-            };
-            self.collapsed_projects = saved
-                .get("collapsedProjects")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect();
-        }
+        let prefs = effects::prefs::load(&path);
+        self.mode = prefs.sidebar;
+        self.collapsed_projects
+            .clone_from(&prefs.collapsed_projects);
+        self.prefs = prefs;
         self.store = Some(path);
     }
 
     /// Writes what `restore` reads. Failing to is harmless: the next launch
     /// starts from the defaults.
-    fn persist(&self) {
+    fn persist(&mut self) {
         let Some(path) = &self.store else {
             return;
         };
-        let mut collapsed: Vec<_> = self.collapsed_projects.iter().collect();
-        collapsed.sort_unstable();
-        let saved = json!({ "sidebar": self.mode.name(), "collapsedProjects": collapsed });
-        if let Some(dir) = path.parent() {
-            _ = std::fs::create_dir_all(dir);
-        }
-        _ = std::fs::write(path, saved.to_string());
+        self.prefs.sidebar = self.mode;
+        self.prefs
+            .collapsed_projects
+            .clone_from(&self.collapsed_projects);
+        effects::prefs::save(path, &self.prefs);
     }
 
     /// Opens the project holding `id`'s top-level thread.
@@ -894,7 +863,7 @@ fn mode_switch(s: &Desktop, t: &Theme) -> El {
     let tab = |mode: Mode, label: &'static str| {
         let active = mode == current;
         row()
-            .key(mode.name())
+            .key(mode.as_str())
             .role("radio")
             .label(label)
             .checked(active)
