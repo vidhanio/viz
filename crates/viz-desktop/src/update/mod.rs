@@ -9,6 +9,7 @@ pub use git::GitMsg;
 pub mod model_picker;
 mod model_picker_keys;
 mod palette;
+mod projects;
 pub mod requests;
 mod selection;
 mod server;

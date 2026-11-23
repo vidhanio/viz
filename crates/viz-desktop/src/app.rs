@@ -183,6 +183,7 @@ impl Desktop {
             Msg::Terminal(update::terminal::TerminalMsg::Created(..))
         );
         let in_terminal = tx.focused().is_some_and(|key| key.starts_with("terminal-"));
+        self.model.palette.pages.clock = tx.clock();
         let effects = update::update(&mut self.model, msg);
         crate::git::diff_panel::sync(self);
         crate::terminal::panel::sync(self);
@@ -245,7 +246,14 @@ impl Desktop {
         }
         self.widgets.sidebar_dialog = TextEdit::new(&self.model.sidebar.edit_value);
 
-        self.widgets.palette_query = TextEdit::new(&self.model.palette.query);
+        let query = self
+            .model
+            .palette
+            .pages
+            .stack
+            .last()
+            .map_or(&self.model.palette.query, |page| &page.query);
+        self.widgets.palette_query = TextEdit::new(query);
         self.widgets.palette_query.focused = self.model.palette.open;
 
         self.widgets.model_query = TextEdit::new(&self.model.composer.model_menu.query);

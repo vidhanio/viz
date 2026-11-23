@@ -1,12 +1,12 @@
 //! Imperative execution of [`Effect`] values against [`Desktop`] and Rune's
 //! [`Tx`].
 
-use rune::{FileDialogOptions, TextEdit, Tx};
+use rune::{TextEdit, Tx};
 
 use super::{EditSync, EditTarget, Effect, ServerEffect, prefs};
 use crate::{
     app::Desktop,
-    update::{self, Msg, ServerMsg, SidebarMsg},
+    update::{self, Msg, ServerMsg},
 };
 
 impl Desktop {
@@ -37,27 +37,6 @@ impl Desktop {
                 Effect::SavePrefs(data) => {
                     if let Some(path) = self.prefs_path() {
                         prefs::save(path, &data);
-                    }
-                }
-                Effect::PickProjectFolder => {
-                    if let Some(tx) = tx.as_deref_mut() {
-                        let options = FileDialogOptions {
-                            title: "Add project".into(),
-                            ..FileDialogOptions::default()
-                        };
-                        tx.open_folder(options, |s: &mut Self, result, tx| match result {
-                            Ok(Some(path)) => s.dispatch(
-                                Msg::Sidebar(SidebarMsg::ProjectFolderPicked(
-                                    path.to_string_lossy().into_owned(),
-                                )),
-                                tx,
-                            ),
-                            Ok(None) => {}
-                            Err(error) => s.dispatch(
-                                Msg::Sidebar(SidebarMsg::ProjectFolderFailed(error.to_string())),
-                                tx,
-                            ),
-                        });
                     }
                 }
                 Effect::CopyText(text) => {
@@ -212,6 +191,16 @@ impl Desktop {
                 ServerEffect::LoadDraft(draft) => Some(ServerMsg::DraftHarnessesLoaded {
                     draft,
                     result: None,
+                }),
+                ServerEffect::ProjectPalette(request, _) => Some(ServerMsg::ProjectPalette {
+                    environment: self
+                        .model
+                        .connection
+                        .environment
+                        .clone()
+                        .unwrap_or_default(),
+                    request,
+                    result: Box::new(Err("The server is offline.".into())),
                 }),
                 ServerEffect::SearchThreads { request, .. } => {
                     Some(ServerMsg::ThreadSearchResult {

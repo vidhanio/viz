@@ -7,9 +7,9 @@ use rune::AppHandle;
 use viz_client::{
     Client, Error, Result,
     protocol::{
-        CreateProject, EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks,
-        ListWorktrees, ProjectIconResult, ReadProjectIcon, RemoveProject, RetitleThread,
-        SearchFiles, SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
+        EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks, ListWorktrees,
+        ProjectIconResult, ReadProjectIcon, RemoveProject, RetitleThread, SearchFiles,
+        SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
@@ -215,19 +215,6 @@ impl Session<'_> {
 
     pub(super) async fn project(&self, op_id: Option<u64>, change: ProjectChange) -> Result<()> {
         let result = match &change {
-            ProjectChange::Add(path) => {
-                let project = self
-                    .client
-                    .create_project(&CreateProject { path, name: None })
-                    .await;
-                match project {
-                    Ok(project) => {
-                        self.dispatch(ServerMsg::ProjectAdded(Box::new(project)));
-                        Ok(())
-                    }
-                    Err(error) => Err(error),
-                }
-            }
             ProjectChange::Rename { id, name } => {
                 self.client
                     .update_project(&UpdateProject {

@@ -31,6 +31,7 @@ mod model_picker;
 mod motion;
 mod motion_scene;
 mod palette;
+mod projects;
 mod requests;
 mod scenes;
 mod shell;
@@ -125,6 +126,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
 
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if ev.key == rune::Key::Escape
+        && !s.model.palette.open
         && s.model.panels.details_open
         && s.model.git.popup.is_none()
         && s.model.git.dialog.is_none()
@@ -280,7 +282,17 @@ fn poll_completion(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
 }
 
 fn poll_palette(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
-    if !s.model.palette.open || s.model.palette.filter.is_empty() {
+    if !s.model.palette.pages.stack.is_empty() {
+        if s.model.palette.pages.due.is_some_and(|due| clock >= due) {
+            s.dispatch(Msg::Palette(PaletteMsg::Poll(clock)), tx);
+            return true;
+        }
+        return false;
+    }
+    if !s.model.palette.open
+        || s.model.palette.filter.is_empty()
+        || s.model.palette.filter.starts_with('>')
+    {
         return false;
     }
     let should_step = if s.model.connected() {

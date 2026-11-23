@@ -145,7 +145,11 @@ pub enum ServerMsg {
         detail: Option<String>,
     },
     /// Server registered a new project.
-    ProjectAdded(Box<Project>),
+    ProjectPalette {
+        environment: String,
+        request: u64,
+        result: Box<Result<crate::model::projects::ProjectReply, String>>,
+    },
     /// Git branches and worktrees finished loading for `project`.
     CheckoutsLoaded {
         /// Environment id.

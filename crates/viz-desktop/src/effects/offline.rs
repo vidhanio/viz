@@ -66,6 +66,16 @@ pub(super) fn handle(
             );
         }
         ServerEffect::SearchFiles { .. } | ServerEffect::ReadProjectIcon { .. } => {}
+        ServerEffect::ProjectPalette(request, _) => ui.update(move |s, tx| {
+            s.dispatch(
+                Msg::Server(ServerMsg::ProjectPalette {
+                    environment: s.model.active_env_key().to_owned(),
+                    request,
+                    result: Box::new(Err("The server is offline.".into())),
+                }),
+                tx,
+            );
+        }),
         ServerEffect::SearchThreads { request, .. } => {
             dispatch_ui(
                 ui,

@@ -1,0 +1,211 @@
+//! Nested command palette pages and keyboard navigation.
+
+use rune::{El, Key, ScrollSpec, col, row, text};
+
+use super::{FIELD, LIST, LIST_HEIGHT, query_input};
+use crate::{
+    app::Desktop,
+    model::projects::ProjectAction,
+    projects,
+    theme::{PALETTE_WIDTH, S8, S16, Size, Theme},
+    ui,
+    update::{Msg, PaletteMsg},
+};
+
+pub(super) fn mount(
+    s: &Desktop,
+    page: &crate::model::projects::ProjectPage,
+    t: &Theme,
+    layer: &mut Vec<El>,
+) {
+    use crate::{
+        model::projects::{ProjectReply, ProjectView},
+        motion::{Switch, TRAVEL_TITLE},
+    };
+    let options = projects::options(&s.model, page);
+    let choices: Vec<_> = options
+        .iter()
+        .enumerate()
+        .filter_map(|(i, row)| row.action().map(|action| (i, action)))
+        .collect();
+    let active = page
+        .active
+        .filter(|active| choices.iter().any(|(i, _)| i == active));
+    let count = options.len();
+    let list = col()
+        .key(LIST)
+        .role("listbox")
+        .label(page.view.title())
+        .max_h(LIST_HEIGHT)
+        .min_h(0.0)
+        .w_full()
+        .padding(S8)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .scroll_edge_fade(S16)
+        .instant_changes()
+        .children(
+            options
+                .into_iter()
+                .enumerate()
+                .map(|(i, option)| option.build(i, Some(i) == active, t)),
+        );
+    let submit = projects::submit(page)
+        .filter(|_| !page.pending)
+        .map(|(_, action)| action);
+    let completion = match &page.data {
+        Some(ProjectReply::Folders(data)) if !page.pending => data.completion.clone(),
+        _ => None,
+    };
+    let is_folder = matches!(page.view, ProjectView::Folders(_));
+    let no_input = matches!(page.view, ProjectView::Remove(_) | ProjectView::Cloning);
+    let field = project_input(
+        s,
+        page.view.placeholder(),
+        ProjectInput {
+            choices,
+            active,
+            submit,
+            completion,
+            is_folder,
+            input_disabled: page.write_pending,
+        },
+        t,
+    );
+    let mut view = col()
+        .gap(S8)
+        .pb(S8)
+        .child(header(page.view.title(), t))
+        .child(ui::rule(t));
+    if !no_input {
+        view = view.child(row().px(S8).child(field));
+    }
+    view = view.child(projects::context(s, page, count, t));
+    if count > 0 {
+        view = view.child(list);
+    }
+    if let Some(footer) = projects::footer(page, t) {
+        view = view.child(row().px(S16).child(footer));
+    }
+    if !no_input {
+        view = view.child(ui::rule(t)).child(legend(is_folder, t));
+    }
+    let pages = &s.model.palette.pages;
+    let switch = if pages.backwards {
+        Switch::Out
+    } else {
+        Switch::Into
+    };
+    ui::sheet(
+        "palette",
+        "Command palette",
+        PALETTE_WIDTH,
+        |s: &mut Desktop| s.dispatch_local(Msg::Palette(PaletteMsg::Close)),
+        [col().child_exit(switch.view_exit(TRAVEL_TITLE)).child(
+            view.key(format!("palette-view-{}", pages.revision))
+                .transition(switch.view_enter(TRAVEL_TITLE)),
+        )],
+        t,
+        layer,
+    );
+}
+
+struct ProjectInput {
+    choices: Vec<(usize, ProjectAction)>,
+    active: Option<usize>,
+    submit: Option<ProjectAction>,
+    completion: Option<String>,
+    is_folder: bool,
+    input_disabled: bool,
+}
+
+fn project_input(s: &Desktop, placeholder: &str, input: ProjectInput, t: &Theme) -> El {
+    let ProjectInput {
+        choices,
+        active,
+        submit,
+        completion,
+        is_folder,
+        input_disabled,
+    } = input;
+    query_input(s, placeholder)
+        .plain()
+        .disabled(input_disabled)
+        .active_descendant(active.map(projects::option_key))
+        .on_key(move |s: &mut Desktop, ev, tx| {
+            if s.widgets.palette_query.preedit().is_some() {
+                return false;
+            }
+            let action = match ev.key {
+                Key::Backspace if s.widgets.palette_query.text.is_empty() => Some(PaletteMsg::Back),
+                Key::Enter if !tx.key_repeat() => {
+                    let highlighted = (!ev.mods.ctrl && !ev.mods.cmd)
+                        .then(|| choices.iter().find(|(i, _)| Some(*i) == active))
+                        .flatten();
+                    highlighted
+                        .map(|(_, action)| action.clone())
+                        .or_else(|| submit.clone())
+                        .or_else(|| choices.first().map(|(_, action)| action.clone()))
+                        .map(PaletteMsg::Project)
+                }
+                Key::Tab if is_folder && !ev.mods.shift => {
+                    let folder = choices
+                        .iter()
+                        .find(|(i, _)| Some(*i) == active)
+                        .map(|(_, action)| action.clone());
+                    folder
+                        .or_else(|| completion.clone().map(ProjectAction::Browse))
+                        .map(PaletteMsg::Project)
+                }
+                Key::Up | Key::Down if !choices.is_empty() => {
+                    let n = choices.len();
+                    let index =
+                        active.and_then(|active| choices.iter().position(|(i, _)| *i == active));
+                    let down = ev.key == Key::Down;
+                    let next = index.map_or(if down { 0 } else { n - 1 }, |i| {
+                        if down { (i + 1) % n } else { (i + n - 1) % n }
+                    });
+                    Some(PaletteMsg::Highlight(choices[next].0))
+                }
+                _ => None,
+            };
+            action.is_some_and(|action| {
+                s.dispatch(Msg::Palette(action), tx);
+                true
+            })
+        })
+        .build(&t.overlay)
+        .key(FIELD)
+}
+
+fn legend(folder: bool, t: &Theme) -> El {
+    let mut hints: Vec<(&[&str], &str)> = vec![
+        (&["↑", "↓"], "Navigate"),
+        (&["↵"], "Select"),
+        (&["⌫"], "Back"),
+    ];
+    if folder {
+        hints.push((&["Tab"], "Complete"));
+    }
+    hints.push((&["Esc"], "Close"));
+    super::key_hints(hints, t)
+}
+
+fn header(title: &str, t: &Theme) -> El {
+    let back = ui::icon_button(
+        &ui::ARROW_LEFT,
+        "Back",
+        rune_kit::IconButtonVariant::Ghost,
+        Size::Compact,
+    )
+    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Palette(PaletteMsg::Back), tx))
+    .build(&t.overlay);
+    row()
+        .px(S8)
+        .gap(S8)
+        .h(Size::Large.height())
+        .center_y()
+        .child(back)
+        .child(text(title).font(t.ui_medium).color(t.text))
+}

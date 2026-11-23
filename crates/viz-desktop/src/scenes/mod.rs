@@ -6,6 +6,7 @@ mod fixtures;
 mod git;
 mod model_picker;
 mod overlays;
+mod projects;
 mod sidebar;
 mod terminal_panel;
 mod timeline;
@@ -66,6 +67,15 @@ pub const SCENES: &[Scene] = &[
     ("context-menu", overlays::context_menu),
     ("palette", overlays::palette),
     ("palette-open", overlays::palette_open),
+    ("project-sources", projects::sources),
+    ("project-folders", projects::folders),
+    ("project-new-folder", projects::new_folder),
+    ("project-repositories", projects::repositories),
+    ("project-cloning", projects::cloning),
+    ("project-settings", projects::settings),
+    ("project-icon", projects::icon),
+    ("project-icon-colors", projects::colors),
+    ("project-sessions", projects::sessions),
     ("attachments", overlays::attachments),
     ("slash", overlays::slash),
     ("mentions", overlays::mentions),

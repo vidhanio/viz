@@ -14,7 +14,7 @@ use super::{
     },
 };
 use crate::{
-    effects::{EditSync, EditTarget, Effect, ProjectChange, ServerEffect, ThreadChange},
+    effects::{EditSync, EditTarget, Effect, ServerEffect, ThreadChange},
     model::{
         ContextMenu, ContextSubmenu, DragShelf, Model, NewThread, ProjectFilter, SETTLED_PAGE_SIZE,
         SidebarDrag, SidebarEdit, SidebarOutline, SnoozePreset, UndoTriage, nth_visible_thread,
@@ -178,12 +178,8 @@ pub enum SidebarMsg {
     CloseEdit,
     /// Submit the active sidebar modal dialog.
     SubmitEdit,
-    /// Open the OS folder picker to register a project.
+    /// Open the Add Project palette.
     OpenAddProject,
-    /// User picked a folder path to register as a project.
-    ProjectFolderPicked(String),
-    /// Opening the OS folder picker failed.
-    ProjectFolderFailed(String),
     /// Open delete confirmation for `thread` if present.
     OpenDeleteThread(ThreadId),
     /// Toggle sidebar open/closed (`Cmd/Ctrl+B`).
@@ -433,24 +429,10 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
         SidebarMsg::EditValueChanged(value) => model.sidebar.edit_value = value,
         SidebarMsg::CloseEdit => model.sidebar.edit = None,
         SidebarMsg::SubmitEdit => submit_edit(model, &mut effects),
-        SidebarMsg::OpenAddProject => {
-            if model.connected() {
-                model.sidebar.menu = None;
-                effects.push(Effect::PickProjectFolder);
-            }
-        }
-        SidebarMsg::ProjectFolderPicked(path) => {
-            effects.push(Effect::Server(ServerEffect::Project {
-                op_id: None,
-                change: ProjectChange::Add(path),
-            }));
-        }
-        SidebarMsg::ProjectFolderFailed(error) => {
-            effects.push(Effect::Toast {
-                title: "Couldn’t open the folder picker".into(),
-                detail: Some(error),
-            });
-        }
+        SidebarMsg::OpenAddProject => effects.extend(super::palette::update(
+            model,
+            super::PaletteMsg::OpenProject(crate::model::projects::ProjectView::Sources),
+        )),
         SidebarMsg::OpenDeleteThread(id) => {
             if model.summary(id).is_some() {
                 open_edit(

@@ -6,6 +6,7 @@ pub mod git;
 mod offline;
 pub mod platform;
 pub mod prefs;
+pub mod projects;
 pub mod requests;
 mod runner;
 pub mod server;
@@ -49,8 +50,7 @@ pub enum Effect {
     },
     /// Persist client preferences to `$XDG_STATE_HOME/viz/desktop.json`.
     SavePrefs(Prefs),
-    /// Open the OS folder picker to add a project.
-    PickProjectFolder,
+
     /// Copy plain text to the system clipboard.
     CopyText(String),
     /// Open an external URL in the default handler.
@@ -329,6 +329,7 @@ pub enum ServerEffect {
         query: String,
     },
     /// Full-text search across transcripts for the command palette.
+    ProjectPalette(u64, projects::ProjectRequest),
     SearchThreads {
         /// Monotonic palette request id.
         request: u64,
@@ -413,8 +414,6 @@ pub enum ThreadChange {
 /// Project record change sent over RPC.
 #[derive(Debug, Clone)]
 pub enum ProjectChange {
-    /// Register an existing directory as a project.
-    Add(String),
     /// Rename a registered project.
     Rename {
         /// Project path id.

@@ -5,14 +5,16 @@ use std::time::Duration;
 use viz_client::protocol::{Position, TriageAction};
 
 use super::{
-    NavKey,
+    NavKey, projects,
     selection::{apply_thread_change, prepare_draft, select_thread},
     sidebar::open_edit,
 };
 use crate::{
     effects::{EditSync, EditTarget, Effect, ServerEffect, ThreadChange},
     model::{
-        Model, ModelMenuState, NewThread, PaletteChoice, PaletteCommand, PaletteSearch, SidebarEdit,
+        Model, ModelMenuState, NewThread, PaletteChoice, PaletteCommand, PaletteSearch,
+        SidebarEdit,
+        projects::{Destination, ProjectAction, ProjectView},
     },
 };
 
@@ -25,6 +27,10 @@ const SEARCH_DELAY: Duration = Duration::from_millis(180);
 pub enum PaletteMsg {
     /// Open or dismiss the palette (`Cmd/Ctrl+K`).
     Toggle,
+    OpenProject(ProjectView),
+    Project(ProjectAction),
+    Highlight(usize),
+    Back,
     /// Dismiss the palette and reset query state.
     Close,
     /// Query text changed; resets highlight and schedules debounced search.
@@ -52,30 +58,52 @@ pub(super) fn update(model: &mut Model, msg: PaletteMsg) -> Vec<Effect> {
     match msg {
         PaletteMsg::Toggle => {
             if model.palette.open {
-                close(model, &mut effects);
+                dismiss(model, &mut effects);
             } else {
-                model.sidebar.dismiss_overlays();
-                model.composer.open_picker = None;
-                model.composer.model_menu = ModelMenuState::default();
-                model.composer.completion.reset();
-                model.palette.open = true;
-                effects.push(Effect::Focus {
-                    key: FIELD,
-                    select_all: false,
-                    when_shown: true,
-                });
+                open(model, &mut effects);
             }
         }
-        PaletteMsg::Close => close(model, &mut effects),
+        PaletteMsg::OpenProject(view) => {
+            if model.connected() {
+                open(model, &mut effects);
+                if !projects::clone_active(model) {
+                    projects::push(model, view, String::new(), &mut effects);
+                }
+            }
+        }
+        PaletteMsg::Project(action) => projects::action(model, action, &mut effects),
+        PaletteMsg::Highlight(index) => projects::highlight(model, index, &mut effects),
+        PaletteMsg::Back => projects::back(model, &mut effects),
+        PaletteMsg::Close => dismiss(model, &mut effects),
         PaletteMsg::QueryChanged { text, clock } => {
             if !model.palette.open {
+                return effects;
+            }
+            if projects::page(model).is_some() {
+                projects::query(model, text, clock, &mut effects);
+                return effects;
+            }
+            if model.connected()
+                && ["/", "~/", "./", "../"]
+                    .iter()
+                    .any(|prefix| text.starts_with(prefix))
+            {
+                projects::push(
+                    model,
+                    ProjectView::Folders(Destination::Add),
+                    text,
+                    &mut effects,
+                );
                 return effects;
             }
             model.palette.query = text;
             model.palette.filter = model.palette.query.trim().to_lowercase();
             model.palette.active = None;
             model.palette.invalidate();
-            if model.connected() && !model.palette.filter.is_empty() {
+            if model.connected()
+                && !model.palette.filter.is_empty()
+                && !model.palette.filter.starts_with('>')
+            {
                 schedule_debounce(model, clock, &mut effects);
             }
             effects.push(Effect::ScrollToInstant {
@@ -84,15 +112,45 @@ pub(super) fn update(model: &mut Model, msg: PaletteMsg) -> Vec<Effect> {
                 y: 0.0,
             });
         }
-        PaletteMsg::Poll(clock) => poll(model, clock, &mut effects),
+        PaletteMsg::Poll(clock) => {
+            if projects::page(model).is_some() {
+                projects::poll(model, clock, &mut effects);
+            } else {
+                poll(model, clock, &mut effects);
+            }
+        }
         PaletteMsg::Key { key, choices } => handle_key(model, key, &choices, &mut effects),
         PaletteMsg::Choose(choice) => choose(model, choice, &mut effects),
     }
     effects
 }
 
-fn close(model: &mut Model, effects: &mut Vec<Effect>) {
+fn open(model: &mut Model, effects: &mut Vec<Effect>) {
+    model.sidebar.dismiss_overlays();
+    model.composer.open_picker = None;
+    model.composer.model_menu = ModelMenuState::default();
+    model.composer.completion.reset();
+    model.palette.open = true;
+    effects.push(Effect::Focus {
+        key: FIELD,
+        select_all: false,
+        when_shown: true,
+    });
+}
+
+fn dismiss(model: &mut Model, effects: &mut Vec<Effect>) {
+    if projects::clone_active(model) {
+        model.palette.open = false;
+    } else {
+        close(model, effects);
+    }
+}
+
+pub(super) fn close(model: &mut Model, effects: &mut Vec<Effect>) {
     model.palette.open = false;
+    model.palette.pages.stack.clear();
+    model.palette.pages.due = None;
+    model.palette.pages.request = model.palette.pages.request.wrapping_add(1);
     model.palette.query.clear();
     model.palette.filter.clear();
     model.palette.active = None;
@@ -106,7 +164,10 @@ fn schedule_debounce(model: &mut Model, clock: f64, effects: &mut Vec<Effect>) {
 }
 
 fn poll(model: &mut Model, clock: f64, effects: &mut Vec<Effect>) {
-    if !model.palette.open || model.palette.filter.is_empty() {
+    if !model.palette.open
+        || model.palette.filter.is_empty()
+        || model.palette.filter.starts_with('>')
+    {
         return;
     }
     if !model.connected() {
@@ -169,21 +230,48 @@ fn choose(model: &mut Model, choice: PaletteChoice, effects: &mut Vec<Effect>) {
     }
     let available = match choice {
         PaletteChoice::Command(command) => command.available(model),
-        PaletteChoice::Thread(_) | PaletteChoice::Message { .. } => model.connected(),
+        PaletteChoice::Project(_) | PaletteChoice::Thread(_) | PaletteChoice::Message { .. } => {
+            model.connected()
+        }
     };
     if !available {
         return;
     }
-    close(model, effects);
     match choice {
+        PaletteChoice::Project(index) => {
+            let path = model
+                .cache()
+                .projects()
+                .nth(index)
+                .map(|project| project.path.clone());
+            if let Some(project) = path {
+                projects::push(
+                    model,
+                    ProjectView::Settings(project),
+                    String::new(),
+                    effects,
+                );
+            }
+        }
         PaletteChoice::Command(command) => run_command(model, command, effects),
         PaletteChoice::Thread(id) | PaletteChoice::Message { thread: id, .. } => {
+            close(model, effects);
             select_thread(model, id, effects);
         }
     }
 }
 
 fn run_command(model: &mut Model, command: PaletteCommand, effects: &mut Vec<Effect>) {
+    let view = command_view(model, command);
+    if let Some(view) = view {
+        projects::push(model, view, String::new(), effects);
+        return;
+    }
+    if command == PaletteCommand::Promote {
+        projects::promote(model, effects);
+        return;
+    }
+    close(model, effects);
     let thread = model
         .selection
         .selected
@@ -196,15 +284,28 @@ fn run_command(model: &mut Model, command: PaletteCommand, effects: &mut Vec<Eff
             )
         });
     match command {
+        PaletteCommand::AddProject
+        | PaletteCommand::Projects
+        | PaletteCommand::Settings
+        | PaletteCommand::Import
+        | PaletteCommand::Environments
+        | PaletteCommand::Promote => {}
         PaletteCommand::NewThread => {
             let draft = NewThread::new(model.selection.next_draft, model.project());
             prepare_draft(model, draft, effects);
         }
-        PaletteCommand::AddProject => {
-            if model.connected() {
-                model.sidebar.menu = None;
-                effects.push(Effect::PickProjectFolder);
-            }
+        PaletteCommand::Scratch => {
+            prepare_draft(
+                model,
+                NewThread::new(model.selection.next_draft, None),
+                effects,
+            );
+        }
+        PaletteCommand::Diff => {
+            effects.extend(super::git::update(model, super::GitMsg::ToggleDiff));
+        }
+        PaletteCommand::Terminal => {
+            effects.extend(super::git::update(model, super::GitMsg::ToggleTerminal));
         }
         PaletteCommand::Sidebar => {
             model.panels.sidebar.open = !model.panels.sidebar.open;
@@ -214,27 +315,17 @@ fn run_command(model: &mut Model, command: PaletteCommand, effects: &mut Vec<Eff
             });
             effects.push(Effect::SavePrefs(model.to_prefs()));
         }
-        PaletteCommand::Pin => {
-            if let Some((id, pinned, _)) = thread {
-                let action = if pinned {
-                    TriageAction::Unpin
-                } else {
-                    TriageAction::Pin {
-                        position: Position::Top,
+        PaletteCommand::Pin | PaletteCommand::Archive => {
+            if let Some((id, pinned, archived)) = thread {
+                let action = if command == PaletteCommand::Pin {
+                    if pinned {
+                        TriageAction::Unpin
+                    } else {
+                        TriageAction::Pin {
+                            position: Position::Top,
+                        }
                     }
-                };
-                apply_thread_change(
-                    model,
-                    id,
-                    ThreadChange::Triage(action),
-                    model.disclosure.tool_clock,
-                    effects,
-                );
-            }
-        }
-        PaletteCommand::Archive => {
-            if let Some((id, _, archived)) = thread {
-                let action = if archived {
+                } else if archived {
                     TriageAction::Unarchive
                 } else {
                     TriageAction::Archive
@@ -261,5 +352,18 @@ fn run_command(model: &mut Model, command: PaletteCommand, effects: &mut Vec<Eff
                 effects.push(Effect::Server(ServerEffect::Abort(id)));
             }
         }
+    }
+}
+
+fn command_view(model: &Model, command: PaletteCommand) -> Option<ProjectView> {
+    match command {
+        PaletteCommand::AddProject => Some(ProjectView::Sources),
+        PaletteCommand::Projects => Some(ProjectView::Projects),
+        PaletteCommand::Settings => model
+            .project()
+            .map(|project| ProjectView::Settings(project.path.clone())),
+        PaletteCommand::Import => Some(ProjectView::Harnesses),
+        PaletteCommand::Environments => Some(ProjectView::Environments),
+        _ => None,
     }
 }

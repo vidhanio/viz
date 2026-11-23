@@ -152,6 +152,14 @@ pub enum PaletteCommand {
     NewThread,
     /// Add a project directory.
     AddProject,
+    Projects,
+    Settings,
+    Import,
+    Promote,
+    Environments,
+    Diff,
+    Terminal,
+    Scratch,
     /// Show or hide the sidebar.
     Sidebar,
     /// Pin or unpin the selected thread.
@@ -171,6 +179,7 @@ pub enum PaletteChoice {
     Command(PaletteCommand),
     /// Open an existing thread.
     Thread(ThreadId),
+    Project(usize),
     /// Jump to a thread matched by transcript search.
     Message {
         /// Matched thread id.
@@ -187,6 +196,7 @@ impl PaletteChoice {
     pub fn key(self) -> String {
         match self {
             Self::Command(command) => format!("palette-command-{command:?}"),
+            Self::Project(index) => format!("palette-project-{index}"),
             Self::Thread(id) => format!("palette-thread-{id}"),
             Self::Message { thread, entry } => format!("palette-hit-{thread}-{entry}"),
         }
@@ -212,6 +222,7 @@ pub enum PaletteSearch {
 pub struct PaletteState {
     /// Whether the modal owns keyboard input.
     pub open: bool,
+    pub pages: super::projects::ProjectPages,
     /// Raw query text typed into the search field.
     pub query: String,
     /// Trimmed lowercase filter derived from `query`.

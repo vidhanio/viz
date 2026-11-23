@@ -8,7 +8,7 @@ use super::{
         apply_attachments_loaded, apply_earlier_loaded, apply_launch_failed,
         apply_project_icon_loaded, apply_select_failed, apply_send_failed, apply_thread_created,
         apply_thread_state, apply_thread_triaged, apply_thread_view, apply_workspace_sync,
-        is_active_env, queue_project_icon, rollback_optimistic,
+        is_active_env, rollback_optimistic,
     },
     timeline::{apply_entry_chunk_loaded, apply_thread_forked},
 };
@@ -183,15 +183,14 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             title,
             detail,
         } => apply_send_failed(model, *input, title, detail, &mut effects),
-        ServerMsg::ProjectAdded(project) => {
-            if let Some(thread) = &mut model.selection.new_thread
-                && !thread.sending
-            {
-                thread.set_project(Some(&project));
+        ServerMsg::ProjectPalette {
+            environment,
+            request,
+            result,
+        } => {
+            if model.connection.environment.as_deref().unwrap_or_default() == environment {
+                super::projects::reply(model, request, *result, &mut effects);
             }
-            let icon_target = (*project).clone();
-            model.cache_mut().insert_project_sorted(*project);
-            queue_project_icon(model, &icon_target, &mut effects);
         }
         ServerMsg::CheckoutsLoaded {
             environment,

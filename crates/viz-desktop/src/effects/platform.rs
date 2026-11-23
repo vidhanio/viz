@@ -142,3 +142,20 @@ pub fn spawn_notify(title: &str, body: &'static str) {
         _ = notification.show();
     });
 }
+
+/// Read a user-selected icon file on the blocking pool.
+pub(super) fn pick_project_icon() -> io::Result<Option<viz_client::protocol::ProjectIconChange>> {
+    let Some(path) = rfd::FileDialog::new()
+        .set_title("Choose project icon")
+        .add_filter(
+            "Images",
+            &["png", "jpg", "jpeg", "gif", "webp", "ico", "svg"],
+        )
+        .pick_file()
+    else {
+        return Ok(None);
+    };
+    read_file(&path)
+        .map(super::projects::uploaded_icon)
+        .map(Some)
+}

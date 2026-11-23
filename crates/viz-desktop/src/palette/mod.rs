@@ -2,12 +2,15 @@
 //! command execution live in [`crate::model::palette`] and
 //! [`crate::update::PaletteMsg`].
 
+mod page;
+
 use rune::{Color, El, Icon, Key, KeyEvent, ScrollSpec, Span, Tx, col, icon, rich, row, text};
 use rune_kit::{Keybind, TextInput};
 
 use crate::{
     app::Desktop,
     model::{PaletteChoice, PaletteCommand, PaletteRow, PaletteSearch, palette_rows, thread_title},
+    projects,
     theme::{DIALOG_INSET, HAIRLINE, ICON, PALETTE_WIDTH, S4, S8, S16, S24, S32, Size, Theme},
     ui,
     update::{Msg, NavKey, PaletteMsg},
@@ -20,9 +23,15 @@ const LIST_HEIGHT: f32 = S32 * 8.0;
 
 const fn command_glyph(command: PaletteCommand) -> &'static Icon {
     match command {
+        PaletteCommand::Projects => &ui::FOLDER,
+        PaletteCommand::Settings => &ui::SETTINGS,
+        PaletteCommand::Import | PaletteCommand::Archive => &ui::ARCHIVE,
+        PaletteCommand::Promote | PaletteCommand::AddProject => &ui::FOLDER_PLUS,
+        PaletteCommand::Environments => &ui::GLOBE,
+        PaletteCommand::Diff => &ui::GIT_BRANCH,
+        PaletteCommand::Terminal => &ui::TERMINAL,
+        PaletteCommand::Scratch => &ui::MESSAGE_SQUARE_DASHED,
         PaletteCommand::NewThread => &ui::COMPOSE,
-        PaletteCommand::AddProject => &ui::FOLDER_PLUS,
-        PaletteCommand::Archive => &ui::ARCHIVE,
         PaletteCommand::Sidebar => &ui::SIDEBAR,
         PaletteCommand::Pin => &ui::PIN,
         PaletteCommand::Delete => &ui::TRASH,
@@ -83,6 +92,7 @@ fn result_row(result: PaletteRow<'_>, active: bool, s: &Desktop, t: &Theme) -> E
     let choice = result.choice();
     let (glyph, title) = match result {
         PaletteRow::Command(command) => (command_glyph(command), command.label(m)),
+        PaletteRow::Project(_, project) => (&ui::FOLDER, project.name.as_str()),
         PaletteRow::Thread(thread) => (ui::harness_icon(&thread.harness), thread_title(thread)),
         PaletteRow::Message(hit) => (&ui::SEARCH, m.title(hit.thread)),
     };
@@ -120,13 +130,15 @@ fn result_row(result: PaletteRow<'_>, active: bool, s: &Desktop, t: &Theme) -> E
     if active {
         item = item.focus_ring_for(FIELD, HAIRLINE, -HAIRLINE, t.accent);
     }
+    let mark = match result {
+        PaletteRow::Project(_, project) => projects::mark(project, ICON, t),
+        _ => icon(glyph, ICON)
+            .color(if active { t.accent_text } else { t.muted })
+            .group_color(if active { t.accent_text } else { t.text })
+            .a11y_hidden(),
+    };
     item = item
-        .child(
-            icon(glyph, ICON)
-                .color(if active { t.accent_text } else { t.muted })
-                .group_color(if active { t.accent_text } else { t.text })
-                .a11y_hidden(),
-        )
+        .child(mark)
         .child(labels)
         .on_press_tx(move |s: &mut Desktop, tx| {
             s.dispatch(Msg::Palette(PaletteMsg::Choose(choice)), tx);
@@ -158,7 +170,7 @@ fn search_note(s: &Desktop, any_choices: bool, t: &Theme) -> Option<El> {
     let m = &s.model;
     let (label, detail) = if !m.connected() {
         ("Connect to search threads and messages", None)
-    } else if m.palette.filter.is_empty() {
+    } else if m.palette.filter.is_empty() || m.palette.filter.starts_with('>') {
         return None;
     } else {
         match &m.palette.search {
@@ -186,32 +198,40 @@ fn search_note(s: &Desktop, any_choices: bool, t: &Theme) -> Option<El> {
 }
 
 fn footer(t: &Theme) -> El {
+    key_hints(
+        [
+            (&["↑", "↓"][..], "Navigate"),
+            (&["↵"][..], "Open"),
+            (&["Esc"][..], "Close"),
+        ],
+        t,
+    )
+}
+
+fn key_hints<'a>(hints: impl IntoIterator<Item = (&'a [&'a str], &'a str)>, t: &Theme) -> El {
     row()
         .w_full()
         .h(Size::Large.height())
         .px(DIALOG_INSET)
         .gap(S16)
         .center_y()
-        .children(
-            [
-                (&["↑", "↓"][..], "Navigate"),
-                (&["↵"][..], "Open"),
-                (&["Esc"][..], "Close"),
-            ]
-            .map(|(keys, name)| {
-                row()
-                    .gap(S4)
-                    .center_y()
-                    .child(Keybind::new(keys).build(&t.overlay))
-                    .child(text(name).font(t.small).color(t.faint))
-            }),
-        )
+        .children(hints.into_iter().map(|(keys, name)| {
+            row()
+                .gap(S4)
+                .center_y()
+                .child(Keybind::new(keys).build(&t.overlay))
+                .child(text(name).font(t.small).color(t.faint))
+        }))
 }
 
 /// Mounts the searchable field and its result list in the shell overlay layer.
 pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     let m = &s.model;
     if !m.palette.open {
+        return;
+    }
+    if let Some(page) = m.palette.pages.stack.last() {
+        page::mount(s, page, t, layer);
         return;
     }
     let recent = m.palette.filter.is_empty();
@@ -232,7 +252,8 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .scroll_edge_fade(S16);
+        .scroll_edge_fade(S16)
+        .instant_changes();
     let mut choices = Vec::with_capacity(results.len());
     let mut group = "";
     for result in results {
@@ -255,25 +276,12 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     if let Some(note) = search_note(s, !choices.is_empty(), t) {
         list = list.child(note.key("search-status"));
     }
-    let field = TextInput::new(&s.widgets.palette_query)
-        .label("Search commands, threads, and messages")
-        .placeholder("Type a command or search threads…")
+    let field = query_input(s, "Search commands, projects, threads, and messages")
         .plain()
         .leading_icon(&ui::SEARCH)
         .width(None)
         .height(Size::Large.height())
         .active_descendant(active.map(PaletteChoice::key))
-        .on_edit(|s: &mut Desktop| &mut s.widgets.palette_query)
-        .on_change(|s: &mut Desktop, tx| {
-            let text = s.widgets.palette_query.text.clone();
-            s.dispatch(
-                Msg::Palette(PaletteMsg::QueryChanged {
-                    text,
-                    clock: tx.clock(),
-                }),
-                tx,
-            );
-        })
         .on_key(move |s, ev, tx| on_key(s, ev, tx, &choices))
         .build(&t.overlay)
         .key(FIELD);
@@ -292,4 +300,19 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         t,
         layer,
     );
+}
+
+fn query_input(s: &Desktop, label: &str) -> TextInput {
+    ui::text_field(&s.widgets.palette_query, label, label, Size::Large)
+        .on_edit(|s: &mut Desktop| &mut s.widgets.palette_query)
+        .on_change(|s: &mut Desktop, tx| {
+            let text = s.widgets.palette_query.text.clone();
+            s.dispatch(
+                Msg::Palette(PaletteMsg::QueryChanged {
+                    text,
+                    clock: tx.clock(),
+                }),
+                tx,
+            );
+        })
 }

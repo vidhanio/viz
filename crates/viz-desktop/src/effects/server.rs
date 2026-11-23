@@ -241,10 +241,6 @@ pub(super) struct Session<'a> {
 }
 
 impl Session<'_> {
-    pub(super) fn dispatch(&self, msg: ServerMsg) {
-        dispatch(self.ui, msg);
-    }
-
     #[expect(
         clippy::too_many_lines,
         reason = "single exhaustive server effect dispatcher"
@@ -336,6 +332,10 @@ impl Session<'_> {
                 query,
             } => {
                 self.search_files(thread, request, query);
+                Ok(())
+            }
+            ServerEffect::ProjectPalette(request, command) => {
+                self.project_palette(request, command);
                 Ok(())
             }
             ServerEffect::SearchThreads { request, query } => {

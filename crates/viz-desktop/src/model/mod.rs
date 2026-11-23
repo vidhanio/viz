@@ -14,6 +14,7 @@ pub mod model_options;
 pub mod palette;
 pub mod picker;
 pub mod prefs;
+pub mod projects;
 pub mod requests;
 pub mod sidebar;
 pub mod sidebar_outline;
