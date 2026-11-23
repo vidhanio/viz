@@ -13,6 +13,7 @@ mod git;
 mod github;
 mod harnesses;
 mod icons;
+mod import;
 mod notifications;
 mod projects;
 mod pulls;

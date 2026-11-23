@@ -203,6 +203,12 @@ handlers! {
         viz_protocol::ListHarnesses, Empty, |workspace, _| {
             Ok(HarnessList { harnesses: workspace.list_harnesses().await? })
         }
+        viz_protocol::ListHarnessSessions, viz_protocol::ListHarnessSessions, |workspace, input| {
+            workspace.harness_sessions(input).await
+        }
+        viz_protocol::ImportSession, viz_protocol::ImportSession, |workspace, input| {
+            workspace.import(input).await
+        }
         HarnessOptions, HarnessOptions, |workspace, HarnessOptions { harness, model }| {
             let options = workspace.harness_options(&harness, Some(&model)).await?;
             Ok(HarnessOptionsResult { options })

@@ -95,7 +95,9 @@ pub use config::HarnessConfig;
 pub use connection::UpdateSink;
 pub use error::Error;
 pub use failure::{TurnFailure, availability};
-pub use housekeeping::{Housekeeping, housekeep};
+pub use housekeeping::{
+    Housekeeping, LoadedTurn, SavedSession, housekeep, load_history, saved_sessions,
+};
 pub use interaction::{ClientEvents, ClientRequest, PermissionPolicy};
 pub use lifecycle::{OpenSession, OpenedSession, SessionSetup};
 pub use local_io::{FileAccess, LocalIo, PtyTerminals, TerminalAccess};

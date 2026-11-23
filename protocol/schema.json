@@ -8530,6 +8530,181 @@
         }
       }
     },
+    "harness.sessions": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ListHarnessSessions",
+        "description": "`harness.sessions`: the sessions a harness saved for a project, or for\nthe default directory.",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cursor": {
+            "description": "From the previous page's `next`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "harness"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "HarnessSessions",
+        "type": "object",
+        "properties": {
+          "supported": {
+            "description": "Whether the harness can list its sessions at all.",
+            "type": "boolean"
+          },
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/HarnessSession"
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "supported",
+          "sessions"
+        ],
+        "$defs": {
+          "HarnessSession": {
+            "description": "A session a harness saved.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "updatedAt": {
+                "description": "The harness's own timestamp text.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thread": {
+                "description": "The thread already bound to it, if any.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "cwd"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "thread.import": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ImportSession",
+        "description": "`thread.import`: open a harness's saved session as a thread, with the\nhistory the harness replays.",
+        "type": "object",
+        "properties": {
+          "harness": {
+            "type": "string"
+          },
+          "session": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "harness",
+          "session"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Launched",
+        "description": "`thread.launch` result.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The new thread.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      }
+    },
     "files.search": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

@@ -92,6 +92,47 @@ pub struct Harness {
     pub commands: Vec<crate::SlashCommand>,
 }
 
+/// `harness.sessions`: the sessions a harness saved for a project, or for
+/// the default directory.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct ListHarnessSessions {
+    pub harness: String,
+    pub project: Option<String>,
+    /// From the previous page's `next`.
+    pub cursor: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct HarnessSessions {
+    /// Whether the harness can list its sessions at all.
+    pub supported: bool,
+    pub sessions: Vec<HarnessSession>,
+    pub next: Option<String>,
+}
+
+/// A session a harness saved.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct HarnessSession {
+    pub id: String,
+    pub cwd: String,
+    pub title: Option<String>,
+    /// The harness's own timestamp text.
+    pub updated_at: Option<String>,
+    /// The thread already bound to it, if any.
+    pub thread: Option<crate::ThreadId>,
+}
+
+/// `thread.import`: open a harness's saved session as a thread, with the
+/// history the harness replays.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct ImportSession {
+    pub harness: String,
+    pub session: String,
+    pub project: Option<String>,
+    pub title: Option<String>,
+}
+
 /// Whether a harness can run threads. A check runs in the background; the
 /// list answers from what the last one found.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

@@ -20,7 +20,10 @@ mod threads;
 mod tool;
 mod transcript;
 
-pub use catalog::{ContextUsage, Harness, HarnessStatus, Project, ThreadWorktree, WorktreeTarget};
+pub use catalog::{
+    ContextUsage, Harness, HarnessSession, HarnessSessions, HarnessStatus, ImportSession,
+    ListHarnessSessions, Project, ThreadWorktree, WorktreeTarget,
+};
 pub use connections::{
     CancelTask, ClearTasks, Cleared, DelegateTask, DeleteTask, Environment, EnvironmentList,
     EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject, ReadThreadState,
@@ -171,6 +174,8 @@ methods! {
     RemoveProject<'_> => "project.remove", Empty;
     ListHarnesses => "harnesses.list", HarnessList;
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
+    ListHarnessSessions => "harness.sessions", HarnessSessions;
+    ImportSession => "thread.import", Launched;
     SearchFiles<'_> => "files.search", FileList;
     LaunchThread => "thread.launch", Launched;
     ForkThread => "thread.fork", Forked;
