@@ -124,10 +124,25 @@ pub fn promote(queue: &[RunId], run: RunId) -> Result<Vec<RunId>, QueueRejection
     Ok(std::iter::once(run).chain(rest).collect())
 }
 
-/// Select the queue head only if the thread has a free running slot.
+/// What an idle worker does with its thread's runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Claim {
+    Nothing,
+    /// Take the queue's head.
+    Start(RunId),
+    /// End a run no worker is on: settling it failed. It holds the slot until
+    /// then.
+    Orphan(RunId),
+}
+
+/// Decide for a worker that is on no run itself.
 #[must_use]
-pub const fn claim(active: Option<RunId>, next: Option<RunId>) -> Option<RunId> {
-    if active.is_none() { next } else { None }
+pub const fn claim(active: Option<RunId>, next: Option<RunId>) -> Claim {
+    match (active, next) {
+        (Some(run), _) => Claim::Orphan(run),
+        (None, Some(run)) => Claim::Start(run),
+        (None, None) => Claim::Nothing,
+    }
 }
 
 /// What stopping a thread, or one of its runs, does.
@@ -289,6 +304,12 @@ impl Settlement {
             "interrupted",
             Some("server was interrupted during the ACP turn; the prompt was not resent"),
         )
+    }
+
+    /// End a run whose settlement could not be stored in time.
+    #[must_use]
+    pub fn orphaned() -> Self {
+        Self::failed("the run's outcome could not be stored".into())
     }
 
     fn failed(error: String) -> Self {

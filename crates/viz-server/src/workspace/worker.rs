@@ -27,6 +27,7 @@ use crate::error::Error;
 
 /// Restorable idle processes are released after ten minutes.
 const IDLE_SESSION: Duration = Duration::from_mins(10);
+const MAX_RETRY: Duration = Duration::from_mins(1);
 
 #[derive(Default)]
 pub(super) struct Workers(Mutex<HashMap<ThreadId, Arc<Driver>>>);
@@ -62,6 +63,29 @@ struct Worker {
     slot: SessionSlot,
     /// Drops only after the slot, acknowledging that the process was released.
     _done: watch::Sender<()>,
+}
+
+/// When to repeat a step that failed: after one second, then twice as long
+/// each time.
+#[derive(Default)]
+struct Retry {
+    at: Option<Instant>,
+    delay: Duration,
+}
+
+impl Retry {
+    fn schedule(&mut self) {
+        self.delay = (self.delay * 2).clamp(Duration::from_secs(1), MAX_RETRY);
+        self.at = Some(Instant::now() + self.delay);
+    }
+
+    async fn due(&mut self) {
+        match self.at {
+            Some(at) => sleep_until(at).await,
+            None => std::future::pending().await,
+        }
+        self.at = None;
+    }
 }
 
 enum Request {
@@ -282,6 +306,7 @@ impl Workspace {
 
     async fn worker(&self, thread: ThreadId, driver: &Driver, mut worker: Worker) {
         let mut ready = false;
+        let mut retry = Retry::default();
         let mut idle_at = Instant::now() + IDLE_SESSION;
         loop {
             let restorable = worker.slot.is_restorable();
@@ -308,15 +333,23 @@ impl Workspace {
                 () = std::future::ready(()), if ready => {
                     let prepare = driver.prepare.swap(false, Ordering::Relaxed);
                     ready = match self.step(thread, driver, &mut worker.slot, prepare).await {
-                        Ok(more) => more,
+                        Ok(more) => {
+                            retry = Retry::default();
+                            more
+                        }
                         Err(error) => {
                             driver.end();
                             tracing::error!(%thread, %error, "ACP scheduler failed");
+                            if prepare {
+                                driver.prepare.store(true, Ordering::Relaxed);
+                            }
+                            retry.schedule();
                             false
                         }
                     };
                     idle_at = Instant::now() + IDLE_SESSION;
                 }
+                () = retry.due() => ready = true,
                 () = sleep_until(idle_at), if restorable => worker.slot.clear(),
             }
         }
@@ -375,9 +408,12 @@ impl Workspace {
                 return Ok(false);
             }
             let mut tx = db.transaction().await?;
-            let claim = runs::claim(&mut tx, thread).await?;
+            let found = runs::claim(&mut tx, thread).await?;
             tx.commit().await?;
-            let claim = claim.map(|claim| {
+            if found.recovered {
+                self.settled(thread);
+            }
+            let claim = found.claimed.map(|claim| {
                 let turn = driver.begin(claim.id);
                 (claim, turn)
             });

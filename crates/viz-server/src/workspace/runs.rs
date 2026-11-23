@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use viz_core::{
-    runs::{self as decisions, Move, Place, Settlement},
+    runs::{self as decisions, Claim, Move, Place, Settlement},
     threads::Patch,
     titles,
 };
@@ -235,9 +235,16 @@ pub(super) struct Claimed {
     pub(super) attachments: Vec<PromptAttachment>,
 }
 
+/// What a worker found to do.
+pub(super) struct Found {
+    pub(super) claimed: Option<Claimed>,
+    /// A run nobody was on was settled.
+    pub(super) recovered: bool,
+}
+
 /// Commit the claim and corresponding prompt together before starting any
 /// external operation.
-pub(super) async fn claim(db: &mut Connection, thread: ThreadId) -> Result<Option<Claimed>, Error> {
+pub(super) async fn claim(db: &mut Connection, thread: ThreadId) -> Result<Found, Error> {
     let active = active(db, thread).await?;
     let next = row(
         db,
@@ -247,9 +254,22 @@ pub(super) async fn claim(db: &mut Connection, thread: ThreadId) -> Result<Optio
     .await?
     .map(|row| row.id(0))
     .transpose()?;
-    let Some(id) = decisions::claim(active, next) else {
-        return Ok(None);
+    let (id, recovered) = match decisions::claim(active, next) {
+        Claim::Nothing => (None, false),
+        Claim::Start(id) => (Some(id), false),
+        Claim::Orphan(run) => {
+            settle(db, thread, run, Settlement::orphaned(), true).await?;
+            (next, true)
+        }
     };
+    let claimed = match id {
+        Some(id) => Some(start(db, thread, id).await?),
+        None => None,
+    };
+    Ok(Found { claimed, recovered })
+}
+
+async fn start(db: &mut Connection, thread: ThreadId, id: RunId) -> Result<Claimed, Error> {
     let mut row = row(
         db,
         "UPDATE runs SET status = 'running' WHERE id = ?1
@@ -295,13 +315,13 @@ pub(super) async fn claim(db: &mut Connection, thread: ThreadId) -> Result<Optio
         };
         (entry, text, origin, attachments)
     };
-    Ok(Some(Claimed {
+    Ok(Claimed {
         id,
         entry,
         text,
         origin,
         attachments,
-    }))
+    })
 }
 
 /// Starts an unprompted run: the agent sent transcript content with no turn
