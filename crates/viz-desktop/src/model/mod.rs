@@ -11,9 +11,11 @@ pub mod git;
 pub mod palette;
 pub mod picker;
 pub mod prefs;
+pub mod requests;
 pub mod sidebar;
 pub mod state;
 pub mod subagents;
+pub mod terminal;
 pub mod timeline;
 pub mod tool_parse;
 pub mod transcript;
@@ -65,6 +67,8 @@ pub const DEFAULT_ENV_KEY: &str = "local";
 /// Complete pure state of the desktop workspace.
 #[derive(Debug, Clone)]
 pub struct Model {
+    pub terminal: terminal::Dock,
+    pub requests: requests::Requests,
     pub git: git::GitState,
     /// Connection status, endpoint, and environment roster.
     pub connection: ConnectionState,
@@ -104,6 +108,8 @@ impl Model {
             panels: PanelsState::default(),
             sidebar: SidebarState::default(),
             composer: ComposerState::default(),
+            terminal: terminal::Dock::default(),
+            requests: requests::Requests::default(),
             palette: PaletteState::default(),
             disclosure: DisclosureState {
                 tool_clock: now_ms,

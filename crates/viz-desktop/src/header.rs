@@ -61,16 +61,20 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         title
     };
     let mut toolbar = toolbar.leading(title);
-    if m.selection.selected.is_none() {
+    if m.selection.selected.is_none() && m.project_path().is_none() {
         return toolbar;
     }
-    toolbar = toolbar.trailing(header_button(
-        &ui::TERMINAL,
-        "Terminal",
-        m.panels.terminal_open,
-        crate::update::GitMsg::ToggleTerminal,
-        t,
-    ));
+    toolbar = toolbar.trailing(
+        ui::icon_button(
+            &ui::TERMINAL,
+            "Terminal",
+            rune_kit::IconButtonVariant::Ghost,
+            Size::Default,
+        )
+        .active(m.panels.terminal_open)
+        .on_press_tx(crate::terminal::panel::toggle)
+        .build(&t.k),
+    );
     if let Some(status) = &m.git.status {
         let diff = row()
             .center_y()

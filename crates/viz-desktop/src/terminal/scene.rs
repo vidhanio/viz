@@ -65,15 +65,17 @@ pub fn view(theme: &Theme) -> Option<El> {
             "terminal-scene",
             &scene.view,
             theme,
-            move |_, action| {
+            true,
+            move |_, action, _| {
                 actions.borrow_mut().push(action);
             },
+            |_, _, _| false,
         ))
     })
 }
 
 /// Routes composition only while the headless scene owns the keyboard.
-pub fn ime(_: &mut Desktop, event: &rune::Ime, tx: &mut rune::Tx) -> bool {
+pub fn ime(_: &mut Desktop, event: &rune::Ime, tx: &rune::Tx) -> bool {
     SCENE.with_borrow_mut(|scene| {
         let Some(scene) = scene.as_mut() else {
             return false;
@@ -163,7 +165,7 @@ impl Scene {
                     self.screen
                         .output(fullscreen(self.revision, size.rows()).into_bytes(), |_| {})
                 }
-                Action::Input(_) | Action::Resize(_, _) => continue,
+                Action::Input(_) | Action::Resize(_, _) | Action::Focus => continue,
             };
             let _ = state.viewer.apply(&update);
         }

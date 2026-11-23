@@ -8,6 +8,7 @@ pub mod prefs;
 pub mod requests;
 mod runner;
 pub mod server;
+mod terminal;
 
 use std::{path::PathBuf, time::Duration};
 
@@ -183,6 +184,8 @@ pub struct LoadedAttachments {
 /// Command sent to the background server connection task.
 #[derive(Debug)]
 pub enum ServerEffect {
+    Terminal(crate::update::terminal::Command),
+    Answer(viz_client::protocol::AnswerRequest),
     Git {
         thread: ThreadId,
         serial: u64,

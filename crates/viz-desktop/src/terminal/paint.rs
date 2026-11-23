@@ -86,6 +86,7 @@ impl Frame {
         key: &str,
         theme: &Theme,
         exit: Option<Exit>,
+        show_exit: bool,
         ime_enabled: bool,
         preedit: &str,
     ) -> El {
@@ -100,7 +101,7 @@ impl Frame {
             ));
         }
 
-        if let Some(exit) = exit {
+        if show_exit && let Some(exit) = exit {
             let label = match exit {
                 Exit::Code(code) => format!("Process exited ({code})"),
                 Exit::Signal(signal) => format!("Process ended by signal {signal}"),

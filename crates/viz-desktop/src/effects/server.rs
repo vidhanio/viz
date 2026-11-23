@@ -196,6 +196,9 @@ async fn session(
             harnesses,
             watched,
         });
+        session
+            .terminal(crate::update::terminal::Command::List)
+            .await?;
         Ok(())
     };
     if let Err(error) = started.await {
@@ -248,6 +251,8 @@ impl Session<'_> {
         selected: &mut Option<ThreadId>,
     ) -> viz_client::Result<()> {
         match command {
+            ServerEffect::Terminal(command) => self.terminal(command).await,
+            ServerEffect::Answer(answer) => self.answer(answer).await,
             ServerEffect::Select(thread) => {
                 self.select(thread).await?;
                 *selected = Some(thread);
@@ -419,10 +424,18 @@ impl Session<'_> {
                 }
                 Ok(())
             }
-            Notification::Reply { .. }
-            | Notification::TerminalUpdate { .. }
-            | Notification::TerminalSnapshot { .. }
-            | Notification::TerminalsChanged(_) => Ok(()),
+            Notification::TerminalUpdate { id, update } => {
+                self.terminal_event(super::terminal::Event::Update(id, update));
+                Ok(())
+            }
+            Notification::TerminalSnapshot { id, snapshot } => {
+                self.terminal_event(super::terminal::Event::Snapshot(id, snapshot));
+                Ok(())
+            }
+            Notification::TerminalsChanged(_) => {
+                self.terminal(crate::update::terminal::Command::List).await
+            }
+            Notification::Reply { .. } => Ok(()),
         }
     }
 

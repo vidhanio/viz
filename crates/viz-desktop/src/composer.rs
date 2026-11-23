@@ -46,7 +46,9 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     if let Some(dock) = tasks::dock(s, t) {
         column = column.child(dock);
     }
-    if let Some(drawer) = completion::drawer(s, t) {
+    if let Some(drawer) =
+        crate::requests::question_drawer(s, t).or_else(|| completion::drawer(s, t))
+    {
         column = column.child(drawer);
     }
     let editor = editor(s, t, layer);
@@ -58,7 +60,7 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
 }
 
 fn on_draft_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    completion::on_key(s, ev, tx)
+    crate::requests::on_draft_key(s, ev, tx) || completion::on_key(s, ev, tx)
 }
 
 fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {

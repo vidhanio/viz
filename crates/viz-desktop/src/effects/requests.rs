@@ -428,8 +428,44 @@ pub(super) fn offline(
             source,
         } => platform::spawn_attach(ui, scope, target, source),
         ServerEffect::Notify { title, body } => platform::spawn_notify(&title, body),
+        ServerEffect::Answer(answer) => ui.update(move |app, tx| {
+            app.dispatch(
+                Msg::Requests(crate::update::requests::RequestMsg::Finished(
+                    answer.request,
+                    Err("Server disconnected".into()),
+                )),
+                tx,
+            );
+        }),
         ServerEffect::Reconnect => return false,
         _ => toast(ui, "Offline", "Server disconnected".into()),
     }
     true
+}
+
+impl Session<'_> {
+    pub(super) async fn answer(
+        &self,
+        answer: viz_client::protocol::AnswerRequest,
+    ) -> viz_client::Result<()> {
+        let result = self.client.request(&answer).await;
+        let closed = matches!(result, Err(viz_client::Error::Closed));
+        let environment = Arc::clone(&self.environment);
+        self.ui.update(move |app, tx| {
+            if app.model.active_env_key() != environment.as_ref() {
+                return;
+            }
+            app.dispatch(
+                Msg::Requests(crate::update::requests::RequestMsg::Finished(
+                    answer.request,
+                    result.map(drop).map_err(|error| error.to_string()),
+                )),
+                tx,
+            );
+        });
+        if closed {
+            return Err(viz_client::Error::Closed);
+        }
+        Ok(())
+    }
 }

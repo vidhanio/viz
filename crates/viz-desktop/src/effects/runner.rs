@@ -147,6 +147,17 @@ impl Desktop {
     fn send_server(&mut self, command: ServerEffect, mut tx: Option<&mut Tx>) {
         if let Some(error) = self.send_command(command) {
             let recovery = match error {
+                ServerEffect::Answer(answer) => {
+                    let effects = update::update(
+                        &mut self.model,
+                        Msg::Requests(crate::update::requests::RequestMsg::Finished(
+                            answer.request,
+                            Err("Server disconnected".into()),
+                        )),
+                    );
+                    self.apply_effects(effects, tx);
+                    return;
+                }
                 ServerEffect::Create { draft, params } => Some(ServerMsg::LaunchFailed {
                     draft,
                     params: Box::new(params),

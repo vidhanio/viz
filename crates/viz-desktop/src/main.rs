@@ -30,6 +30,7 @@ mod model;
 mod motion;
 mod motion_scene;
 mod palette;
+mod requests;
 mod scenes;
 mod shell;
 mod sidebar;
@@ -98,7 +99,11 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         main,
         details,
         diff,
-        terminal: None,
+        terminal: s
+            .model
+            .panels
+            .terminal_open
+            .then(|| terminal::panel::view(s, t)),
         overlays,
     };
     shell::build(s, slots, cx.titlebar_inset(), reduced, t)
@@ -119,6 +124,9 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if s.model.palette.open {
         return false;
+    }
+    if terminal::panel::shortcut(s, ev, tx, false) {
+        return true;
     }
     if ev.mods.shift || ev.mods.alt {
         return false;
@@ -320,7 +328,9 @@ fn main() {
         desktop
     })
     .on_focus(terminal::scene::focus)
-    .on_ime(terminal::scene::ime);
+    .on_ime(|app, event, tx| {
+        terminal::scene::ime(app, event, tx) || terminal::panel::ime(app, event, tx)
+    });
     if let Some(detail) = theme_error {
         app.handle().update(move |s, tx| {
             s.dispatch(

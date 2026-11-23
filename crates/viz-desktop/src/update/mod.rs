@@ -8,11 +8,13 @@ mod git;
 pub use git::GitMsg;
 mod model_picker;
 mod palette;
+pub mod requests;
 mod selection;
 mod server;
 mod server_sync;
 mod shell;
 mod sidebar;
+pub mod terminal;
 mod timeline;
 
 pub use self::{
@@ -40,6 +42,8 @@ pub enum NavKey {
 /// Top-level message routed through [`update`].
 #[derive(Debug)]
 pub enum Msg {
+    Terminal(terminal::TerminalMsg),
+    Requests(requests::RequestMsg),
     Git(GitMsg),
     /// Event arriving from the background server or blocking platform worker.
     Server(ServerMsg),
@@ -64,6 +68,8 @@ pub enum Msg {
 #[must_use]
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
     let mut effects = match msg {
+        Msg::Terminal(msg) => terminal::update(model, msg),
+        Msg::Requests(msg) => requests::update(model, msg),
         Msg::Git(msg) => git::update(model, msg),
         Msg::Server(msg) => server::update(model, msg),
         Msg::Selection(msg) => selection::update(model, msg),
@@ -74,5 +80,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::Shell(msg) => shell::update(model, msg),
     };
     git::reconcile(model, &mut effects);
+    terminal::reconcile(model, &mut effects);
+    requests::reconcile(model);
     effects
 }

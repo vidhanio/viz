@@ -68,7 +68,10 @@ impl Rows {
 pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let m = &s.model;
     let thread = m.transcript();
-    let empty = thread.items.is_empty() && thread.before.is_none() && !m.busy();
+    let empty = thread.items.is_empty()
+        && thread.before.is_none()
+        && !m.busy()
+        && crate::model::requests::pending(m).next().is_none();
     let body = if m.is_loading() && m.connected() {
         loading(t)
     } else if empty {
@@ -92,6 +95,9 @@ pub fn timeline(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             t,
         );
         live(s, &mut rows, t);
+        for card in crate::requests::approval_rows(s, t) {
+            rows.push(Kind::Activity, card);
+        }
         col().key("items").children(rows.rows)
     };
     let body = ui::reading(body)

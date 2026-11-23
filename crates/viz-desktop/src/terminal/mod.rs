@@ -2,7 +2,9 @@
 
 mod input;
 mod paint;
+pub mod panel;
 pub mod scene;
+mod search;
 
 use std::{cell::RefCell, rc::Rc};
 
@@ -18,7 +20,7 @@ use viz_terminal::{CellSize, Size, Viewer};
 
 use crate::theme::Theme;
 
-const CELL: CellSize = CellSize {
+pub const CELL: CellSize = CellSize {
     width: 8,
     height: 18,
 };
@@ -28,6 +30,7 @@ const PAD: f32 = 12.0;
 pub enum Action {
     Input(Vec<u8>),
     Resize(Size, CellSize),
+    Focus,
 }
 
 pub struct TerminalView {
@@ -109,10 +112,12 @@ impl TerminalView {
     reason = "each Rune event binding stays with its element"
 )]
 pub fn view<S: 'static>(
-    key: &'static str,
+    key: &str,
     model: &Rc<RefCell<TerminalView>>,
     theme: &Theme,
-    action: impl Fn(&mut S, Action) + 'static,
+    show_exit: bool,
+    action: impl Fn(&mut S, Action, &mut rune::Tx) + 'static,
+    shortcut: impl Fn(&mut S, &rune::KeyEvent, &mut rune::Tx) -> bool + 'static,
 ) -> El {
     let action = Rc::new(action);
     let mut state = model.borrow_mut();
@@ -121,6 +126,7 @@ pub fn view<S: 'static>(
             key,
             theme,
             state.viewer.exit(),
+            show_exit,
             state.ime_enabled,
             &state.preedit,
         )
@@ -138,7 +144,9 @@ pub fn view<S: 'static>(
     let drag_state = Rc::clone(model);
     let drag_action = Rc::clone(&action);
     let resize_state = Rc::clone(model);
-    el().key(key)
+    let focus_key = key.to_owned();
+    el().key(key.to_owned())
+        .label("Terminal viewport")
         .w_full()
         .h_full()
         .clip_soft(0.0)
@@ -146,7 +154,23 @@ pub fn view<S: 'static>(
         .focusable(true)
         .child(rendered)
         .on_key(move |app: &mut S, event, tx| {
+            if shortcut(app, event, tx) {
+                return true;
+            }
             let mut state = key_state.borrow_mut();
+            if event.mods.cmd && event.mods.shift {
+                match event.key {
+                    rune::Key::Home => {
+                        state.scroll(ScrollViewport::Top);
+                        return true;
+                    }
+                    rune::Key::End => {
+                        state.scroll(ScrollViewport::Bottom);
+                        return true;
+                    }
+                    _ => {}
+                }
+            }
             if (cfg!(target_os = "macos") || event.mods.shift) && event.is_command('c') {
                 if let Ok(Some(bytes)) = state
                     .viewer
@@ -160,11 +184,11 @@ pub fn view<S: 'static>(
             if (cfg!(target_os = "macos") || event.mods.shift) && event.is_command('v') {
                 let state = Rc::clone(&key_state);
                 let action = Rc::clone(&key_action);
-                tx.read_clipboard(move |app: &mut S, clipboard, _| {
+                tx.read_clipboard(move |app: &mut S, clipboard, tx| {
                     if let Ok(bytes) =
                         input::paste(state.borrow().viewer.terminal(), clipboard.text())
                     {
-                        action(app, Action::Input(bytes));
+                        action(app, Action::Input(bytes), tx);
                     }
                 });
                 return true;
@@ -190,13 +214,13 @@ pub fn view<S: 'static>(
                     viewer
                         .terminal_mut()
                         .scroll_viewport(ScrollViewport::Bottom);
-                    key_action(app, Action::Input(bytes));
+                    key_action(app, Action::Input(bytes), tx);
                 }
                 return true;
             }
             false
         })
-        .on_wheel(move |app: &mut S, event: rune::WheelEvent, _| {
+        .on_wheel(move |app: &mut S, event: rune::WheelEvent, tx| {
             let mut state = wheel_state.borrow_mut();
             if event.dy == 0.0 {
                 return false;
@@ -217,7 +241,7 @@ pub fn view<S: 'static>(
                     [event.x, event.y],
                     event.mods,
                 ) {
-                    wheel_action(app, Action::Input(bytes));
+                    wheel_action(app, Action::Input(bytes), tx);
                 }
             } else {
                 state.scroll(ScrollViewport::Delta(if event.dy > 0.0 { -3 } else { 3 }));
@@ -225,16 +249,17 @@ pub fn view<S: 'static>(
             true
         })
         .on_drag(move |app: &mut S, drag, tx| {
-            let mut state = drag_state.borrow_mut();
             if drag.phase == Phase::Down {
-                tx.focus(key, false);
-                if !state.ime_enabled {
-                    state.ime_enabled = true;
-                    if let Ok(Some(bytes)) =
-                        input::focus(state.viewer.terminal(), ghostty_vt::focus::Event::Gained)
-                    {
-                        drag_action(app, Action::Input(bytes));
-                    }
+                drag_action(app, Action::Focus, tx);
+                tx.focus(&focus_key, false);
+            }
+            let mut state = drag_state.borrow_mut();
+            if drag.phase == Phase::Down && !state.ime_enabled {
+                state.ime_enabled = true;
+                if let Ok(Some(bytes)) =
+                    input::focus(state.viewer.terminal(), ghostty_vt::focus::Event::Gained)
+                {
+                    drag_action(app, Action::Input(bytes), tx);
                 }
             }
             let mods = tx.mods();
@@ -254,7 +279,7 @@ pub fn view<S: 'static>(
                     [drag.x, drag.y],
                     mods,
                 ) {
-                    drag_action(app, Action::Input(bytes));
+                    drag_action(app, Action::Input(bytes), tx);
                 }
             } else if mods.cmd && drag.phase == Phase::Down {
                 if let Ok(Some(link)) = state.link(drag.x, drag.y) {
@@ -264,14 +289,14 @@ pub fn view<S: 'static>(
                 let _ = state.select(drag);
             }
         })
-        .on_layout_tx(move |app: &mut S, rect, _| {
+        .on_layout_tx(move |app: &mut S, rect, tx| {
             let columns = cells(2.0_f32.mul_add(-PAD, rect[2]), CELL.width);
             let rows = cells(2.0_f32.mul_add(-PAD, rect[3]), CELL.height);
             let size = Size::new(columns, rows);
             let mut state = resize_state.borrow_mut();
             if state.requested != Some(size) {
                 state.requested = Some(size);
-                action(app, Action::Resize(size, CELL));
+                action(app, Action::Resize(size, CELL), tx);
             }
         })
 }

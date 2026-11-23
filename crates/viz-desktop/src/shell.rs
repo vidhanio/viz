@@ -64,8 +64,7 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
             .h_full()
             .min_h(0.0)
             .child(main.grow(1.0).shrink().min_h(0.0))
-            .child(ui::rule(t).key("terminal-rule"))
-            .child(terminal.h(s.model.panels.terminal_height));
+            .child(terminal.h(crate::model::terminal::height(&s.model)));
     }
     let main = motion::stable_content(
         col()

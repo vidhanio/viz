@@ -184,6 +184,9 @@ pub struct Tool {
     pub summary: String,
     /// Recognized command text, never a serialized arguments object.
     pub input: Option<String>,
+    /// The original arguments while the harness may still be waiting for
+    /// approval.
+    pub pending_input: Option<String>,
     /// Command timeout in milliseconds, when advertised.
     pub timeout_ms: Option<u64>,
     /// Unix milliseconds when the tool started running.

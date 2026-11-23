@@ -103,6 +103,9 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
         name: name.to_owned(),
         summary,
         input,
+        pending_input: (status == ToolStatus::Running)
+            .then(|| record.raw_input.as_ref().map(serde_json::Value::to_string))
+            .flatten(),
         timeout_ms,
         started_at: record.started_at,
         status,

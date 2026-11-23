@@ -5,6 +5,7 @@ mod data;
 mod fixtures;
 mod git;
 mod overlays;
+mod terminal_panel;
 
 use crate::{app::Desktop, motion_scene::MotionDemo};
 
@@ -29,6 +30,11 @@ pub const SCENES: &[Scene] = &[
     ("terminal-alternate", crate::terminal::scene::alternate),
     ("terminal-selection", crate::terminal::scene::selection),
     ("terminal-exited", crate::terminal::scene::exited),
+    ("terminal-dock", terminal_panel::dock),
+    ("terminal-disconnected", terminal_panel::disconnected),
+    ("request-approval", terminal_panel::approval),
+    ("request-question", terminal_panel::question),
+    ("request-multi-step", terminal_panel::multi_step),
     ("motion", motion),
     ("motion-reduced", motion_reduced),
     ("activity", activity),

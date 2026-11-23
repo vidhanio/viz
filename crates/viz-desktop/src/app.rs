@@ -37,6 +37,9 @@ pub struct ToastContent {
 /// Stateful Rune and `rune-kit` widget controllers kept outside the pure
 /// [`Model`].
 pub struct ShellWidgets {
+    pub terminal: crate::terminal::panel::Widgets,
+    pub request_edit: TextEdit,
+    pub request_step: Option<(viz_client::protocol::RequestId, usize)>,
     pub git_query: TextEdit,
     pub git_message: TextEdit,
     pub git_body: TextEdit,
@@ -69,6 +72,9 @@ impl Default for ShellWidgets {
         let mut draft = TextEdit::new("");
         draft.focused = true;
         Self {
+            terminal: crate::terminal::panel::Widgets::default(),
+            request_edit: TextEdit::new(""),
+            request_step: None,
             git_query: TextEdit::new(""),
             git_message: TextEdit::new(""),
             git_body: TextEdit::new(""),
@@ -144,8 +150,22 @@ impl Desktop {
     /// returned [`crate::effects::Effect`] with access to Rune's [`Tx`].
     pub fn dispatch(&mut self, msg: Msg, tx: &mut Tx) {
         self.sync_draft_text();
+        let active = self.model.terminal.active;
+        let created = matches!(
+            msg,
+            Msg::Terminal(update::terminal::TerminalMsg::Created(..))
+        );
+        let in_terminal = tx.focused().is_some_and(|key| key.starts_with("terminal-"));
         let effects = update::update(&mut self.model, msg);
         crate::git::diff_panel::sync(self);
+        crate::terminal::panel::sync(self);
+        crate::requests::sync(self);
+        if self.model.panels.terminal_open
+            && active != self.model.terminal.active
+            && (created || in_terminal)
+        {
+            crate::terminal::panel::focus_active(self, tx);
+        }
         self.apply_effects(effects, Some(tx));
     }
 
@@ -155,6 +175,8 @@ impl Desktop {
         self.sync_draft_text();
         let effects = update::update(&mut self.model, msg);
         crate::git::diff_panel::sync(self);
+        crate::terminal::panel::sync(self);
+        crate::requests::sync(self);
         self.apply_effects(effects, None);
     }
 
@@ -177,6 +199,8 @@ impl Desktop {
     /// headless scene populates fixture state directly.
     pub fn sync_widgets_from_model(&mut self) {
         crate::git::diff_panel::sync(self);
+        crate::terminal::panel::sync(self);
+        crate::requests::sync(self);
         self.widgets.git_query = TextEdit::new(&self.model.git.query);
         self.widgets.draft = TextEdit::new(&self.model.composer.draft.text);
         self.widgets.draft.focused = self.model.composer.draft_focused;
