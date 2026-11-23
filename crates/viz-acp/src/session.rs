@@ -41,7 +41,8 @@ pub struct Session {
 impl Session {
     /// Starts the harness in `cwd` and opens the thread's session:
     /// `session/resume` or `session/load` when `saved` is given, otherwise
-    /// `session/new`. `mcp` gives the agent viz's tools.
+    /// `session/new`. `mcp` gives the agent viz's tools, and `events` receives
+    /// the harness's requests.
     ///
     /// Dropping the future stops the harness.
     ///
@@ -52,12 +53,13 @@ impl Session {
         setup: SessionSetup,
         saved: Option<&str>,
         mcp: Option<&McpEndpoint>,
+        events: ClientEvents,
     ) -> Result<Self> {
         let operation = saved.map_or(OpenSession::New, |id| OpenSession::Restore {
             id,
             replay: None,
         });
-        Self::open_with(config, setup, operation, mcp, ClientEvents::default()).await
+        Self::open_with(config, setup, operation, mcp, events).await
     }
 
     /// Starts a process and opens, restores, or forks a session.

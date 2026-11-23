@@ -5,9 +5,9 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 use viz_protocol::{
-    Attention, Body, Entry, EntryData, EntryId, EntryPage, OptionValue, PlanContent, Run, RunId,
-    Shelf, Task, TaskId, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary, ToolCall,
-    ToolCallStatus, WaitResult,
+    AccessKind, Attention, Body, Entry, EntryData, EntryId, EntryPage, OptionValue, PlanContent,
+    Run, RunId, RunRequest, Shelf, Task, TaskId, TaskStatus, ThreadId, ThreadState, ThreadStatus,
+    ThreadSummary, ToolCall, ToolCallStatus, WaitResult,
 };
 
 /// Characters of a message, and of a tool's output, shown in a page.
@@ -100,6 +100,11 @@ pub(super) struct State {
     live: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     running_tools: Vec<String>,
+    access: AccessKind,
+    /// Approvals and questions waiting for an answer; answer with
+    /// `thread_answer`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    requests: Vec<RunRequest>,
 }
 
 #[derive(Debug, Serialize)]
@@ -154,6 +159,8 @@ pub(super) fn state(state: ThreadState) -> State {
             .collect(),
         live,
         running_tools,
+        access: state.access.current.kind,
+        requests: state.requests,
     }
 }
 

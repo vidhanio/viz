@@ -15,7 +15,7 @@ use rusqlite::{
     types::{ToSql, ToSqlOutput, Value as SqlValue},
 };
 use tokio::sync::{mpsc, oneshot};
-use viz_protocol::{EntryId, RunId, TaskId, ThreadId};
+use viz_protocol::{EntryId, RequestId, RunId, TaskId, ThreadId};
 
 use crate::error::Error;
 
@@ -195,7 +195,7 @@ macro_rules! sql_ids {
     )+};
 }
 
-sql_ids!(ThreadId, RunId, EntryId);
+sql_ids!(ThreadId, RunId, EntryId, RequestId);
 
 impl From<TaskId> for Value {
     fn from(id: TaskId) -> Self {

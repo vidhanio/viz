@@ -9,7 +9,7 @@ use viz_core::{
     handoff::{self, Reason},
     runs::{self as decisions, Signals, Stop, TurnEnd},
 };
-use viz_protocol::{CheckpointEdge, ThreadId};
+use viz_protocol::{CheckpointEdge, ThreadId, Withdrawal};
 
 use super::{
     Workspace, attachments,
@@ -156,6 +156,7 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         runs::settle(&mut tx, thread, run, settlement, self.is_watched(thread)).await?;
         tx.commit().await?;
+        self.requests.release_run(run);
         self.updates.live(thread, None);
         drop(db);
         self.settled(thread);
@@ -166,8 +167,10 @@ impl Workspace {
     /// would make every later `claim` on the thread violate the `runs_active`
     /// index, so mark it failed with a bare update that appends no entry.
     pub(super) async fn abandon(&self, thread: ThreadId, run: RunId, error: &Error) {
+        self.requests.release_run(run);
+        let mut db = self.db.lock().await;
         let failed = exec(
-            &mut *self.db.lock().await,
+            &mut db,
             "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
             [
                 run.into(),
@@ -175,6 +178,13 @@ impl Workspace {
             ],
         )
         .await;
+        let failed = match failed {
+            Ok(_) => store::withdraw_requests(&mut db, Some(run), Withdrawal::TurnEnded)
+                .await
+                .map(drop),
+            Err(error) => Err(error),
+        };
+        drop(db);
         if let Err(error) = failed {
             tracing::error!(%thread, %run, %error, "could not fail an unsettled run");
         }

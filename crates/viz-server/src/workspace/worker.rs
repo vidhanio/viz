@@ -149,6 +149,11 @@ impl Driver {
         self.queued.notify_one();
     }
 
+    /// The run under way, if any.
+    pub(super) fn active_run(&self) -> Option<RunId> {
+        self.active.borrow().map(|active| active.run)
+    }
+
     pub(super) fn is_current(&self, run: RunId) -> bool {
         self.active.borrow().is_some_and(|active| active.run == run)
     }

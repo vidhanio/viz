@@ -15,6 +15,7 @@ mod icons;
 mod notifications;
 mod projects;
 mod pulls;
+mod requests;
 pub(crate) mod rpc;
 pub(crate) mod runs;
 mod runtime;
@@ -48,6 +49,7 @@ use viz_protocol::{EntryId, Lifecycle, RunId, TaskId, ThreadId};
 
 use self::{
     notifications::Updates,
+    requests::Requests,
     runs::NewRun,
     sql::{Connection, exec, row, rows},
     worker::Workers,
@@ -86,6 +88,7 @@ pub(crate) struct Workspace {
     pulls: pulls::Pulls,
     pull_due: Notify,
     github: Mutex<BTreeMap<String, viz_github::GitHub>>,
+    requests: Requests,
     mcp: Mcp,
     closing: CancellationToken,
     jobs: TaskTracker,
@@ -154,6 +157,7 @@ impl Workspace {
             pulls: pulls::Pulls::default(),
             pull_due: Notify::new(),
             github: Mutex::default(),
+            requests: Requests::default(),
             mcp,
             closing: CancellationToken::new(),
             jobs: TaskTracker::new(),
@@ -172,6 +176,7 @@ impl Workspace {
         }
         self.jobs.spawn(Arc::clone(self).keep_time());
         self.jobs.spawn(Arc::clone(self).poll_pulls());
+        self.jobs.spawn(Arc::clone(self).serve_requests());
         Ok(())
     }
 

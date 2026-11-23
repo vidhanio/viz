@@ -11,11 +11,12 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use viz_protocol::{
-    Cleared, CreateProject, Empty, EntryId, EnvironmentList, ForkThread, Forked, HarnessList,
-    HarnessOptions, LaunchThread, Launched, ListBranches, ListEntries, ListHarnesses, ListProjects,
-    ListThreads, ListWorktrees, Method, MoveThread, ReadThreadState, RemoveProject, RemoveWorktree,
-    RetitleThread, SearchThreads, SendInput, Shelf, StopThread, TaskId, TaskResult, ThreadId,
-    ThreadStateResult, TriageThread, UpdateProject, UpdateThread, WaitThread,
+    AnswerRequest, AnsweredBy, Cleared, CreateProject, Empty, EntryId, EnvironmentList, ForkThread,
+    Forked, HarnessList, HarnessOptions, LaunchThread, Launched, ListBranches, ListEntries,
+    ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method, MoveThread, ReadThreadState,
+    RemoveProject, RemoveWorktree, RequestAnswer, RequestId, RetitleThread, SearchThreads,
+    SendInput, Shelf, StopThread, TaskId, TaskResult, ThreadId, ThreadStateResult, TriageThread,
+    UpdateProject, UpdateThread, WaitThread,
 };
 
 use self::inputs::{SendText, ThreadUpdate, ToolInput, WaitRun};
@@ -129,6 +130,7 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
         definition::<TaskKey>("task_cancel", "Cancel one of this thread's tasks and everything delegated from it. An unreachable task stays until it can be told."),
         definition::<TaskKey>("task_delete", "Remove one of this thread's finished tasks from its list. The child thread stays."),
         definition::<Empty>("task_clear", "Remove all of this thread's finished tasks from its list."),
+        definition::<ChildAnswer>("thread_answer", "Answer an approval or question a thread you delegated is waiting on, listed under requests in its thread_state. Give a permission one of its option ids, or a question its fields or a decline."),
     ]);
     definitions
 }
@@ -232,6 +234,23 @@ impl Tools {
                     .thread
                     .map(|thread| (thread, result.task.environment.as_str()));
                 output(&result, link)
+            }
+            "thread_answer" => {
+                let ChildAnswer {
+                    thread,
+                    request,
+                    answer,
+                } = decode(args)?;
+                let input = AnswerRequest {
+                    thread,
+                    request,
+                    answer,
+                };
+                let request = self
+                    .workspace
+                    .answer(input, AnsweredBy::Agent(scope.thread))
+                    .await?;
+                output(&request, Some((thread, self.peers.local.as_str())))
             }
             _ => self.call_rpc(name, args).await,
         }
@@ -557,6 +576,14 @@ struct ListedModel<'a> {
     value: &'a str,
     name: &'a str,
     group: Option<&'a str>,
+}
+
+/// A reply to one of a child thread's pending requests.
+#[derive(Deserialize, JsonSchema)]
+struct ChildAnswer {
+    thread: ThreadId,
+    request: RequestId,
+    answer: RequestAnswer,
 }
 
 #[derive(Deserialize, JsonSchema)]

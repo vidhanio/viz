@@ -237,4 +237,8 @@ pub struct ThreadState {
     pub live: Option<LiveTurn>,
     /// The ACP runner's last context usage report, if any.
     pub usage: Option<ContextUsage>,
+    /// The access mode and the modes the harness offers.
+    pub access: crate::Access,
+    /// Approvals and questions awaiting an answer, oldest first.
+    pub requests: Vec<crate::RunRequest>,
 }

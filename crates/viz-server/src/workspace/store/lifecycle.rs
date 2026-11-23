@@ -1,6 +1,6 @@
 //! Thread lifecycles, and the activity triage is decided on.
 
-use viz_core::lifecycle::Activity;
+use viz_core::lifecycle::{Activity, Awaiting};
 use viz_protocol::{AutoSettle, Lifecycle, RunStatus, SettledBy, Standing, ThreadId, ThreadStatus};
 
 use super::{
@@ -18,7 +18,8 @@ pub(super) const COLUMNS: &str = "t.settled_at, t.settled_by, t.kept, t.snoozed_
     EXISTS (SELECT 1 FROM runs WHERE thread = t.id AND status IN ('queued','running')),
     t.setup_failed,
     (SELECT status FROM runs WHERE thread = t.id AND end_entry IS NOT NULL ORDER BY end_entry DESC LIMIT 1),
-    (SELECT count(*) FROM agent_tasks WHERE parent = t.id AND status IN ('queued','running'))";
+    (SELECT count(*) FROM agent_tasks WHERE parent = t.id AND status IN ('queued','running')),
+    (SELECT json_extract(body, '$.type') FROM run_requests WHERE thread = t.id AND pending ORDER BY id LIMIT 1)";
 
 /// A thread for triage.
 #[derive(Debug)]
@@ -71,7 +72,11 @@ pub(super) fn decode(
     let activity = Activity {
         working,
         failed: status == ThreadStatus::Failed,
-        awaiting: None,
+        awaiting: match row.opt_str(first + 15)?.as_deref() {
+            None => None,
+            Some("permission") => Some(Awaiting::Approval),
+            Some(_) => Some(Awaiting::Question),
+        },
         waiting_on: u32::try_from(row.u64(first + 14)?).unwrap_or(u32::MAX),
         updated_at: row.i64(first + 9)?,
         last_input_at: row.opt_i64(first + 10)?,

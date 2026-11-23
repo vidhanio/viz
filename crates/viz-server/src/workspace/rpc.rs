@@ -189,6 +189,17 @@ handlers! {
             workspace.steer_queue(input).await?;
             Ok(Empty {})
         }
+        viz_protocol::AnswerRequest, viz_protocol::AnswerRequest, |workspace, input| {
+            workspace.answer(input, viz_protocol::AnsweredBy::User).await
+        }
+        viz_protocol::SetThreadAccess, viz_protocol::SetThreadAccess, |workspace, viz_protocol::SetThreadAccess { thread, access }| {
+            workspace.set_thread_access(thread, access).await?;
+            Ok(Empty {})
+        }
+        viz_protocol::SetProjectAccess, viz_protocol::SetProjectAccess, |workspace, input| {
+            workspace.set_project_access(input).await?;
+            Ok(Empty {})
+        }
         viz_protocol::ListHarnesses, Empty, |workspace, _| {
             Ok(HarnessList { harnesses: workspace.list_harnesses().await })
         }
@@ -224,6 +235,10 @@ impl Workspace {
         store::require(&mut tx, thread).await?;
         let active = runs::active(&mut tx, thread).await?;
         runs::promote(&mut tx, thread, input.run).await?;
+        if let Some(active) = active {
+            store::withdraw_requests(&mut tx, Some(active), viz_protocol::Withdrawal::Steered)
+                .await?;
+        }
         tx.commit().await?;
         if let Some(active) = active {
             self.steer_active(thread, active);

@@ -1278,6 +1278,17 @@
                     "type": "null"
                   }
                 ]
+              },
+              "access": {
+                "description": "The access mode and the modes the harness offers.",
+                "$ref": "#/$defs/Access"
+              },
+              "requests": {
+                "description": "Approvals and questions awaiting an answer, oldest first.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/RunRequest"
+                }
               }
             },
             "required": [
@@ -1287,7 +1298,9 @@
               "options",
               "commands",
               "queue",
-              "attachments"
+              "attachments",
+              "access",
+              "requests"
             ]
           },
           "ThreadStatus": {
@@ -2346,6 +2359,447 @@
             "required": [
               "used",
               "size"
+            ]
+          },
+          "Access": {
+            "description": "A thread's access mode, the choices, and where the mode came from.",
+            "type": "object",
+            "properties": {
+              "current": {
+                "$ref": "#/$defs/AccessMode"
+              },
+              "source": {
+                "$ref": "#/$defs/AccessSource"
+              },
+              "modes": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/AccessMode"
+                }
+              }
+            },
+            "required": [
+              "current",
+              "source",
+              "modes"
+            ]
+          },
+          "AccessMode": {
+            "description": "One access mode a thread can run in: a harness's own mode where it has\none, or viz answering permission requests itself.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/AccessKind"
+              },
+              "label": {
+                "description": "The harness's label, or viz's for its own modes.",
+                "type": "string"
+              },
+              "native": {
+                "description": "The harness option value selecting this mode; `None` for a mode viz\nprovides.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NativeAccess"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ]
+          },
+          "AccessKind": {
+            "description": "The broad behaviour of an access mode.",
+            "oneOf": [
+              {
+                "description": "Every permission request is approved without asking.",
+                "type": "string",
+                "const": "full"
+              },
+              {
+                "description": "The harness decides most actions itself and asks about the rest.",
+                "type": "string",
+                "const": "auto"
+              },
+              {
+                "description": "File edits are approved; other actions ask.",
+                "type": "string",
+                "const": "accept_edits"
+              },
+              {
+                "description": "Actions ask before they run.",
+                "type": "string",
+                "const": "ask"
+              },
+              {
+                "description": "Read only, or planning without changes.",
+                "type": "string",
+                "const": "read_only"
+              }
+            ]
+          },
+          "NativeAccess": {
+            "description": "A harness configuration option value.",
+            "type": "object",
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option",
+              "value"
+            ]
+          },
+          "AccessSource": {
+            "oneOf": [
+              {
+                "description": "Nothing was chosen; viz approves requests as it always has.",
+                "type": "string",
+                "const": "default"
+              },
+              {
+                "description": "The project's default for this harness.",
+                "type": "string",
+                "const": "project"
+              },
+              {
+                "description": "Chosen for this thread.",
+                "type": "string",
+                "const": "thread"
+              }
+            ]
+          },
+          "RunRequest": {
+            "description": "A durable request issued by a harness while a run is under way.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "$ref": "#/$defs/RequestId"
+              },
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "run": {
+                "$ref": "#/$defs/RunId"
+              },
+              "createdAt": {
+                "description": "Unix milliseconds.",
+                "type": "integer",
+                "format": "int64"
+              },
+              "body": {
+                "$ref": "#/$defs/RequestBody"
+              },
+              "state": {
+                "$ref": "#/$defs/RequestState"
+              }
+            },
+            "required": [
+              "id",
+              "thread",
+              "run",
+              "createdAt",
+              "body",
+              "state"
+            ]
+          },
+          "RequestId": {
+            "description": "A harness request's id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RequestBody": {
+            "description": "What the harness asked for.",
+            "oneOf": [
+              {
+                "description": "Approve a tool call. `call` is the transcript's tool call id.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "permission"
+                  },
+                  "call": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/PermissionOption"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "call",
+                  "title",
+                  "options"
+                ]
+              },
+              {
+                "description": "Fill in a form, or decline to.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "question"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "schema": {
+                    "description": "A JSON Schema object whose properties are primitive fields."
+                  }
+                },
+                "required": [
+                  "type",
+                  "message",
+                  "schema"
+                ]
+              }
+            ]
+          },
+          "PermissionOption": {
+            "description": "One answer the harness accepts for a permission request.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/PermissionKind"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "kind"
+            ]
+          },
+          "PermissionKind": {
+            "type": "string",
+            "enum": [
+              "allow_once",
+              "allow_always",
+              "reject_once",
+              "reject_always"
+            ]
+          },
+          "RequestState": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "pending"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "answered"
+                  },
+                  "at": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "by": {
+                    "$ref": "#/$defs/AnsweredBy"
+                  },
+                  "answer": {
+                    "$ref": "#/$defs/RequestAnswer"
+                  }
+                },
+                "required": [
+                  "type",
+                  "at",
+                  "by",
+                  "answer"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "withdrawn"
+                  },
+                  "at": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/Withdrawal"
+                  }
+                },
+                "required": [
+                  "type",
+                  "at",
+                  "reason"
+                ]
+              }
+            ]
+          },
+          "AnsweredBy": {
+            "description": "Who answered a request.",
+            "oneOf": [
+              {
+                "description": "A person, through a client.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "user"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "description": "The agent of the parent thread that delegated this one.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "agent"
+                  },
+                  "thread": {
+                    "$ref": "#/$defs/ThreadId"
+                  }
+                },
+                "required": [
+                  "type",
+                  "thread"
+                ]
+              }
+            ]
+          },
+          "RequestAnswer": {
+            "description": "A reply to a pending request.",
+            "oneOf": [
+              {
+                "description": "Choose one of a permission request's options.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "permission"
+                  },
+                  "option": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "option"
+                ]
+              },
+              {
+                "description": "Answer a question with values for its fields.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "accept"
+                  },
+                  "fields": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/$defs/FormValue"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "fields"
+                ]
+              },
+              {
+                "description": "Refuse to answer a question.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "decline"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          },
+          "FormValue": {
+            "description": "A form field's value.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "Withdrawal": {
+            "description": "Why a request stopped waiting without an answer.",
+            "oneOf": [
+              {
+                "description": "The run was stopped.",
+                "type": "string",
+                "const": "cancelled"
+              },
+              {
+                "description": "New input steered the run.",
+                "type": "string",
+                "const": "steered"
+              },
+              {
+                "description": "The harness withdrew the request or exited.",
+                "type": "string",
+                "const": "harness"
+              },
+              {
+                "description": "The run ended.",
+                "type": "string",
+                "const": "turn_ended"
+              },
+              {
+                "description": "The server stopped or restarted while the request waited.",
+                "type": "string",
+                "const": "restarted"
+              }
             ]
           }
         }
@@ -9859,6 +10313,686 @@
         ]
       }
     },
+    "thread.answer": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "AnswerRequest",
+        "description": "`thread.answer`: resolve one of a thread's pending requests.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "request": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "answer": {
+            "$ref": "#/$defs/RequestAnswer"
+          }
+        },
+        "required": [
+          "thread",
+          "request",
+          "answer"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RequestId": {
+            "description": "A harness request's id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RequestAnswer": {
+            "description": "A reply to a pending request.",
+            "oneOf": [
+              {
+                "description": "Choose one of a permission request's options.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "permission"
+                  },
+                  "option": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "option"
+                ]
+              },
+              {
+                "description": "Answer a question with values for its fields.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "accept"
+                  },
+                  "fields": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/$defs/FormValue"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "fields"
+                ]
+              },
+              {
+                "description": "Refuse to answer a question.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "decline"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          },
+          "FormValue": {
+            "description": "A form field's value.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RunRequest",
+        "description": "A durable request issued by a harness while a run is under way.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "createdAt": {
+            "description": "Unix milliseconds.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "body": {
+            "$ref": "#/$defs/RequestBody"
+          },
+          "state": {
+            "$ref": "#/$defs/RequestState"
+          }
+        },
+        "required": [
+          "id",
+          "thread",
+          "run",
+          "createdAt",
+          "body",
+          "state"
+        ],
+        "$defs": {
+          "RequestId": {
+            "description": "A harness request's id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RequestBody": {
+            "description": "What the harness asked for.",
+            "oneOf": [
+              {
+                "description": "Approve a tool call. `call` is the transcript's tool call id.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "permission"
+                  },
+                  "call": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/PermissionOption"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "call",
+                  "title",
+                  "options"
+                ]
+              },
+              {
+                "description": "Fill in a form, or decline to.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "question"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "schema": {
+                    "description": "A JSON Schema object whose properties are primitive fields."
+                  }
+                },
+                "required": [
+                  "type",
+                  "message",
+                  "schema"
+                ]
+              }
+            ]
+          },
+          "PermissionOption": {
+            "description": "One answer the harness accepts for a permission request.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "kind": {
+                "$ref": "#/$defs/PermissionKind"
+              }
+            },
+            "required": [
+              "id",
+              "label",
+              "kind"
+            ]
+          },
+          "PermissionKind": {
+            "type": "string",
+            "enum": [
+              "allow_once",
+              "allow_always",
+              "reject_once",
+              "reject_always"
+            ]
+          },
+          "RequestState": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "pending"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "answered"
+                  },
+                  "at": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "by": {
+                    "$ref": "#/$defs/AnsweredBy"
+                  },
+                  "answer": {
+                    "$ref": "#/$defs/RequestAnswer"
+                  }
+                },
+                "required": [
+                  "type",
+                  "at",
+                  "by",
+                  "answer"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "withdrawn"
+                  },
+                  "at": {
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "reason": {
+                    "$ref": "#/$defs/Withdrawal"
+                  }
+                },
+                "required": [
+                  "type",
+                  "at",
+                  "reason"
+                ]
+              }
+            ]
+          },
+          "AnsweredBy": {
+            "description": "Who answered a request.",
+            "oneOf": [
+              {
+                "description": "A person, through a client.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "user"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "description": "The agent of the parent thread that delegated this one.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "agent"
+                  },
+                  "thread": {
+                    "$ref": "#/$defs/ThreadId"
+                  }
+                },
+                "required": [
+                  "type",
+                  "thread"
+                ]
+              }
+            ]
+          },
+          "RequestAnswer": {
+            "description": "A reply to a pending request.",
+            "oneOf": [
+              {
+                "description": "Choose one of a permission request's options.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "permission"
+                  },
+                  "option": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "option"
+                ]
+              },
+              {
+                "description": "Answer a question with values for its fields.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "accept"
+                  },
+                  "fields": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/$defs/FormValue"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "fields"
+                ]
+              },
+              {
+                "description": "Refuse to answer a question.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "decline"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          },
+          "FormValue": {
+            "description": "A form field's value.",
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            ]
+          },
+          "Withdrawal": {
+            "description": "Why a request stopped waiting without an answer.",
+            "oneOf": [
+              {
+                "description": "The run was stopped.",
+                "type": "string",
+                "const": "cancelled"
+              },
+              {
+                "description": "New input steered the run.",
+                "type": "string",
+                "const": "steered"
+              },
+              {
+                "description": "The harness withdrew the request or exited.",
+                "type": "string",
+                "const": "harness"
+              },
+              {
+                "description": "The run ended.",
+                "type": "string",
+                "const": "turn_ended"
+              },
+              {
+                "description": "The server stopped or restarted while the request waited.",
+                "type": "string",
+                "const": "restarted"
+              }
+            ]
+          }
+        }
+      }
+    },
+    "thread.access": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SetThreadAccess",
+        "description": "`thread.access`: choose a thread's access mode; `None` returns it to the\nproject default.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "access": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AccessMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "AccessMode": {
+            "description": "One access mode a thread can run in: a harness's own mode where it has\none, or viz answering permission requests itself.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/AccessKind"
+              },
+              "label": {
+                "description": "The harness's label, or viz's for its own modes.",
+                "type": "string"
+              },
+              "native": {
+                "description": "The harness option value selecting this mode; `None` for a mode viz\nprovides.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NativeAccess"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ]
+          },
+          "AccessKind": {
+            "description": "The broad behaviour of an access mode.",
+            "oneOf": [
+              {
+                "description": "Every permission request is approved without asking.",
+                "type": "string",
+                "const": "full"
+              },
+              {
+                "description": "The harness decides most actions itself and asks about the rest.",
+                "type": "string",
+                "const": "auto"
+              },
+              {
+                "description": "File edits are approved; other actions ask.",
+                "type": "string",
+                "const": "accept_edits"
+              },
+              {
+                "description": "Actions ask before they run.",
+                "type": "string",
+                "const": "ask"
+              },
+              {
+                "description": "Read only, or planning without changes.",
+                "type": "string",
+                "const": "read_only"
+              }
+            ]
+          },
+          "NativeAccess": {
+            "description": "A harness configuration option value.",
+            "type": "object",
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option",
+              "value"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
+    "project.access": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "SetProjectAccess",
+        "description": "`project.access`: a project's default access mode for one harness; `None`\nclears it.",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "access": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AccessMode"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "project",
+          "harness"
+        ],
+        "$defs": {
+          "AccessMode": {
+            "description": "One access mode a thread can run in: a harness's own mode where it has\none, or viz answering permission requests itself.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/AccessKind"
+              },
+              "label": {
+                "description": "The harness's label, or viz's for its own modes.",
+                "type": "string"
+              },
+              "native": {
+                "description": "The harness option value selecting this mode; `None` for a mode viz\nprovides.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NativeAccess"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ]
+          },
+          "AccessKind": {
+            "description": "The broad behaviour of an access mode.",
+            "oneOf": [
+              {
+                "description": "Every permission request is approved without asking.",
+                "type": "string",
+                "const": "full"
+              },
+              {
+                "description": "The harness decides most actions itself and asks about the rest.",
+                "type": "string",
+                "const": "auto"
+              },
+              {
+                "description": "File edits are approved; other actions ask.",
+                "type": "string",
+                "const": "accept_edits"
+              },
+              {
+                "description": "Actions ask before they run.",
+                "type": "string",
+                "const": "ask"
+              },
+              {
+                "description": "Read only, or planning without changes.",
+                "type": "string",
+                "const": "read_only"
+              }
+            ]
+          },
+          "NativeAccess": {
+            "description": "A harness configuration option value.",
+            "type": "object",
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option",
+              "value"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
     "queue.remove": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -11996,6 +13130,17 @@
                 "type": "null"
               }
             ]
+          },
+          "access": {
+            "description": "The access mode and the modes the harness offers.",
+            "$ref": "#/$defs/Access"
+          },
+          "requests": {
+            "description": "Approvals and questions awaiting an answer, oldest first.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/RunRequest"
+            }
           }
         },
         "required": [
@@ -12005,7 +13150,9 @@
           "options",
           "commands",
           "queue",
-          "attachments"
+          "attachments",
+          "access",
+          "requests"
         ]
       },
       "ThreadStatus": {
@@ -12311,6 +13458,447 @@
         "required": [
           "turn",
           "entries"
+        ]
+      },
+      "Access": {
+        "description": "A thread's access mode, the choices, and where the mode came from.",
+        "type": "object",
+        "properties": {
+          "current": {
+            "$ref": "#/$defs/AccessMode"
+          },
+          "source": {
+            "$ref": "#/$defs/AccessSource"
+          },
+          "modes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/AccessMode"
+            }
+          }
+        },
+        "required": [
+          "current",
+          "source",
+          "modes"
+        ]
+      },
+      "AccessMode": {
+        "description": "One access mode a thread can run in: a harness's own mode where it has\none, or viz answering permission requests itself.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/AccessKind"
+          },
+          "label": {
+            "description": "The harness's label, or viz's for its own modes.",
+            "type": "string"
+          },
+          "native": {
+            "description": "The harness option value selecting this mode; `None` for a mode viz\nprovides.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/NativeAccess"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind",
+          "label"
+        ]
+      },
+      "AccessKind": {
+        "description": "The broad behaviour of an access mode.",
+        "oneOf": [
+          {
+            "description": "Every permission request is approved without asking.",
+            "type": "string",
+            "const": "full"
+          },
+          {
+            "description": "The harness decides most actions itself and asks about the rest.",
+            "type": "string",
+            "const": "auto"
+          },
+          {
+            "description": "File edits are approved; other actions ask.",
+            "type": "string",
+            "const": "accept_edits"
+          },
+          {
+            "description": "Actions ask before they run.",
+            "type": "string",
+            "const": "ask"
+          },
+          {
+            "description": "Read only, or planning without changes.",
+            "type": "string",
+            "const": "read_only"
+          }
+        ]
+      },
+      "NativeAccess": {
+        "description": "A harness configuration option value.",
+        "type": "object",
+        "properties": {
+          "option": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "option",
+          "value"
+        ]
+      },
+      "AccessSource": {
+        "oneOf": [
+          {
+            "description": "Nothing was chosen; viz approves requests as it always has.",
+            "type": "string",
+            "const": "default"
+          },
+          {
+            "description": "The project's default for this harness.",
+            "type": "string",
+            "const": "project"
+          },
+          {
+            "description": "Chosen for this thread.",
+            "type": "string",
+            "const": "thread"
+          }
+        ]
+      },
+      "RunRequest": {
+        "description": "A durable request issued by a harness while a run is under way.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/$defs/RequestId"
+          },
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "$ref": "#/$defs/RunId"
+          },
+          "createdAt": {
+            "description": "Unix milliseconds.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "body": {
+            "$ref": "#/$defs/RequestBody"
+          },
+          "state": {
+            "$ref": "#/$defs/RequestState"
+          }
+        },
+        "required": [
+          "id",
+          "thread",
+          "run",
+          "createdAt",
+          "body",
+          "state"
+        ]
+      },
+      "RequestId": {
+        "description": "A harness request's id.",
+        "type": "integer",
+        "format": "uint64",
+        "minimum": 1
+      },
+      "RequestBody": {
+        "description": "What the harness asked for.",
+        "oneOf": [
+          {
+            "description": "Approve a tool call. `call` is the transcript's tool call id.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "permission"
+              },
+              "call": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PermissionOption"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "call",
+              "title",
+              "options"
+            ]
+          },
+          {
+            "description": "Fill in a form, or decline to.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "question"
+              },
+              "message": {
+                "type": "string"
+              },
+              "schema": {
+                "description": "A JSON Schema object whose properties are primitive fields."
+              }
+            },
+            "required": [
+              "type",
+              "message",
+              "schema"
+            ]
+          }
+        ]
+      },
+      "PermissionOption": {
+        "description": "One answer the harness accepts for a permission request.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/PermissionKind"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind"
+        ]
+      },
+      "PermissionKind": {
+        "type": "string",
+        "enum": [
+          "allow_once",
+          "allow_always",
+          "reject_once",
+          "reject_always"
+        ]
+      },
+      "RequestState": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "pending"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "answered"
+              },
+              "at": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "by": {
+                "$ref": "#/$defs/AnsweredBy"
+              },
+              "answer": {
+                "$ref": "#/$defs/RequestAnswer"
+              }
+            },
+            "required": [
+              "type",
+              "at",
+              "by",
+              "answer"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "withdrawn"
+              },
+              "at": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "reason": {
+                "$ref": "#/$defs/Withdrawal"
+              }
+            },
+            "required": [
+              "type",
+              "at",
+              "reason"
+            ]
+          }
+        ]
+      },
+      "AnsweredBy": {
+        "description": "Who answered a request.",
+        "oneOf": [
+          {
+            "description": "A person, through a client.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "user"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "description": "The agent of the parent thread that delegated this one.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "agent"
+              },
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              }
+            },
+            "required": [
+              "type",
+              "thread"
+            ]
+          }
+        ]
+      },
+      "RequestAnswer": {
+        "description": "A reply to a pending request.",
+        "oneOf": [
+          {
+            "description": "Choose one of a permission request's options.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "permission"
+              },
+              "option": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "option"
+            ]
+          },
+          {
+            "description": "Answer a question with values for its fields.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "accept"
+              },
+              "fields": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/FormValue"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "fields"
+            ]
+          },
+          {
+            "description": "Refuse to answer a question.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "decline"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        ]
+      },
+      "FormValue": {
+        "description": "A form field's value.",
+        "anyOf": [
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        ]
+      },
+      "Withdrawal": {
+        "description": "Why a request stopped waiting without an answer.",
+        "oneOf": [
+          {
+            "description": "The run was stopped.",
+            "type": "string",
+            "const": "cancelled"
+          },
+          {
+            "description": "New input steered the run.",
+            "type": "string",
+            "const": "steered"
+          },
+          {
+            "description": "The harness withdrew the request or exited.",
+            "type": "string",
+            "const": "harness"
+          },
+          {
+            "description": "The run ended.",
+            "type": "string",
+            "const": "turn_ended"
+          },
+          {
+            "description": "The server stopped or restarted while the request waited.",
+            "type": "string",
+            "const": "restarted"
+          }
         ]
       },
       "GitStatus": {

@@ -139,7 +139,7 @@ async fn watch_thread(
         outgoing,
         Notification::ThreadState {
             thread,
-            state: state.clone(),
+            state: Box::new(state.clone()),
         },
     )
     .await;
@@ -206,7 +206,7 @@ async fn refresh_watch(
             outgoing,
             Notification::ThreadState {
                 thread,
-                state: state.clone(),
+                state: Box::new(state.clone()),
             },
         )
         .await?;

@@ -1,7 +1,7 @@
 //! Caller-mediated ACP requests. Waiting for a user never blocks the reader.
 
 use std::{
-    collections::HashMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, Mutex},
 };
 
@@ -12,6 +12,7 @@ use agent_client_protocol::{
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
+use viz_protocol::{FormValue, PermissionKind, PermissionOption, RequestAnswer, RequestBody};
 
 use crate::{
     local_io::{Host, LocalIo, TerminalAccess},
@@ -19,12 +20,12 @@ use crate::{
     schema::{
         AgentRequest, BooleanConfigOptionCapabilities, ClientCapabilities,
         ClientSessionCapabilities, CreateElicitationRequest, CreateElicitationResponse,
-        ElicitationAction, ElicitationCapabilities, ElicitationFormCapabilities, ElicitationMode,
-        ElicitationScope, MessageMcpRequest, MessageMcpResponse, PermissionOptionId,
-        PermissionOptionKind, PlanCapabilities, PromptSuggestionsCapabilities,
-        RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-        SelectedPermissionOutcome, SessionConfigOptionsCapabilities, SessionId,
-        SubagentCapabilities,
+        ElicitationAcceptAction, ElicitationAction, ElicitationCapabilities,
+        ElicitationContentValue, ElicitationFormCapabilities, ElicitationMode, ElicitationScope,
+        MessageMcpRequest, MessageMcpResponse, PermissionOptionId, PermissionOptionKind,
+        PlanCapabilities, PromptSuggestionsCapabilities, RequestPermissionOutcome,
+        RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
+        SessionConfigOptionsCapabilities, SessionId, SubagentCapabilities,
     },
 };
 
@@ -46,15 +47,14 @@ pub struct ClientEvents {
 }
 
 /// A request from the harness with a typed, single-use response channel.
+/// Dropping `reply` cancels the request.
 #[derive(Debug)]
 pub enum ClientRequest {
-    Permission {
-        request: RequestPermissionRequest,
-        reply: oneshot::Sender<Option<PermissionOptionId>>,
-    },
-    Elicitation {
-        request: CreateElicitationRequest,
-        reply: oneshot::Sender<ElicitationAction>,
+    /// An approval or a question for the caller to answer.
+    Interaction {
+        session: SessionId,
+        body: RequestBody,
+        reply: oneshot::Sender<RequestAnswer>,
     },
     Mcp {
         request: MessageMcpRequest,
@@ -271,23 +271,39 @@ impl Work {
                 let choice = if events.permissions == PermissionPolicy::FullAccess {
                     auto_allow(request)
                 } else {
-                    ask(events, |reply| ClientRequest::Permission {
-                        request: (**request).clone(),
+                    ask(events, |reply| ClientRequest::Interaction {
+                        session: request.session_id.clone(),
+                        body: permission_body(request),
                         reply,
                     })
                     .await
-                    .flatten()
-                    .filter(|id| request.options.iter().any(|option| &option.option_id == id))
+                    .and_then(|answer| match answer {
+                        RequestAnswer::Permission { option } => request
+                            .options
+                            .iter()
+                            .find(|offered| *offered.option_id.0 == *option)
+                            .map(|offered| offered.option_id.clone()),
+                        RequestAnswer::Accept { .. } | RequestAnswer::Decline => None,
+                    })
                 };
                 permission_response(choice).into_json(method)
             }
             Self::Elicitation(request) => {
-                let action = ask(events, |reply| ClientRequest::Elicitation {
-                    request: (**request).clone(),
+                let ElicitationMode::Form(form) = &request.mode else {
+                    return Err(Error::invalid_params());
+                };
+                let schema = serde_json::to_value(&form.requested_schema)
+                    .map_err(Error::into_internal_error)?;
+                let action = ask(events, |reply| ClientRequest::Interaction {
+                    session: self.session().unwrap_or_else(|| SessionId::new("")),
+                    body: RequestBody::Question {
+                        message: request.message.clone(),
+                        schema,
+                    },
                     reply,
                 })
                 .await
-                .unwrap_or(ElicitationAction::Decline);
+                .map_or(ElicitationAction::Cancel, elicitation_action);
                 CreateElicitationResponse::new(action).into_json(method)
             }
             Self::Mcp(request)
@@ -322,6 +338,57 @@ async fn ask<T>(
     let (reply, answer) = oneshot::channel();
     sender.send(request(reply)).ok()?;
     answer.await.ok()
+}
+
+fn permission_body(request: &RequestPermissionRequest) -> RequestBody {
+    RequestBody::Permission {
+        call: request.tool_call.tool_call_id.0.to_string(),
+        title: request.tool_call.fields.title.clone().unwrap_or_default(),
+        options: request
+            .options
+            .iter()
+            .filter_map(|option| {
+                Some(PermissionOption {
+                    id: option.option_id.0.to_string(),
+                    label: option.name.clone(),
+                    kind: match option.kind {
+                        PermissionOptionKind::AllowOnce => PermissionKind::AllowOnce,
+                        PermissionOptionKind::AllowAlways => PermissionKind::AllowAlways,
+                        PermissionOptionKind::RejectOnce => PermissionKind::RejectOnce,
+                        PermissionOptionKind::RejectAlways => PermissionKind::RejectAlways,
+                        _ => return None,
+                    },
+                })
+            })
+            .collect(),
+    }
+}
+
+fn elicitation_action(answer: RequestAnswer) -> ElicitationAction {
+    match answer {
+        RequestAnswer::Accept { fields } => {
+            let content: BTreeMap<_, _> = fields
+                .into_iter()
+                .map(|(key, value)| {
+                    let value = match value {
+                        FormValue::Boolean(value) => ElicitationContentValue::Boolean(value),
+                        FormValue::Number(number) => number.as_i64().map_or_else(
+                            || ElicitationContentValue::Number(number.as_f64().unwrap_or_default()),
+                            ElicitationContentValue::Integer,
+                        ),
+                        FormValue::Text(text) => ElicitationContentValue::String(text),
+                        FormValue::Choices(choices) => {
+                            ElicitationContentValue::StringArray(choices)
+                        }
+                    };
+                    (key, value)
+                })
+                .collect();
+            ElicitationAction::Accept(ElicitationAcceptAction::new().content(content))
+        }
+        RequestAnswer::Decline => ElicitationAction::Decline,
+        RequestAnswer::Permission { .. } => ElicitationAction::Cancel,
+    }
 }
 
 fn permission_response(choice: Option<PermissionOptionId>) -> RequestPermissionResponse {

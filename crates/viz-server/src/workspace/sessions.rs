@@ -86,7 +86,7 @@ impl Workspace {
         let running = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::from(viz_acp::Error::Cancelled)),
-            result = Session::open(config, setup, session.session_id.as_deref(), Some(&endpoint)) => result?,
+            result = Session::open(config, setup, session.session_id.as_deref(), Some(&endpoint), self.client_events(thread)) => result?,
         };
         if session.session_id.as_deref() != Some(running.id()) {
             exec(
@@ -101,6 +101,7 @@ impl Workspace {
             () = cancel.cancelled() => return Err(Error::from(viz_acp::Error::Cancelled)),
             result = running.restore(&session.desired, session.selection.as_ref()) => result?,
         };
+        let desired = self.apply_access(thread, &running, desired).await?;
         let updates = running.watch();
         let relist = {
             let mut db = self.db.lock().await;
@@ -124,6 +125,35 @@ impl Workspace {
             harness,
             desired,
         })
+    }
+
+    /// Switches a newly opened session to the thread's or project's chosen
+    /// harness mode. A harness that refuses keeps its own mode.
+    async fn apply_access(
+        &self,
+        thread: ThreadId,
+        session: &Session,
+        desired: Desired,
+    ) -> Result<Desired, Error> {
+        let (chosen, project) = store::chosen_access(&mut *self.db.lock().await, thread).await?;
+        let Some(native) = chosen.or(project).and_then(|mode| mode.native) else {
+            return Ok(desired);
+        };
+        let value = OptionValue::Select(native.value);
+        let current = session.snapshot().options;
+        if current
+            .iter()
+            .any(|option| option.id == native.option && option.value == value)
+        {
+            return Ok(desired);
+        }
+        match session.configure(&native.option, value, &desired).await {
+            Ok(desired) => Ok(desired),
+            Err(error) => {
+                tracing::warn!(%thread, %error, "applying the chosen access mode");
+                Ok(desired)
+            }
+        }
     }
 
     pub(super) async fn configure_session(

@@ -4,7 +4,7 @@
 //! JSON-RPC codes.
 
 use viz_core::{
-    fork, lifecycle, placement, projects,
+    fork, lifecycle, placement, projects, requests,
     runs::{Busy, QueueRejection},
     tasks, threads,
 };
@@ -15,7 +15,10 @@ pub(crate) enum Error {
     #[error("no thread {0}")]
     NoThread(ThreadId),
     #[error("no run {run} in thread {thread}")]
-    NoRun { thread: ThreadId, run: RunId },
+    NoRun {
+        thread: ThreadId,
+        run: RunId,
+    },
     #[error("no task {0}")]
     NoTask(TaskId),
     #[error("no project {0}")]
@@ -38,6 +41,8 @@ pub(crate) enum Error {
     Task(#[from] tasks::Rejection),
     #[error(transparent)]
     Project(#[from] projects::Rejection),
+    #[error(transparent)]
+    Answer(#[from] requests::Rejection),
     /// Input that violates a documented constraint.
     #[error("{0}")]
     Invalid(String),
@@ -123,6 +128,7 @@ impl Error {
             | Self::Busy(_)
             | Self::Thread(_)
             | Self::Task(_)
+            | Self::Answer(_)
             | Self::Triage(_)
             | Self::Fork(_)
             | Self::Git(_)

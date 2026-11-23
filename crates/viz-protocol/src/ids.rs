@@ -34,6 +34,8 @@ ids! {
     RunId;
     /// A transcript entry id.
     EntryId;
+    /// A harness request's id.
+    RequestId;
 }
 
 fn positive<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {

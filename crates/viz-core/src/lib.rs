@@ -7,6 +7,7 @@ pub mod lifecycle;
 pub mod options;
 pub mod placement;
 pub mod projects;
+pub mod requests;
 pub mod runs;
 pub mod tasks;
 pub mod threads;

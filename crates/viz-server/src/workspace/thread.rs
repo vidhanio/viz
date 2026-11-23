@@ -9,7 +9,7 @@ use viz_core::{
     titles,
 };
 use viz_protocol::{
-    LaunchThread, Launched, RunId, SendInput, SendMode, Sent, ThreadId, ThreadUpdated,
+    LaunchThread, Launched, RunId, SendInput, SendMode, Sent, ThreadId, ThreadUpdated, Withdrawal,
 };
 
 use super::{
@@ -180,6 +180,9 @@ impl Workspace {
             },
         )
         .await?;
+        if let Some(active) = steer {
+            store::withdraw_requests(&mut tx, Some(active), Withdrawal::Steered).await?;
+        }
         tx.commit().await?;
         if let Some(active) = steer {
             self.steer_active(thread, active);
@@ -190,7 +193,9 @@ impl Workspace {
         Ok(Sent { run })
     }
 
+    /// Call after committing the withdrawal of the run's pending requests.
     pub(super) fn steer_active(&self, thread: ThreadId, active: RunId) {
+        self.requests.release_run(active);
         if let Some(driver) = self.workers.get(thread) {
             driver.signal(active, Intent::Steer);
         }
@@ -211,11 +216,15 @@ impl Workspace {
             }
             let mut tx = db.transaction().await?;
             let active = runs::cancel(&mut tx, thread, requested).await?;
+            if let Some(active) = active {
+                store::withdraw_requests(&mut tx, Some(active), Withdrawal::Cancelled).await?;
+            }
             tx.commit().await?;
-            if let Some(active) = active
-                && let Some(driver) = self.workers.get(thread)
-            {
-                driver.signal(active, Intent::Stop);
+            if let Some(active) = active {
+                self.requests.release_run(active);
+                if let Some(driver) = self.workers.get(thread) {
+                    driver.signal(active, Intent::Stop);
+                }
             }
             drop(db);
             active

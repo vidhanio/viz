@@ -255,6 +255,16 @@ pub fn on_agent_activity(current: &Lifecycle) -> Lifecycle {
     }
 }
 
+/// The agent asked for an approval or an answer: that ends a snooze, and the
+/// thread is unread until someone looks.
+#[must_use]
+pub fn on_request(current: &Lifecycle, watched: bool) -> Lifecycle {
+    let mut next = on_agent_activity(current);
+    next.unread |= !watched;
+    wake(&mut next);
+    next
+}
+
 /// A run ended. Only a failure ends a snooze: a snoozed thread may well be one
 /// left to finish.
 #[must_use]

@@ -4,6 +4,7 @@ mod entry_wire;
 mod fork;
 mod lifecycle;
 mod projects;
+mod requests;
 mod threads;
 mod transcript;
 
@@ -16,6 +17,10 @@ pub(super) use self::{
     fork::{copy_history, fork_prompt, turns},
     lifecycle::{lifecycle, save_lifecycle, standings, touch},
     projects::{directory, path_text, preferences, project, project_at, projects, thread_worktree},
+    requests::{
+        access, chosen_access, insert_request, request, save_project_access, save_request,
+        save_thread_access, withdraw_requests,
+    },
     threads::{
         Binding, Handoff, NewThread, SavedSession, binding, create_thread, list_threads, metadata,
         require, save_metadata, state, updated,

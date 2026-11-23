@@ -575,7 +575,7 @@ impl Session<'_> {
             Notification::ThreadsChanged(_) => self.refresh_list().await,
             Notification::TasksChanged(_) => self.refresh_tasks().await,
             Notification::ThreadState { thread, state } => {
-                self.ui.update(move |s, tx| s.set_state(thread, state, tx));
+                self.ui.update(move |s, tx| s.set_state(thread, *state, tx));
                 Ok(())
             }
             Notification::ThreadLive { thread, delta } => {

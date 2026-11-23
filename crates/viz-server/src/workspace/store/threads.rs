@@ -257,6 +257,8 @@ pub(in crate::workspace) async fn state(
     })
     .collect::<Result<_, Error>>()?;
     let (_, _, status) = lifecycle::decode(&mut row, 5)?;
+    let access = super::requests::access(db, thread, &session.options).await?;
+    let requests = super::requests::pending_requests(db, thread).await?;
     Ok(ThreadState {
         harness: row.str(0)?,
         project: row.opt_str(1)?,
@@ -271,5 +273,7 @@ pub(in crate::workspace) async fn state(
         usage: session.usage,
         queue,
         live: None,
+        access,
+        requests,
     })
 }

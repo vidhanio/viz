@@ -54,7 +54,7 @@ pub enum Notification {
     #[serde(rename = "thread.state")]
     ThreadState {
         thread: ThreadId,
-        state: ThreadState,
+        state: Box<ThreadState>,
     },
     #[serde(rename = "git.changed")]
     GitChanged {

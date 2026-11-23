@@ -403,6 +403,7 @@ pub(super) async fn settle(
         ],
     )
     .await?;
+    store::withdraw_requests(db, Some(run), viz_core::requests::on_settle(ended)).await?;
     store::touch(db, thread, |current| {
         lifecycle::on_run_end(current, ended, watched)
     })
@@ -417,6 +418,7 @@ pub(super) async fn settle(
 }
 
 pub(super) async fn recover(db: &mut Connection) -> Result<(), Error> {
+    store::withdraw_requests(db, None, viz_protocol::Withdrawal::Restarted).await?;
     for row in rows(
         db,
         "SELECT id, thread FROM runs WHERE status = 'running'",

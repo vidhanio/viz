@@ -11,6 +11,7 @@ mod git;
 mod github;
 mod history;
 mod ids;
+mod interactions;
 mod lifecycle;
 pub mod peer;
 mod project_settings;
@@ -48,7 +49,12 @@ pub use history::{
     ReadEntryChunk, RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads,
     SteerQueuedInput, TurnTokens, TurnUsage, UpdateQueuedInput, UsageCost,
 };
-pub use ids::{EntryId, RunId, TaskId, ThreadId};
+pub use ids::{EntryId, RequestId, RunId, TaskId, ThreadId};
+pub use interactions::{
+    Access, AccessKind, AccessMode, AccessSource, AnswerRequest, AnsweredBy, FormValue,
+    NativeAccess, PermissionKind, PermissionOption, RequestAnswer, RequestBody, RequestState,
+    RunRequest, SetProjectAccess, SetThreadAccess, Withdrawal,
+};
 pub use lifecycle::{
     Attention, AutoSettle, Lifecycle, Position, RetitleThread, SettledBy, Shelf, Standing,
     ThreadUpdated, TriageAction, TriageThread, Triaged,
@@ -174,6 +180,9 @@ methods! {
     SearchThreads<'_> => "threads.search", SearchHits;
     ListEntries => "thread.entries", EntryPage;
     ReadEntryChunk => "thread.entry_chunk", EntryChunk;
+    AnswerRequest => "thread.answer", RunRequest;
+    SetThreadAccess => "thread.access", Empty;
+    SetProjectAccess => "project.access", Empty;
     RemoveQueuedInput => "queue.remove", Empty;
     ListBranches<'_> => "project.branches", BranchList;
     ListWorktrees<'_> => "worktrees.list", WorktreeList;

@@ -234,6 +234,16 @@ fn thread() -> ThreadState {
         attachments: AttachmentCapabilities { images: true },
         live: None,
         usage: None,
+        access: viz_client::protocol::Access {
+            current: viz_client::protocol::AccessMode {
+                kind: viz_client::protocol::AccessKind::Full,
+                label: "Full access".into(),
+                native: None,
+            },
+            source: viz_client::protocol::AccessSource::Default,
+            modes: Vec::new(),
+        },
+        requests: Vec::new(),
     }
 }
 
