@@ -14,7 +14,6 @@ pub mod gallery;
 mod icon_button;
 
 mod icons;
-mod input;
 mod project_icon;
 mod row;
 mod surface;
@@ -29,9 +28,7 @@ use rune_kit::Spinner;
 pub use self::{
     badge::{Tone, ToneColors, diff_stat, diff_stat_rolling, dot, tooltip_text, with_tooltip},
     button::{Button, button},
-    dialog::{
-        Dialog, DialogForm, ToastCard, dialog, dialog_actions, dialog_body, sheet, toast_card,
-    },
+    dialog::{DialogForm, dialog_actions, dialog_body, dialog_subject, sheet},
     feedback::{
         Banner, EmptyState, LoadingDelay, empty, empty_state, error_banner, loading_state,
         skeleton_rows, status_banner,
@@ -51,7 +48,6 @@ pub use self::{
         TERMINAL, TEXT_WRAP, THREAD, TIMER, TRASH, TRIANGLE_ALERT, UNLOCK, UPLOAD, WRENCH, ZAP,
         harness_glyph, harness_icon, harness_mark, kit_glyphs, swap_kit_icon,
     },
-    input::{Field, SearchInput, SearchStyle, field, search_input, text_field},
     project_icon::{
         no_project_mark, project_color, project_color_index, project_icon, project_initials,
         project_mark, project_monogram,

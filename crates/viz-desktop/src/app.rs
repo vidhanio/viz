@@ -66,6 +66,9 @@ pub struct ShellWidgets {
     pub diff_pane: PaneState,
     /// Coalesced toast stack with hover and hidden-window timer pause.
     pub toasts: ToastStack<ToastContent>,
+    /// Toasts whose close button was pressed, dismissed on the next poll
+    /// (`rune_kit::Toast::on_close` runs without a [`Tx`]).
+    pub closed_toasts: Vec<u64>,
     /// Off-thread image decoder cache initialized in `AppSpec::setup`.
     pub images: Option<ImageCache>,
     /// Decoded project icon images keyed by `"{env}\0{project_path}"`.
@@ -117,6 +120,7 @@ impl Default for ShellWidgets {
                 .range(DIFF_MIN_WIDTH, DIFF_MAX_WIDTH)
                 .collapsed(),
             toasts: ToastStack::default(),
+            closed_toasts: Vec::new(),
             images: None,
             project_icons: HashMap::new(),
             attachment_images: crate::attachments::DraftImages::default(),

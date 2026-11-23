@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use rune::{El, col, el, row};
 use rune_kit::{
-    ButtonVariant, ToastRegion,
+    Toast, ToastRegion,
     shell::{SidebarPeek, SidebarToggle, SplitView, Toolbar},
 };
 
@@ -146,23 +146,19 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
         .iter()
         .fold(ToastRegion::new(), |region, entry| {
             let id = entry.id;
-            let mut card = ui::toast_card(format!("toast-{id}"), &entry.options.title)
-                .tone(entry.options.tone)
-                .on_close(move |s: &mut Desktop, tx| s.dismiss_toast(id, tx), t);
+            let mut card = Toast::new(format!("toast-{id}"), &entry.options.title)
+                .lead(entry.options.tone.mark(t))
+                .on_close(move |s: &mut Desktop| s.dismiss_toast_local(id));
             if let Some(detail) = &entry.options.detail {
-                card = card.detail(detail);
+                card = card.description(detail);
             }
             if let Some(undo) = entry.options.undo.clone() {
-                let undo_btn = ui::button("Undo", ButtonVariant::Neutral, Size::Small)
-                    .on_press_tx(move |s: &mut Desktop, tx| {
-                        s.dismiss_toast(id, tx);
-                        s.dispatch(Msg::Sidebar(SidebarMsg::UndoTriage(undo.clone())), tx);
-                    })
-                    .build(&t.overlay)
-                    .key("undo");
-                card = card.action(undo_btn);
+                card = card.action(&t.overlay, "Undo", true, move |s: &mut Desktop, tx| {
+                    s.dismiss_toast(id, tx);
+                    s.dispatch(Msg::Sidebar(SidebarMsg::UndoTriage(undo.clone())), tx);
+                });
             }
-            region.toast(card.build(t))
+            region.toast(card.build(&t.overlay))
         });
     let region = region.build(&t.k);
     let region = if entries[start..]

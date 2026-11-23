@@ -155,25 +155,21 @@ fn editor(
     let options = &field.options;
     let label = field.title;
     if options.is_empty() {
-        let input = ui::text_field(
-            &app.widgets.request_edit,
-            label,
-            "Enter an answer",
-            Size::Small,
-        )
-        .disabled(disabled)
-        .on_edit(|app: &mut Desktop| &mut app.widgets.request_edit)
-        .on_submit(move |app: &mut Desktop, tx| {
-            let value = app.widgets.request_edit.text.clone();
-            dispatch(app, RequestMsg::Next(id, value), tx);
-        })
-        .build(&t.k);
-        let entry = ui::field(label, input);
-        return if field.required {
-            entry.required().build(t)
-        } else {
-            entry.build(t)
-        };
+        let input = rune_kit::TextInput::new(&app.widgets.request_edit)
+            .label(label)
+            .placeholder("Enter an answer")
+            .width(None)
+            .disabled(disabled)
+            .on_edit(|app: &mut Desktop| &mut app.widgets.request_edit)
+            .on_submit(move |app: &mut Desktop, tx| {
+                let value = app.widgets.request_edit.text.clone();
+                dispatch(app, RequestMsg::Next(id, value), tx);
+            })
+            .build(&t.k);
+        return rune_kit::Field::new()
+            .label(label)
+            .control(input)
+            .build(&t.k);
     }
     let selected = app
         .model

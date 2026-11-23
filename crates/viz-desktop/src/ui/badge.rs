@@ -1,11 +1,11 @@
 //! Semantic tones, diff statistics, and tooltip
 //! helpers.
 
-use rune::{Color, El, el, row, text};
+use rune::{Color, El, Icon, el, icon, row, text};
 
 use crate::{
     motion,
-    theme::{DOT, S6, Theme},
+    theme::{DOT, ICON, S6, Theme},
 };
 
 /// Semantic accent role for badges, banners, and inline status elements.
@@ -36,6 +36,21 @@ pub struct ToneColors {
 }
 
 impl Tone {
+    /// The status glyph banners and toasts lead with.
+    pub const fn glyph(self) -> &'static Icon {
+        match self {
+            Self::Danger => &super::CIRCLE_ALERT,
+            Self::Warning => &super::TRIANGLE_ALERT,
+            Self::Success => &super::CIRCLE_CHECK,
+            Self::Neutral | Self::Accent | Self::Info => &super::INFO,
+        }
+    }
+
+    /// The tone's [`Tone::glyph`] in its ink, as a toast's leading mark.
+    pub fn mark(self, t: &Theme) -> El {
+        icon(self.glyph(), ICON).color(self.colors(t).fg)
+    }
+
     /// Resolves foreground and subtle tinted fill from `t`.
     pub fn colors(self, t: &Theme) -> ToneColors {
         match self {

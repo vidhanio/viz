@@ -85,11 +85,24 @@ impl Desktop {
         self.step_toasts(event, tx);
     }
 
-    /// Syncs window visibility and expires due toasts; returns true if any
-    /// closed.
+    /// Queues a toast whose close button was pressed for the next poll.
+    pub fn dismiss_toast_local(&mut self, id: u64) {
+        self.widgets.closed_toasts.push(id);
+    }
+
+    /// Dismisses closed toasts, syncs window visibility, and expires due
+    /// toasts; returns true if any closed.
     pub fn expire_toasts(&mut self, clock: f64, tx: &mut Tx) -> bool {
+        let mut closed = false;
+        for id in std::mem::take(&mut self.widgets.closed_toasts) {
+            let event = ToastEvent::Dismissed {
+                id: Some(id),
+                now: clock,
+            };
+            closed |= self.step_toasts(event, tx);
+        }
         if self.widgets.toasts.entries().is_empty() {
-            return false;
+            return closed;
         }
         let page = if tx.window_visible() {
             ToastPage::Shown
@@ -105,9 +118,9 @@ impl Desktop {
             .next_due()
             .is_some_and(|due| clock + 1e-3 >= due)
         {
-            return self.step_toasts(ToastEvent::Tick { now: clock }, tx);
+            return self.step_toasts(ToastEvent::Tick { now: clock }, tx) || closed;
         }
-        false
+        closed
     }
 
     pub(crate) fn show_toast(

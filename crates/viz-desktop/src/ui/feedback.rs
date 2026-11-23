@@ -4,12 +4,7 @@
 use rune::{Align, El, Icon, Tx, col, el, icon, row, text};
 use rune_kit::IconButtonVariant;
 
-use super::{
-    badge::Tone,
-    icon_button::icon_button,
-    icons::{CIRCLE_ALERT, CIRCLE_CHECK, CLOSE, INFO, TRIANGLE_ALERT},
-    radar,
-};
+use super::{badge::Tone, icon_button::icon_button, icons::CLOSE, radar};
 use crate::{
     motion,
     theme::{
@@ -216,12 +211,7 @@ impl Banner {
     /// Builds the flat tinted banner against `t`.
     pub fn build(self, t: &Theme) -> El {
         let colors = self.tone.colors(t);
-        let glyph = match self.tone {
-            Tone::Danger => &CIRCLE_ALERT,
-            Tone::Warning => &TRIANGLE_ALERT,
-            Tone::Success => &CIRCLE_CHECK,
-            Tone::Neutral | Tone::Accent | Tone::Info => &INFO,
-        };
+        let glyph = self.tone.glyph();
         let mut copy = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(
             text(&self.title)
                 .font(t.small_medium)

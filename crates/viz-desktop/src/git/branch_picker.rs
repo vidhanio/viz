@@ -54,16 +54,19 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
         .as_ref()
         .filter(|key| choices.iter().any(|choice| choice.key == **key))
         .cloned();
-    let search = ui::search_input(&s.widgets.git_query, "Search refs…")
-        .input_key("git-branch-search")
-        .style(ui::SearchStyle::Plain)
+    let search = rune_kit::TextInput::new(&s.widgets.git_query)
+        .placeholder("Search refs…")
+        .leading_icon(&ui::SEARCH)
+        .width(None)
+        .plain()
         .active_descendant(active)
         .on_edit(|s: &mut Desktop| &mut s.widgets.git_query)
         .on_key(on_key)
         .on_change(|s: &mut Desktop, tx| {
             super::dispatch(s, GitMsg::Search(s.widgets.git_query.text.clone()), tx);
         })
-        .build(t);
+        .build(&t.k)
+        .key("git-branch-search");
     let rows: Vec<_> = choices
         .into_iter()
         .map(|choice| {

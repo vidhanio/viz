@@ -8,7 +8,7 @@ use super::{GalleryState, edit_gallery, gallery_card, with_gallery};
 use crate::{
     app::Desktop,
     theme::{S6, S8, Size, Theme},
-    ui::{self, InlineStyle, SearchStyle, Tone},
+    ui::{self, InlineStyle, Tone},
 };
 
 const DIFF_STEPS: [(u32, u32); 3] = [(42, 13), (128, 29), (7, 2)];
@@ -274,24 +274,35 @@ pub(super) fn controls_card(state: &GalleryState, t: &Theme) -> El {
         .w_full()
         .gap(S6)
         .child(
-            ui::search_input(&state.search_filled, "Filter threads…")
-                .input_key("gallery-search-filled")
-                .label("Active search")
-                .style(SearchStyle::Bordered)
-                .on_edit(|s: &mut Desktop| edit_gallery(s, |g| &mut g.search_filled))
-                .on_clear(|s: &mut Desktop, _tx| {
-                    with_gallery(s, |g| g.search_filled.text.clear());
-                })
-                .build(t)
-                .grow(1.0)
-                .shrink()
-                .min_w(0.0),
+            {
+                let input = rune_kit::TextInput::new(&state.search_filled)
+                    .placeholder("Filter threads…")
+                    .leading_icon(&ui::SEARCH)
+                    .width(None)
+                    .label("Active search")
+                    .on_edit(|s: &mut Desktop| edit_gallery(s, |g| &mut g.search_filled));
+                if state.search_filled.text.is_empty() {
+                    input
+                } else {
+                    input.clear_button().on_action(|s: &mut Desktop, _tx| {
+                        with_gallery(s, |g| g.search_filled.text.clear());
+                    })
+                }
+            }
+            .build(&t.k)
+            .key("gallery-search-filled")
+            .grow(1.0)
+            .shrink()
+            .min_w(0.0),
         )
         .child(
-            ui::search_input(&state.search_empty, "Disabled search")
+            rune_kit::TextInput::new(&state.search_empty)
+                .placeholder("Disabled search")
+                .leading_icon(&ui::SEARCH)
+                .width(None)
                 .trailing(rune_kit::Keybind::new(&["/"]).build(&t.k))
                 .disabled(true)
-                .build(t)
+                .build(&t.k)
                 .grow(1.0)
                 .shrink()
                 .min_w(0.0),
@@ -365,39 +376,40 @@ fn fields_row(state: &GalleryState, t: &Theme) -> El {
         .gap(S8)
         .items_start()
         .child(
-            ui::field(
-                "Project name",
-                ui::text_field(&state.field_ok, "Project name", "e.g. viz", Size::Compact)
-                    .on_edit(|s: &mut Desktop| edit_gallery(s, |g| &mut g.field_ok))
-                    .build(&t.k)
-                    .key("gallery-field-ok"),
-            )
-            .required()
-            .description("Shown in sidebar and headers.")
-            .trailing(rune_kit::Badge::new("Git").build(&t.k))
-            .build(t)
-            .grow(1.0)
-            .shrink()
-            .min_w(0.0),
+            rune_kit::Field::new()
+                .label("Project name")
+                .control(
+                    rune_kit::TextInput::new(&state.field_ok)
+                        .label("Project name")
+                        .placeholder("e.g. viz")
+                        .width(None)
+                        .on_edit(|s: &mut Desktop| edit_gallery(s, |g| &mut g.field_ok))
+                        .build(&t.k)
+                        .key("gallery-field-ok"),
+                )
+                .suffix("Shown in sidebar and headers.")
+                .build(&t.k)
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0),
         )
         .child(
-            ui::field(
-                "Repository path",
-                ui::text_field(
-                    &state.field_err,
-                    "Repository path",
-                    "/path/to/repo",
-                    Size::Compact,
+            rune_kit::Field::new()
+                .label("Repository path")
+                .control(
+                    rune_kit::TextInput::new(&state.field_err)
+                        .label("Repository path")
+                        .placeholder("/path/to/repo")
+                        .width(None)
+                        .invalid(true)
+                        .on_edit(|s: &mut Desktop| edit_gallery(s, |g| &mut g.field_err))
+                        .build(&t.k)
+                        .key("gallery-field-err"),
                 )
-                .invalid(true)
-                .on_edit(|s: &mut Desktop| edit_gallery(s, |g| &mut g.field_err))
+                .suffix("Directory does not exist on this environment.")
                 .build(&t.k)
-                .key("gallery-field-err"),
-            )
-            .error("Directory does not exist on this environment.")
-            .build(t)
-            .grow(1.0)
-            .shrink()
-            .min_w(0.0),
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0),
         )
 }

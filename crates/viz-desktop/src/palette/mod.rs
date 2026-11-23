@@ -302,7 +302,11 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
 }
 
 fn query_input(s: &Desktop, label: &str) -> TextInput {
-    ui::text_field(&s.widgets.palette_query, label, label, Size::Large)
+    rune_kit::TextInput::new(&s.widgets.palette_query)
+        .label(label)
+        .placeholder(label)
+        .width(None)
+        .large()
         .on_edit(|s: &mut Desktop| &mut s.widgets.palette_query)
         .on_change(|s: &mut Desktop, tx| {
             let text = s.widgets.palette_query.text.clone();

@@ -282,30 +282,28 @@ pub fn push_dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
             })
             .build(&t.k),
     ]);
-    let branch_input = ui::field(
-        "Feature branch name",
-        ui::text_field(
-            &s.widgets.git_message,
-            "Feature branch name",
-            "feature/topic",
-            Size::Default,
+    let branch_input = rune_kit::Field::new()
+        .label("Feature branch name")
+        .control(
+            rune_kit::TextInput::new(&s.widgets.git_message)
+                .label("Feature branch name")
+                .placeholder("feature/topic")
+                .width(None)
+                .on_edit(|s: &mut Desktop| &mut s.widgets.git_message)
+                .build(&t.k),
         )
-        .on_edit(|s: &mut Desktop| &mut s.widgets.git_message)
-        .build(&t.k),
-    )
-    .build(t);
-    ui::dialog(
-        "git-push",
-        "Push this branch?",
-        Some("This push can update the repository’s default branch."),
-    )
-    .subject(branch)
-    .build(
-        super::close_dialog,
-        ui::dialog_body(std::iter::once(branch_input).chain(error(s, t)), footer),
-        t,
-        overlays,
-    );
+        .build(&t.k);
+    rune_kit::Dialog::new("git-push", "Push this branch?")
+        .open(true)
+        .fit()
+        .on_close(super::close_dialog)
+        .description("This push can update the repository’s default branch.")
+        .child(ui::dialog_subject(branch, t))
+        .child(ui::dialog_body(
+            std::iter::once(branch_input).chain(error(s, t)),
+            footer,
+        ))
+        .build(&t.overlay, overlays);
 }
 
 pub fn commit_dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
@@ -356,19 +354,17 @@ pub fn commit_dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
                 ))),
         ),
         Some(
-            ui::field(
-                "Commit message",
-                ui::text_field(
-                    &s.widgets.git_message,
-                    "Commit message",
-                    "Describe your changes",
-                    Size::Default,
+            rune_kit::Field::new()
+                .label("Commit message")
+                .control(
+                    rune_kit::TextInput::new(&s.widgets.git_message)
+                        .label("Commit message")
+                        .placeholder("Describe your changes")
+                        .width(None)
+                        .on_edit(|s: &mut Desktop| &mut s.widgets.git_message)
+                        .build(&t.k),
                 )
-                .on_edit(|s: &mut Desktop| &mut s.widgets.git_message)
                 .build(&t.k),
-            )
-            .required()
-            .build(t),
         ),
         error(s, t),
     ]
@@ -387,18 +383,14 @@ pub fn commit_dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
         .on_press_tx(commit)
         .build(&t.k),
     ]);
-    ui::dialog(
-        "git-commit",
-        "Commit changes",
-        Some("Selected files will be included in the commit."),
-    )
-    .width(512.0)
-    .build(
-        super::close_dialog,
-        ui::dialog_body(fields, footer),
-        t,
-        overlays,
-    );
+    rune_kit::Dialog::new("git-commit", "Commit changes")
+        .open(true)
+        .fit()
+        .width(512.0)
+        .on_close(super::close_dialog)
+        .description("Selected files will be included in the commit.")
+        .child(ui::dialog_body(fields, footer))
+        .build(&t.overlay, overlays);
 }
 
 pub(super) fn error(s: &Desktop, t: &Theme) -> Option<El> {

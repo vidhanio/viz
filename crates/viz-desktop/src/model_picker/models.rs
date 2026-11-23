@@ -26,23 +26,32 @@ pub(super) fn column(s: &Desktop, list: &PickerList<'_>, t: &Theme) -> El {
     let state = &s.model.composer.model_menu;
     let preview = list.preview(state).map(|row| row.model.clone());
     let keyboard = state.column == PickerColumn::Models;
-    let search = ui::search_input(&s.widgets.model_query, "Search models…")
-        .style(ui::SearchStyle::Plain)
-        .input_key(FIELD)
-        .label("Search models")
-        .active_descendant(preview.as_ref().map(crate::model::ModelRef::row_key))
-        .on_edit(|s: &mut Desktop| &mut s.widgets.model_query)
-        .on_change(|s: &mut Desktop, tx| {
-            let query = s.widgets.model_query.text.clone();
-            s.dispatch(Msg::ModelPicker(ModelPickerMsg::Query(query)), tx);
-        })
-        .on_clear(|s: &mut Desktop, tx| {
-            s.widgets.model_query = TextEdit::new("");
-            s.widgets.model_query.focused = true;
-            s.dispatch(Msg::ModelPicker(ModelPickerMsg::Query(String::new())), tx);
-        })
-        .on_key(super::on_key)
-        .build(t);
+    let search = {
+        let input = rune_kit::TextInput::new(&s.widgets.model_query)
+            .placeholder("Search models…")
+            .leading_icon(&ui::SEARCH)
+            .width(None)
+            .plain()
+            .label("Search models")
+            .active_descendant(preview.as_ref().map(crate::model::ModelRef::row_key))
+            .on_edit(|s: &mut Desktop| &mut s.widgets.model_query)
+            .on_change(|s: &mut Desktop, tx| {
+                let query = s.widgets.model_query.text.clone();
+                s.dispatch(Msg::ModelPicker(ModelPickerMsg::Query(query)), tx);
+            })
+            .on_key(super::on_key);
+        if s.widgets.model_query.text.is_empty() {
+            input
+        } else {
+            input.clear_button().on_action(|s: &mut Desktop, tx| {
+                s.widgets.model_query = TextEdit::new("");
+                s.widgets.model_query.focused = true;
+                s.dispatch(Msg::ModelPicker(ModelPickerMsg::Query(String::new())), tx);
+            })
+        }
+    }
+    .build(&t.k)
+    .key(FIELD);
     let header = col()
         .w_full()
         .h(HEADER_HEIGHT)

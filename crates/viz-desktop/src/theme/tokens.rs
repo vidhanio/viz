@@ -90,8 +90,6 @@ pub const PALETTE_WIDTH: f32 = PALETTE_MAX_WIDTH;
 
 /// Standard modal dialog width (512pt).
 pub const DIALOG_MAX_WIDTH: f32 = 512.0;
-/// Compact confirmation dialog width (400pt).
-pub const DIALOG_WIDTH: f32 = 400.0;
 /// Padding inside dialogs.
 pub const DIALOG_INSET: f32 = S16;
 
@@ -108,10 +106,8 @@ pub const COMPOSER_DRAWER_INSET: f32 = 22.0;
 /// (17pt).
 pub const COMPOSER_DRAWER_OVERLAP: f32 = 17.0;
 
-/// Padding inside cards, tool outputs, plans, and toasts (12pt).
+/// Padding inside cards, tool outputs, and plans (12pt).
 pub const CARD_INSET: f32 = S12;
-/// Standard toast and floating card width (320pt).
-pub const CARD_WIDTH: f32 = 320.0;
 /// Vertical offset for centered empty states in the transcript.
 pub const EMPTY_TOP: f32 = S32 * 4.0;
 /// Maximum text measure for centered empty states.
@@ -176,15 +172,6 @@ impl Size {
             Self::Tiny | Self::Micro => ICON_SMALL,
             Self::Small | Self::Compact => ICON_MD,
             Self::Default | Self::Large => ICON,
-        }
-    }
-
-    /// Text style for labels inside a control of this size.
-    pub const fn font(self, t: &super::Theme) -> rune::TextStyle {
-        match self {
-            Self::Tiny | Self::Micro => t.micro_medium,
-            Self::Small | Self::Compact => t.small_medium,
-            Self::Default | Self::Large => t.ui_medium,
         }
     }
 

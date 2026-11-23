@@ -327,35 +327,29 @@ fn gallery_dialog(t: &Theme, overlays: &mut Vec<El>) {
         ],
         actions,
     );
-    ui::dialog(
-        "gallery-modal",
-        "Flat modal dialog",
-        Some("Zero drop shadow, crisp hairline frame, Escape to dismiss."),
-    )
-    .subject("/home/user/projects/viz/crates/viz-desktop")
-    .width(DIALOG_MAX_WIDTH)
-    .build(
-        |s: &mut Desktop| with_gallery(s, |g| g.overlays.dialog = false),
-        body,
-        t,
-        overlays,
-    );
+    rune_kit::Dialog::new("gallery-modal", "Flat modal dialog")
+        .open(true)
+        .fit()
+        .width(DIALOG_MAX_WIDTH)
+        .on_close(|s: &mut Desktop| with_gallery(s, |g| g.overlays.dialog = false))
+        .description("Zero drop shadow, crisp hairline frame, Escape to dismiss.")
+        .child(ui::dialog_subject(
+            "/home/user/projects/viz/crates/viz-desktop",
+            t,
+        ))
+        .child(body)
+        .build(&t.overlay, overlays);
 }
 
 fn gallery_toast(t: &Theme) -> El {
-    let undo = ui::button("Undo", ButtonVariant::Outline, Size::Small)
-        .on_press(|s: &mut Desktop| with_gallery(s, |g| g.overlays.toast = false))
+    rune_kit::Toast::new("gallery-toast", "Thread settled")
+        .lead(Tone::Success.mark(t))
+        .description("Moved \"Audit theme tokens\" to Settled.")
+        .action(&t.overlay, "Undo", true, |s: &mut Desktop, _tx| {
+            with_gallery(s, |g| g.overlays.toast = false);
+        })
+        .on_close(|s: &mut Desktop| with_gallery(s, |g| g.overlays.toast = false))
         .build(&t.overlay)
-        .key("btn-gallery-toast-undo");
-    ui::toast_card("gallery-toast", "Thread settled")
-        .tone(Tone::Success)
-        .detail("Moved \"Audit theme tokens\" to Settled.")
-        .action(undo)
-        .on_close(
-            |s: &mut Desktop, _tx| with_gallery(s, |g| g.overlays.toast = false),
-            t,
-        )
-        .build(t)
         .pin(None, None, Some(S16), Some(S16))
 }
 

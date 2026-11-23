@@ -10,8 +10,8 @@ use crate::{
     app::Desktop,
     model::{HomeProjectOption, home_project_options},
     motion,
-    theme::{HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_SM, S4, S6, S8, Size, Theme},
-    ui::{self, RowDensity, SearchStyle},
+    theme::{HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_SM, S4, S6, S8, Theme},
+    ui::{self, RowDensity},
     update::{ComposerMsg, HOME_PROJECT_SEARCH, Msg, NavKey, SelectionMsg},
 };
 
@@ -30,11 +30,12 @@ pub(super) fn popover(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .min(options.len().saturating_sub(1));
     let active_key = options.get(active_idx).map(|opt| opt.key());
 
-    let search = ui::search_input(&s.widgets.home_project_query, "Search projects...")
+    let search = rune_kit::TextInput::new(&s.widgets.home_project_query)
+        .placeholder("Search projects...")
+        .leading_icon(&ui::SEARCH)
+        .width(None)
+        .plain()
         .label("Search projects")
-        .input_key(HOME_PROJECT_SEARCH)
-        .style(SearchStyle::Plain)
-        .size(Size::Compact)
         .active_descendant(active_key)
         .on_edit(|s: &mut Desktop| &mut s.widgets.home_project_query)
         .on_change(|s: &mut Desktop, tx| {
@@ -45,7 +46,8 @@ pub(super) fn popover(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
             );
         })
         .on_key(on_project_key)
-        .build(t);
+        .build(&t.k)
+        .key(HOME_PROJECT_SEARCH);
 
     let current_path = m.project_path();
     let remote_env = m

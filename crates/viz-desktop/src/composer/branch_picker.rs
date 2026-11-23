@@ -10,8 +10,8 @@ use crate::{
     app::Desktop,
     model::{NewThread, draft_branch_options},
     motion,
-    theme::{ICON_SMALL, S6, Size, Theme},
-    ui::{self, RowDensity, SearchStyle},
+    theme::{ICON_SMALL, S6, Theme},
+    ui::{self, RowDensity},
     update::{ComposerMsg, DRAFT_BRANCH_PICKER, DRAFT_BRANCH_SEARCH, Msg, NavKey, SelectionMsg},
 };
 
@@ -114,11 +114,12 @@ fn popover(
     let active_key = branches
         .get(active_idx)
         .map(|branch| format!("draft-branch-{}", branch.name));
-    let search = ui::search_input(&s.widgets.draft_branch_query, "Search refs…")
+    let search = rune_kit::TextInput::new(&s.widgets.draft_branch_query)
+        .placeholder("Search refs…")
+        .leading_icon(&ui::SEARCH)
+        .width(None)
+        .plain()
         .label("Search branches")
-        .input_key(DRAFT_BRANCH_SEARCH)
-        .style(SearchStyle::Plain)
-        .size(Size::Compact)
         .active_descendant(active_key)
         .on_edit(|s: &mut Desktop| &mut s.widgets.draft_branch_query)
         .on_change(|s: &mut Desktop, tx| {
@@ -129,7 +130,8 @@ fn popover(
             );
         })
         .on_key(on_branch_key)
-        .build(t);
+        .build(&t.k)
+        .key(DRAFT_BRANCH_SEARCH);
     let rows = branches
         .iter()
         .enumerate()

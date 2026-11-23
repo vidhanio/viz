@@ -158,33 +158,30 @@ pub fn dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
     let git = &s.model.git;
     let fields = [
         Some(
-            ui::field(
-                "Title",
-                ui::text_field(
-                    &s.widgets.git_message,
-                    "Title",
-                    "Pull request title",
-                    Size::Default,
+            rune_kit::Field::new()
+                .label("Title")
+                .control(
+                    rune_kit::TextInput::new(&s.widgets.git_message)
+                        .label("Title")
+                        .placeholder("Pull request title")
+                        .width(None)
+                        .on_edit(|s: &mut Desktop| &mut s.widgets.git_message)
+                        .build(&t.k),
                 )
-                .on_edit(|s: &mut Desktop| &mut s.widgets.git_message)
                 .build(&t.k),
-            )
-            .required()
-            .build(t),
         ),
         Some(
-            ui::field(
-                "Description",
-                ui::text_field(
-                    &s.widgets.git_body,
-                    "Description",
-                    "Summarize the changes",
-                    Size::Default,
+            rune_kit::Field::new()
+                .label("Description")
+                .control(
+                    rune_kit::TextInput::new(&s.widgets.git_body)
+                        .label("Description")
+                        .placeholder("Summarize the changes")
+                        .width(None)
+                        .on_edit(|s: &mut Desktop| &mut s.widgets.git_body)
+                        .build(&t.k),
                 )
-                .on_edit(|s: &mut Desktop| &mut s.widgets.git_body)
                 .build(&t.k),
-            )
-            .build(t),
         ),
         super::actions::error(s, t),
     ]
@@ -225,10 +222,11 @@ pub fn dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
         "Open a pull request targeting {}.",
         default_branch(&s.model)
     );
-    ui::dialog("git-create-pr", "Create pull request", Some(&description)).build(
-        super::close_dialog,
-        ui::dialog_body(fields, footer),
-        t,
-        overlays,
-    );
+    rune_kit::Dialog::new("git-create-pr", "Create pull request")
+        .open(true)
+        .fit()
+        .on_close(super::close_dialog)
+        .description(&description)
+        .child(ui::dialog_body(fields, footer))
+        .build(&t.overlay, overlays);
 }

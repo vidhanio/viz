@@ -8,7 +8,7 @@ use super::{GalleryState, edit_gallery, gallery_card, with_gallery};
 use crate::{
     app::Desktop,
     theme::{HAIRLINE, RADIUS_CARD, S4, S6, S8, Size, Theme},
-    ui::{self, Card, LoadingDelay, RowDensity, SearchStyle, Tone},
+    ui::{self, Card, LoadingDelay, RowDensity, Tone},
 };
 
 pub(super) fn rows_card(state: &GalleryState, t: &Theme) -> El {
@@ -157,13 +157,15 @@ fn combobox_specimen(state: &GalleryState, t: &Theme) -> El {
         .fill_width()
         .max_height(132.0)
         .search(
-            ui::search_input(&state.combo_search, "Search models or commands…")
-                .input_key("gallery-combo-search")
-                .style(SearchStyle::Plain)
-                .size(Size::Compact)
+            rune_kit::TextInput::new(&state.combo_search)
+                .placeholder("Search models or commands…")
+                .leading_icon(&ui::SEARCH)
+                .width(None)
+                .plain()
                 .active_descendant(Some("gal-combo-hi"))
                 .on_edit(|s: &mut Desktop| edit_gallery(s, |g| &mut g.combo_search))
-                .build(t),
+                .build(&t.k)
+                .key("gallery-combo-search"),
         )
         .items(items)
         .empty(text("No matching models").font(t.small).color(t.muted))

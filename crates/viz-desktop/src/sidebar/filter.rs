@@ -11,8 +11,8 @@ use crate::{
     app::Desktop,
     model::{ProjectFilter, ProjectFilterOption, project_filter_options},
     motion,
-    theme::{ICON_MD, ICON_SMALL, S6, Size, Theme},
-    ui::{self, RowDensity, SearchStyle},
+    theme::{ICON_MD, ICON_SMALL, S6, Theme},
+    ui::{self, RowDensity},
     update::{Msg, NavKey, PROJECT_FILTER_INPUT, SidebarMsg},
 };
 
@@ -30,29 +30,41 @@ pub(super) fn combobox(s: &Desktop, now: i64, t: &Theme, layer: &mut Vec<El>) {
     let active_idx = m.sidebar.filter_active.min(options.len().saturating_sub(1));
     let active_key = options.get(active_idx).map(|opt| opt.key());
 
-    let search = ui::search_input(&s.widgets.project_filter_query, "Search projects…")
-        .label("Filter by project")
-        .input_key(PROJECT_FILTER_INPUT)
-        .style(SearchStyle::Plain)
-        .size(Size::Compact)
-        .active_descendant(active_key)
-        .on_edit(|s: &mut Desktop| &mut s.widgets.project_filter_query)
-        .on_change(|s: &mut Desktop, tx: &mut Tx| {
-            let query = s.widgets.project_filter_query.text.clone();
-            s.dispatch(
-                Msg::Sidebar(SidebarMsg::ProjectFilterQueryChanged(query)),
-                tx,
-            );
-        })
-        .on_key(move |s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx| on_filter_key(s, ev, now, tx))
-        .on_clear(|s: &mut Desktop, tx: &mut Tx| {
-            s.widgets.project_filter_query.clear();
-            s.dispatch(
-                Msg::Sidebar(SidebarMsg::ProjectFilterQueryChanged(String::new())),
-                tx,
-            );
-        })
-        .build(t);
+    let search = {
+        let input = rune_kit::TextInput::new(&s.widgets.project_filter_query)
+            .placeholder("Search projects…")
+            .leading_icon(&ui::SEARCH)
+            .width(None)
+            .plain()
+            .label("Filter by project")
+            .active_descendant(active_key)
+            .on_edit(|s: &mut Desktop| &mut s.widgets.project_filter_query)
+            .on_change(|s: &mut Desktop, tx: &mut Tx| {
+                let query = s.widgets.project_filter_query.text.clone();
+                s.dispatch(
+                    Msg::Sidebar(SidebarMsg::ProjectFilterQueryChanged(query)),
+                    tx,
+                );
+            })
+            .on_key(move |s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx| {
+                on_filter_key(s, ev, now, tx)
+            });
+        if s.widgets.project_filter_query.text.is_empty() {
+            input
+        } else {
+            input
+                .clear_button()
+                .on_action(|s: &mut Desktop, tx: &mut Tx| {
+                    s.widgets.project_filter_query.clear();
+                    s.dispatch(
+                        Msg::Sidebar(SidebarMsg::ProjectFilterQueryChanged(String::new())),
+                        tx,
+                    );
+                })
+        }
+    }
+    .build(&t.k)
+    .key(PROJECT_FILTER_INPUT);
 
     let items: Vec<El> = options
         .into_iter()

@@ -314,7 +314,10 @@ fn scope(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 }
 
 fn input_scope(edit: &rune::TextEdit, label: &str, turn: bool, t: &Theme) -> El {
-    ui::text_field(edit, label, label, Size::Small)
+    rune_kit::TextInput::new(edit)
+        .label(label)
+        .placeholder(label)
+        .width(None)
         .on_edit(move |s: &mut Desktop| {
             if turn {
                 &mut s.widgets.git_run
@@ -354,19 +357,17 @@ pub fn restore_dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     let GitDiffTarget::Turn { run } = s.model.git.target else {
         return;
     };
-    let input = ui::field(
-        "Latest completed run ID",
-        ui::text_field(
-            &s.widgets.git_body,
-            "Latest completed run ID",
-            "Run ID",
-            Size::Default,
+    let input = rune_kit::Field::new()
+        .label("Latest completed run ID")
+        .control(
+            rune_kit::TextInput::new(&s.widgets.git_body)
+                .label("Latest completed run ID")
+                .placeholder("Run ID")
+                .width(None)
+                .on_edit(|s: &mut Desktop| &mut s.widgets.git_body)
+                .build(&t.k),
         )
-        .on_edit(|s: &mut Desktop| &mut s.widgets.git_body)
-        .build(&t.k),
-    )
-    .required()
-    .build(t);
+        .build(&t.k);
     let footer = ui::dialog_actions([
         ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
             .on_press(super::close_dialog)
@@ -387,18 +388,14 @@ pub fn restore_dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     let description = format!(
         "Restore files to their state before run {run}. The server verifies the checkout against the expected run."
     );
-    ui::dialog(
-        "restore-checkpoint",
-        "Restore turn checkpoint?",
-        Some(&description),
-    )
-    .build(
-        super::close_dialog,
-        ui::dialog_body(
+    rune_kit::Dialog::new("restore-checkpoint", "Restore turn checkpoint?")
+        .open(true)
+        .fit()
+        .on_close(super::close_dialog)
+        .description(&description)
+        .child(ui::dialog_body(
             std::iter::once(input).chain(super::actions::error(s, t)),
             footer,
-        ),
-        t,
-        layer,
-    );
+        ))
+        .build(&t.overlay, layer);
 }
