@@ -15,8 +15,8 @@ use crate::{
     theme::{
         CARD_INSET, CARD_WIDTH, DECK_INSET, DECK_OVERLAP, DIALOG_INSET, DIALOG_WIDTH, DOT,
         EMPTY_WIDTH, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_DECK,
-        READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, S16, Size, TRAILING,
-        TREE_ROW, TREE_ROW_TALL, TREE_STEP, Theme,
+        READING_INSET, READING_WIDTH, ROW_INSET, S2, S4, S6, S8, S12, Size, TRAILING, TREE_ROW,
+        TREE_ROW_TALL, TREE_STEP, Theme,
     },
 };
 
@@ -202,10 +202,7 @@ impl Button {
     }
 
     pub fn build(self, k: &Kit) -> El {
-        let px = match self.size {
-            Size::Small | Size::Default => S12,
-            Size::Large => S16,
-        };
+        let px = self.size.px();
         let font = if matches!(self.variant, ButtonVariant::GhostMuted) {
             k.ty.ui
         } else {

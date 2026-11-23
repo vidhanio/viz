@@ -1,0 +1,256 @@
+#![expect(
+    dead_code,
+    reason = "tokens.md geometry constants are consumed by ui components and Phase 1 feature tracks"
+)]
+
+//! Spacing, radii, sizing, and layout geometry tokens from `tokens.md`.
+//!
+//! Views read these through `ui` components; bare layout constants in feature
+//! views are bugs.
+
+/// Half-step optical alignment spacing (2pt).
+pub const S2: f32 = 2.0;
+/// Base grid step (4pt).
+pub const S4: f32 = 4.0;
+/// Half-step compact spacing (6pt).
+pub const S6: f32 = 6.0;
+/// Standard tight gap (8pt).
+pub const S8: f32 = 8.0;
+/// Compact horizontal control padding (10pt).
+pub const S10: f32 = 10.0;
+/// Standard card and panel inset (12pt).
+pub const S12: f32 = 12.0;
+/// Large control horizontal padding (14pt).
+pub const S14: f32 = 14.0;
+/// Dialog inset and section rhythm (16pt).
+pub const S16: f32 = 16.0;
+/// Reading lane horizontal padding (20pt).
+pub const S20: f32 = 20.0;
+/// Small control height and major section spacing (24pt).
+pub const S24: f32 = 24.0;
+/// Compact control height (28pt).
+pub const S28: f32 = 28.0;
+/// Standard control height (32pt).
+pub const S32: f32 = 32.0;
+/// Tall sidebar row height and pane travel distance (40pt).
+pub const S40: f32 = 40.0;
+/// Topbar height and provider rail width (44pt).
+pub const S44: f32 = 44.0;
+/// Minimum composer text area height (48pt).
+pub const S48: f32 = 48.0;
+
+/// Single-pixel hairline stroke width.
+pub const HAIRLINE: f32 = 1.0;
+/// Compact icon size for badges, chips, and inline indicators (12pt).
+pub const ICON_SMALL: f32 = 12.0;
+/// Medium icon size for dense controls and tree rows (14pt).
+pub const ICON_MD: f32 = 14.0;
+/// Standard Lucide and harness icon size (16pt).
+pub const ICON: f32 = 16.0;
+/// Status dot diameter (6pt).
+pub const DOT: f32 = 6.0;
+
+/// Keycaps, tiny icon highlights, and progress fills (4pt).
+pub const RADIUS_XS: f32 = S4;
+/// Menu/list items, badges, inline code, and small chips (6pt).
+pub const RADIUS_SM: f32 = S6;
+/// Alias for [`RADIUS_SM`] used by legacy call sites.
+pub const RADIUS_INNER: f32 = RADIUS_SM;
+/// Standard buttons, inputs, triggers, code blocks, and small popovers (8pt).
+pub const RADIUS_CONTROL: f32 = S8;
+/// Thread cards, hover cards, and toasts (12pt).
+pub const RADIUS_CARD: f32 = S12;
+/// Composer shell, tucked drawers, user bubbles, dialogs, and palette (16pt).
+pub const RADIUS_SURFACE: f32 = S16;
+/// Tucked deck top-corner radius.
+pub const RADIUS_DECK: f32 = RADIUS_SURFACE;
+/// Full circular / pill corner radius.
+pub const RADIUS_PILL: f32 = 9999.0;
+
+/// Squircle corner radius (`25%` of `side`, rounded to whole points) for
+/// project monogram tiles and favicons.
+pub fn squircle_radius(side: f32) -> f32 {
+    (side * 0.25).round()
+}
+
+/// Top bar height for the chat header (44pt).
+pub const TOPBAR_HEIGHT: f32 = S44;
+/// Shell title band height shared by `SplitView` and its sidebar toggle.
+pub const TOOLBAR_HEIGHT: f32 = rune_kit::shell::TOOLBAR_HEIGHT;
+/// Horizontal padding at the ends of the toolbar band.
+pub const TOOLBAR_PAD: f32 = S12;
+
+/// Default sidebar width (264pt).
+pub const SIDEBAR_DEFAULT_WIDTH: f32 = 264.0;
+/// Minimum resizable sidebar width (220pt).
+pub const SIDEBAR_MIN_WIDTH: f32 = 220.0;
+/// Maximum resizable sidebar width (440pt).
+pub const SIDEBAR_MAX_WIDTH: f32 = 440.0;
+/// Sidebar pane horizontal padding where row fills start and end.
+pub const SIDEBAR_PAD: f32 = S8;
+/// Leading inset for sidebar content, section titles, and footer.
+pub const SIDEBAR_INSET: f32 = S16;
+/// Row inner inset inside its fill.
+pub const ROW_INSET: f32 = SIDEBAR_INSET - SIDEBAR_PAD;
+/// Single-line sidebar row height (28pt).
+pub const TREE_ROW: f32 = S28;
+/// Two-line sidebar row height (40pt).
+pub const TREE_ROW_TALL: f32 = S40;
+/// Indented delegated child row height (26pt).
+pub const TREE_ROW_CHILD: f32 = 26.0;
+/// Indent step per delegated tree depth (20pt).
+pub const TREE_STEP: f32 = S20;
+/// Fixed trailing slot width on sidebar rows (28pt).
+pub const TRAILING: f32 = S28;
+
+/// Standard reading lane width for timeline and composer (736pt / `46rem`).
+pub const CHAT_CONTENT_MAX_WIDTH: f32 = 736.0;
+/// Wide reading lane width when wide layout is active (1152pt / `72rem`).
+pub const CHAT_WIDE_MAX_WIDTH: f32 = 1152.0;
+/// Horizontal padding around the reading lane (20pt).
+pub const CHAT_LANE_PADDING_X: f32 = S20;
+/// Compact horizontal padding for narrow viewports (12pt).
+pub const CHAT_LANE_PADDING_COMPACT_X: f32 = S12;
+/// Reading column width used by existing transcript and composer views.
+pub const READING_WIDTH: f32 = CHAT_CONTENT_MAX_WIDTH;
+/// Side inset around the reading column.
+pub const READING_INSET: f32 = CHAT_LANE_PADDING_X;
+
+/// Floating Thread Details card width (280pt).
+pub const DETAILS_CARD_WIDTH: f32 = 280.0;
+/// Gap between the reading lane and inline Thread Details card (12pt).
+pub const DETAILS_CARD_GAP: f32 = S12;
+/// Minimum docked Diff panel width (360pt).
+pub const DIFF_PANEL_MIN_WIDTH: f32 = 360.0;
+/// Maximum inline Diff panel width (560pt).
+pub const DIFF_PANEL_MAX_WIDTH: f32 = 560.0;
+
+/// Command palette maximum width (576pt).
+pub const PALETTE_MAX_WIDTH: f32 = 576.0;
+/// Command palette maximum body height (420pt).
+pub const PALETTE_MAX_HEIGHT: f32 = 420.0;
+/// Existing palette sheet width alias.
+pub const PALETTE_WIDTH: f32 = PALETTE_MAX_WIDTH;
+
+/// Standard modal dialog width (512pt).
+pub const DIALOG_MAX_WIDTH: f32 = 512.0;
+/// Wide modal dialog width (576pt).
+pub const DIALOG_WIDE_MAX_WIDTH: f32 = 576.0;
+/// Compact confirmation dialog width (400pt).
+pub const DIALOG_WIDTH: f32 = 400.0;
+/// Padding inside dialogs.
+pub const DIALOG_INSET: f32 = S16;
+
+/// Model picker body height (346pt).
+pub const MODEL_PICKER_BODY_HEIGHT: f32 = 346.0;
+/// Model picker left harness rail width (44pt).
+pub const MODEL_PICKER_RAIL_WIDTH: f32 = S44;
+/// Model picker right reasoning/options column width (192pt).
+pub const MODEL_PICKER_OPTIONS_WIDTH: f32 = 192.0;
+/// Legacy model picker width kept for `composer/model.rs`.
+pub const MODEL_MENU_WIDTH: f32 = 420.0;
+/// Legacy model list height kept for `composer/model.rs`.
+pub const MODEL_LIST_HEIGHT: f32 = S32 * 9.0;
+
+/// Horizontal inset on each side of a tucked composer drawer (22pt).
+pub const COMPOSER_DRAWER_INSET: f32 = 22.0;
+/// Bottom overlap tucking a composer drawer behind the composer hairline
+/// (17pt).
+pub const COMPOSER_DRAWER_OVERLAP: f32 = 17.0;
+/// Horizontal inset for legacy tucked decks inside `READING_WIDTH`.
+pub const DECK_INSET: f32 = S12;
+/// Bottom overlap for legacy tucked decks.
+pub const DECK_OVERLAP: f32 = S8;
+
+/// Padding inside cards, tool outputs, plans, and toasts (12pt).
+pub const CARD_INSET: f32 = S12;
+/// Standard toast and floating card width (320pt).
+pub const CARD_WIDTH: f32 = 320.0;
+/// Vertical offset for centered empty states in the transcript.
+pub const EMPTY_TOP: f32 = S32 * 4.0;
+/// Maximum text measure for centered empty states.
+pub const EMPTY_WIDTH: f32 = 360.0;
+
+/// Control size ladder from `tokens.md` §2 (`16`, `20`, `24`, `28`, `32`,
+/// `36`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Size {
+    /// 16pt icon-only hit target (`icon-tiny`).
+    Tiny,
+    /// 20pt micro control (`micro` / `icon-micro`).
+    Micro,
+    /// 24pt dense row action and inline control (`xs` / `icon-xs`).
+    Small,
+    /// 28pt compact toolbar and composer control (`sm` / `icon-sm`).
+    Compact,
+    /// 32pt standard desktop button, input, and trigger (`default`).
+    #[default]
+    Default,
+    /// 36pt prominent primary action and search field (`lg`).
+    Large,
+}
+
+impl Size {
+    /// Control height in points.
+    pub const fn height(self) -> f32 {
+        match self {
+            Self::Tiny => S16,
+            Self::Micro => S20,
+            Self::Small => S24,
+            Self::Compact => S28,
+            Self::Default => S32,
+            Self::Large => 36.0,
+        }
+    }
+
+    /// Horizontal text-button padding in points.
+    pub const fn px(self) -> f32 {
+        match self {
+            Self::Tiny => 0.0,
+            Self::Micro => S6,
+            Self::Small => S8,
+            Self::Compact => S10,
+            Self::Default => S12,
+            Self::Large => S14,
+        }
+    }
+
+    /// Corner radius in points.
+    pub const fn radius(self) -> f32 {
+        match self {
+            Self::Tiny => RADIUS_XS,
+            Self::Micro | Self::Small => RADIUS_SM,
+            Self::Compact | Self::Default | Self::Large => RADIUS_CONTROL,
+        }
+    }
+
+    /// Icon glyph size suited to this control height.
+    pub const fn icon_size(self) -> f32 {
+        match self {
+            Self::Tiny | Self::Micro => ICON_SMALL,
+            Self::Small | Self::Compact => ICON_MD,
+            Self::Default | Self::Large => ICON,
+        }
+    }
+
+    /// Text style for labels inside a control of this size.
+    pub const fn font(self, t: &super::Theme) -> rune::TextStyle {
+        match self {
+            Self::Tiny | Self::Micro => t.micro_medium,
+            Self::Small | Self::Compact => t.small_medium,
+            Self::Default | Self::Large => t.ui_medium,
+        }
+    }
+
+    /// Nearest `rune_kit::ControlSize` height for shell widgets
+    /// (`SidebarToggle`).
+    pub const fn kit(self) -> rune_kit::ControlSize {
+        match self {
+            Self::Tiny => rune_kit::ControlSize::Mini,
+            Self::Micro => rune_kit::ControlSize::Small,
+            Self::Small => rune_kit::ControlSize::Regular,
+            Self::Compact | Self::Default => rune_kit::ControlSize::Large,
+            Self::Large => rune_kit::ControlSize::ExtraLarge,
+        }
+    }
+}
