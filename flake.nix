@@ -124,7 +124,7 @@
                   drv;
             };
           };
-          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+          cargoArtifacts = craneLib.buildDepsOnly (commonArgs // { doCheck = false; });
 
           crate =
             name: extra:
