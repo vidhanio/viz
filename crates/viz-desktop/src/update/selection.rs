@@ -28,8 +28,6 @@ pub enum SelectionMsg {
     ChooseDraftProject(Option<String>),
     /// Set the active draft's Git worktree target.
     ChooseDraftWorktree(WorktreeTarget),
-    /// Set the active draft's harness id.
-    ChooseDraftHarness(String),
     /// Move an idle thread to another Git worktree.
     MoveThread {
         /// Thread id.
@@ -83,21 +81,6 @@ pub(super) fn update(model: &mut Model, msg: SelectionMsg) -> Vec<Effect> {
                 .filter(|draft| !draft.sending)
             {
                 draft.worktree = (target != WorktreeTarget::Local).then_some(target);
-            }
-            effects.push(focus_draft());
-        }
-        SelectionMsg::ChooseDraftHarness(id) => {
-            model.composer.open_picker = None;
-            let is_default = model.harnesses().iter().any(|h| h.id == id && h.default);
-            if let Some(thread) = &mut model.selection.new_thread {
-                let already_selected = thread
-                    .harness
-                    .as_deref()
-                    .map_or(is_default, |picked| picked == id);
-                if !already_selected {
-                    thread.harness = Some(id);
-                    thread.options.clear();
-                }
             }
             effects.push(focus_draft());
         }

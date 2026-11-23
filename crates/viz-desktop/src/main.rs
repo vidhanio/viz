@@ -27,6 +27,7 @@ mod config;
 mod effects;
 mod header;
 mod model;
+mod model_picker;
 mod motion;
 mod motion_scene;
 mod palette;
@@ -139,6 +140,9 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return false;
     }
     if terminal::panel::shortcut(s, ev, tx, false) {
+        return true;
+    }
+    if model_picker::shortcut(s, ev, tx) {
         return true;
     }
     if ev.mods.shift || ev.mods.alt {

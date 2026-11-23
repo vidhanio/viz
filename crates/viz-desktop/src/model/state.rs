@@ -104,6 +104,8 @@ pub struct NewThread {
     pub harness: Option<String>,
     /// Initial ACP config option overrides.
     pub options: BTreeMap<String, OptionValue>,
+    /// Access mode chosen before launch; `None` is the harness default.
+    pub access: Option<viz_client::protocol::AccessMode>,
     /// True while the initial launch request is in flight.
     pub sending: bool,
     /// True while refreshing harness choices for this draft.
@@ -120,6 +122,7 @@ impl NewThread {
             worktree: None,
             harness: None,
             options: BTreeMap::new(),
+            access: None,
             sending: false,
             loading_choices: false,
         }

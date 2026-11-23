@@ -203,7 +203,14 @@ pub(super) fn apply_thread_created(
     {
         return;
     }
-    model.selection.new_thread = None;
+    let access = model
+        .selection
+        .new_thread
+        .take()
+        .and_then(|draft| draft.access);
+    if access.is_some() {
+        effects.push(Effect::Server(ServerEffect::Access { thread, access }));
+    }
     model.selection.selected = Some(thread);
     model.selection.switch = PaneSwitch::Cut;
     let open = model.cache_mut().open_thread_mut(thread);

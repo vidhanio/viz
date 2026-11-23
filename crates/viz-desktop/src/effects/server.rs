@@ -279,6 +279,8 @@ impl Session<'_> {
                 self.load_draft(id);
                 Ok(())
             }
+            ServerEffect::Harnesses => self.refresh_harnesses().await,
+            ServerEffect::Access { thread, access } => self.set_access(thread, access).await,
             ServerEffect::HarnessOptions { harness, model } => {
                 self.harness_options(harness, model);
                 Ok(())
@@ -399,11 +401,7 @@ impl Session<'_> {
         match notification {
             Notification::ThreadsChanged(_) => self.refresh_list().await,
             Notification::TasksChanged(_) => self.refresh_tasks().await,
-            Notification::HarnessesChanged(_) => {
-                let harnesses = self.client.list_harnesses().await?;
-                self.dispatch(ServerMsg::HarnessesSynced(harnesses));
-                Ok(())
-            }
+            Notification::HarnessesChanged(_) => self.refresh_harnesses().await,
             Notification::ThreadState { thread, state } => {
                 self.dispatch(ServerMsg::ThreadState { thread, state });
                 Ok(())

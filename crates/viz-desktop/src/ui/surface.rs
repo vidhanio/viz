@@ -295,6 +295,7 @@ pub fn select_trigger(
 }
 
 /// An inline select led by a harness icon.
+#[expect(dead_code, reason = "inline select for Phase 1 settings surfaces")]
 pub fn marked_trigger(
     id: &str,
     name: &str,
@@ -369,6 +370,7 @@ fn inline_trigger(
 }
 
 /// Builds an inline select trigger paired with its anchored [`Menu`].
+#[expect(dead_code, reason = "inline select for Phase 1 settings surfaces")]
 pub fn picker<S: 'static>(
     id: &str,
     name: &str,

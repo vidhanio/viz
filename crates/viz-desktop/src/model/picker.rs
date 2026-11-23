@@ -1,8 +1,7 @@
-//! Pure derivations for runner configuration options, the model/thinking
-//! picker, and inline composer completions (`/` commands and `@` file
-//! mentions).
+//! Pure derivations for runner configuration options: option roles, whose
+//! options the picker edits, and a model's thinking levels and labels.
 
-use std::{borrow::Cow, collections::HashMap};
+use std::borrow::Cow;
 
 use viz_client::protocol::{
     ConfigOption, DependentOption, Harness, OptionChoice, OptionKind, OptionValue, ThreadId,
@@ -43,15 +42,6 @@ pub enum OptionTarget<'a> {
     Thread(ThreadId),
 }
 
-/// Owned handle identifying an option's target for messages.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OptionOwner {
-    /// Local draft id.
-    Draft(u64),
-    /// Existing thread id.
-    Thread(ThreadId),
-}
-
 impl<'a> OptionTarget<'a> {
     /// Effective value of `option`: draft override if present, else runner's.
     #[must_use]
@@ -59,15 +49,6 @@ impl<'a> OptionTarget<'a> {
         match self {
             Self::Draft(thread) => thread.options.get(&option.id).unwrap_or(&option.value),
             Self::Thread(_) => &option.value,
-        }
-    }
-
-    /// Converts the borrowed target into an owned [`OptionOwner`].
-    #[must_use]
-    pub const fn owner(self) -> OptionOwner {
-        match self {
-            Self::Draft(thread) => OptionOwner::Draft(thread.id),
-            Self::Thread(id) => OptionOwner::Thread(id),
         }
     }
 }
@@ -266,61 +247,6 @@ impl<'a> ModelPicker<'a> {
     }
 }
 
-/// One model row in the grouped picker list.
-#[derive(Debug, Clone, Copy)]
-pub struct ModelEntry<'a> {
-    /// Wire value sent to the harness.
-    pub value: &'a str,
-    /// Display name.
-    pub label: &'a str,
-    /// Disambiguating suffix shown when duplicate labels exist in a group.
-    pub detail: Option<&'a str>,
-}
-
-/// Groups models matching `query` by provider in the runner's order.
-#[must_use]
-pub fn model_groups<'a>(
-    model: &'a ConfigOption,
-    query: &str,
-) -> Vec<(Option<&'a str>, Vec<ModelEntry<'a>>)> {
-    let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
-    let mut duplicates = HashMap::new();
-    for choice in &model.choices {
-        duplicates
-            .entry((choice_group(choice), model_name(choice)))
-            .and_modify(|duplicate| *duplicate = true)
-            .or_insert(false);
-    }
-    let mut groups: Vec<(Option<&str>, Vec<ModelEntry<'a>>)> = Vec::new();
-    for choice in &model.choices {
-        let group = choice_group(choice);
-        let label = model_name(choice);
-        if !words.is_empty() {
-            let id = group.unwrap_or_default();
-            let haystack =
-                format!("{} {id} {label} {}", provider_name(id), choice.value).to_lowercase();
-            if !words.iter().all(|word| haystack.contains(word.as_str())) {
-                continue;
-            }
-        }
-        let entry = ModelEntry {
-            value: &choice.value,
-            label,
-            detail: duplicates[&(group, label)].then(|| {
-                choice
-                    .value
-                    .split_once('/')
-                    .map_or(choice.value.as_str(), |(_, id)| id)
-            }),
-        };
-        match groups.iter_mut().find(|(name, _)| *name == group) {
-            Some((_, entries)) => entries.push(entry),
-            None => groups.push((group, vec![entry])),
-        }
-    }
-    groups
-}
-
 /// Whether `harness` has not yet reported thinking levels for `value`.
 #[must_use]
 pub fn unseen_model_levels(harness: &Harness, id: &str, value: &str) -> bool {
@@ -364,7 +290,10 @@ pub fn thinking_ids(harness: &Harness) -> Vec<String> {
         .collect()
 }
 
-fn choice_group(choice: &OptionChoice) -> Option<&str> {
+/// Sub-provider of a model choice: its group, else the prefix of a
+/// `provider/model` value.
+#[must_use]
+pub fn choice_group(choice: &OptionChoice) -> Option<&str> {
     choice
         .group
         .as_deref()
@@ -417,7 +346,9 @@ pub fn provider_name(group: &str) -> Cow<'_, str> {
     Cow::Borrowed(known)
 }
 
-fn sentence_label(label: &str) -> Cow<'_, str> {
+/// Capitalizes an all-lowercase label.
+#[must_use]
+pub fn sentence_label(label: &str) -> Cow<'_, str> {
     let mut chars = label.chars();
     match chars.next() {
         Some(first) if first.is_lowercase() && !chars.clone().any(char::is_uppercase) => {
@@ -427,7 +358,9 @@ fn sentence_label(label: &str) -> Cow<'_, str> {
     }
 }
 
-fn thinking_label(label: &str) -> Cow<'_, str> {
+/// Display label for a thinking level value or name.
+#[must_use]
+pub fn thinking_label(label: &str) -> Cow<'_, str> {
     if ["xhigh", "x-high", "extra-high", "extra high"]
         .iter()
         .any(|id| label.eq_ignore_ascii_case(id))

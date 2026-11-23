@@ -1,27 +1,20 @@
 //! Pure transitions for the composer: prompt text, attachments, sending and
-//! steering, inline completions, model/thinking picker, runner options, and
-//! tasks dock actions.
+//! steering, inline completions, inline pickers, and tasks dock actions.
 
 use std::{mem, time::Duration};
 
-use viz_client::protocol::{LaunchThread, OptionValue, SendInput, SendMode};
+use viz_client::protocol::{LaunchThread, SendInput, SendMode};
 
-use super::{
-    NavKey,
-    model_picker::{MODEL_LIST, apply_option, choose_model, close_model_menu, handle_model_key},
-    selection::focus_draft,
-};
+use super::{NavKey, selection::focus_draft};
 use crate::{
     effects::{AttachmentSource, EditSync, EditTarget, Effect, ServerEffect},
     model::{
-        CompletionKind, DraftCursor, Model, ModelMenuState, OptionOwner, completion_token_at,
-        format_completion_insertion, matching_commands, matching_files,
+        CompletionKind, DraftCursor, Model, completion_token_at, format_completion_insertion,
+        matching_commands, matching_files,
     },
 };
 
 const FILE_DELAY: Duration = Duration::from_millis(110);
-const MODEL_PICKER_KEY: &str = "model";
-const MODEL_FIELD: &str = "model-query";
 
 /// Messages emitted by the composer, pickers, completion drawer, and tasks
 /// dock.
@@ -72,65 +65,10 @@ pub enum ComposerMsg {
     },
     /// Close whichever inline picker is open.
     ClosePicker,
-    /// Open or close the model-and-thinking picker.
-    ToggleModelMenu {
-        /// Key of the currently selected model row to scroll to center on open.
-        current_row_key: Option<String>,
-    },
-    /// Close the model-and-thinking picker and reset its search state.
-    CloseModelMenu,
-    /// Search text in the model picker changed.
-    ModelQueryChanged(String),
-    /// Navigation key pressed in the model picker search input.
-    ModelKey {
-        /// Navigation key.
-        key: NavKey,
-        /// Visible filtered model values.
-        values: Vec<String>,
-        /// Currently highlighted model value.
-        active: Option<String>,
-        /// Currently committed model value.
-        committed: Option<String>,
-        /// Draft or thread target.
-        owner: OptionOwner,
-        /// Model config option id.
-        option_id: String,
-    },
-    /// Select a model in the model picker.
-    ChooseModel {
-        /// Draft or thread target.
-        owner: OptionOwner,
-        /// Model config option id.
-        option_id: String,
-        /// Selected model wire value.
-        value: String,
-    },
-    /// Select a thinking level in the model picker footer.
-    ChooseLevel {
-        /// Draft or thread target.
-        owner: OptionOwner,
-        /// Thinking config option id.
-        option_id: String,
-        /// Selected level wire value.
-        value: String,
-    },
-    /// Apply an overflow runner config option and close the menu.
-    ApplyOption {
-        /// Draft or thread target.
-        owner: OptionOwner,
-        /// Config option id.
-        option_id: String,
-        /// New value.
-        value: OptionValue,
-    },
     /// Cancel a running or queued delegated task from the Tasks Dock.
     CancelTask(String),
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "single exhaustive handler for composer, completion, and picker messages"
-)]
 pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
     let mut effects = Vec::new();
     match msg {
@@ -205,81 +143,6 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
         }
         ComposerMsg::ClosePicker => {
             model.composer.open_picker = None;
-        }
-        ComposerMsg::ToggleModelMenu { current_row_key } => {
-            if model.composer.open_picker.as_deref() == Some(MODEL_PICKER_KEY) {
-                close_model_menu(model, &mut effects);
-            } else {
-                model.composer.open_picker = Some(MODEL_PICKER_KEY.to_owned());
-                model.composer.model_menu = ModelMenuState::default();
-                effects.push(Effect::SyncEdit(EditSync::Clear(EditTarget::ModelQuery)));
-                effects.push(Effect::Focus {
-                    key: MODEL_FIELD,
-                    select_all: false,
-                    when_shown: true,
-                });
-                if let Some(current) = current_row_key {
-                    effects.push(Effect::ScrollCenterInstant {
-                        list: MODEL_LIST,
-                        item: current,
-                    });
-                }
-            }
-        }
-        ComposerMsg::CloseModelMenu => close_model_menu(model, &mut effects),
-        ComposerMsg::ModelQueryChanged(query) => {
-            model.composer.model_menu.query = query;
-            model.composer.model_menu.active = None;
-            effects.push(Effect::ScrollToInstant {
-                key: MODEL_LIST,
-                x: 0.0,
-                y: 0.0,
-            });
-        }
-        ComposerMsg::ModelKey {
-            key,
-            values,
-            active,
-            committed,
-            owner,
-            option_id,
-        } => handle_model_key(
-            model,
-            key,
-            &values,
-            active.as_deref(),
-            committed.as_deref(),
-            owner,
-            &option_id,
-            &mut effects,
-        ),
-        ComposerMsg::ChooseModel {
-            owner,
-            option_id,
-            value,
-        } => choose_model(model, owner, &option_id, &value, &mut effects),
-        ComposerMsg::ChooseLevel {
-            owner,
-            option_id,
-            value,
-        } => {
-            model.composer.model_menu.chosen = Some((option_id.clone(), value.clone()));
-            apply_option(
-                model,
-                owner,
-                option_id,
-                OptionValue::Select(value),
-                &mut effects,
-            );
-        }
-        ComposerMsg::ApplyOption {
-            owner,
-            option_id,
-            value,
-        } => {
-            model.composer.open_picker = None;
-            effects.push(focus_draft());
-            apply_option(model, owner, option_id, value, &mut effects);
         }
         ComposerMsg::CancelTask(id) => {
             effects.push(Effect::Server(ServerEffect::CancelTask(id)));

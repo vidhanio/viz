@@ -6,7 +6,8 @@
 mod composer;
 mod git;
 pub use git::GitMsg;
-mod model_picker;
+pub mod model_picker;
+mod model_picker_keys;
 mod palette;
 pub mod requests;
 mod selection;
@@ -21,6 +22,8 @@ mod timeline;
 
 pub use self::{
     composer::ComposerMsg,
+    model_picker::ModelPickerMsg,
+    model_picker_keys::PickerKey,
     palette::PaletteMsg,
     selection::SelectionMsg,
     server::ServerMsg,
@@ -59,9 +62,10 @@ pub enum Msg {
     Selection(SelectionMsg),
     /// Sidebar view mode, filter, menus, dialogs, and thread/project actions.
     Sidebar(SidebarMsg),
-    /// Composer text, attachments, completions, model picker, options, and
-    /// tasks dock.
+    /// Composer text, attachments, completions, and tasks dock.
     Composer(ComposerMsg),
+    /// Unified model picker and access-mode popovers.
+    ModelPicker(ModelPickerMsg),
     /// Timeline disclosure, pagination, links, and tool clock ticks.
     Timeline(TimelineMsg),
     /// Command palette modal actions.
@@ -82,6 +86,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::Selection(msg) => selection::update(model, msg),
         Msg::Sidebar(msg) => sidebar::update(model, msg),
         Msg::Composer(msg) => composer::update(model, msg),
+        Msg::ModelPicker(msg) => model_picker::update(model, msg),
         Msg::Timeline(msg) => timeline::update(model, msg),
         Msg::Palette(msg) => palette::update(model, msg),
         Msg::Shell(msg) => shell::update(model, msg),

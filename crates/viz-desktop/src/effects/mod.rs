@@ -258,6 +258,15 @@ pub enum ServerEffect {
     },
     /// Refresh harness choices for a fresh draft.
     LoadDraft(u64),
+    /// Refresh the harness catalog in the background (model picker open).
+    Harnesses,
+    /// Choose a thread's access mode; `None` returns it to the project default.
+    Access {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Mode to apply.
+        access: Option<viz_client::protocol::AccessMode>,
+    },
     /// Update or triage an existing thread, paired with an optimistic `op_id`.
     Update {
         /// Optimistic mutation id for ack/rollback tracking.

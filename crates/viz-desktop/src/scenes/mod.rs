@@ -4,6 +4,7 @@
 mod data;
 mod fixtures;
 mod git;
+mod model_picker;
 mod overlays;
 mod sidebar;
 mod terminal_panel;
@@ -47,8 +48,20 @@ pub const SCENES: &[Scene] = &[
     ("timeline-working", timeline::working),
     ("timeline-cards", timeline_cards::cards),
     ("timeline-minimap", timeline_cards::minimap),
-    ("selectors", overlays::selectors),
-    ("model-search", overlays::model_search),
+    ("selectors", model_picker::claude),
+    ("model-search", model_picker::search),
+    ("model-picker-codex", model_picker::codex),
+    ("model-picker-multi", model_picker::multi),
+    ("model-picker-favorites", model_picker::favorites),
+    (
+        "model-picker-favorites-empty",
+        model_picker::favorites_empty,
+    ),
+    ("model-picker-search-empty", model_picker::search_empty),
+    ("model-picker-submenu", model_picker::submenu),
+    ("model-picker-access", model_picker::access),
+    ("model-picker-status", model_picker::status),
+    ("model-picker-locked", model_picker::locked),
     ("new-agent", overlays::new_agent),
     ("context-menu", overlays::context_menu),
     ("palette", overlays::palette),

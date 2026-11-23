@@ -1,4 +1,4 @@
-//! Preview scenes for pickers, menus, palette, dialogs, drafts, completions,
+//! Preview scenes for menus, palette, dialogs, drafts, completions,
 //! environments, and empty/offline states.
 
 use viz_client::protocol::{
@@ -19,24 +19,6 @@ use crate::{
     },
     timeline,
 };
-
-pub(super) fn selectors(s: &mut Desktop) {
-    seed_workspace(&mut s.model);
-    preview_model_menu(s, "");
-}
-
-pub(super) fn model_search(s: &mut Desktop) {
-    seed_workspace(&mut s.model);
-    preview_model_menu(s, "fl");
-}
-
-fn preview_model_menu(s: &mut Desktop, query: &str) {
-    s.model.composer.open_picker = Some("model".into());
-    s.model.composer.model_menu.query = query.into();
-    s.model.composer.model_menu.active = None;
-    s.model.composer.draft_focused = false;
-    s.sync_widgets_from_model();
-}
 
 pub(super) fn new_agent(s: &mut Desktop) {
     seed_workspace(&mut s.model);

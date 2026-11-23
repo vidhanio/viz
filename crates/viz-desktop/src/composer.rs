@@ -1,12 +1,10 @@
-//! Per-thread composer, settings, and completions.
+//! Per-thread composer, its footer controls, and completions.
 
 mod completion;
 mod draft;
-mod model;
-mod settings;
 mod task_row;
 mod tasks;
-mod thinking;
+mod toolbar;
 
 use rune::{Color, El, KeyEvent, Tx, col, el, icon, row, text_input};
 pub use tasks::DOCK_KEY as TASKS_DOCK_KEY;
@@ -122,7 +120,7 @@ fn editor(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .center_y()
                 .instant_changes()
                 .children(attach)
-                .child(settings::toolbar(s, t, layer).grow(1.0).shrink().min_w(0.0))
+                .child(toolbar::toolbar(s, t, layer).grow(1.0).shrink().min_w(0.0))
                 .child(send_button(s, t)),
         );
     if m.can_attach() {

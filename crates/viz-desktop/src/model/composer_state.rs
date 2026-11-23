@@ -123,20 +123,6 @@ impl CompletionState {
     }
 }
 
-/// Pure state of the open model-and-thinking picker menu.
-#[derive(Debug, Clone, Default)]
-pub struct ModelMenuState {
-    /// Search input text.
-    pub query: String,
-    /// Highlighted model value; current model or first match when unset.
-    pub active: Option<String>,
-    /// Optimistically shown thinking choice `(option_id, value)` while the menu
-    /// stays open on this model.
-    pub chosen: Option<(String, String)>,
-    /// Model value whose thinking levels are being fetched.
-    pub loading_levels: Option<String>,
-}
-
 /// Pure composer state: active draft, per-environment saved drafts, pickers,
 /// completions, and model favorites.
 #[derive(Debug, Clone, Default)]
@@ -152,7 +138,7 @@ pub struct ComposerState {
     /// Slash and `@file` completion state.
     pub completion: CompletionState,
     /// Model picker popover state.
-    pub model_menu: ModelMenuState,
+    pub model_menu: super::ModelMenuState,
     /// Key of whichever inline picker menu is currently open.
     pub open_picker: Option<String>,
     /// User-starred model identifiers persisted in client preferences.

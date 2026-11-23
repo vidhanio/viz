@@ -8,6 +8,9 @@ pub mod cache;
 pub mod completion;
 pub mod composer_state;
 pub mod git;
+pub mod model_list;
+pub mod model_menu;
+pub mod model_options;
 pub mod palette;
 pub mod picker;
 pub mod prefs;
@@ -37,12 +40,21 @@ pub use self::{
     },
     composer_state::{
         AttachmentTarget, CompletionKind, CompletionToken, ComposerState, DraftCursor, DraftData,
-        ModelMenuState, PaletteChoice, PaletteCommand, PaletteSearch, PaletteState,
+        PaletteChoice, PaletteCommand, PaletteSearch, PaletteState,
+    },
+    model_list::{ListEmpty, ListItem, ModelRow, PickerList, picker_list},
+    model_menu::{
+        ACCESS_PICKER, Catalog, MODEL_PICKER, ModelMenuState, ModelRef, PickerColumn, PickerScope,
+        RailTab, catalogs, picker_scope, status_note, status_usable,
+    },
+    model_options::{
+        EffortColumn, EffortLevel, ExtraNav, ExtraOption, PickerNav, access_summary, access_view,
+        context_badge, effort_column, picker_nav, speed,
     },
     palette::{PaletteRow, palette_rows},
     picker::{
-        ModelEntry, ModelLevels, ModelPicker, OptionOwner, OptionRole, OptionTarget, model_groups,
-        option_role, provider_name, thinking_ids, unseen_model_levels,
+        ModelLevels, ModelPicker, OptionRole, OptionTarget, choice_group, model_name, option_role,
+        provider_name, sentence_label, thinking_ids, unseen_model_levels,
     },
     prefs::Prefs,
     sidebar::{

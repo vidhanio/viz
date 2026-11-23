@@ -21,6 +21,25 @@ use crate::{
 };
 
 impl Session<'_> {
+    /// Relists harnesses so the model picker's catalog stays current.
+    pub(super) async fn refresh_harnesses(&self) -> Result<()> {
+        let harnesses = self.client.list_harnesses().await?;
+        self.dispatch(ServerMsg::HarnessesSynced(harnesses));
+        Ok(())
+    }
+
+    /// `thread.access`: applies or clears a thread's access mode.
+    pub(super) async fn set_access(
+        &self,
+        thread: ThreadId,
+        access: Option<viz_client::protocol::AccessMode>,
+    ) -> Result<()> {
+        self.client
+            .request(&viz_client::protocol::SetThreadAccess { thread, access })
+            .await
+            .map(drop)
+    }
+
     pub(super) async fn launch(&self, draft: u64, params: LaunchThread) -> Result<()> {
         match self.client.launch_thread(&params).await {
             Ok(thread) => self.dispatch(ServerMsg::ThreadCreated { draft, thread }),
