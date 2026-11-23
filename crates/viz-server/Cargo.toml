@@ -53,6 +53,7 @@ viz-git.workspace = true
 viz-github.workspace = true
 viz-protocol.workspace = true
 viz-config.workspace = true
+viz-terminal = { workspace = true, features = ["pty"] }
 
 [lints]
 workspace = true

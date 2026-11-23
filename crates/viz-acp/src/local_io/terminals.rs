@@ -50,7 +50,7 @@ pub(super) struct Completion {
 }
 
 impl Completion {
-    fn publish(self, output: TerminalOutputResponse) {
+    pub(super) fn publish(self, output: TerminalOutputResponse) {
         let mut recent = self
             .history
             .recent

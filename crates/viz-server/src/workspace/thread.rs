@@ -300,6 +300,7 @@ impl Workspace {
             self.updates.remove(thread);
             let driver = self.workers.remove(thread);
             drop(db);
+            self.terminals.lock().await.release_thread(thread);
             driver
         };
         self.settled(thread);

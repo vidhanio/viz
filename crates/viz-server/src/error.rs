@@ -15,10 +15,7 @@ pub(crate) enum Error {
     #[error("no thread {0}")]
     NoThread(ThreadId),
     #[error("no run {run} in thread {thread}")]
-    NoRun {
-        thread: ThreadId,
-        run: RunId,
-    },
+    NoRun { thread: ThreadId, run: RunId },
     #[error("no task {0}")]
     NoTask(TaskId),
     #[error("no project {0}")]

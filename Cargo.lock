@@ -6712,6 +6712,7 @@ dependencies = [
  "uuid",
  "viz-config",
  "viz-protocol",
+ "viz-terminal",
 ]
 
 [[package]]
@@ -6889,6 +6890,7 @@ dependencies = [
  "viz-git",
  "viz-github",
  "viz-protocol",
+ "viz-terminal",
 ]
 
 [[package]]

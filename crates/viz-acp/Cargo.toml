@@ -42,6 +42,7 @@ url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 viz-config.workspace = true
 viz-protocol.workspace = true
+viz-terminal = { workspace = true, features = ["pty"] }
 
 [lints]
 workspace = true

@@ -67,7 +67,7 @@ impl ClientEvents {
     pub fn capabilities(&self) -> ClientCapabilities {
         let caps = ClientCapabilities::new()
             .fs(self.local_io.file_capabilities())
-            .terminal(self.local_io.terminals == TerminalAccess::Local)
+            .terminal(!matches!(self.local_io.terminals, TerminalAccess::Disabled))
             .plan(PlanCapabilities::new())
             .subagents(SubagentCapabilities::new())
             .session(

@@ -89,6 +89,9 @@ pub(crate) struct Workspace {
     pull_due: Notify,
     github: Mutex<BTreeMap<String, viz_github::GitHub>>,
     requests: Requests,
+    /// PTYs owned by threads: the commands agents run, and later the user's
+    /// own shells.
+    terminals: Arc<Mutex<viz_terminal::pty::Terminals>>,
     mcp: Mcp,
     closing: CancellationToken,
     jobs: TaskTracker,
@@ -158,6 +161,7 @@ impl Workspace {
             pull_due: Notify::new(),
             github: Mutex::default(),
             requests: Requests::default(),
+            terminals: Arc::default(),
             mcp,
             closing: CancellationToken::new(),
             jobs: TaskTracker::new(),
