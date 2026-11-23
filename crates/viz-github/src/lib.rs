@@ -10,7 +10,7 @@ mod repository;
 
 pub use client::{AuthState, Error, GitHub, PollState, TransportFailure, poll_delay};
 pub use models::{
-    Account, CheckRun, CreatePullRequest, Issue, IssueKind, PullComment, PullRequest,
+    Account, CheckRun, CreatePullRequest, Issue, IssueDetail, IssueKind, PullComment, PullRequest,
     PullRequestAuthor, PullRequestMode, PullReview, Repository, Template,
 };
 pub use viz_git::RemoteRepository;

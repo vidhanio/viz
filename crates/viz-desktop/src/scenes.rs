@@ -173,6 +173,7 @@ fn list() -> Vec<ThreadSummary> {
         parent: parent.map(ThreadId),
         parent_environment: None,
         project: project.map(str::to_owned),
+        pull_request: None,
         worktree: (id == 10).then(|| ThreadWorktree {
             path: WORKTREE.into(),
             branch: Some("viz/trim-export-whitespace".into()),

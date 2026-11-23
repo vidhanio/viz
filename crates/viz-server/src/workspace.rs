@@ -15,6 +15,7 @@ mod github;
 mod icons;
 mod notifications;
 mod projects;
+mod pulls;
 pub(crate) mod rpc;
 pub(crate) mod runs;
 mod runtime;
@@ -85,6 +86,8 @@ pub(crate) struct Workspace {
     icons: icons::Icons,
     clones: clones::Clones,
     git_actions: git::GitActions,
+    pulls: pulls::Pulls,
+    pull_due: Notify,
     github: Mutex<BTreeMap<String, viz_github::GitHub>>,
     mcp: Mcp,
     closing: CancellationToken,
@@ -151,6 +154,8 @@ impl Workspace {
             icons: icons::Icons::default(),
             clones: clones::Clones::default(),
             git_actions: git::GitActions::default(),
+            pulls: pulls::Pulls::default(),
+            pull_due: Notify::new(),
             github: Mutex::default(),
             files: Files::default(),
             mcp,
@@ -170,6 +175,7 @@ impl Workspace {
             self.kick(row.id(0)?, false);
         }
         self.jobs.spawn(Arc::clone(self).keep_time());
+        self.jobs.spawn(Arc::clone(self).poll_pulls());
         Ok(())
     }
 

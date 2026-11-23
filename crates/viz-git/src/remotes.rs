@@ -13,7 +13,7 @@ pub struct AheadBehind {
     pub behind: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct RemoteRepository {
     pub host: String,
     pub owner: String,

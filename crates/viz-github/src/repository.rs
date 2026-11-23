@@ -11,14 +11,14 @@ use serde_json::json;
 use url::form_urlencoded;
 
 use crate::{
-    Account, CheckRun, CreatePullRequest, Error, GitHub, Issue, IssueKind, PullComment,
-    PullRequest, PullRequestMode, PullReview, RemoteRepository, Repository, Template,
+    Account, CheckRun, CreatePullRequest, Error, GitHub, Issue, IssueDetail, IssueKind,
+    PullComment, PullRequest, PullRequestMode, PullReview, RemoteRepository, Repository, Template,
     client::missing_graphql,
 };
 
 const PR_FIELDS: &str = "
     number title url state isDraft headRefName headRefOid baseRefName baseRefOid mergeable reviewDecision
-    additions deletions updatedAt author { login avatarUrl }
+    additions deletions updatedAt closedAt mergedAt author { login avatarUrl }
     statusCheckRollup { state }
     headRepository { nameWithOwner }
     repository { nameWithOwner }
@@ -144,8 +144,7 @@ impl GitHub {
     /// Look up up to 100 distinct branches in one GraphQL request.
     ///
     /// Each requested branch has an entry, with open PRs preferred over
-    /// historical PRs. Only branches with a current remote ref participate.
-    /// Use the paginated single-branch lookup for deleted refs.
+    /// historical PRs, including PRs whose remote branch was deleted.
     ///
     /// # Errors
     /// Returns an error if the batch exceeds 100 branches or GitHub rejects the
@@ -175,13 +174,14 @@ impl GitHub {
             .into_iter()
             .enumerate()
             .map(|(index, branch)| {
-                let reference = results
-                    .remove(&format!("branch{index}"))
-                    .ok_or_else(|| missing_graphql("missing branch result"))?;
-                let pull = reference.and_then(|reference| {
-                    preferred_pull(reference.open.nodes, &full_name)
-                        .or_else(|| preferred_pull(reference.recent.nodes, &full_name))
-                });
+                let open = results
+                    .remove(&format!("open{index}"))
+                    .ok_or_else(|| missing_graphql("missing open pull requests"))?;
+                let recent = results
+                    .remove(&format!("recent{index}"))
+                    .ok_or_else(|| missing_graphql("missing historical pull requests"))?;
+                let pull = preferred_pull(open.nodes, &full_name)
+                    .or_else(|| preferred_pull(recent.nodes, &full_name));
                 Ok((branch.to_owned(), pull))
             })
             .collect()
@@ -213,6 +213,19 @@ impl GitHub {
         let path = query("/search/issues", page, &[("q", &term), ("sort", "updated")])?;
         let result: Search<Issue> = self.get(&path).await?;
         Ok(result.items)
+    }
+
+    /// Read the body and metadata of an issue or pull request.
+    ///
+    /// # Errors
+    /// Returns an error if GitHub cannot resolve the item.
+    pub async fn issue(
+        &self,
+        repository: &RemoteRepository,
+        number: u64,
+    ) -> Result<IssueDetail, Error> {
+        let route = self.repo_route(repository)?;
+        self.get(&format!("{route}/issues/{number}")).await
     }
 
     /// Create a PR. If base is omitted GitHub's configured default branch is
@@ -467,20 +480,15 @@ fn batch_query(
         write!(query, ",$head{index}:String!").map_err(|_| Error::Invalid("batch query"))?;
         write!(
             selections,
-            "branch{index}:ref(qualifiedName:$head{index}) {{
-                open:associatedPullRequests(first:30, states:[OPEN], orderBy:{{field:UPDATED_AT,direction:DESC}}) {{
-                    nodes {{ {PR_FIELDS} }}
-                }}
-                recent:associatedPullRequests(first:30, orderBy:{{field:UPDATED_AT,direction:DESC}}) {{
-                    nodes {{ {PR_FIELDS} }}
-                }}
+            "open{index}:pullRequests(headRefName:$head{index},first:15,states:[OPEN],orderBy:{{field:UPDATED_AT,direction:DESC}}) {{
+                nodes {{ {PR_FIELDS} }}
+            }}
+            recent{index}:pullRequests(headRefName:$head{index},first:15,orderBy:{{field:UPDATED_AT,direction:DESC}}) {{
+                nodes {{ {PR_FIELDS} }}
             }} "
         )
         .map_err(|_| Error::Invalid("batch query"))?;
-        variables.insert(
-            format!("head{index}"),
-            json!(format!("refs/heads/{branch}")),
-        );
+        variables.insert(format!("head{index}"), json!(branch));
     }
     write!(
         query,
@@ -513,13 +521,7 @@ fn preferred_pull(nodes: Vec<Option<PullNode>>, full_name: &str) -> Option<PullR
 
 #[derive(Deserialize)]
 struct BatchRepository {
-    repository: Option<BTreeMap<String, Option<BatchRef>>>,
-}
-
-#[derive(Deserialize)]
-struct BatchRef {
-    open: PullCandidates,
-    recent: PullCandidates,
+    repository: Option<BTreeMap<String, PullCandidates>>,
 }
 
 #[derive(Deserialize)]

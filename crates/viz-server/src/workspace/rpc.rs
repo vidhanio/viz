@@ -76,6 +76,12 @@ handlers! {
         StartClone, StartClone, |workspace, args| { workspace.start_clone(args).await }
         ReadClone, ReadClone, |workspace, ReadClone { id }| { workspace.clone_status(id).await }
         CancelClone, CancelClone, |workspace, CancelClone { id }| { workspace.cancel_clone(id).await }
+        viz_protocol::GitHubAuth, viz_protocol::GitHubAuth, |workspace, args| { workspace.github_auth(args).await }
+        viz_protocol::GitHubSearch, viz_protocol::GitHubSearch, |workspace, args| { workspace.github_search(args).await }
+        viz_protocol::GitHubChecks, viz_protocol::GitHubChecks, |workspace, args| { workspace.github_checks(args).await }
+        viz_protocol::GitHubPullPage, viz_protocol::GitHubPullPage, |workspace, args| { workspace.github_reviews(args).await }
+        viz_protocol::GitHubCreatePull, viz_protocol::GitHubCreatePull, |workspace, args| { workspace.github_create_pull(args).await }
+        viz_protocol::GitHubLaunch, viz_protocol::GitHubLaunch, |workspace, args| { workspace.github_launch(args).await }
         GitHubRepositories, GitHubRepositories, |workspace, args| { workspace.github_repositories(args).await }
         PromoteThread, PromoteThread, |workspace, args| { workspace.promote_thread(args).await }
         ReadProjectIcon, ReadProjectIcon, |workspace, args| {

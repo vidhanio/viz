@@ -37,6 +37,8 @@ pub struct PullRequest {
     pub deletions: u64,
     pub author: Option<PullRequestAuthor>,
     pub updated_at: String,
+    pub closed_at: Option<String>,
+    pub merged_at: Option<String>,
     pub mergeable: String,
     pub review_decision: Option<String>,
     #[serde(skip)]
@@ -55,6 +57,26 @@ pub struct PullRequestAuthor {
 pub enum IssueKind {
     Issue,
     PullRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct IssueDetail {
+    #[serde(flatten)]
+    pub item: Issue,
+    pub body: Option<String>,
+    pull_request: Option<PullLink>,
+}
+
+impl IssueDetail {
+    #[must_use]
+    pub const fn is_pull(&self) -> bool {
+        self.pull_request.is_some()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+struct PullLink {
+    url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]

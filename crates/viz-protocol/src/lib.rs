@@ -8,6 +8,7 @@ mod connections;
 mod folders;
 mod fork;
 mod git;
+mod github;
 mod history;
 mod ids;
 mod lifecycle;
@@ -36,6 +37,11 @@ pub use git::{
     CheckpointEdge, GitAction, GitActionRequest, GitActionResult, GitDiff, GitDiffFile,
     GitDiffLine, GitDiffRequest, GitDiffTarget, GitFailure, GitFileKind, GitHunk, GitLineStats,
     GitStatus, GitStatusRequest, RestoreCheckpoint, UnwatchGit, WatchGit,
+};
+pub use github::{
+    GitHubAuth, GitHubAuthState, GitHubCheck, GitHubChecks, GitHubCreatePull, GitHubItem,
+    GitHubItemKind, GitHubLaunch, GitHubPull, GitHubPullPage, GitHubPullState, GitHubReview,
+    GitHubSearch, GitHubSearchResult,
 };
 pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryData, EntryPage, ListEntries, PlanEntry,
@@ -142,6 +148,12 @@ methods! {
     StartClone => "project.clone", CloneStatus;
     ReadClone => "project.cloneStatus", CloneStatus;
     CancelClone => "project.cancelClone", CloneStatus;
+    GitHubAuth => "github.auth", GitHubAuthState;
+    GitHubSearch => "github.search", GitHubSearchResult;
+    GitHubChecks => "github.checks", Vec<GitHubCheck>;
+    GitHubPullPage => "github.reviews", Vec<GitHubReview>;
+    GitHubCreatePull => "github.createPull", GitHubItem;
+    GitHubLaunch => "github.launch", Launched;
     GitHubRepositories => "github.repositories", GitHubRepositoryList;
     RemoveProject<'_> => "project.remove", Empty;
     ListHarnesses => "harnesses.list", HarnessList;

@@ -381,3 +381,9 @@ pub fn sort_key(
     };
     (shelf, first, second, Reverse(thread))
 }
+
+/// Poll visible threads and threads still in the active triage shelves.
+#[must_use]
+pub const fn poll_pull_request(visible: bool, archived: bool, settled: bool) -> bool {
+    visible || (!archived && !settled)
+}

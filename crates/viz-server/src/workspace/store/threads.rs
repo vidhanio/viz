@@ -180,7 +180,7 @@ pub(in crate::workspace) async fn list_threads(
 ) -> Result<Vec<ThreadSummary>, Error> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
-            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, {}
+            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, t.cwd, {}
         FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)",
         lifecycle::COLUMNS
     );
@@ -189,7 +189,7 @@ pub(in crate::workspace) async fn list_threads(
     let mut threads = Vec::new();
     for mut row in records {
         let harness = row.str(5)?;
-        let (lifecycle, activity, status) = lifecycle::decode(&mut row, 11)?;
+        let (lifecycle, activity, status) = lifecycle::decode(&mut row, 12)?;
         let id = row.id(0)?;
         let shelf = triage::shelf(&lifecycle, &activity, now);
         let summary = ThreadSummary {
@@ -208,6 +208,7 @@ pub(in crate::workspace) async fn list_threads(
                 .transpose()?,
             project: row.opt_str(4)?,
             worktree: thread_worktree(row.opt_str(8)?).await,
+            pull_request: workspace.pull_summary(id, &row.str(11)?),
             harness_name: workspace.harness_name(&harness).to_owned(),
             harness,
             status,

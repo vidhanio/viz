@@ -2184,6 +2184,17 @@
                   }
                 ]
               },
+              "pullRequest": {
+                "description": "The most recently observed pull request for this checkout branch.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitHubPull"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "harness": {
                 "description": "Configuration key of the ACP harness.",
                 "type": "string"
@@ -2315,6 +2326,83 @@
             },
             "required": [
               "path"
+            ]
+          },
+          "GitHubPull": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "state": {
+                "$ref": "#/$defs/GitHubPullState"
+              },
+              "draft": {
+                "type": "boolean"
+              },
+              "head": {
+                "type": "string"
+              },
+              "head_commit": {
+                "type": "string"
+              },
+              "base": {
+                "type": "string"
+              },
+              "additions": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "deletions": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "mergeable": {
+                "type": "string"
+              },
+              "checks": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "review": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "number",
+              "title",
+              "url",
+              "state",
+              "draft",
+              "head",
+              "head_commit",
+              "base",
+              "additions",
+              "deletions",
+              "mergeable"
+            ]
+          },
+          "GitHubPullState": {
+            "type": "string",
+            "enum": [
+              "open",
+              "closed",
+              "merged"
             ]
           },
           "ThreadStatus": {
@@ -5750,6 +5838,605 @@
               "resolving",
               "checkingOut"
             ]
+          }
+        }
+      }
+    },
+    "github.auth": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubAuth",
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubAuthState",
+        "type": "string",
+        "enum": [
+          "ready",
+          "gh_missing",
+          "logged_out"
+        ]
+      }
+    },
+    "github.search": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubSearch",
+        "type": "object",
+        "properties": {
+          "project": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/GitHubItemKind"
+          },
+          "query": {
+            "type": "string"
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "project",
+          "kind",
+          "query"
+        ],
+        "$defs": {
+          "GitHubItemKind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubSearchResult",
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GitHubItem"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "$defs": {
+          "GitHubItem": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/GitHubItemKind"
+              },
+              "number": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "number",
+              "title",
+              "url",
+              "state"
+            ]
+          },
+          "GitHubItemKind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
+          }
+        }
+      }
+    },
+    "github.checks": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubChecks",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "commit": {
+            "type": "string"
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "thread",
+          "commit"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Array_of_GitHubCheck",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/GitHubCheck"
+        },
+        "$defs": {
+          "GitHubCheck": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "conclusion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "status"
+            ]
+          }
+        }
+      }
+    },
+    "github.reviews": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubPullPage",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "number": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "thread",
+          "number"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Array_of_GitHubReview",
+        "type": "array",
+        "items": {
+          "$ref": "#/$defs/GitHubReview"
+        },
+        "$defs": {
+          "GitHubReview": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "author": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "state": {
+                "type": "string"
+              },
+              "body": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "url": {
+                "type": "string"
+              },
+              "submitted_at": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "state",
+              "url"
+            ]
+          }
+        }
+      }
+    },
+    "github.createPull": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubCreatePull",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "base": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "draft": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "thread",
+          "title",
+          "body",
+          "draft"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubItem",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/GitHubItemKind"
+          },
+          "number": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "number",
+          "title",
+          "url",
+          "state"
+        ],
+        "$defs": {
+          "GitHubItemKind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
+          }
+        }
+      }
+    },
+    "github.launch": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubLaunch",
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "launch": {
+            "$ref": "#/$defs/LaunchThread"
+          }
+        },
+        "required": [
+          "number",
+          "launch"
+        ],
+        "$defs": {
+          "LaunchThread": {
+            "description": "`thread.launch` params.",
+            "type": "object",
+            "properties": {
+              "title": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "model": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "thinking": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "text": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Attachment"
+                }
+              },
+              "requestId": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "project": {
+                "description": "Project directory; absent uses the default working directory.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "harness": {
+                "description": "Configured runner; absent uses the server default.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "worktree": {
+                "description": "Where in the project's repository to run; absent uses the project's\ncheckout. Requires `project`.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/WorktreeTarget"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "options": {
+                "description": "Initial configuration by option id.",
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/OptionValue"
+                }
+              }
+            }
+          },
+          "Attachment": {
+            "description": "A file attached to an input.",
+            "type": "object",
+            "properties": {
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "mime": {
+                "description": "Media type.",
+                "type": "string"
+              },
+              "data": {
+                "description": "Base64 bytes, at most 20 MiB decoded.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "mime",
+              "data"
+            ]
+          },
+          "WorktreeTarget": {
+            "description": "Where in a project's Git repository a thread runs.",
+            "oneOf": [
+              {
+                "description": "The project's own checkout.",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "local"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              {
+                "description": "A new linked worktree on a new branch.",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "new"
+                  },
+                  "base": {
+                    "description": "Branch, remote-tracking branch or commit to start from; defaults\nto the project checkout's HEAD.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "branch": {
+                    "description": "New branch name; defaults to `viz/` and a slug of the thread title.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              {
+                "description": "An existing linked worktree of the project's repository.",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "existing"
+                  },
+                  "path": {
+                    "description": "Absolute path of the worktree root.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "path"
+                ]
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Launched",
+        "description": "`thread.launch` result.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The new thread.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "RunId": {
+            "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
           }
         }
       }

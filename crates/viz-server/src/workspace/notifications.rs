@@ -117,6 +117,7 @@ impl Workspace {
                     .entry(thread)
                     .or_default() += 1;
                 drop(db);
+                self.pull_due.notify_one();
                 if updated != 0 {
                     self.relist(thread);
                 }

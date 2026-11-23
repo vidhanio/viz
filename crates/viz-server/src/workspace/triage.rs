@@ -97,9 +97,10 @@ impl Workspace {
         {
             let mut db = self.db.lock().await;
             let mut tx = db.transaction().await?;
-            for thread in store::standings(&mut tx).await? {
+            for mut thread in store::standings(&mut tx).await? {
                 let policy = lifecycle::project_policy(thread.auto_settle);
                 let current = &thread.lifecycle;
+                thread.activity.pull_request = self.finished_pull(thread.thread, &thread.cwd).await;
                 if let Some(next) = lifecycle::on_time(current, &thread.activity, policy, now) {
                     store::save_lifecycle(&mut tx, thread.thread, &next).await?;
                     changed.push(thread.thread);

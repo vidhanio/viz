@@ -42,6 +42,8 @@ pub struct ThreadSummary {
     /// The project's linked Git worktree the thread runs in; `None` in the
     /// project's own checkout.
     pub worktree: Option<ThreadWorktree>,
+    /// The most recently observed pull request for this checkout branch.
+    pub pull_request: Option<crate::GitHubPull>,
     /// Configuration key of the ACP harness.
     pub harness: String,
     /// Display name of the ACP harness.
