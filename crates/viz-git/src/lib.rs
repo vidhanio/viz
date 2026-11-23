@@ -76,6 +76,8 @@ pub enum Error {
     Invalid(&'static str),
     #[error("repository has no working tree")]
     Bare,
+    #[error("directory is outside a Git repository")]
+    NotRepository,
 }
 
 /// The caller's admission decision for a checkout-changing operation.

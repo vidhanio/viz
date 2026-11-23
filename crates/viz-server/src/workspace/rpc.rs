@@ -9,7 +9,7 @@ use viz_protocol::{
     BranchList, BrowseFolders, CancelClone, ConfigureThread, CreateFolder, CreateProject,
     DeleteThread, Empty, FileList, ForkThread, GitHubRepositories, HarnessList, HarnessOptions,
     HarnessOptionsResult, InitRepository, ListBranches, ListEntries, ListProjects, ListWorktrees,
-    MoveThread, ProjectList, ProjectResult, ReadClone, ReadProject, ReadProjectIcon,
+    MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone, ReadProject, ReadProjectIcon,
     ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId,
     SearchFiles, SearchHits, SearchThreads, SendInput, StartClone, SteerQueuedInput, StopThread,
     ThreadId, ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput,
@@ -63,6 +63,7 @@ handlers! {
         ReadClone, ReadClone, |workspace, ReadClone { id }| { workspace.clone_status(id).await }
         CancelClone, CancelClone, |workspace, CancelClone { id }| { workspace.cancel_clone(id).await }
         GitHubRepositories, GitHubRepositories, |workspace, args| { workspace.github_repositories(args).await }
+        PromoteThread, PromoteThread, |workspace, args| { workspace.promote_thread(args).await }
         ReadProjectIcon, ReadProjectIcon, |workspace, args| {
             workspace.project_icon(args).await
         }

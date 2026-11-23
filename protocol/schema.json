@@ -7327,6 +7327,326 @@
           }
         }
       }
+    },
+    "thread.promoteProject": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "PromoteThread",
+        "description": "Register this thread's scratch workspace in place and file the threads\nsharing it.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "PromotedThread",
+        "type": "object",
+        "properties": {
+          "project": {
+            "$ref": "#/$defs/Project"
+          },
+          "threads": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ThreadId"
+            }
+          }
+        },
+        "required": [
+          "project",
+          "threads"
+        ],
+        "$defs": {
+          "Project": {
+            "description": "A working directory shared by a group of threads.",
+            "type": "object",
+            "properties": {
+              "settings": {
+                "description": "Project preferences shared by all clients.",
+                "$ref": "#/$defs/ProjectSettings"
+              },
+              "name": {
+                "description": "Display name.",
+                "type": "string"
+              },
+              "path": {
+                "description": "Absolute directory path.",
+                "type": "string"
+              },
+              "createdAt": {
+                "description": "Creation time in Unix milliseconds.",
+                "type": "integer",
+                "format": "int64"
+              },
+              "git": {
+                "description": "Whether the directory is inside a Git checkout, so its threads can\nrun in worktrees.",
+                "type": "boolean"
+              },
+              "branch": {
+                "description": "The checkout's current branch; `None` outside Git or on a detached\nHEAD.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "settings",
+              "name",
+              "path",
+              "createdAt",
+              "git"
+            ]
+          },
+          "ProjectSettings": {
+            "description": "Stored project preferences. Optional defaults inherit from the environment.",
+            "type": "object",
+            "properties": {
+              "icon": {
+                "$ref": "#/$defs/ProjectIcon",
+                "default": {
+                  "kind": "automatic"
+                }
+              },
+              "pinned": {
+                "type": "boolean",
+                "default": false
+              },
+              "order": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64",
+                "default": null
+              },
+              "archived": {
+                "type": "boolean",
+                "default": false
+              },
+              "defaultHarness": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultModel": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "defaultOptions": {
+                "type": "object",
+                "additionalProperties": {
+                  "$ref": "#/$defs/OptionValue"
+                },
+                "default": {}
+              },
+              "defaultCheckout": {
+                "$ref": "#/$defs/DefaultCheckout",
+                "default": "local"
+              },
+              "baseBranch": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "branchPrefix": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "default": null
+              },
+              "additionalDirectories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "default": []
+              },
+              "autoSettle": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ProjectAutoSettle"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            }
+          },
+          "ProjectIcon": {
+            "description": "Icon selection advertised in project summaries. Image bytes are read\nseparately.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "automatic"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "ownerAvatar"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "lucide"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "color": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "color"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "emoji"
+                  },
+                  "emoji": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "emoji"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "uploaded"
+                  },
+                  "mediaType": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "mediaType"
+                ]
+              }
+            ]
+          },
+          "OptionValue": {
+            "description": "Config option value, stored as a string choice or a boolean.",
+            "anyOf": [
+              {
+                "description": "A named choice.",
+                "type": "string"
+              },
+              {
+                "description": "On or off.",
+                "type": "boolean"
+              }
+            ]
+          },
+          "DefaultCheckout": {
+            "type": "string",
+            "enum": [
+              "local",
+              "newWorktree"
+            ]
+          },
+          "ProjectAutoSettle": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "never"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "afterDays"
+                  },
+                  "days": {
+                    "type": "integer",
+                    "format": "uint16",
+                    "minimum": 0,
+                    "maximum": 65535
+                  }
+                },
+                "required": [
+                  "kind",
+                  "days"
+                ]
+              }
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      }
     }
   },
   "notification": {

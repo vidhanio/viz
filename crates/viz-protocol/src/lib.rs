@@ -48,9 +48,9 @@ pub use project_settings::{
 pub use requests::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, GitBranch,
     HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches, ListHarnesses, ListProjects,
-    ListWorktrees, MoveThread, Moved, ProjectList, ProjectResult, RemoveProject, RemoveWorktree,
-    SearchFiles, SendInput, SendMode, Sent, StopThread, UpdateProject, UpdateThread, Worktree,
-    WorktreeList,
+    ListWorktrees, MoveThread, Moved, ProjectList, ProjectResult, PromoteThread, PromotedThread,
+    RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode, Sent, StopThread,
+    UpdateProject, UpdateThread, Worktree, WorktreeList,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -147,6 +147,7 @@ methods! {
     ListWorktrees<'_> => "worktrees.list", WorktreeList;
     RemoveWorktree<'_> => "worktree.remove", Empty;
     MoveThread => "thread.move", Moved;
+    PromoteThread => "thread.promoteProject", PromotedThread;
 }
 
 /// What kind of client is connecting; decides which notifications it receives.

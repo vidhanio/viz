@@ -179,7 +179,7 @@ impl Workspace {
             selection: selection(args.target.model.clone(), args.target.thinking.clone()),
             ..SavedSession::default()
         };
-        store::create_thread(
+        let thread = store::create_thread(
             db,
             &NewThread {
                 harness,
@@ -191,7 +191,12 @@ impl Workspace {
                 session,
             },
         )
-        .await
+        .await?;
+        if project.is_none() {
+            self.provision_scratch(db, thread, &titles::from_prompt(&args.text))
+                .await?;
+        }
+        Ok(thread)
     }
 
     pub(crate) async fn retract(&self, args: RetractTask) -> Result<Option<Received>, Error> {

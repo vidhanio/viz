@@ -274,3 +274,17 @@ pub struct Sent {
     /// The run the input became.
     pub run: RunId,
 }
+
+/// Register this thread's scratch workspace in place and file the threads
+/// sharing it.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct PromoteThread {
+    pub thread: ThreadId,
+    pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+pub struct PromotedThread {
+    pub project: Project,
+    pub threads: Vec<ThreadId>,
+}

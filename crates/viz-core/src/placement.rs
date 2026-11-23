@@ -25,6 +25,10 @@ pub struct Checkout {
 pub enum Rejection {
     #[error("a worktree requires a project")]
     NoProject,
+    #[error("the thread does not have a projectless scratch directory")]
+    NotScratch,
+    #[error("project name must not be empty")]
+    EmptyProjectName,
     #[error("{0} is not a worktree viz created")]
     Unmanaged(String),
     #[error("thread {user} still runs in {path}")]
@@ -212,5 +216,55 @@ fn slug(text: &str, fallback: &str) -> String {
         fallback.to_owned()
     } else {
         slug
+    }
+}
+
+/// Name a fresh projectless workspace from its creation date, title, and thread
+/// id.
+#[must_use]
+pub fn scratch_name(date: &str, title: &str, thread: ThreadId) -> String {
+    format!("{date}-{}-{thread}", slug(title, "thread"))
+}
+
+/// Decide whether a checkout may be registered in place as a project.
+#[derive(Debug)]
+pub struct ScratchPromotion;
+
+impl ScratchPromotion {
+    /// Return the destination already used by the thread.
+    ///
+    /// # Errors
+    /// Refuses threads that already have a project or do not own a scratch
+    /// directory.
+    pub fn decide(
+        root: &std::path::Path,
+        checkout: &Checkout,
+        project: Option<&str>,
+    ) -> Result<String, Rejection> {
+        if project.is_some()
+            || checkout.worktree.is_some()
+            || std::path::Path::new(&checkout.cwd).parent() != Some(root)
+        {
+            return Err(Rejection::NotScratch);
+        }
+        Ok(checkout.cwd.clone())
+    }
+
+    /// Choose the explicit name, or use the thread title when available.
+    ///
+    /// # Errors
+    /// Rejects an explicitly blank display name.
+    pub fn name(requested: Option<String>, title: String) -> Result<String, Rejection> {
+        if let Some(name) = requested {
+            if name.trim().is_empty() {
+                return Err(Rejection::EmptyProjectName);
+            }
+            return Ok(name);
+        }
+        if title.trim().is_empty() {
+            Ok("Scratch project".to_owned())
+        } else {
+            Ok(title)
+        }
     }
 }

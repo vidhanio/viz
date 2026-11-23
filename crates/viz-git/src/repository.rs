@@ -50,7 +50,11 @@ impl Repository {
     pub async fn discover(path: &Path, cancel: &CancellationToken) -> Result<Self, Error> {
         let path = path.to_owned();
         blocking(cancel, move |_| {
-            Self::from_git(&git2::Repository::discover(path)?)
+            let repo = git2::Repository::discover(path).map_err(|error| match error.code() {
+                ErrorCode::NotFound => Error::NotRepository,
+                _ => Error::Git(error),
+            })?;
+            Self::from_git(&repo)
         })
         .await
     }

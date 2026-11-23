@@ -16,6 +16,7 @@ mod projects;
 pub(crate) mod rpc;
 pub(crate) mod runs;
 mod runtime;
+mod scratch;
 mod sessions;
 pub(crate) mod sql;
 mod store;

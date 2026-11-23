@@ -278,6 +278,17 @@ impl Client {
         self.request(args).await
     }
 
+    /// File a projectless thread and its scratch directory under a new project.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn promote_thread(
+        &self,
+        args: &viz_protocol::PromoteThread,
+    ) -> Result<viz_protocol::PromotedThread> {
+        self.request(args).await
+    }
+
     /// Get a project's image icon, or confirm that the caller’s `ETag` still
     /// matches.
     ///

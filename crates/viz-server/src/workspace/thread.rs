@@ -108,6 +108,13 @@ impl Workspace {
             },
         )
         .await?;
+        if args.project.is_none() {
+            let title = args
+                .title
+                .clone()
+                .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()));
+            self.provision_scratch(&mut tx, thread, &title).await?;
+        }
         let run = if args.text.is_some() || !attachments.is_empty() {
             let attachments = attachments::save(&mut tx, thread, attachments).await?;
             Some(
