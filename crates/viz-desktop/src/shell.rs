@@ -1,8 +1,5 @@
 //! Window shell layout with explicit slots for `sidebar`, `toolbar`, `main`,
-//! `details`, `diff`, `terminal`, and `overlays`.
-//!
-//! Slots not yet populated by Phase 1 feature tracks (`details`, `diff`,
-//! `terminal`) stay `None` and add zero layout nodes or visual chrome.
+//! `details`, `diff`, and `overlays`.
 
 use std::time::Duration;
 
@@ -32,8 +29,6 @@ pub struct ShellSlots {
     pub details: Option<El>,
     /// Optional resizable right-hand diff inspector slot (Phase 1 Track G).
     pub diff: Option<El>,
-    /// Optional bottom docked terminal drawer slot (Phase 1 Track X).
-    pub terminal: Option<El>,
     /// Popovers, menus, dialogs, palette, and sheets rendered above the shell.
     pub overlays: Vec<El>,
 }
@@ -47,7 +42,6 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
         mut main,
         details,
         diff,
-        terminal,
         mut overlays,
     } = slots;
     if let Some(details) = details {
@@ -59,15 +53,6 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
             .items_start()
             .child(main.grow(1.0).shrink().min_w(0.0))
             .child(details);
-    }
-    if let Some(terminal) = terminal.filter(|_| s.model.panels.terminal_open) {
-        main = col()
-            .key("main-with-terminal")
-            .w_full()
-            .h_full()
-            .min_h(0.0)
-            .child(main.grow(1.0).shrink().min_h(0.0))
-            .child(terminal.h(crate::model::terminal::height(&s.model)));
     }
     let main = motion::stable_content(
         col()

@@ -44,10 +44,6 @@ pub struct ProjectIconCache {
 }
 
 /// Normalised cache of server-owned data for one environment.
-///
-/// Upcoming Phase 1 tracks extend this cache with git working-tree status,
-/// diffs, pull requests, pending approval/question requests, and docked
-/// terminal state as those protocol types land.
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentCache {
     projects: BTreeMap<String, Project>,

@@ -20,7 +20,6 @@
       url = "github:numtide/treefmt-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    ghostty.url = "github:ghostty-org/ghostty/108cacb17ed8990840cd14abfce43d8ed8503ca1";
     crane.url = "github:ipetkov/crane";
     rust-overlay = {
       url = "github:oxalica/rust-overlay";
@@ -64,7 +63,6 @@
           );
 
           linkedLibs = [
-            inputs'.ghostty.packages.libghostty-vt
             pkgs.libxkbcommon
             pkgs.wayland
           ];

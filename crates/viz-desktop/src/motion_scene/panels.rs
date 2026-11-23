@@ -1,6 +1,6 @@
-//! Live shimmer, tucked drawer, popover, inspector, terminal, and toast cards.
+//! Live shimmer, tucked drawer, popover, inspector, and toast cards.
 
-use rune::{Edge, El, col, icon, row, text};
+use rune::{El, col, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, Placement, SegmentedControl};
 
 use super::{DIFF_STEPS, WorkbenchDemo, card, with_demo};
@@ -312,31 +312,6 @@ fn diff_line(line: &str, added: bool, t: &Theme) -> El {
                 .font(t.mono_micro)
                 .color(if added { t.success } else { t.danger })
                 .truncate(),
-        )
-}
-
-pub(super) fn terminal_drawer(t: &Theme) -> El {
-    col()
-        .key("demo-terminal-panel")
-        .w_full()
-        .h(72.0)
-        .padding(S8)
-        .gap(S4)
-        .radius(RADIUS_CONTROL)
-        .fill(t.surface)
-        .border(HAIRLINE, t.hairline)
-        .transition(motion::slide_panel(Edge::Bottom))
-        .child(
-            row()
-                .gap(S6)
-                .center_y()
-                .child(icon(&ui::TERMINAL, ICON_SMALL).color(t.muted).a11y_hidden())
-                .child(text("Terminal · bash").font(t.small_medium).color(t.text)),
-        )
-        .child(
-            text("$ cargo clippy --workspace --all-targets -- -D warnings   [0 warnings]")
-                .font(t.mono_small)
-                .color(t.success),
         )
 }
 

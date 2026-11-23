@@ -68,7 +68,6 @@ fn main() -> Result<()> {
                 "methods": viz_protocol::method_schemas(),
                 "notification": schemars::schema_for!(wire::Notification),
                 "gitErrorData": schemars::schema_for!(viz_protocol::GitFailure),
-                "terminalErrorData": schemars::schema_for!(viz_protocol::TerminalFailure),
             });
             let mut json = serde_json::to_string_pretty(&schema)?;
             json.push('\n');

@@ -2,7 +2,6 @@
 
 mod peer_rpc;
 mod socket;
-mod terminals;
 
 use std::sync::Arc;
 

@@ -9,7 +9,6 @@ publish.workspace = true
 
 [dependencies]
 chrono.workspace = true
-tokio-stream = { workspace = true, features = ["sync"] }
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, features = ["ws"] }
@@ -54,7 +53,6 @@ viz-git.workspace = true
 viz-github.workspace = true
 viz-protocol.workspace = true
 viz-config.workspace = true
-viz-terminal = { workspace = true, features = ["pty"] }
 
 [lints]
 workspace = true

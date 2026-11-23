@@ -1,6 +1,6 @@
 # AGENTS.md
 
-viz is a single-user workspace for running ACP harnesses on code across environments: run agents, review and ship their work (Git, GitHub, terminals), follow delegation, and find things. Each environment stores its projects, threads, and durable runs in SQLite and can delegate tasks to peers over HTTP(S). External harnesses run every model over ACP; viz owns no model loop.
+viz is a single-user workspace for running ACP harnesses on code across environments: run agents, review and ship their work (Git and GitHub), follow delegation, and find things. Each environment stores its projects, threads, and durable runs in SQLite and can delegate tasks to peers over HTTP(S). External harnesses run every model over ACP; viz owns no model loop.
 
 Active single-user development: change configs, wire types, and clients directly without backward-compatibility shims. Prefer improving an existing surface over adding one, remove what becomes redundant in the same change, and pick a good default over adding a setting. Process-wide config stays TOML; project settings live in-app.
 

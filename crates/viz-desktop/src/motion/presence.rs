@@ -1,13 +1,12 @@
 //! Presence, directional view-switch, popover, and pane-slide transitions.
 
-use rune::{Align, Edge, El, Side, SpringPair, Transition};
+use rune::{Align, El, Side, SpringPair, Transition};
 use rune_kit::{Placement, shell::PaneMotion};
 
 use super::tokens::{
-    GLIDE, GLIDE_PAIR, OVERLAY_SCALE, PANE_FADE_TAIL, PANE_MAX_DURATION, PANE_MIN_DURATION,
-    PANE_REDUCED_FADE, PANE_REF_WIDTH, QUICK_PAIR, REFLOW_PAIR, SETTLE_PAIR, SNAP_PAIR,
-    STAGGER_BULK_LIMIT, STAGGER_MAX_ITEMS, STAGGER_STEP, TITLE_PAIR, TRAVEL_DRAWER, TRAVEL_MICRO,
-    TRAVEL_SMALL,
+    GLIDE, OVERLAY_SCALE, PANE_FADE_TAIL, PANE_MAX_DURATION, PANE_MIN_DURATION, PANE_REDUCED_FADE,
+    PANE_REF_WIDTH, QUICK_PAIR, REFLOW_PAIR, SETTLE_PAIR, SNAP_PAIR, STAGGER_BULK_LIMIT,
+    STAGGER_MAX_ITEMS, STAGGER_STEP, TITLE_PAIR, TRAVEL_DRAWER, TRAVEL_MICRO, TRAVEL_SMALL,
 };
 
 /// Which way a pane or view stack moves when selection changes.
@@ -198,13 +197,6 @@ pub fn pane_motion() -> PaneMotion {
         .scale_with_width(PANE_REF_WIDTH, PANE_MIN_DURATION, PANE_MAX_DURATION)
         .fade_tail(PANE_FADE_TAIL)
         .reduced_motion_fade(PANE_REDUCED_FADE)
-}
-
-/// Edge-sliding transition for docked drawers and bottom/side panels.
-pub fn slide_panel(edge: Edge) -> Transition {
-    Transition::move_edge(edge)
-        .combined(Transition::opacity())
-        .springs(GLIDE_PAIR)
 }
 
 /// Locks text layout to its destination width while an adjacent pane opens or

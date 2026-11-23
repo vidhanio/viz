@@ -12,12 +12,6 @@ use viz_protocol::{RunId, TaskId, ThreadId};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum Error {
-    #[error(transparent)]
-    Terminal(#[from] viz_terminal::pty::PtyError),
-    #[error("attach to the terminal before resizing")]
-    TerminalNotAttached,
-    #[error("the checkout has running terminals")]
-    ActiveTerminals,
     #[error("no thread {0}")]
     NoThread(ThreadId),
     #[error("no run {run} in thread {thread}")]
@@ -122,21 +116,12 @@ impl Error {
 
     pub(crate) const fn kind(&self) -> Kind {
         match self {
-            Self::Terminal(error) => match error {
-                viz_terminal::pty::PtyError::Closed => Kind::NotFound,
-                viz_terminal::pty::PtyError::Capacity => Kind::Unavailable,
-                viz_terminal::pty::PtyError::ResizeLease
-                | viz_terminal::pty::PtyError::InputTooLarge => Kind::Invalid,
-                _ => Kind::Internal,
-            },
             Self::NoThread(_)
             | Self::NoRun { .. }
             | Self::NoTask(_)
             | Self::NoProject(_)
             | Self::NotFound(_) => Kind::NotFound,
-            Self::TerminalNotAttached
-            | Self::ActiveTerminals
-            | Self::Queue(_)
+            Self::Queue(_)
             | Self::Busy(_)
             | Self::Thread(_)
             | Self::Task(_)

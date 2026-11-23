@@ -14,7 +14,7 @@ use rune_kit::{
 
 use self::{
     cards::{disclosure_card, reorder_card},
-    panels::{diff_inspector, shimmer_presence_card, terminal_drawer, undo_toast},
+    panels::{diff_inspector, shimmer_presence_card, undo_toast},
     shared::shared_morph_roll_card,
 };
 use crate::{
@@ -84,15 +84,11 @@ struct SharedState {
 #[derive(Debug)]
 struct LiveState {
     shimmer: bool,
-    terminal: bool,
 }
 
 impl Default for LiveState {
     fn default() -> Self {
-        Self {
-            shimmer: true,
-            terminal: false,
-        }
+        Self { shimmer: true }
     }
 }
 
@@ -210,7 +206,7 @@ fn workbench_view(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> El {
         .child(shared_morph_roll_card(demo, t))
         .child(shimmer_presence_card(demo, t, &mut overlays));
 
-    let mut content = col()
+    let content = col()
         .key("workbench-grid")
         .w_full()
         .grow(1.0)
@@ -219,10 +215,6 @@ fn workbench_view(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> El {
         .gap(S12)
         .child(top_row)
         .child(bottom_row);
-
-    if demo.live.terminal {
-        content = content.child(terminal_drawer(t));
-    }
 
     let main = motion::stable_content(
         col()
@@ -301,22 +293,6 @@ fn workbench_toolbar(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> Toolbar 
                 })
                 .build(&t.k)
                 .key("btn-toast"),
-        )
-        .child(
-            ui::button(
-                if demo.live.terminal {
-                    "Hide terminal"
-                } else {
-                    "Terminal"
-                },
-                ButtonVariant::Outline,
-                Size::Small,
-            )
-            .on_press(|s: &mut Desktop| {
-                with_demo(s, |d| d.live.terminal = !d.live.terminal);
-            })
-            .build(&t.k)
-            .key("btn-terminal"),
         )
         .child(
             ui::button(

@@ -322,7 +322,6 @@ impl Workspace {
             tx.commit().await?;
             self.updates.remove(thread);
             let driver = self.workers.remove(thread);
-            self.terminals.lock().await.release_thread(thread).await;
             drop(db);
             (driver, binding)
         };
@@ -330,7 +329,6 @@ impl Workspace {
         self.due.notify_one();
         if let Some(driver) = driver {
             driver.close().await;
-            self.terminals.lock().await.release_thread(thread).await;
         }
         self.housekeep(&binding, Housekeeping::Delete);
         match tokio::fs::remove_dir_all(self.attachment_dir(thread)).await {

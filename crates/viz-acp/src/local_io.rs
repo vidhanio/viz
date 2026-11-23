@@ -1,7 +1,6 @@
 //! Opt-in ACP filesystem and process operations on the client's host.
 
 mod files;
-mod pty;
 mod terminals;
 
 use std::{
@@ -13,7 +12,6 @@ use std::{
 };
 
 use agent_client_protocol::{Error, JsonRpcResponse as _};
-pub use pty::PtyTerminals;
 use serde_json::Value;
 pub use terminals::kill_group;
 use tokio::{
@@ -25,7 +23,6 @@ use uuid::Uuid;
 
 use self::{
     files::{read_text_file, write_text_file},
-    pty::Ptys,
     terminals::{Completion, Output, Terminal, TerminalHistory, run_terminal, terminal_snapshot},
 };
 use crate::{
@@ -52,22 +49,13 @@ pub enum FileAccess {
 }
 
 /// Whether to execute agent-supplied commands on the client's host.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalAccess {
     #[default]
     Disabled,
     /// Runs commands with the client's OS permissions and a scrubbed inherited
     /// environment.
     Local,
-    /// Runs commands in PTYs of the environment's terminal registry, where
-    /// clients can watch them.
-    Pty(PtyTerminals),
-}
-
-impl TerminalAccess {
-    const fn enabled(&self) -> bool {
-        !matches!(self, Self::Disabled)
-    }
 }
 
 /// Configuration for optional host-side ACP filesystem and terminal operations.
@@ -93,7 +81,6 @@ pub struct Host {
     cwd: PathBuf,
     roots: Vec<PathBuf>,
     terminals: Mutex<HashMap<TerminalId, Terminal>>,
-    ptys: Option<Ptys>,
     history: Arc<TerminalHistory>,
     shutdown: CancellationToken,
 }
@@ -105,7 +92,7 @@ impl Host {
         events: Option<mpsc::UnboundedSender<ClientEvent>>,
     ) -> crate::error::Result<Self> {
         let mut roots = Vec::new();
-        if policy.files != FileAccess::Disabled || policy.terminals.enabled() {
+        if policy.files != FileAccess::Disabled || policy.terminals == TerminalAccess::Local {
             let configured = if policy.roots.is_empty() {
                 std::slice::from_ref(&cwd)
             } else {
@@ -132,16 +119,11 @@ impl Host {
                 roots.push(root);
             }
         }
-        let ptys = match &policy.terminals {
-            TerminalAccess::Pty(owner) => Some(Ptys::new(owner.clone())),
-            TerminalAccess::Disabled | TerminalAccess::Local => None,
-        };
         Ok(Self {
             policy,
             cwd: cwd.to_owned(),
             roots,
             terminals: Mutex::default(),
-            ptys,
             shutdown: CancellationToken::new(),
             history: Arc::new(TerminalHistory {
                 recent: Mutex::default(),
@@ -168,35 +150,15 @@ impl Host {
                 blocking(move || write_text_file(&root, &path, &content)).await?;
                 WriteTextFileResponse::new().into_json(method)
             }
-            AgentRequest::CreateTerminalRequest(request) if self.policy.terminals.enabled() => {
+            AgentRequest::CreateTerminalRequest(request)
+                if self.policy.terminals == TerminalAccess::Local =>
+            {
                 CreateTerminalResponse::new(self.create(request.clone()).await?).into_json(method)
             }
             AgentRequest::TerminalOutputRequest(request) => self
                 .output(&request.session_id, &request.terminal_id)
                 .ok_or_else(unknown_terminal)?
                 .into_json(method),
-            AgentRequest::WaitForTerminalExitRequest(request) if let Some(ptys) = &self.ptys => {
-                let status = ptys
-                    .wait(&request.session_id, &request.terminal_id)
-                    .await
-                    .ok_or_else(unknown_terminal)?;
-                WaitForTerminalExitResponse::new(status).into_json(method)
-            }
-            AgentRequest::KillTerminalRequest(request) if let Some(ptys) = &self.ptys => {
-                if !ptys.kill(&request.session_id, &request.terminal_id).await {
-                    return Err(unknown_terminal());
-                }
-                KillTerminalResponse::new().into_json(method)
-            }
-            AgentRequest::ReleaseTerminalRequest(request) if let Some(ptys) = &self.ptys => {
-                if !ptys
-                    .release(&request.session_id, &request.terminal_id)
-                    .await
-                {
-                    return Err(unknown_terminal());
-                }
-                ReleaseTerminalResponse::new().into_json(method)
-            }
             AgentRequest::WaitForTerminalExitRequest(request) => {
                 let mut status =
                     self.terminal(&request.session_id, &request.terminal_id, |terminal| {
@@ -256,22 +218,6 @@ impl Host {
             .await
             .map_err(Error::into_internal_error)?;
         self.relative(&cwd)?;
-        let limit = request.output_byte_limit.unwrap_or(OUTPUT_DEFAULT);
-        let limit = usize::try_from(limit)
-            .unwrap_or(OUTPUT_LIMIT)
-            .min(OUTPUT_LIMIT);
-        if let Some(ptys) = &self.ptys {
-            return ptys
-                .create(
-                    request,
-                    cwd,
-                    limit,
-                    Arc::clone(&self.history),
-                    &self.shutdown,
-                )
-                .await
-                .map_err(Error::into_internal_error);
-        }
         let child = Command::new(&request.command)
             .args(request.args)
             .current_dir(cwd)
@@ -290,6 +236,10 @@ impl Host {
             .kill_on_drop(true)
             .spawn()
             .map_err(Error::into_internal_error)?;
+        let limit = request.output_byte_limit.unwrap_or(OUTPUT_DEFAULT);
+        let limit = usize::try_from(limit)
+            .unwrap_or(OUTPUT_LIMIT)
+            .min(OUTPUT_LIMIT);
         let cancel = self.shutdown.child_token();
         let output = Arc::new(Mutex::new(Output {
             limit,
@@ -340,9 +290,6 @@ impl Host {
     }
 
     fn output(&self, session: &SessionId, id: &TerminalId) -> Option<TerminalOutputResponse> {
-        if let Some(output) = self.ptys.as_ref().and_then(|ptys| ptys.output(session, id)) {
-            return Some(output);
-        }
         self.terminal(session, id, |terminal| {
             let status = terminal.status.borrow().clone();
             terminal_snapshot(&terminal.output, status)
@@ -370,15 +317,9 @@ impl Host {
 
     pub fn shutdown(&self) {
         self.shutdown.cancel();
-        if let Some(ptys) = &self.ptys {
-            ptys.shutdown();
-        }
     }
 
     pub fn cancel_session(&self, session: &str) {
-        if let Some(ptys) = &self.ptys {
-            ptys.kill_session(session);
-        }
         for terminal in self
             .terminals
             .lock()

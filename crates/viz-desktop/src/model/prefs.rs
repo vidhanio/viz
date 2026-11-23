@@ -42,8 +42,6 @@ pub struct Prefs {
     pub sidebar_open: Option<bool>,
     /// Saved docked diff panel width in points.
     pub diff_width: Option<f32>,
-    /// Saved docked terminal height in points.
-    pub terminal_height: Option<f32>,
     /// Shelf names collapsed in the sidebar triage view.
     pub collapsed_shelves: BTreeSet<String>,
     /// User-starred model identifiers (`harness/model` or model id).
@@ -61,7 +59,6 @@ impl Default for Prefs {
             sidebar_width: None,
             sidebar_open: None,
             diff_width: None,
-            terminal_height: None,
             collapsed_shelves: default_collapsed_shelves(),
             favorite_models: Vec::new(),
             drafts: BTreeMap::new(),
@@ -87,7 +84,6 @@ impl Prefs {
         let sidebar_width = positive_f32(&root, "sidebarWidth");
         let sidebar_open = root.get("sidebarOpen").and_then(Value::as_bool);
         let diff_width = positive_f32(&root, "diffWidth");
-        let terminal_height = positive_f32(&root, "terminalHeight");
         let collapsed_shelves = root
             .get("collapsedShelves")
             .and_then(Value::as_array)
@@ -106,7 +102,6 @@ impl Prefs {
             sidebar_width,
             sidebar_open,
             diff_width,
-            terminal_height,
             collapsed_shelves,
             favorite_models,
             drafts,
@@ -128,9 +123,6 @@ impl Prefs {
         }
         if let Some(width) = self.diff_width.filter(|w| w.is_finite() && *w > 0.0) {
             root.insert("diffWidth".into(), json!(width));
-        }
-        if let Some(height) = self.terminal_height.filter(|h| h.is_finite() && *h > 0.0) {
-            root.insert("terminalHeight".into(), json!(height));
         }
         let collapsed_shelves: Vec<&str> =
             self.collapsed_shelves.iter().map(String::as_str).collect();

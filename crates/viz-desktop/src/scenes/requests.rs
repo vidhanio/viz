@@ -1,99 +1,13 @@
-//! Dock and harness request previews using the production desktop surfaces.
+//! Harness request previews using the production desktop surfaces.
 
 use serde_json::json;
 use viz_client::protocol::{
     FormValue, PermissionKind, PermissionOption, RequestBody, RequestId, RequestState, RunId,
-    RunRequest, Size, TerminalId, TerminalScope, TerminalSummary,
+    RunRequest,
 };
-use viz_terminal::Exit;
 
 use super::{data::THREAD, fixtures};
-use crate::{
-    app::Desktop,
-    model::{
-        Status,
-        terminal::{Accessory, Place, Split},
-    },
-};
-
-pub fn dock(app: &mut Desktop) {
-    seed_dock(app, false);
-}
-
-pub fn disconnected(app: &mut Desktop) {
-    seed_dock(app, true);
-}
-
-fn seed_dock(app: &mut Desktop, disconnected: bool) {
-    fixtures::seed_workspace(&mut app.model);
-    let project = app
-        .model
-        .project_path()
-        .expect("preview project")
-        .to_owned();
-    let dock = &mut app.model.terminal;
-    dock.environment = "local".into();
-    dock.listed = true;
-    dock.panel_was_open = true;
-    let ids = [
-        "00000000-0000-4000-8000-000000000001",
-        "00000000-0000-4000-8000-000000000002",
-        "00000000-0000-4000-8000-000000000003",
-    ]
-    .map(|id| TerminalId(id.parse().expect("preview UUID")));
-    let checkout = TerminalScope::Thread { thread: THREAD };
-    let exit = disconnected.then_some(Exit::Code(2));
-    for (id, scope, title, exit) in [
-        (ids[0], checkout.clone(), "Shell", exit),
-        (ids[1], checkout, "Shell", None),
-        (ids[2], TerminalScope::Project { project }, "Shell", None),
-    ] {
-        dock.sessions.push(TerminalSummary {
-            id,
-            scope,
-            cwd: "/work/workbench".into(),
-            title: title.into(),
-            created_at: 0,
-            exit,
-        });
-    }
-    dock.place(ids[0], Place::Tab);
-    if disconnected {
-        app.model.connection.status = Status::Error("Connection interrupted".into());
-    } else {
-        dock.place(ids[1], Place::Split(ids[0], Split::Right));
-        dock.active = Some(ids[0]);
-        dock.accessory = Accessory::Find;
-        dock.attached.extend(ids[..2].iter().copied());
-    }
-    app.model.panels.terminal_open = true;
-    app.model.panels.terminal_height = 280.0;
-    app.sync_widgets_from_model();
-    let output = if disconnected {
-        "\x1b[31merror\x1b[0m: missing package metadata\r\n"
-    } else {
-        "\x1b[32m~/work/workbench\x1b[0m $ cargo check\r\n    Checking workbench\r\n    Finished dev profile\r\n"
-    };
-    let size = Size::new(if disconnected { 96 } else { 48 }, 8);
-    crate::terminal::panel::preview(
-        app,
-        ids[0],
-        size,
-        output,
-        exit,
-        if disconnected { "" } else { "Checking" },
-    );
-    if !disconnected {
-        crate::terminal::panel::preview(
-            app,
-            ids[1],
-            size,
-            "\x1b[36m~/work/workbench\x1b[0m $ git status --short\r\n M src/main.rs\r\n",
-            None,
-            "",
-        );
-    }
-}
+use crate::app::Desktop;
 
 pub fn approval(app: &mut Desktop) {
     fixtures::seed_activity(&mut app.model);

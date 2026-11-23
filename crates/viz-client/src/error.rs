@@ -24,8 +24,6 @@ pub enum Error {
         message: String,
         /// Machine-readable Git operation failure, when applicable.
         git_failure: Option<viz_protocol::GitFailure>,
-        /// Machine-readable terminal failure, when applicable.
-        terminal_failure: Option<viz_protocol::TerminalFailure>,
     },
     /// A request's params couldn't be encoded as JSON.
     #[error("{method}: encoding params: {source}")]

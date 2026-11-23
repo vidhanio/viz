@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 
 use serde_json::Value;
-use viz_client::protocol::{ToolCall, ToolCallStatus, ToolContent};
+use viz_client::protocol::{ToolCall, ToolCallStatus};
 
 use super::transcript::{SearchMatch, Tool, ToolStatus};
 
@@ -80,14 +80,6 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
         .and_then(|code| i32::try_from(code).ok())
         .or(legacy_exit);
     let exit_signal = exit_ref.and_then(|exit| exit.signal.clone());
-    let terminal_id = record
-        .content
-        .iter()
-        .find_map(|block| match block {
-            ToolContent::Terminal(id) => Some(id.clone()),
-            _ => None,
-        })
-        .or_else(|| record.terminals.first().map(|term| term.id.clone()));
     let terminal_truncated = record.terminals.iter().any(|term| term.truncated);
     let preserve_output =
         command || matches!(name, "read" | "read_file" | "search" | "grep" | "glob");
@@ -153,7 +145,6 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
         exit_code,
         exit_signal,
         output: cap_output(output, status),
-        terminal_id,
         terminal_truncated,
         more: record.more,
         review: record.review.clone(),

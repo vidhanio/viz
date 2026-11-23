@@ -25,7 +25,6 @@ mod scratch;
 mod sessions;
 pub(crate) mod sql;
 mod store;
-mod terminals;
 mod thread;
 mod triage;
 mod worker;
@@ -94,7 +93,6 @@ pub(crate) struct Workspace {
     requests: Requests,
     /// PTYs owned by threads: the commands agents run, and later the user's
     /// own shells.
-    terminals: Arc<Mutex<viz_terminal::pty::Terminals>>,
     checks: harnesses::Checks,
     mcp: Mcp,
     closing: CancellationToken,
@@ -165,7 +163,6 @@ impl Workspace {
             pull_due: Notify::new(),
             github: Mutex::default(),
             requests: Requests::default(),
-            terminals: Arc::default(),
             checks: harnesses::Checks::default(),
             mcp,
             closing: CancellationToken::new(),

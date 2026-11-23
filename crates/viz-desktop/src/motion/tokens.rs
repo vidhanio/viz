@@ -33,8 +33,6 @@ pub const TITLE_PAIR: SpringPair = SpringPair::new(SNAP, INSTANT);
 pub const SETTLE_PAIR: SpringPair = SpringPair::new(SETTLE, Spring::new(0.18, 0.0));
 /// Asymmetric enter/exit pair for entering/exiting list rows.
 pub const REFLOW_PAIR: SpringPair = SpringPair::new(REFLOW, SNAP);
-/// Asymmetric enter/exit pair for edge-sliding panels.
-pub const GLIDE_PAIR: SpringPair = SpringPair::new(GLIDE, Spring::new(0.22, 0.0));
 
 /// Micro travel distance for popovers, menus, and tooltips (points).
 pub const TRAVEL_MICRO: f32 = 4.0;

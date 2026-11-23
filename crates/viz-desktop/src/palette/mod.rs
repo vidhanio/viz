@@ -29,7 +29,6 @@ const fn command_glyph(command: PaletteCommand) -> &'static Icon {
         PaletteCommand::Promote | PaletteCommand::AddProject => &ui::FOLDER_PLUS,
         PaletteCommand::Environments => &ui::GLOBE,
         PaletteCommand::Diff => &ui::GIT_BRANCH,
-        PaletteCommand::Terminal => &ui::TERMINAL,
         PaletteCommand::Scratch => &ui::MESSAGE_SQUARE_DASHED,
         PaletteCommand::NewThread => &ui::COMPOSE,
         PaletteCommand::Sidebar => &ui::SIDEBAR,

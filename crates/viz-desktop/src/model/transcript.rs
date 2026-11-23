@@ -377,8 +377,6 @@ pub struct Tool {
     pub exit_signal: Option<String>,
     /// Display-ready result text or running output.
     pub output: String,
-    /// Associated terminal id for jump-to-terminal hooks.
-    pub terminal_id: Option<String>,
     /// True when the beginning of terminal output was dropped.
     pub terminal_truncated: bool,
     /// True when full payload can be fetched lazily via `thread.entry_chunk`.

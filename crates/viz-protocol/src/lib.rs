@@ -16,7 +16,6 @@ mod lifecycle;
 pub mod peer;
 mod project_settings;
 mod requests;
-mod terminals;
 mod threads;
 mod tool;
 mod transcript;
@@ -76,12 +75,6 @@ pub use requests::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-pub use terminals::{
-    AttachTerminal, CellSize, Change as TerminalChange, CloseTerminal, CreateTerminal,
-    DetachTerminal, Exit as TerminalExit, InteractiveScope, ListTerminals, ResizeTerminal,
-    Sequence, Size, Snapshot, TerminalFailure, TerminalFilter, TerminalId, TerminalInput,
-    TerminalList, TerminalScope, TerminalSummary, Update,
-};
 pub use threads::{
     CommandSource, ConfigOption, DependentChoice, DependentOption, LaunchThread, Launched,
     ListThreads, OptionChoice, OptionKind, OptionValue, SlashCommand, ThreadList, ThreadState,
@@ -155,13 +148,6 @@ methods! {
     ConfigureThread<'_> => "thread.configure", Empty;
     StopThread => "thread.stop", Empty;
     DeleteThread => "thread.delete", Empty;
-    ListTerminals => "terminals.list", TerminalList;
-    CreateTerminal => "terminal.create", TerminalSummary;
-    AttachTerminal => "terminal.attach", Snapshot;
-    DetachTerminal => "terminal.detach", Empty;
-    TerminalInput => "terminal.input", Empty;
-    ResizeTerminal => "terminal.resize", Empty;
-    CloseTerminal => "terminal.close", Empty;
     ListProjects => "projects.list", ProjectList;
     CreateProject<'_> => "project.create", ProjectResult;
     UpdateProject<'_> => "project.update", Empty;

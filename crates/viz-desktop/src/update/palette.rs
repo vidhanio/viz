@@ -312,9 +312,6 @@ fn run_command(model: &mut Model, command: PaletteCommand, effects: &mut Vec<Eff
         PaletteCommand::Diff => {
             effects.extend(super::git::update(model, super::GitMsg::ToggleDiff));
         }
-        PaletteCommand::Terminal => {
-            effects.extend(super::git::update(model, super::GitMsg::ToggleTerminal));
-        }
         PaletteCommand::Sidebar => {
             model.panels.sidebar.open = !model.panels.sidebar.open;
             effects.push(Effect::SyncSidebarPane {

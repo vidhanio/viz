@@ -18,7 +18,7 @@
 //!   [`rolling_diff_stat`].
 //! - Live row shimmer: [`shimmer_band`].
 //! - Shared-element move: [`shared_pill`], [`shared_surface`], [`launch_from`].
-//! - Panel slide: [`pane_motion`], [`slide_panel`], [`stable_content`].
+//! - Panel slide: [`pane_motion`], [`stable_content`].
 //! - Drag settle: [`DragOrder`], [`drag_row`].
 
 mod presence;
@@ -32,14 +32,13 @@ mod widgets;
 pub use self::{
     presence::{
         Switch, anchored_popover, chip_enter, dialog, fade, pane_motion, popover, row_enter, scrim,
-        slide_panel, stable_content, stagger_delay, toast, tucked_deck, tucked_menu,
+        stable_content, stagger_delay, toast, tucked_deck, tucked_menu,
     },
     tokens::{
-        FOLD_FEATHER, GLIDE, GLIDE_PAIR, HOVER_OUT, INSTANT, LOADING_DELAY, MORPH_SCALE,
-        OVERLAY_SCALE, PRESS_SCALE, QUICK, QUICK_PAIR, REFLOW, REFLOW_PAIR, SETTLE, SETTLE_PAIR,
-        SHIMMER_PERIOD, SNAP, SNAP_PAIR, STAGGER_BULK_LIMIT, STAGGER_MAX_ITEMS, STAGGER_STEP,
-        TITLE_ENTER_DELAY, TITLE_PAIR, TRAVEL_DRAWER, TRAVEL_MICRO, TRAVEL_PANE, TRAVEL_SMALL,
-        TRAVEL_TITLE,
+        FOLD_FEATHER, GLIDE, HOVER_OUT, INSTANT, LOADING_DELAY, MORPH_SCALE, OVERLAY_SCALE,
+        PRESS_SCALE, QUICK, QUICK_PAIR, REFLOW, REFLOW_PAIR, SETTLE, SETTLE_PAIR, SHIMMER_PERIOD,
+        SNAP, SNAP_PAIR, STAGGER_BULK_LIMIT, STAGGER_MAX_ITEMS, STAGGER_STEP, TITLE_ENTER_DELAY,
+        TITLE_PAIR, TRAVEL_DRAWER, TRAVEL_MICRO, TRAVEL_PANE, TRAVEL_SMALL, TRAVEL_TITLE,
     },
     widgets::{
         DragOrder, chevron, drag_row, fold_container, fold_row, icon_morph, launch_from, pressable,

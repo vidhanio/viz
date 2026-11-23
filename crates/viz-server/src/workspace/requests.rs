@@ -14,9 +14,7 @@ use std::{
 };
 
 use tokio::sync::{mpsc, oneshot};
-use viz_acp::{
-    ClientEvents, ClientRequest, LocalIo, PermissionPolicy, PtyTerminals, TerminalAccess,
-};
+use viz_acp::{ClientEvents, ClientRequest, LocalIo, PermissionPolicy, TerminalAccess};
 use viz_core::{
     lifecycle,
     requests::{self, Admission, Asker, Command},
@@ -78,8 +76,7 @@ enum Waited {
 
 impl Workspace {
     /// The client services a thread's session uses: every request comes to
-    /// this workspace, which applies the thread's access mode, and commands
-    /// run in PTYs clients can attach to.
+    /// this workspace, which applies the thread's access mode.
     pub(super) fn client_events(&self, thread: ThreadId) -> ClientEvents {
         let (sender, mut receiver) = mpsc::unbounded_channel();
         let incoming = self.requests.incoming.clone();
@@ -94,10 +91,7 @@ impl Workspace {
             permissions: PermissionPolicy::Ask,
             requests: Some(sender),
             local_io: LocalIo {
-                terminals: TerminalAccess::Pty(PtyTerminals::new(
-                    Arc::clone(&self.terminals),
-                    thread,
-                )),
+                terminals: TerminalAccess::Local,
                 ..LocalIo::default()
             },
             ..ClientEvents::default()

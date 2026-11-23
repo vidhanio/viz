@@ -2338,18 +2338,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "int-enum"
-version = "1.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "98e2fe9fba0e74e6b4cbc96a06d473ee6f2dd675f4b26ef6391a4973060c7ed1"
-dependencies = [
- "proc-macro2",
- "proc-macro2-diagnostics",
- "quote",
- "syn 3.0.10",
-]
-
-[[package]]
 name = "io-extras"
 version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2626,24 +2614,6 @@ name = "libc"
 version = "0.2.191"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65cd87c9a6d60536580b316ad985726104730a5151c99845f2490428ef91240a"
-
-[[package]]
-name = "libghostty-vt"
-version = "0.2.1"
-source = "git+https://github.com/uzaaft/libghostty-rs?rev=483ea3d5247b214060da58ef6037a95f30ae89fb#483ea3d5247b214060da58ef6037a95f30ae89fb"
-dependencies = [
- "bitflags 2.13.2",
- "int-enum",
- "libghostty-vt-sys",
-]
-
-[[package]]
-name = "libghostty-vt-sys"
-version = "0.2.1"
-source = "git+https://github.com/uzaaft/libghostty-rs?rev=483ea3d5247b214060da58ef6037a95f30ae89fb#483ea3d5247b214060da58ef6037a95f30ae89fb"
-dependencies = [
- "pkg-config",
-]
 
 [[package]]
 name = "libgit2-sys"
@@ -3908,17 +3878,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "proc-macro2-diagnostics"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df921e1ef974ebc8dd9effdb0c037a96928ae8cbf871438e02d6fd67204b595e"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 3.0.10",
-]
-
-[[package]]
 name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3932,16 +3891,6 @@ checksum = "4dcd034599e63b970727f70d79e02d62390a4a84f7c6b827c27c46d5ac3fa622"
 dependencies = [
  "ar_archive_writer",
  "cc",
-]
-
-[[package]]
-name = "pty-process"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5f0cff49b5194f464ce14bfaef7d6dba180889934e9bfa37ca5f2528ea515c0b"
-dependencies = [
- "rustix 1.1.6",
- "tokio",
 ]
 
 [[package]]
@@ -5003,7 +4952,6 @@ dependencies = [
  "schemars_derive",
  "serde",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -5993,7 +5941,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]
@@ -6490,7 +6437,6 @@ dependencies = [
  "uuid",
  "viz-config",
  "viz-protocol",
- "viz-terminal",
 ]
 
 [[package]]
@@ -6536,7 +6482,6 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "fontique",
- "libghostty-vt",
  "lucide-static-svg",
  "mime_guess",
  "notify-rust",
@@ -6552,7 +6497,6 @@ dependencies = [
  "tracing-subscriber",
  "viz-client",
  "viz-config",
- "viz-terminal",
 ]
 
 [[package]]
@@ -6626,11 +6570,9 @@ dependencies = [
 name = "viz-protocol"
 version = "0.1.0"
 dependencies = [
- "base64 0.23.1",
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "uuid",
 ]
 
 [[package]]
@@ -6659,7 +6601,6 @@ dependencies = [
  "subtle",
  "thiserror 2.0.21",
  "tokio",
- "tokio-stream",
  "tokio-tungstenite 0.30.0",
  "tokio-util",
  "tracing",
@@ -6671,20 +6612,6 @@ dependencies = [
  "viz-core",
  "viz-git",
  "viz-github",
- "viz-protocol",
- "viz-terminal",
-]
-
-[[package]]
-name = "viz-terminal"
-version = "0.1.0"
-dependencies = [
- "libghostty-vt",
- "pty-process",
- "rustix 1.1.6",
- "thiserror 2.0.21",
- "tokio",
- "uuid",
  "viz-protocol",
 ]
 

@@ -100,7 +100,7 @@ pub use housekeeping::{
 };
 pub use interaction::{ClientEvents, ClientRequest, PermissionPolicy};
 pub use lifecycle::{OpenSession, OpenedSession, SessionSetup};
-pub use local_io::{FileAccess, LocalIo, PtyTerminals, TerminalAccess};
+pub use local_io::{FileAccess, LocalIo, TerminalAccess};
 pub use mcp::Mcp;
 pub use options::{Catalog, Desired, Selection};
 pub use probe::{catalog, refresh};

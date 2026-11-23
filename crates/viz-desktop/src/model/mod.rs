@@ -22,7 +22,6 @@ pub mod sidebar;
 pub mod sidebar_outline;
 pub mod state;
 pub mod subagents;
-pub mod terminal;
 pub mod timeline;
 pub mod tool_parse;
 pub mod transcript;
@@ -77,7 +76,7 @@ pub use self::{
         ConnectionState, ContextMenu, DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH,
         DisclosureState, NewThread, OptimisticLedger, OptimisticUndo, PaneSwitch, PanelsState,
         SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SelectionState, SidebarEdit,
-        SidebarState, Status, TERMINAL_DEFAULT_HEIGHT, WINDOW_SIZE,
+        SidebarState, Status, WINDOW_SIZE,
     },
     subagents::{
         AgentStanding, SubagentCall, child_link, delegated_task, local_child, spawned_subagent,
@@ -106,7 +105,6 @@ pub const DEFAULT_ENV_KEY: &str = "local";
 /// Complete pure state of the desktop workspace.
 #[derive(Debug, Clone)]
 pub struct Model {
-    pub terminal: terminal::Dock,
     pub requests: requests::Requests,
     pub git: git::GitState,
     /// Connection status, endpoint, and environment roster.
@@ -150,7 +148,6 @@ impl Model {
             panels: PanelsState::default(),
             sidebar: SidebarState::default(),
             composer: ComposerState::default(),
-            terminal: terminal::Dock::default(),
             requests: requests::Requests::default(),
             palette: PaletteState::default(),
             disclosure: DisclosureState {
@@ -413,9 +410,6 @@ impl Model {
                 .round()
                 .clamp(self.panels.diff.min, self.panels.diff.max);
         }
-        if let Some(height) = prefs.terminal_height {
-            self.panels.terminal_height = height.round().clamp(120.0, 600.0);
-        }
         self.composer
             .favorite_models
             .clone_from(&prefs.favorite_models);
@@ -467,10 +461,6 @@ impl Model {
                 .abs()
                 .ge(&1.0)
                 .then_some(self.panels.diff.width),
-            terminal_height: (self.panels.terminal_height - TERMINAL_DEFAULT_HEIGHT)
-                .abs()
-                .ge(&1.0)
-                .then_some(self.panels.terminal_height),
             collapsed_shelves: self.sidebar.collapsed_shelves.clone(),
             favorite_models: self.composer.favorite_models.clone(),
             drafts,

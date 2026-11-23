@@ -61,21 +61,6 @@ pub enum Notification {
         thread: ThreadId,
         status: Option<crate::GitStatus>,
     },
-    /// A sequenced update for an attachment on this connection.
-    #[serde(rename = "terminal.update")]
-    TerminalUpdate {
-        id: crate::TerminalId,
-        update: crate::Update,
-    },
-    /// A replacement baseline after this connection fell behind the PTY.
-    #[serde(rename = "terminal.snapshot")]
-    TerminalSnapshot {
-        id: crate::TerminalId,
-        snapshot: crate::Snapshot,
-    },
-    /// Sessions opened, exited, or were released; list terminals again.
-    #[serde(rename = "terminals.changed")]
-    TerminalsChanged(Empty),
     #[serde(rename = "thread.live")]
     ThreadLive {
         thread: ThreadId,

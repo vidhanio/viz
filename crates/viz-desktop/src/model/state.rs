@@ -27,9 +27,6 @@ pub const DIFF_DEFAULT_WIDTH: f32 = 480.0;
 pub const DIFF_MIN_WIDTH: f32 = 320.0;
 /// Maximum docked diff inspector width in points.
 pub const DIFF_MAX_WIDTH: f32 = 840.0;
-/// Default docked terminal drawer height in points.
-pub const TERMINAL_DEFAULT_HEIGHT: f32 = 240.0;
-
 /// The server connection status shown in the sidebar footer and empty state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Status {
@@ -179,8 +176,8 @@ pub struct PaneLayout {
     pub max: f32,
 }
 
-/// Visibility and sizing of every shell slot (`sidebar`, `details`, `diff`,
-/// `terminal`) plus the current window width.
+/// Visibility and sizing of the sidebar, details, and diff panes, plus the
+/// current window dimensions.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PanelsState {
     /// Leading workspace sidebar slot.
@@ -189,10 +186,6 @@ pub struct PanelsState {
     pub details_open: bool,
     /// Trailing docked diff inspector slot (populated in Phase 1 Track G).
     pub diff: PaneLayout,
-    /// Bottom docked terminal drawer slot (populated in Phase 1 Track X).
-    pub terminal_open: bool,
-    /// Height of the bottom terminal drawer in points.
-    pub terminal_height: f32,
     /// Last drawn window width in points, used for responsive layout choices.
     pub window_width: f32,
     pub window_height: f32,
@@ -214,8 +207,6 @@ impl Default for PanelsState {
                 min: DIFF_MIN_WIDTH,
                 max: DIFF_MAX_WIDTH,
             },
-            terminal_open: false,
-            terminal_height: TERMINAL_DEFAULT_HEIGHT,
             window_width: WINDOW_SIZE.0,
             window_height: WINDOW_SIZE.1,
         }

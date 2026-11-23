@@ -8,7 +8,7 @@ const RECENT_LIMIT: usize = 12;
 const CHAT_LIMIT: usize = 24;
 
 /// All local commands in palette display order.
-pub const PALETTE_COMMANDS: [PaletteCommand; 15] = [
+pub const PALETTE_COMMANDS: [PaletteCommand; 14] = [
     PaletteCommand::NewThread,
     PaletteCommand::AddProject,
     PaletteCommand::Projects,
@@ -17,7 +17,6 @@ pub const PALETTE_COMMANDS: [PaletteCommand; 15] = [
     PaletteCommand::Promote,
     PaletteCommand::Environments,
     PaletteCommand::Diff,
-    PaletteCommand::Terminal,
     PaletteCommand::Scratch,
     PaletteCommand::Sidebar,
     PaletteCommand::Pin,
@@ -40,7 +39,6 @@ impl PaletteCommand {
             Self::Promote => "Turn scratch thread into project",
             Self::Environments => "Switch environment",
             Self::Diff => "Toggle diff",
-            Self::Terminal => "Toggle terminal",
             Self::Scratch => "New thread without a project",
             Self::Sidebar => "Toggle sidebar",
             Self::Pin if thread.is_some_and(|thread| thread.lifecycle.pin.is_some()) => {
@@ -79,7 +77,7 @@ impl PaletteCommand {
         let thread = model.selection.selected.and_then(|id| model.summary(id));
         match self {
             Self::NewThread => model.selection.new_thread.is_none(),
-            Self::AddProject | Self::Sidebar | Self::Diff | Self::Terminal | Self::Scratch => true,
+            Self::AddProject | Self::Sidebar | Self::Diff | Self::Scratch => true,
             Self::Settings => model.project().is_some(),
             Self::Projects => model.cache().has_projects(),
             Self::Import => !model.harnesses().is_empty(),

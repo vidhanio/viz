@@ -18,7 +18,6 @@ pub enum GitMsg {
     ToggleDetails,
     RefreshDiff,
     CloseDetails,
-    ToggleTerminal,
     ToggleDiff,
     PaneWidth(f32),
     Popup(Option<Popup>),
@@ -321,7 +320,6 @@ pub(super) fn update(model: &mut Model, msg: GitMsg) -> Vec<Effect> {
             model.panels.details_open = false;
             model.git.popup = None;
         }
-        GitMsg::ToggleTerminal => model.panels.terminal_open = !model.panels.terminal_open,
         GitMsg::ToggleDiff => {
             model.panels.diff.open = !model.panels.diff.open;
             model.panels.details_open = false;

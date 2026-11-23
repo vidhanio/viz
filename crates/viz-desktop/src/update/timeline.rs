@@ -3,7 +3,7 @@
 //! running tool timers.
 
 use viz_client::protocol::{
-    EntryId, EntrySource, ForkPoint, ForkThread, Forked, SendInput, TerminalScope, ThreadId,
+    EntryId, EntrySource, ForkPoint, ForkThread, Forked, SendInput, ThreadId,
 };
 
 use super::selection::{focus_draft, open_in_environment, open_thread, select_thread};
@@ -94,9 +94,6 @@ pub enum TimelineMsg {
         /// Optional relative file path to reveal in the Diff panel.
         path: Option<String>,
     },
-    /// Open the docked Terminal panel for an executed command (seam for Track
-    /// X).
-    OpenTerminal(String),
     /// Open a delegated child or parent thread (local or remote).
     OpenThreadLink {
         /// Target thread id.
@@ -301,19 +298,6 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             }
             if let Some(path) = path {
                 effects.push(Effect::RevealDiffFile(path));
-            }
-        }
-        TimelineMsg::OpenTerminal(terminal_id) => {
-            model.panels.terminal_open = true;
-            let selected = model.selection.selected;
-            if let Some(summary) = model.terminal.sessions.iter().find(|summary| {
-                summary.id.0.to_string() == terminal_id
-                    || matches!(
-                        summary.scope,
-                        TerminalScope::Agent { thread } if selected == Some(thread)
-                    )
-            }) {
-                model.terminal.active = Some(summary.id);
             }
         }
         TimelineMsg::OpenThreadLink {

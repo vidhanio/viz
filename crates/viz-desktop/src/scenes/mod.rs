@@ -8,8 +8,8 @@ mod home_composer;
 mod model_picker;
 mod overlays;
 mod projects;
+mod requests;
 mod sidebar;
-mod terminal_panel;
 mod timeline;
 mod timeline_cards;
 
@@ -32,15 +32,9 @@ pub const SCENES: &[Scene] = &[
     ("git-diff-split", git::split),
     ("components", components),
     ("components-reduced", components_reduced),
-    ("terminal-shell", crate::terminal::scene::shell),
-    ("terminal-alternate", crate::terminal::scene::alternate),
-    ("terminal-selection", crate::terminal::scene::selection),
-    ("terminal-exited", crate::terminal::scene::exited),
-    ("terminal-dock", terminal_panel::dock),
-    ("terminal-disconnected", terminal_panel::disconnected),
-    ("request-approval", terminal_panel::approval),
-    ("request-question", terminal_panel::question),
-    ("request-multi-step", terminal_panel::multi_step),
+    ("request-approval", requests::approval),
+    ("request-question", requests::question),
+    ("request-multi-step", requests::multi_step),
     ("motion", motion),
     ("motion-reduced", motion_reduced),
     ("activity", activity),

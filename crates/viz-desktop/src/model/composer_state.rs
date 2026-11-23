@@ -385,7 +385,6 @@ pub enum PaletteCommand {
     Promote,
     Environments,
     Diff,
-    Terminal,
     Scratch,
     /// Show or hide the sidebar.
     Sidebar,

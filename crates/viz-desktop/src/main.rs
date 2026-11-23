@@ -9,7 +9,7 @@
 //! UI rules:
 //!
 //! - Layout: shell slots for sidebar, main (timeline + composer + Tasks Dock),
-//!   details, diff, terminal, and overlays (menus, palette, dialogs, toasts).
+//!   details, diff, and overlays (menus, palette, dialogs, toasts).
 //! - Visuals come from `theme` tokens and `ui` components, derived strictly
 //!   from the configured base16 scheme in a flat, sans-serif style with crisp
 //!   hairline borders and no blur, glow, or drop shadows. Icons are Lucide plus
@@ -37,7 +37,6 @@ mod requests;
 mod scenes;
 mod shell;
 mod sidebar;
-mod terminal;
 mod theme;
 mod timeline;
 mod ui;
@@ -71,9 +70,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let reduced = cx.is_reduced_motion();
     let t = Theme::get(cx.system_dark());
     cx.help_look(t.help_look());
-    if let Some(terminal) = terminal::scene::view(t) {
-        return terminal;
-    }
     if let Some(demo) = &s.motion_demo {
         return motion_scene::view(demo, reduced, t);
     }
@@ -126,11 +122,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         main,
         details,
         diff,
-        terminal: s
-            .model
-            .panels
-            .terminal_open
-            .then(|| terminal::panel::view(s, t)),
         overlays,
     };
     shell::build(s, slots, cx.titlebar_inset(), reduced, t)
@@ -152,9 +143,6 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if s.model.palette.open {
         return false;
-    }
-    if terminal::panel::shortcut(s, ev, tx, false) {
-        return true;
     }
     if model_picker::shortcut(s, ev, tx) {
         return true;
@@ -424,10 +412,7 @@ fn main() {
         }
         desktop
     })
-    .on_focus(terminal::scene::focus)
-    .on_ime(|app, event, tx| {
-        terminal::scene::ime(app, event, tx) || terminal::panel::ime(app, event, tx)
-    });
+    .on_focus(Desktop::set_focus);
     if let Some(detail) = theme_error {
         app.handle().update(move |s, tx| {
             s.dispatch(

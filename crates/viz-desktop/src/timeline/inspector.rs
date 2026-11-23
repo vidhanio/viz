@@ -158,7 +158,7 @@ fn cmd_header(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let copy_id = format!("copy-cmd-{}", tool.key);
     let copied = s.model.timeline.copied_key.as_deref() == Some(copy_id.as_str());
 
-    let mut header = row()
+    let header = row()
         .key("cmd-header")
         .w_full()
         .px(S10)
@@ -176,25 +176,6 @@ fn cmd_header(s: &Desktop, tool: &Tool, t: &Theme) -> El {
                 .truncate()
                 .help_when_truncated(cmd),
         );
-
-    if let Some(term_id) = tool.terminal_id.clone() {
-        header = header.child(
-            ui::icon_button(
-                &ui::TERMINAL,
-                "Open in terminal",
-                IconButtonVariant::GhostMuted,
-                Size::Micro,
-            )
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::OpenTerminal(term_id.clone())),
-                    tx,
-                );
-            })
-            .build(&t.k)
-            .key("open-terminal"),
-        );
-    }
 
     header.child(
         ui::icon_button(
