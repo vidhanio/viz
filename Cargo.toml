@@ -81,6 +81,7 @@ viz-config = { path = "crates/viz-config" }
 viz-git = { path = "crates/viz-git" }
 viz-core = { path = "crates/viz-core" }
 viz-protocol = { path = "crates/viz-protocol" }
+viz-terminal = { path = "crates/viz-terminal" }
 
 rune = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }

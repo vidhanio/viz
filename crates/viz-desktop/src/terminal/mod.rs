@@ -1,0 +1,293 @@
+//! Rune viewport for a Ghostty terminal attachment.
+
+mod input;
+mod paint;
+pub mod scene;
+
+use std::{cell::RefCell, rc::Rc};
+
+use ghostty_vt::{
+    Terminal,
+    render::{CellIterator, RenderState, RowIterator},
+    screen::TrackedGridRef,
+    selection::{FormatOptions, Selection},
+    terminal::{Point, PointCoordinate, ScrollViewport},
+};
+use rune::{Drag, El, Phase, el, text};
+use viz_terminal::{CellSize, Size, Viewer};
+
+use crate::theme::Theme;
+
+const CELL: CellSize = CellSize {
+    width: 8,
+    height: 18,
+};
+const PAD: f32 = 12.0;
+
+/// Actions for the surrounding desktop session to route.
+pub enum Action {
+    Input(Vec<u8>),
+    Resize(Size, CellSize),
+}
+
+pub struct TerminalView {
+    viewer: Viewer,
+    render: RenderState,
+    rows: RowIterator,
+    cells: CellIterator,
+    encoder: input::Encoder,
+    cache: paint::Frame,
+    anchor: Option<TrackedGridRef>,
+    requested: Option<Size>,
+    preedit: String,
+    ime_enabled: bool,
+}
+
+impl TerminalView {
+    pub(super) fn new(viewer: Viewer) -> Result<Self, ghostty_vt::Error> {
+        Ok(Self {
+            viewer,
+            render: RenderState::new()?,
+            rows: RowIterator::new()?,
+            cells: CellIterator::new()?,
+            encoder: input::Encoder::new()?,
+            cache: paint::Frame::default(),
+            anchor: None,
+            requested: None,
+            preedit: String::new(),
+            ime_enabled: false,
+        })
+    }
+
+    fn refresh(&mut self) -> Result<(), ghostty_vt::Error> {
+        let snapshot = self.render.update(self.viewer.terminal())?;
+        self.cache
+            .update(&snapshot, &mut self.rows, &mut self.cells)
+    }
+
+    fn scroll(&mut self, scroll: ScrollViewport) {
+        self.viewer.terminal_mut().scroll_viewport(scroll);
+    }
+
+    fn select(&mut self, drag: &Drag) -> Result<(), ghostty_vt::Error> {
+        let terminal = self.viewer.terminal();
+        let point = coordinate(terminal, drag.x, drag.y)?;
+        if drag.phase == Phase::Down {
+            self.anchor = Some(terminal.track_grid_ref(Point::Viewport(point))?);
+            terminal.set_selection(None)?;
+        } else if let Some(anchor) = &self.anchor {
+            if !drag.cancelled()
+                && let Some(start) = anchor.snapshot(terminal)?
+            {
+                let end = terminal.grid_ref(Point::Viewport(point))?;
+                terminal.set_selection(Some(&Selection::new(start, end, false)))?;
+            }
+            if drag.phase == Phase::Up {
+                self.anchor = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn link(&self, x: f32, y: f32) -> Result<Option<String>, ghostty_vt::Error> {
+        let terminal = self.viewer.terminal();
+        let point = coordinate(terminal, x, y)?;
+        let cell = terminal.grid_ref(Point::Viewport(point))?;
+        let mut bytes = [0; 4096];
+        let len = cell.hyperlink_uri(&mut bytes)?;
+        Ok(str::from_utf8(&bytes[..len])
+            .ok()
+            .filter(|link| link.starts_with("https://") || link.starts_with("http://"))
+            .map(str::to_owned))
+    }
+}
+
+/// Builds the terminal element. State and routing stay with the caller so the
+/// view can be dropped when its panel closes and recreated on attachment.
+#[expect(
+    clippy::too_many_lines,
+    reason = "each Rune event binding stays with its element"
+)]
+pub fn view<S: 'static>(
+    key: &'static str,
+    model: &Rc<RefCell<TerminalView>>,
+    theme: &Theme,
+    action: impl Fn(&mut S, Action) + 'static,
+) -> El {
+    let action = Rc::new(action);
+    let mut state = model.borrow_mut();
+    let rendered = if state.refresh().is_ok() {
+        state.cache.view(
+            key,
+            theme,
+            state.viewer.exit(),
+            state.ime_enabled,
+            &state.preedit,
+        )
+    } else {
+        text("Terminal display unavailable")
+            .font(theme.mono)
+            .color(theme.muted)
+    };
+    drop(state);
+
+    let key_state = Rc::clone(model);
+    let key_action = Rc::clone(&action);
+    let wheel_state = Rc::clone(model);
+    let wheel_action = Rc::clone(&action);
+    let drag_state = Rc::clone(model);
+    let drag_action = Rc::clone(&action);
+    let resize_state = Rc::clone(model);
+    el().key(key)
+        .w_full()
+        .h_full()
+        .clip_soft(0.0)
+        .fill(theme.k.c.bg_base)
+        .focusable(true)
+        .child(rendered)
+        .on_key(move |app: &mut S, event, tx| {
+            let mut state = key_state.borrow_mut();
+            if (cfg!(target_os = "macos") || event.mods.shift) && event.is_command('c') {
+                if let Ok(Some(bytes)) = state
+                    .viewer
+                    .terminal()
+                    .format_selection_alloc(FormatOptions::default())
+                {
+                    tx.copy(String::from_utf8_lossy(&bytes).into_owned());
+                }
+                return true;
+            }
+            if (cfg!(target_os = "macos") || event.mods.shift) && event.is_command('v') {
+                let state = Rc::clone(&key_state);
+                let action = Rc::clone(&key_action);
+                tx.read_clipboard(move |app: &mut S, clipboard, _| {
+                    if let Ok(bytes) =
+                        input::paste(state.borrow().viewer.terminal(), clipboard.text())
+                    {
+                        action(app, Action::Input(bytes));
+                    }
+                });
+                return true;
+            }
+            if event.mods.shift && matches!(event.key, rune::Key::PageUp | rune::Key::PageDown) {
+                let rows = state
+                    .viewer
+                    .terminal()
+                    .rows()
+                    .map_or(0, |rows| isize::try_from(rows).unwrap_or_default());
+                state.scroll(ScrollViewport::Delta(if event.key == rune::Key::PageUp {
+                    -rows
+                } else {
+                    rows
+                }));
+                return true;
+            }
+            let TerminalView {
+                viewer, encoder, ..
+            } = &mut *state;
+            if let Ok(Some(bytes)) = encoder.key(viewer.terminal(), event, tx.key_base()) {
+                if viewer.exit().is_none() {
+                    viewer
+                        .terminal_mut()
+                        .scroll_viewport(ScrollViewport::Bottom);
+                    key_action(app, Action::Input(bytes));
+                }
+                return true;
+            }
+            false
+        })
+        .on_wheel(move |app: &mut S, event: rune::WheelEvent, _| {
+            let mut state = wheel_state.borrow_mut();
+            if event.dy == 0.0 {
+                return false;
+            }
+            let TerminalView {
+                viewer, encoder, ..
+            } = &mut *state;
+            if !event.mods.shift && viewer.terminal().is_mouse_tracking() == Ok(true) {
+                let button = if event.dy > 0.0 {
+                    ghostty_vt::mouse::Button::Four
+                } else {
+                    ghostty_vt::mouse::Button::Five
+                };
+                if let Ok(bytes) = encoder.mouse(
+                    viewer.terminal(),
+                    ghostty_vt::mouse::Action::Press,
+                    button,
+                    [event.x, event.y],
+                    event.mods,
+                ) {
+                    wheel_action(app, Action::Input(bytes));
+                }
+            } else {
+                state.scroll(ScrollViewport::Delta(if event.dy > 0.0 { -3 } else { 3 }));
+            }
+            true
+        })
+        .on_drag(move |app: &mut S, drag, tx| {
+            let mut state = drag_state.borrow_mut();
+            if drag.phase == Phase::Down {
+                tx.focus(key, false);
+                if !state.ime_enabled {
+                    state.ime_enabled = true;
+                    if let Ok(Some(bytes)) =
+                        input::focus(state.viewer.terminal(), ghostty_vt::focus::Event::Gained)
+                    {
+                        drag_action(app, Action::Input(bytes));
+                    }
+                }
+            }
+            let mods = tx.mods();
+            let TerminalView {
+                viewer, encoder, ..
+            } = &mut *state;
+            if !mods.shift && viewer.terminal().is_mouse_tracking() == Ok(true) {
+                let mouse = match drag.phase {
+                    Phase::Down => ghostty_vt::mouse::Action::Press,
+                    Phase::Move => ghostty_vt::mouse::Action::Motion,
+                    Phase::Up => ghostty_vt::mouse::Action::Release,
+                };
+                if let Ok(bytes) = encoder.mouse(
+                    viewer.terminal(),
+                    mouse,
+                    ghostty_vt::mouse::Button::Left,
+                    [drag.x, drag.y],
+                    mods,
+                ) {
+                    drag_action(app, Action::Input(bytes));
+                }
+            } else if mods.cmd && drag.phase == Phase::Down {
+                if let Ok(Some(link)) = state.link(drag.x, drag.y) {
+                    let _ = tx.open_url(&link);
+                }
+            } else {
+                let _ = state.select(drag);
+            }
+        })
+        .on_layout_tx(move |app: &mut S, rect, _| {
+            let columns = cells(2.0_f32.mul_add(-PAD, rect[2]), CELL.width);
+            let rows = cells(2.0_f32.mul_add(-PAD, rect[3]), CELL.height);
+            let size = Size::new(columns, rows);
+            let mut state = resize_state.borrow_mut();
+            if state.requested != Some(size) {
+                state.requested = Some(size);
+                action(app, Action::Resize(size, CELL));
+            }
+        })
+}
+
+fn coordinate(terminal: &Terminal, x: f32, y: f32) -> Result<PointCoordinate, ghostty_vt::Error> {
+    Ok(PointCoordinate {
+        x: cells(x - PAD, CELL.width).min(terminal.cols()?.saturating_sub(1)),
+        y: u32::from(cells(y - PAD, CELL.height).min(terminal.rows()?.saturating_sub(1))),
+    })
+}
+
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "nonnegative clamped point coordinates become cell indices"
+)]
+fn cells(points: f32, metric: u16) -> u16 {
+    (points / f32::from(metric)).clamp(0.0, f32::from(u16::MAX)) as u16
+}

@@ -6754,6 +6754,7 @@ dependencies = [
  "base64 0.23.1",
  "clap",
  "fontique",
+ "ghostty-vt",
  "lucide-static-svg",
  "mime_guess",
  "notify-rust",
@@ -6769,6 +6770,7 @@ dependencies = [
  "tracing-subscriber",
  "viz-client",
  "viz-config",
+ "viz-terminal",
 ]
 
 [[package]]

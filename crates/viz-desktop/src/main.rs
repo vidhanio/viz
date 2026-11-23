@@ -45,6 +45,7 @@ mod palette;
 mod scenes;
 mod server;
 mod sidebar;
+mod terminal;
 mod theme;
 mod thread;
 mod timeline;
@@ -79,6 +80,9 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let reduced = cx.is_reduced_motion();
     let t = Theme::get(cx.system_dark());
     cx.help_look(t.help_look());
+    if let Some(terminal) = terminal::scene::view(t) {
+        return terminal;
+    }
     if let Some(demo) = &s.motion_demo {
         return motion_scene::view(demo, reduced, t);
     }
@@ -306,7 +310,8 @@ fn main() {
         }
         desktop
     })
-    .on_focus(Desktop::set_focus);
+    .on_focus(terminal::scene::focus)
+    .on_ime(terminal::scene::ime);
     if let Some(detail) = theme_error {
         app.handle()
             .update(move |s, tx| s.toast(tx, "Invalid desktop configuration", Some(detail)));
