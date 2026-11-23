@@ -118,6 +118,7 @@ pub(super) fn apply_thread_view(
     entries: &Arc<Vec<Entry>>,
     reset: bool,
     before: Option<EntryId>,
+    effects: &mut Vec<Effect>,
 ) {
     if model.selection.selected != Some(thread) {
         return;
@@ -132,6 +133,7 @@ pub(super) fn apply_thread_view(
     }
     let live = open.state.as_ref().and_then(|state| state.live.as_ref());
     open.transcript.sync_acp(live);
+    super::palette::continue_message_jump(model, effects);
 }
 
 pub(super) fn apply_earlier_loaded(
@@ -157,6 +159,13 @@ pub(super) fn apply_earlier_loaded(
         open.transcript = transcript;
         let live = open.state.as_ref().and_then(|state| state.live.as_ref());
         open.transcript.sync_acp(live);
+        super::palette::continue_message_jump(model, effects);
+    } else if model
+        .palette
+        .message_jump
+        .is_some_and(|(target, _)| target == thread)
+    {
+        model.palette.message_jump = None;
     }
 }
 

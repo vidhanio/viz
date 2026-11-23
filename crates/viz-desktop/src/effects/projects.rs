@@ -1,5 +1,6 @@
 //! Execute project palette requests on the selected environment.
 
+use anyhow::Context as _;
 use viz_client::{
     Client,
     protocol::{
@@ -23,6 +24,7 @@ pub enum ProjectRequest {
     CloneStatus(CloneId),
     CancelClone(CloneId),
     CreateFolder(String),
+    CreateGitProject(String),
     Init(String),
     Add(String),
     Save {
@@ -75,6 +77,7 @@ async fn execute(client: &Client, command: ProjectRequest) -> anyhow::Result<Pro
         ProjectRequest::CancelClone(id) => {
             ProjectReply::Clone(client.cancel_clone(&CancelClone { id }).await?)
         }
+        ProjectRequest::CreateGitProject(path) => create_git_project(client, path).await?,
         ProjectRequest::CreateFolder(path) => {
             ProjectReply::Directory(client.create_folder(&CreateFolder { path }).await?.path)
         }
@@ -158,4 +161,32 @@ pub(super) fn uploaded_icon(file: viz_client::protocol::Attachment) -> ProjectIc
         media_type: file.mime,
         data: file.data,
     }
+}
+
+async fn create_git_project(client: &Client, path: String) -> anyhow::Result<ProjectReply> {
+    let folder = client.create_folder(&CreateFolder { path }).await?;
+    let folder = client
+        .init_repository(&InitRepository {
+            path: folder.path.clone(),
+        })
+        .await
+        .with_context(|| {
+            format!(
+                "Folder created at {}. Initialize Git there to continue",
+                folder.path
+            )
+        })?;
+    let result = client
+        .create_project(&CreateProject {
+            path: &folder.path,
+            name: None,
+        })
+        .await
+        .with_context(|| {
+            format!(
+                "Git initialized at {}. Add that folder to finish",
+                folder.path
+            )
+        })?;
+    Ok(ProjectReply::Added(result))
 }

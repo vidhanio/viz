@@ -129,6 +129,8 @@ pub enum Effect {
         /// Vertical center position in viewport points.
         center_y: f32,
     },
+    /// Center a matched transcript row in the active thread.
+    RevealMessage { thread: ThreadId, item: String },
     /// Anchor element `key` in place across the next layout update.
     KeepOnScreen(String),
     /// Schedule a poll wakeup after `duration`.

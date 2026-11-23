@@ -8,6 +8,7 @@ use viz_client::protocol::{
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Destination {
     Add,
+    NewProject,
     Clone { url: String, name: String },
     Additional(String),
 }
@@ -44,6 +45,7 @@ pub enum ProjectView {
     Sources,
     Folders(Destination),
     NewFolder,
+    NewProject(String),
     CloneUrl,
     Repositories,
     Cloning,
@@ -73,8 +75,10 @@ impl ProjectView {
             Self::Sources => "Add project",
             Self::Folders(Destination::Clone { .. }) => "Choose clone destination",
             Self::Folders(Destination::Additional(_)) => "Choose additional directory",
+            Self::Folders(Destination::NewProject) => "Choose project location",
             Self::Folders(Destination::Add) => "Browse folders",
             Self::NewFolder => "New folder",
+            Self::NewProject(_) => "New project",
             Self::CloneUrl => "Clone from Git URL",
             Self::Repositories => "GitHub repositories",
             Self::Cloning => "Clone progress",
@@ -94,6 +98,7 @@ impl ProjectView {
         match self {
             Self::Folders(_) => "Server directory path",
             Self::NewFolder => "Folder name",
+            Self::NewProject(_) => "Project name",
             Self::CloneUrl => "https://github.com/owner/repo.git",
             Self::Edit { field, .. } => field.label(),
             _ => "Filter…",

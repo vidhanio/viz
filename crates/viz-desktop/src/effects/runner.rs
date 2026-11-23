@@ -115,6 +115,11 @@ impl Desktop {
                         tx.scroll_key_center_at(key, center_y);
                     }
                 }
+                Effect::RevealMessage { thread, item } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        tx.scroll_center_in_instant(format!("page-{thread}"), item);
+                    }
+                }
                 Effect::KeepOnScreen(key) => {
                     if let Some(tx) = tx.as_deref_mut() {
                         tx.keep_on_screen(key);

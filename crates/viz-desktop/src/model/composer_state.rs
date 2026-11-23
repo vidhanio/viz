@@ -223,6 +223,7 @@ pub struct PaletteState {
     /// Whether the modal owns keyboard input.
     pub open: bool,
     pub pages: super::projects::ProjectPages,
+    pub message_jump: Option<(ThreadId, viz_client::protocol::EntryId)>,
     /// Raw query text typed into the search field.
     pub query: String,
     /// Trimmed lowercase filter derived from `query`.

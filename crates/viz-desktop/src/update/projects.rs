@@ -284,6 +284,9 @@ fn submit_folder(model: &mut Model, effects: &mut Vec<Effect>) {
     }
     let path = folders.path.clone();
     match destination {
+        Destination::NewProject => {
+            push(model, ProjectView::NewProject(path), String::new(), effects);
+        }
         Destination::Add if folders.project => {
             if let Some(project) = model.cache().project(&path).cloned() {
                 if project.settings.archived {
@@ -357,30 +360,34 @@ fn submit(model: &mut Model, effects: &mut Vec<Effect>) {
             }
             return;
         }
-        ProjectView::NewFolder => {
-            let Some(parent) = model
-                .palette
-                .pages
-                .stack
-                .iter()
-                .rev()
-                .nth(1)
-                .and_then(|page| match &page.data {
-                    Some(ProjectReply::Folders(data)) => Some(&data.path),
-                    _ => None,
-                })
-            else {
-                return;
+        ProjectView::NewFolder | ProjectView::NewProject(_) => {
+            let parent = match &current.view {
+                ProjectView::NewProject(parent) => Some(parent),
+                _ => model
+                    .palette
+                    .pages
+                    .stack
+                    .iter()
+                    .rev()
+                    .nth(1)
+                    .and_then(|page| match &page.data {
+                        Some(ProjectReply::Folders(data)) => Some(&data.path),
+                        _ => None,
+                    }),
             };
+            let Some(parent) = parent else { return };
             if value.is_empty() || value.contains(['/', '\\']) || matches!(value, "." | "..") {
                 if let Some(page) = page_mut(model) {
                     page.error = Some("Enter a single folder name.".into());
                 }
                 return;
             }
-            ProjectRequest::CreateFolder(
-                Path::new(parent).join(value).to_string_lossy().into_owned(),
-            )
+            let path = Path::new(parent).join(value).to_string_lossy().into_owned();
+            if matches!(current.view, ProjectView::NewProject(_)) {
+                ProjectRequest::CreateGitProject(path)
+            } else {
+                ProjectRequest::CreateFolder(path)
+            }
         }
         ProjectView::Edit { project, field } => match settings::edit(project.clone(), field, value)
         {

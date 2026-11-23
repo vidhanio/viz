@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use viz_client::protocol::{Position, TriageAction};
+use viz_client::protocol::{EntryId, Position, TriageAction};
 
 use super::{
     NavKey, projects,
@@ -254,9 +254,17 @@ fn choose(model: &mut Model, choice: PaletteChoice, effects: &mut Vec<Effect>) {
             }
         }
         PaletteChoice::Command(command) => run_command(model, command, effects),
-        PaletteChoice::Thread(id) | PaletteChoice::Message { thread: id, .. } => {
+        PaletteChoice::Thread(id) => {
             close(model, effects);
             select_thread(model, id, effects);
+        }
+        PaletteChoice::Message { thread, entry } => {
+            close(model, effects);
+            if model.selection.selected != Some(thread) {
+                select_thread(model, thread, effects);
+            }
+            model.palette.message_jump = Some((thread, EntryId(entry)));
+            continue_message_jump(model, effects);
         }
     }
 }
@@ -365,5 +373,36 @@ fn command_view(model: &Model, command: PaletteCommand) -> Option<ProjectView> {
         PaletteCommand::Import => Some(ProjectView::Harnesses),
         PaletteCommand::Environments => Some(ProjectView::Environments),
         _ => None,
+    }
+}
+
+/// Resolve a search hit against visible message rows, paging older history when
+/// needed.
+pub(super) fn continue_message_jump(model: &mut Model, effects: &mut Vec<Effect>) {
+    let Some((thread, entry)) = model.palette.message_jump else {
+        return;
+    };
+    if model.selection.selected != Some(thread) {
+        model.palette.message_jump = None;
+        return;
+    }
+    if model
+        .cache()
+        .open_thread(thread)
+        .is_some_and(|view| view.loading || view.history_loading)
+    {
+        return;
+    }
+    if let Some(key) = model.transcript().message_row(entry) {
+        effects.push(Effect::RevealMessage {
+            thread,
+            item: key.to_owned(),
+        });
+        model.palette.message_jump = None;
+    } else if let Some(before) = model.transcript().before.filter(|before| *before > entry) {
+        model.cache_mut().open_thread_mut(thread).history_loading = true;
+        effects.push(Effect::Server(ServerEffect::LoadEarlier { thread, before }));
+    } else {
+        model.palette.message_jump = None;
     }
 }

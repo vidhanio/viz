@@ -186,6 +186,7 @@ pub(super) fn show_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec
     };
     let draft_saved = save_draft(model);
     model.selection.new_thread = None;
+    model.palette.message_jump = None;
     model.selection.selected = Some(thread);
     let env = model.active_env_key().to_owned();
     let restored = model

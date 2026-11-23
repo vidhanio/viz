@@ -94,7 +94,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             {
                 model.timeline.unseen_activity = true;
             }
-            apply_thread_view(model, thread, &entries, reset, before);
+            apply_thread_view(model, thread, &entries, reset, before, &mut effects);
         }
         ServerMsg::EarlierLoaded { thread, transcript } => {
             apply_earlier_loaded(model, thread, transcript, &mut effects);

@@ -232,6 +232,7 @@ impl Transcript {
             } => {
                 let steered = self.acp_turn.is_some() && !self.ended_run;
                 if !text.trim().is_empty() || !attachments.is_empty() || !context.is_empty() {
+                    self.message_rows.insert(*id, format!("e{id}-0-row"));
                     self.items.push(Item::User(User {
                         key: format!("e{id}-0"),
                         entry_id: Some(*id),
@@ -251,6 +252,7 @@ impl Transcript {
                 self.start(*id);
             }
             EntryData::TaskResult { task, text } => {
+                self.message_rows.insert(*id, format!("e{id}"));
                 self.items.push(Item::TaskResult(TaskResult::parse(
                     format!("e{id}"),
                     task,
@@ -270,7 +272,12 @@ impl Transcript {
 
     fn transcript_entry(&mut self, id: EntryId, entry: &TranscriptEntry) {
         match &entry.body {
-            Body::Text(segment) => self.commit_text(id, &entry.key, segment, entry.more, false),
+            Body::Text(segment) => {
+                self.commit_text(id, &entry.key, segment, entry.more, false);
+                if let Some(item) = self.items.last() {
+                    self.message_rows.insert(id, item.key().to_owned());
+                }
+            }
             Body::Thought(segment) => self.commit_text(id, &entry.key, segment, entry.more, true),
             Body::Tool(record) => {
                 let mut tool = parse_tool(self.acp_turn.as_deref(), record);

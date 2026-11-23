@@ -26,6 +26,7 @@ pub struct OptionRow {
     action: Option<Action>,
     badges: Vec<&'static str>,
     color: Option<usize>,
+    notice: bool,
 }
 
 impl OptionRow {
@@ -37,6 +38,7 @@ impl OptionRow {
             action: Some(action),
             badges: Vec::new(),
             color: None,
+            notice: false,
         }
     }
 
@@ -71,7 +73,7 @@ impl OptionRow {
             .leading_icon(self.glyph)
             .focus_ring_for("palette-query")
             .highlighted(active)
-            .disabled(self.action.is_none());
+            .disabled(self.action.is_none() && !self.notice);
         if let Some(color) = self.color {
             item = item.leading(ui::project_icon("", Some(self.glyph), 24.0, Some(color), t));
         }
@@ -90,7 +92,12 @@ impl OptionRow {
                 s.dispatch(Msg::Palette(PaletteMsg::Project(action.clone())), tx);
             });
         }
-        item.build(t).preserve_focus_on_press(true)
+        let item = item.build(t).preserve_focus_on_press(true);
+        if self.notice {
+            item.role("status")
+        } else {
+            item
+        }
     }
 }
 
@@ -104,22 +111,7 @@ const fn push(view: View) -> Action {
 
 pub fn options(model: &Model, page: &ProjectPage) -> Vec<OptionRow> {
     let mut options = match &page.view {
-        View::Sources => vec![
-            OptionRow::new(
-                "Local folder",
-                &ui::FOLDER_OPEN,
-                push(View::Folders(Destination::Add)),
-            )
-            .detail("Browse folders on the connected environment"),
-            OptionRow::new("Git URL", &ui::GIT_BRANCH, push(View::CloneUrl))
-                .detail("Clone a repository from a URL"),
-            OptionRow::new(
-                "GitHub repository",
-                &ui::FOLDER_GIT2,
-                push(View::Repositories),
-            )
-            .detail("Search repositories available to your GitHub account"),
-        ],
+        View::Sources => sources(),
         View::Folders(_) => folder_options(page),
         View::Projects => model
             .cache()
@@ -215,7 +207,9 @@ fn folder_options(page: &ProjectPage) -> Vec<OptionRow> {
             let item = OptionRow::new(&entry.name, &ui::FOLDER, Action::Browse(entry.path.clone()))
                 .badges(folder_badges(entry.git, entry.project));
             if let Some(issue) = entry.issue {
-                item.detail(issue_label(issue)).disabled(true)
+                let mut item = item.detail(issue_label(issue)).disabled(true);
+                item.notice = true;
+                item
             } else {
                 item
             }
@@ -288,11 +282,12 @@ pub const fn submit(page: &ProjectPage) -> Option<(&'static str, Action)> {
                     Destination::Add => "Add project",
                     Destination::Clone { .. } => "Clone",
                     Destination::Additional(_) => "Use folder",
+                    Destination::NewProject => "Choose location",
                 },
                 Action::SubmitFolder,
             )
         }
-        View::NewFolder => ("Create", Action::Submit),
+        View::NewFolder | View::NewProject(_) => ("Create", Action::Submit),
         View::CloneUrl => ("Continue", Action::Submit),
         View::Edit { .. } => ("Save", Action::Submit),
         View::Remove(_) => ("Remove project", Action::Submit),
@@ -389,6 +384,7 @@ pub fn context(s: &Desktop, page: &ProjectPage, count: usize, t: &Theme) -> El {
                 body = body.child(settings::preview(project, s.project_icon_image(project.path.as_str()), t));
             }
         }
+        (View::NewProject(parent), _) => body = body.child(status(&format!("Create in {parent}"), t)),
         (View::Remove(project), _) => body = body.child(status(&format!("Remove {project} from viz? The folder remains on disk."), t)),
         (View::Sessions { .. }, Some(ProjectReply::Sessions(result))) if !result.supported => body = body.child(status("This harness cannot list saved sessions.", t)),
         (View::Sessions { .. }, Some(ProjectReply::Sessions(result))) if result.sessions.is_empty() => body = body.child(status("No saved sessions", t)),
@@ -407,4 +403,29 @@ pub fn footer(page: &ProjectPage, t: &Theme) -> Option<El> {
         return Some(button("Load more", Action::MoreSessions, page.pending, t));
     }
     None
+}
+
+fn sources() -> Vec<OptionRow> {
+    vec![
+        OptionRow::new(
+            "New project",
+            &ui::FOLDER_GIT2,
+            push(View::Folders(Destination::NewProject)),
+        )
+        .detail("Create a folder and initialize Git"),
+        OptionRow::new(
+            "Local folder",
+            &ui::FOLDER_OPEN,
+            push(View::Folders(Destination::Add)),
+        )
+        .detail("Browse folders on the connected environment"),
+        OptionRow::new("Git URL", &ui::GIT_BRANCH, push(View::CloneUrl))
+            .detail("Clone a repository from a URL"),
+        OptionRow::new(
+            "GitHub repository",
+            &ui::FOLDER_GIT2,
+            push(View::Repositories),
+        )
+        .detail("Search repositories available to your GitHub account"),
+    ]
 }

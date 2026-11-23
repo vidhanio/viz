@@ -1,6 +1,8 @@
 //! Pure transcript data model: user prompts, assistant prose/reasoning,
 //! rich tool records, plans, compactions, media, omitted entries, and run ends.
 
+use std::collections::BTreeMap;
+
 use viz_client::protocol::{
     Compaction, CompactionStatus, ContentBlock, EntryId, EntrySource, Origin, Plan, PlanContent,
     PlanPriority, PlanStatus, Review, Segment, ThreadId, ToolDiff, TranscriptEntry, TurnUsage,
@@ -13,6 +15,7 @@ pub struct Transcript {
     pub items: Vec<Item>,
     /// Exclusive cursor for the next page of older entries.
     pub before: Option<EntryId>,
+    pub(super) message_rows: BTreeMap<EntryId, String>,
     pub(super) plan: Option<(Option<String>, usize)>,
     pub(super) ended_run: bool,
     pub(super) acp_turn: Option<String>,
@@ -478,5 +481,12 @@ impl Item {
                 more,
             }
         }
+    }
+}
+
+impl Transcript {
+    /// Finds the displayed transcript row for a committed search result.
+    pub fn message_row(&self, entry: EntryId) -> Option<&str> {
+        self.message_rows.get(&entry).map(String::as_str)
     }
 }
