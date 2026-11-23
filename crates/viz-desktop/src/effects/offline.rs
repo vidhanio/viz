@@ -65,7 +65,9 @@ pub(super) fn handle(
                 },
             );
         }
-        ServerEffect::SearchFiles { .. } | ServerEffect::ReadProjectIcon { .. } => {}
+        ServerEffect::SearchFiles { .. }
+        | ServerEffect::SearchGitHub { .. }
+        | ServerEffect::ReadProjectIcon { .. } => {}
         ServerEffect::ProjectPalette(request, _) => ui.update(move |s, tx| {
             s.dispatch(
                 Msg::Server(ServerMsg::ProjectPalette {

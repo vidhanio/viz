@@ -4,9 +4,9 @@
 use std::sync::Arc;
 
 use viz_client::protocol::{
-    ConfigOption, Entry, EntryId, EntrySource, Environment, Forked, Harness, LaunchThread,
-    Lifecycle, LiveDelta, Project, SearchHit, SendInput, Task, ThreadId, ThreadState,
-    ThreadSummary,
+    ConfigOption, Entry, EntryId, EntrySource, Environment, FileSearchMatch, Forked, GitHubItem,
+    Harness, LaunchThread, Lifecycle, LiveDelta, Project, SearchHit, SendInput, Task, ThreadId,
+    ThreadState, ThreadSummary,
 };
 
 use crate::{
@@ -165,8 +165,15 @@ pub enum ServerMsg {
         thread: ThreadId,
         /// Monotonic completion request id.
         request: u64,
-        /// Matching paths or error string.
-        result: Result<Vec<String>, String>,
+        /// Matching ranked file results or error string.
+        result: Result<Vec<FileSearchMatch>, String>,
+    },
+    /// `#` GitHub pull-request and issue search finished.
+    GitHubSearchResult {
+        /// Monotonic completion request id.
+        request: u64,
+        /// Matching GitHub items or error string.
+        result: Result<Vec<GitHubItem>, String>,
     },
     /// Palette full-text transcript search finished.
     ThreadSearchResult {

@@ -6,8 +6,10 @@
 
 pub mod cache;
 pub mod completion;
+mod completion_match;
 pub mod composer_state;
 pub mod git;
+pub mod home;
 pub mod model_list;
 pub mod model_menu;
 pub mod model_options;
@@ -37,12 +39,16 @@ use viz_client::protocol::{
 pub use self::{
     cache::{Checkouts, EnvironmentCache, OpenThread},
     completion::{
-        completion_token_at, format_completion_insertion, matching_commands, matching_files,
+        BuiltinCommand, CompletionChoice, GitHubEntry, MentionEntry, SkillEntry, SlashEntry,
+        available_commands, completion_choice_at, completion_count, completion_token_at,
+        matching_commands, matching_github, matching_mentions, matching_skills,
     },
     composer_state::{
-        AttachmentTarget, CompletionKind, CompletionToken, ComposerState, DraftCursor, DraftData,
-        PaletteChoice, PaletteCommand, PaletteSearch, PaletteState,
+        AttachmentStatus, AttachmentTarget, CompletionKind, CompletionToken, ComposerState,
+        DraftCursor, DraftData, DraftPill, PROMPT_CHAR_LIMIT, PROMPT_WARN_LIMIT, PaletteChoice,
+        PaletteCommand, PaletteSearch, PaletteState,
     },
+    home::{HomeProjectOption, draft_branch_options, home_project_options},
     model_list::{ListEmpty, ListItem, ModelRow, PickerList, picker_list},
     model_menu::{
         ACCESS_PICKER, Catalog, MODEL_PICKER, ModelMenuState, ModelRef, PickerColumn, PickerScope,
@@ -307,12 +313,28 @@ impl Model {
     /// Whether the composer can submit the current draft.
     #[must_use]
     pub fn can_send(&self) -> bool {
-        self.can_attach()
+        if self.composer.draft.text.chars().count() > PROMPT_CHAR_LIMIT
+            || self.composer.draft.has_pending_or_failed_attachments()
+        {
+            return false;
+        }
+        let non_empty = !self.composer.draft.text.trim().is_empty()
+            || !self.composer.draft.attachments.is_empty();
+        if !non_empty {
+            return false;
+        }
+        if self.composer.editing_queued.is_some() {
+            return self.connected() && self.selection.selected.is_some();
+        }
+        let ready = if self.selection.new_thread.is_some() || self.selection.selected.is_some() {
+            self.can_attach()
+        } else {
+            self.connected() && self.cache().has_projects()
+        };
+        ready
             && self.selection.new_thread.as_ref().is_none_or(|thread| {
                 !thread.loading_choices && thread.active_harness(self.harnesses()).is_some()
             })
-            && (!self.composer.draft.text.trim().is_empty()
-                || !self.composer.draft.attachments.is_empty())
     }
 
     /// Whether any non-archived thread in the active environment is unread.
@@ -407,7 +429,7 @@ impl Model {
                         .entry(ThreadId(raw_id))
                         .or_insert_with(|| DraftData {
                             text: text.clone(),
-                            attachments: Vec::new(),
+                            ..DraftData::default()
                         });
                 }
             }

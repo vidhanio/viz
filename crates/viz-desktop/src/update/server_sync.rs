@@ -440,6 +440,17 @@ pub(super) fn rollback_optimistic(model: &mut Model, undo: OptimisticUndo) {
                 project.name = prior_name;
             }
         }
+        OptimisticUndo::ProjectPin {
+            env,
+            path,
+            prior_pinned,
+        } => {
+            if let Some(cache) = model.caches.get_mut(&env)
+                && let Some(project) = cache.project_mut(&path)
+            {
+                project.settings.pinned = prior_pinned;
+            }
+        }
         OptimisticUndo::ProjectRemove {
             env,
             index,

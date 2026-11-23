@@ -5,41 +5,28 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 
 use rune::{ImageCache, TextEdit, Tx, image::Image};
-use rune_kit::{ToastEffect, ToastEvent, ToastPage, ToastStack, shell::PaneState};
+use rune_kit::{ImageZoom, ToastStack, shell::PaneState};
 use tokio::sync::mpsc;
+use viz_client::protocol::Attachment;
 
 use crate::{
     effects::{self, ServerEffect},
     model::{
-        DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH, DraftCursor, Model, PaneSwitch,
-        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, UndoTriage,
+        DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH, DraftCursor, DraftPill, Model,
+        PaneSwitch, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
     },
     motion::Switch,
     motion_scene::MotionDemo,
     theme,
-    ui::Tone,
     update::{self, Msg, ShellMsg},
 };
 
-/// How long a toast stays up while unpaused.
-const TOAST_LIFE: Duration = Duration::from_secs(6);
+mod toasts;
 
-/// Content carried by an entry in [`ShellWidgets::toasts`].
-#[derive(Debug, Clone)]
-pub struct ToastContent {
-    /// One line.
-    pub title: String,
-    /// More, if there is any.
-    pub detail: Option<String>,
-    /// Semantic tone dot color for the toast card.
-    pub tone: Tone,
-    /// Optional undo payload rendered as an inline `Undo` button.
-    pub undo: Option<UndoTriage>,
-}
+pub use toasts::ToastContent;
 
 /// Stateful Rune and `rune-kit` widget controllers kept outside the pure
 /// [`Model`].
@@ -68,6 +55,12 @@ pub struct ShellWidgets {
     pub palette_query: TextEdit,
     /// Model picker search input.
     pub model_query: TextEdit,
+    /// Home hero project picker search input.
+    pub home_project_query: TextEdit,
+    /// Home context strip branch search input.
+    pub draft_branch_query: TextEdit,
+    /// Attachment image lightbox zoom and pan controller.
+    pub image_zoom: ImageZoom,
     /// Resizable, collapsible sidebar pane state.
     pub sidebar_pane: PaneState,
     /// Resizable, collapsible docked diff inspector pane state.
@@ -78,6 +71,9 @@ pub struct ShellWidgets {
     pub images: Option<ImageCache>,
     /// Decoded project icon images keyed by `"{env}\0{project_path}"`.
     pub project_icons: HashMap<String, Image>,
+    /// Decoded composer attachment thumbnails keyed by name, mime, and payload
+    /// prefix.
+    pub attachment_thumbs: HashMap<String, Image>,
 }
 
 impl std::fmt::Debug for ShellWidgets {
@@ -114,6 +110,9 @@ impl Default for ShellWidgets {
             sidebar_dialog: TextEdit::new(""),
             palette_query: TextEdit::new(""),
             model_query: TextEdit::new(""),
+            home_project_query: TextEdit::new(""),
+            draft_branch_query: TextEdit::new(""),
+            image_zoom: ImageZoom::new(),
             sidebar_pane: PaneState::new(SIDEBAR_DEFAULT_WIDTH)
                 .range(SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH),
             diff_pane: PaneState::new(DIFF_DEFAULT_WIDTH)
@@ -122,6 +121,7 @@ impl Default for ShellWidgets {
             toasts: ToastStack::default(),
             images: None,
             project_icons: HashMap::new(),
+            attachment_thumbs: HashMap::new(),
         }
     }
 }
@@ -188,6 +188,7 @@ impl Desktop {
         crate::git::diff_panel::sync(self);
         crate::terminal::panel::sync(self);
         crate::requests::sync(self);
+        self.decode_draft_attachments();
         if self.model.panels.terminal_open
             && active != self.model.terminal.active
             && (created || in_terminal)
@@ -230,8 +231,18 @@ impl Desktop {
         crate::terminal::panel::sync(self);
         crate::requests::sync(self);
         self.widgets.git_query = TextEdit::new(&self.model.git.query);
-        self.widgets.draft = TextEdit::new(&self.model.composer.draft.text);
+        let draft_text = self.model.composer.draft.text.clone();
+        let draft_pills = self.model.composer.draft.pills.clone();
+        self.widgets.draft = crate::attachments::build_draft_edit(&draft_text, &draft_pills);
         self.widgets.draft.focused = self.model.composer.draft_focused;
+
+        self.widgets.home_project_query = TextEdit::new(&self.model.composer.home_project.query);
+        self.widgets.home_project_query.focused =
+            self.model.composer.open_picker.as_deref() == Some(update::HOME_PROJECT_PICKER);
+        self.widgets.draft_branch_query = TextEdit::new(&self.model.composer.draft_branch.query);
+        self.widgets.draft_branch_query.focused =
+            self.model.composer.open_picker.as_deref() == Some(update::DRAFT_BRANCH_PICKER);
+        self.decode_draft_attachments();
 
         self.widgets.project_filter_query = TextEdit::new(&self.model.sidebar.filter_query);
         self.widgets.project_filter_query.focused = self.model.sidebar.filter_open;
@@ -272,38 +283,6 @@ impl Desktop {
         self.widgets.diff_pane.set_open(self.model.panels.diff.open);
     }
 
-    /// Adds a persistent toast for preview scenes (no expiry clock).
-    pub fn preview_toast(&mut self, title: &str, detail: &str) {
-        let key = format!("{title}\n{detail}");
-        let _ = self.widgets.toasts.step(ToastEvent::Shown {
-            key,
-            options: ToastContent {
-                title: title.into(),
-                detail: Some(detail.into()),
-                tone: Tone::Danger,
-                undo: None,
-            },
-            secs: None,
-            now: 0.0,
-        });
-    }
-
-    /// Adds a persistent triage undo toast for preview scenes.
-    pub fn preview_undo_toast(&mut self, title: &str, detail: &str, undo: UndoTriage) {
-        let key = format!("undo-{}-{title}", undo.thread);
-        let _ = self.widgets.toasts.step(ToastEvent::Shown {
-            key,
-            options: ToastContent {
-                title: title.into(),
-                detail: Some(detail.into()),
-                tone: Tone::Neutral,
-                undo: Some(undo),
-            },
-            secs: None,
-            now: 0.0,
-        });
-    }
-
     /// Returns the decoded image handle for `project` in the active
     /// environment, if loaded.
     #[must_use]
@@ -329,53 +308,6 @@ impl Desktop {
         self.widgets.project_icons.insert(key, image);
     }
 
-    /// Closes a toast early.
-    pub fn dismiss_toast(&mut self, id: u64, tx: &mut Tx) {
-        self.step_toasts(
-            ToastEvent::Dismissed {
-                id: Some(id),
-                now: tx.clock(),
-            },
-            tx,
-        );
-    }
-
-    /// Pauses or resumes toast auto-dismiss while the pointer is over the
-    /// stack.
-    pub fn toast_hover(&mut self, inside: bool, tx: &mut Tx) {
-        let event = if inside {
-            ToastEvent::PointerOver { now: tx.clock() }
-        } else {
-            ToastEvent::PointerLeft { now: tx.clock() }
-        };
-        self.step_toasts(event, tx);
-    }
-
-    /// Syncs window visibility and expires due toasts; returns true if any
-    /// closed.
-    pub fn expire_toasts(&mut self, clock: f64, tx: &mut Tx) -> bool {
-        if self.widgets.toasts.entries().is_empty() {
-            return false;
-        }
-        let page = if tx.window_visible() {
-            ToastPage::Shown
-        } else {
-            ToastPage::Hidden
-        };
-        if self.widgets.toasts.page() != page {
-            self.step_toasts(ToastEvent::Page { page, now: clock }, tx);
-        }
-        if self
-            .widgets
-            .toasts
-            .next_due()
-            .is_some_and(|due| clock + 1e-3 >= due)
-        {
-            return self.step_toasts(ToastEvent::Tick { now: clock }, tx);
-        }
-        false
-    }
-
     pub(crate) fn prefs_path(&self) -> Option<&Path> {
         self.prefs_path.as_deref()
     }
@@ -384,84 +316,24 @@ impl Desktop {
         self.commands.send(command).err().map(|error| error.0)
     }
 
-    pub(crate) fn show_toast(
-        &mut self,
-        tx: &mut Tx,
-        title: impl Into<String>,
-        detail: Option<String>,
-    ) {
-        let title = title.into();
-        let key = format!("{title}\n{}", detail.as_deref().unwrap_or_default());
-        let tone = if detail.is_some() {
-            Tone::Danger
-        } else {
-            Tone::Neutral
-        };
-        self.step_toasts(
-            ToastEvent::Shown {
-                key,
-                options: ToastContent {
-                    title,
-                    detail,
-                    tone,
-                    undo: None,
-                },
-                secs: Some(TOAST_LIFE.as_secs_f64()),
-                now: tx.clock(),
-            },
-            tx,
-        );
+    /// Returns the decoded thumbnail image handle for an image attachment, if
+    /// available.
+    #[must_use]
+    pub fn attachment_image(&self, attachment: &Attachment) -> Option<&Image> {
+        crate::attachments::cached_image(self, attachment)
     }
 
-    pub(crate) fn show_undo_toast(
-        &mut self,
-        tx: &mut Tx,
-        title: String,
-        detail: Option<String>,
-        undo: UndoTriage,
-        secs: f64,
-    ) {
-        let key = format!("undo-{}", undo.thread);
-        self.step_toasts(
-            ToastEvent::Shown {
-                key,
-                options: ToastContent {
-                    title,
-                    detail,
-                    tone: Tone::Neutral,
-                    undo: Some(undo),
-                },
-                secs: Some(secs),
-                now: tx.clock(),
-            },
-            tx,
-        );
+    pub(crate) fn decode_draft_attachments(&mut self) {
+        crate::attachments::decode_draft_images(self);
     }
 
-    fn sync_draft_text(&mut self) {
-        if self.widgets.draft.text != self.model.composer.draft.text {
-            self.model
-                .composer
-                .draft
-                .text
-                .clone_from(&self.widgets.draft.text);
-        }
-        self.model.composer.draft_focused = self.widgets.draft.focused;
+    pub(crate) fn replace_draft_with_pills(&mut self, text: &str, pills: &[DraftPill]) {
+        self.widgets.draft = crate::attachments::build_draft_edit(text, pills);
+        self.sync_draft_text();
     }
 
-    fn step_toasts(&mut self, event: ToastEvent<ToastContent>, tx: &mut Tx) -> bool {
-        let mut closed = false;
-        for effect in self.widgets.toasts.step(event) {
-            match effect {
-                ToastEffect::Closed(_) => closed = true,
-                ToastEffect::WakeAt(due) => {
-                    let wait = (due - tx.clock()).max(0.0);
-                    tx.wake_after(Duration::from_secs_f64(wait));
-                }
-                ToastEffect::Pulse(_) => {}
-            }
-        }
-        closed
+    pub(crate) fn sync_draft_text(&mut self) {
+        crate::attachments::sync_draft_text(self);
     }
 }
 

@@ -5,7 +5,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use viz_client::protocol::{
-    Environment, Harness, OptionValue, Project, ThreadId, ThreadSummary, WorktreeTarget,
+    AccessMode, Environment, Harness, OptionValue, Project, ThreadId, ThreadSummary, WorktreeTarget,
 };
 
 use super::{
@@ -100,12 +100,14 @@ pub struct NewThread {
     pub project: Option<String>,
     /// Which checkout of a Git project to run in; `None` is the project's own.
     pub worktree: Option<WorktreeTarget>,
+    /// Whether `New worktree` bases on the remote-tracking ref.
+    pub remote_base: bool,
     /// Explicitly chosen harness id; `None` uses the server default.
     pub harness: Option<String>,
     /// Initial ACP config option overrides.
     pub options: BTreeMap<String, OptionValue>,
     /// Access mode chosen before launch; `None` is the harness default.
-    pub access: Option<viz_client::protocol::AccessMode>,
+    pub access: Option<AccessMode>,
     /// True while the initial launch request is in flight.
     pub sending: bool,
     /// True while refreshing harness choices for this draft.
@@ -120,6 +122,7 @@ impl NewThread {
             id,
             project: project.map(|project| project.path.clone()),
             worktree: None,
+            remote_base: false,
             harness: None,
             options: BTreeMap::new(),
             access: None,
@@ -132,6 +135,7 @@ impl NewThread {
     pub fn set_project(&mut self, project: Option<&Project>) {
         self.project = project.map(|project| project.path.clone());
         self.worktree = None;
+        self.remote_base = false;
     }
 
     /// Resolves the active harness for this draft from `runners`.
@@ -399,6 +403,15 @@ pub enum OptimisticUndo {
         path: String,
         /// Display name before rename.
         prior_name: String,
+    },
+    /// Restores a project's prior pinned state after a failed pin toggle.
+    ProjectPin {
+        /// Environment cache key.
+        env: String,
+        /// Project path.
+        path: String,
+        /// Pinned flag before toggle.
+        prior_pinned: bool,
     },
     /// Restores a removed project after a failed removal.
     ProjectRemove {

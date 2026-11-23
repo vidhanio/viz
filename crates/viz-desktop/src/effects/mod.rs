@@ -2,6 +2,7 @@
 //! runtime, filesystem, clipboard, notifications, file dialogs, or preferences
 //! file.
 
+mod composer_rpc;
 pub mod git;
 mod offline;
 pub mod platform;
@@ -16,11 +17,11 @@ mod timeline_rpc;
 use std::{path::PathBuf, time::Duration};
 
 use viz_client::protocol::{
-    Attachment, EntryId, EntrySource, ForkPoint, ForkThread, LaunchThread, OptionValue, SendInput,
-    ThreadId, TriageAction, WorktreeTarget,
+    Attachment, EntryId, EntrySource, ForkPoint, ForkThread, LaunchThread, OptionValue, RunId,
+    SendInput, ThreadId, TriageAction, WorktreeTarget,
 };
 
-use crate::model::{AttachmentTarget, Prefs, UndoTriage};
+use crate::model::{AttachmentTarget, DraftPill, Prefs, UndoTriage};
 
 /// Maximum base64-encoded bytes per message across all attachments.
 pub const ATTACHMENT_ENCODED_LIMIT: usize = platform::ENCODED_LIMIT;
@@ -172,6 +173,10 @@ pub enum EditTarget {
     PaletteQuery,
     /// Model picker search input.
     ModelQuery,
+    /// Home hero project picker search input.
+    HomeProjectQuery,
+    /// Home context strip branch picker search input.
+    DraftBranchQuery,
 }
 
 /// Mutation applied to a shell-owned [`rune::TextEdit`] widget.
@@ -186,6 +191,13 @@ pub enum EditSync {
         /// Select the entire replaced string when true.
         select_all: bool,
     },
+    /// Replace the composer draft editor with text plus atomic inline pills.
+    ReplaceDraftWithPills {
+        /// Plain prompt text including pill label spans.
+        text: String,
+        /// Atomic pills anchored to byte ranges in `text`.
+        pills: Vec<DraftPill>,
+    },
     /// Clear text contents.
     Clear(EditTarget),
     /// Prepend restored message text to the active draft when a send fails.
@@ -198,6 +210,19 @@ pub enum EditSync {
         end: usize,
         /// Replacement text.
         insertion: String,
+    },
+    /// Replace a byte range in the draft with an atomic [`rune::Mark::Pill`].
+    InsertDraftPill {
+        /// Start byte offset of the trigger token.
+        start: usize,
+        /// End byte offset of the trigger token.
+        end: usize,
+        /// Typed pill id.
+        id: String,
+        /// Visible inline label.
+        label: String,
+        /// Append a trailing space after the pill when true.
+        trailing_space: bool,
     },
 }
 
@@ -330,6 +355,38 @@ pub enum ServerEffect {
         /// File query string.
         query: String,
     },
+    /// Search GitHub issues and pull requests for `#` completion.
+    SearchGitHub {
+        /// Active project path.
+        project: String,
+        /// Monotonic completion request id.
+        request: u64,
+        /// Issue/PR query string.
+        query: String,
+    },
+    /// Promote a queued input to steer immediately.
+    SteerQueued {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Queued run id.
+        run: RunId,
+    },
+    /// Update a queued input's prompt text.
+    UpdateQueued {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Queued run id.
+        run: RunId,
+        /// Updated prompt text.
+        text: String,
+    },
+    /// Remove a queued input from the queue.
+    RemoveQueued {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Queued run id.
+        run: RunId,
+    },
     /// Full-text search across transcripts for the command palette.
     ProjectPalette(u64, projects::ProjectRequest),
     SearchThreads {
@@ -422,6 +479,13 @@ pub enum ProjectChange {
         id: String,
         /// New display name.
         name: String,
+    },
+    /// Pin or unpin a registered project.
+    Pin {
+        /// Project path id.
+        id: String,
+        /// New pinned flag.
+        pinned: bool,
     },
     /// Unregister a project without deleting files.
     Remove(String),

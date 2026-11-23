@@ -26,6 +26,7 @@ mod composer;
 mod config;
 mod effects;
 mod header;
+mod home;
 mod model;
 mod model_picker;
 mod motion;
@@ -77,29 +78,39 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         return motion_scene::view(demo, reduced, t);
     }
     let mut overlays = Vec::new();
-    let dock = composer::composer(s, t, &mut overlays);
-    let approvals: Vec<El> = requests::approval_rows(s, t).collect();
-    let pending_requests = (!approvals.is_empty()).then(|| {
+    let main = if home::is_active(&s.model) {
         col()
-            .key("approval-rows")
+            .key("main")
             .w_full()
-            .gap(theme::S8)
-            .children(approvals)
-    });
-    let mut main = col()
-        .key("main")
-        .w_full()
-        .h_full()
-        .min_h(0.0)
-        .child(timeline::timeline(
-            s,
-            timeline::TimelineSlots { pending_requests },
-            t,
-            &mut overlays,
-        ));
-    if let Some(dock) = dock {
-        main = main.child(dock);
-    }
+            .h_full()
+            .min_h(0.0)
+            .child(home::view(s, t, &mut overlays))
+    } else {
+        let dock = composer::composer(s, t, &mut overlays);
+        let approvals: Vec<El> = requests::approval_rows(s, t).collect();
+        let pending_requests = (!approvals.is_empty()).then(|| {
+            col()
+                .key("approval-rows")
+                .w_full()
+                .gap(theme::S8)
+                .children(approvals)
+        });
+        let mut main = col()
+            .key("main")
+            .w_full()
+            .h_full()
+            .min_h(0.0)
+            .child(timeline::timeline(
+                s,
+                timeline::TimelineSlots { pending_requests },
+                t,
+                &mut overlays,
+            ));
+        if let Some(dock) = dock {
+            main = main.child(dock);
+        }
+        main
+    };
     let sidebar = sidebar::sidebar(s, cx.titlebar_inset(), t, &mut overlays);
     let toolbar = header::toolbar(s, t);
     let details = git::details_card::mount(s, t, &mut overlays);
@@ -108,6 +119,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     git::dialogs(s, t, &mut overlays);
     sidebar::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
+    composer::attachments::lightbox(s, reduced, t, &mut overlays);
     let slots = ShellSlots {
         sidebar,
         toolbar,
@@ -145,6 +157,14 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     if model_picker::shortcut(s, ev, tx) {
+        return true;
+    }
+    if ev.is_command('p') && ev.mods.shift && !ev.mods.alt && home::is_active(&s.model) {
+        s.dispatch(Msg::Composer(ComposerMsg::ToggleHomeProjectPicker), tx);
+        return true;
+    }
+    if ev.is_command('n') && ev.mods.alt && !ev.mods.shift && s.model.connected() {
+        s.dispatch(Msg::Selection(SelectionMsg::StartWithoutProject), tx);
         return true;
     }
     if ev.mods.shift || ev.mods.alt {
@@ -218,6 +238,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     if diff_resized {
         git::dispatch(s, update::GitMsg::PaneWidth(diff_width), tx);
     }
+    let zoom = s.widgets.image_zoom.poll(clock, tx);
     let completion = poll_completion(s, clock, tx);
     let palette = poll_palette(s, clock, tx);
     let has_tool_timeout = s.model.transcript().acp_partial.iter().any(|item| {
@@ -248,6 +269,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     s.expire_toasts(clock, tx)
         || pane_changed
         || diff_resized
+        || zoom
         || completion
         || palette
         || tool_timer

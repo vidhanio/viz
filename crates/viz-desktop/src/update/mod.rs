@@ -4,8 +4,10 @@
 //! Nothing under `update` imports Rune, Tokio, channels, or performs I/O.
 
 mod composer;
+mod composer_actions;
 mod git;
 pub use git::GitMsg;
+mod home;
 pub mod model_picker;
 mod model_picker_keys;
 mod palette;
@@ -22,7 +24,10 @@ pub mod terminal;
 mod timeline;
 
 pub use self::{
-    composer::ComposerMsg,
+    composer::{
+        ComposerMsg, DRAFT_BRANCH_PICKER, DRAFT_BRANCH_SEARCH, HOME_ENV_PICKER,
+        HOME_PROJECT_PICKER, HOME_PROJECT_SEARCH,
+    },
     model_picker::ModelPickerMsg,
     model_picker_keys::PickerKey,
     palette::PaletteMsg,

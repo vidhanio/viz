@@ -26,7 +26,6 @@ use crate::{
 /// Element key of the picker footer's access trigger.
 pub const FOOTER_TRIGGER: &str = "model-access-trigger";
 /// Element key of the Home strip's access trigger.
-#[expect(dead_code, reason = "embedded by the Home context strip (Track H)")]
 pub const STRIP_TRIGGER: &str = "access-trigger";
 /// Popover width.
 const WIDTH: f32 = 288.0;
@@ -109,7 +108,6 @@ pub(super) fn footer_trigger(s: &Desktop, t: &Theme) -> Option<El> {
 
 /// A standalone access-mode pill (Home context strip): `24pt` ghost trigger
 /// that mounts its popover into `layer` while open.
-#[expect(dead_code, reason = "embedded by the Home context strip (Track H)")]
 pub fn access_trigger(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let view = access_view(&s.model)?;
     let open = s.model.composer.open_picker.as_deref() == Some(ACCESS_PICKER);
@@ -117,6 +115,14 @@ pub fn access_trigger(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El>
         layer.extend(popover(s, STRIP_TRIGGER, Placement::TopEnd, t));
     }
     Some(trigger(STRIP_TRIGGER, view.current, open, S24, S6, t))
+}
+
+/// Standalone thread chip for an explicit access override.
+pub fn thread_trigger(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
+    let access = &s.model.thread_state()?.access;
+    (access.source == viz_client::protocol::AccessSource::Thread)
+        .then(|| access_trigger(s, t, layer))
+        .flatten()
 }
 
 /// The access popover anchored to `anchor`: a scrim and the flat card.

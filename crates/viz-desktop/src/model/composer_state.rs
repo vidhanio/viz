@@ -1,20 +1,142 @@
-//! Pure composer and command-palette state structs stored inside
-//! [`crate::model::Model`].
+//! Pure composer, inline pill, completion drawer, home picker, and
+//! command-palette state structs stored inside [`crate::model::Model`].
 
 use std::{
     collections::{BTreeMap, HashSet},
     ops::Range,
 };
 
-use viz_client::protocol::{Attachment, SearchHit, ThreadId};
+use viz_client::protocol::{
+    Attachment, FileSearchMatch, GitHubItem, PromptContext, RunId, SearchHit, ThreadId,
+};
 
-/// Unsent composer text and prepared attachments for one thread or draft.
+/// Maximum prompt characters before warning and disabling Send.
+pub const PROMPT_CHAR_LIMIT: usize = 200_000;
+/// Soft character threshold showing a non-blocking length caution badge.
+pub const PROMPT_WARN_LIMIT: usize = 160_000;
+
+/// Atomic inline chip stored in the composer's [`rune::TextEdit`] via
+/// `Mark::Pill`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DraftPill {
+    /// Byte range in [`DraftData::text`].
+    pub range: Range<usize>,
+    /// Typed pill identifier (`file:...`, `dir:...`, `thread:...`, `env:...`,
+    /// `model:...`, `skill:...`, `pr:...`).
+    pub id: String,
+    /// Visible inline label inserted into the editor.
+    pub label: String,
+}
+
+impl DraftPill {
+    /// Builds a file or directory mention pill id.
+    #[must_use]
+    pub fn file_id(path: &str, directory: bool) -> String {
+        if directory {
+            format!("dir:{path}")
+        } else {
+            format!("file:{path}")
+        }
+    }
+
+    /// Builds a thread mention pill id.
+    #[must_use]
+    pub fn thread_id(thread: ThreadId, title: &str) -> String {
+        format!("thread:{}:{title}", thread.0)
+    }
+
+    /// Builds an environment mention pill id.
+    #[must_use]
+    pub fn env_id(env: &str) -> String {
+        format!("env:{env}")
+    }
+
+    /// Builds a model mention pill id.
+    #[must_use]
+    pub fn model_id(value: &str) -> String {
+        format!("model:{value}")
+    }
+
+    /// Builds a skill mention pill id.
+    #[must_use]
+    pub fn skill_id(name: &str) -> String {
+        format!("skill:{name}")
+    }
+
+    /// Builds a GitHub issue/PR mention pill id encoding state, number, url,
+    /// and title.
+    #[must_use]
+    pub fn github_id(item: &GitHubItem) -> String {
+        let kind = match item.kind {
+            viz_client::protocol::GitHubItemKind::PullRequest => "pr",
+            viz_client::protocol::GitHubItemKind::Issue => "issue",
+        };
+        let state = item.state.to_ascii_lowercase();
+        format!(
+            "{kind}:{state}:{}:{}\x1f{}",
+            item.number, item.url, item.title
+        )
+    }
+
+    /// Converts file and GitHub link pills into structured [`PromptContext`]
+    /// blocks for `thread.launch` and `thread.send`.
+    #[must_use]
+    pub fn to_prompt_context(&self) -> Option<PromptContext> {
+        if let Some(path) = self
+            .id
+            .strip_prefix("file:")
+            .or_else(|| self.id.strip_prefix("dir:"))
+        {
+            return Some(PromptContext::File {
+                path: path.to_owned(),
+            });
+        }
+        let rest = self
+            .id
+            .strip_prefix("pr:")
+            .or_else(|| self.id.strip_prefix("issue:"))?;
+        let (_, after_state) = rest.split_once(':')?;
+        let (number, tail) = after_state.split_once(':')?;
+        let (uri, title) = tail.split_once('\x1f').unwrap_or((tail, ""));
+        if uri.is_empty() {
+            return None;
+        }
+        Some(PromptContext::Link {
+            uri: uri.to_owned(),
+            name: format!("#{number}"),
+            title: (!title.is_empty()).then(|| title.to_owned()),
+        })
+    }
+}
+
+/// Upload / decoding status of an attached composer file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AttachmentStatus {
+    /// Ready to send.
+    Ready,
+    /// Upload or encoding progress (`0..=100`, `None` for indeterminate).
+    Uploading(Option<u8>),
+    /// Failed with a user-readable error message.
+    #[expect(
+        dead_code,
+        reason = "rendered by attachment tiles/rows when an upload or decode fails"
+    )]
+    Error(String),
+}
+
+/// Unsent composer text, atomic pills, and prepared attachments for one thread
+/// or draft.
 #[derive(Debug, Clone, Default)]
 pub struct DraftData {
-    /// Plain prompt text.
+    /// Plain prompt text (including pill label spans).
     pub text: String,
+    /// Atomic inline chips synced with `ShellWidgets::draft`.
+    pub pills: Vec<DraftPill>,
     /// Prepared attachments queued for the next send.
     pub attachments: Vec<Attachment>,
+    /// Per-attachment transient status (defaults to `Ready` when shorter than
+    /// `attachments`).
+    pub attachment_statuses: Vec<AttachmentStatus>,
 }
 
 impl DraftData {
@@ -22,6 +144,37 @@ impl DraftData {
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.text.is_empty() && self.attachments.is_empty()
+    }
+
+    /// Status for attachment `index`, defaulting to
+    /// [`AttachmentStatus::Ready`].
+    #[must_use]
+    pub fn attachment_status(&self, index: usize) -> &AttachmentStatus {
+        self.attachment_statuses
+            .get(index)
+            .unwrap_or(&AttachmentStatus::Ready)
+    }
+
+    /// Whether any attachment is currently uploading or failed.
+    #[must_use]
+    pub fn has_pending_or_failed_attachments(&self) -> bool {
+        self.attachment_statuses
+            .iter()
+            .any(|status| !matches!(status, AttachmentStatus::Ready))
+    }
+
+    /// Extracts deduplicated [`PromptContext`] items from inline pills.
+    #[must_use]
+    pub fn prompt_context(&self) -> Vec<PromptContext> {
+        let mut out = Vec::new();
+        for pill in &self.pills {
+            if let Some(ctx) = pill.to_prompt_context()
+                && !out.contains(&ctx)
+            {
+                out.push(ctx);
+            }
+        }
+        out
     }
 }
 
@@ -37,16 +190,20 @@ pub enum AttachmentTarget {
 /// Kind of inline composer completion trigger.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionKind {
-    /// Leading `/command` completion.
+    /// `/command` completion (built-in actions + ACP harness commands).
     Slash,
-    /// Inline `@file` mention completion.
-    File,
+    /// `@` mention completion (files, threads, environments, models).
+    Mention,
+    /// `$` skill completion (ignoring numeric currency like `$100`).
+    Skill,
+    /// `#` GitHub issue and pull request mention completion.
+    PullRequest,
 }
 
 /// Parsed inline completion token at the composer caret.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompletionToken {
-    /// Slash command or file mention.
+    /// Trigger kind.
     pub kind: CompletionKind,
     /// Byte range of the token inside the draft string.
     pub range: Range<usize>,
@@ -70,12 +227,15 @@ pub struct DraftCursor {
 pub struct CompletionState {
     /// Currently tracked token at the caret.
     pub token: Option<CompletionToken>,
-    /// Monotonic request id matching asynchronous file-search replies.
+    /// Monotonic request id matching asynchronous file and GitHub search
+    /// replies.
     pub request: u64,
-    /// Clock deadline for debounced file search.
+    /// Clock deadline for debounced server search.
     pub due: Option<f64>,
-    /// Latest file-search outcome for `request`.
-    pub files: Option<Result<Vec<String>, String>>,
+    /// Latest ranked file-search outcome for `request`.
+    pub files: Option<Result<Vec<FileSearchMatch>, String>>,
+    /// Latest GitHub issue/PR search outcome for `request`.
+    pub github: Option<Result<Vec<GitHubItem>, String>>,
     /// Highlighted row index.
     pub highlighted: usize,
     /// True after pressing Escape on the current token.
@@ -83,12 +243,13 @@ pub struct CompletionState {
 }
 
 impl CompletionState {
-    /// Resets completion state and invalidates any in-flight file search.
+    /// Resets completion state and invalidates any in-flight search.
     pub fn reset(&mut self) {
         self.token = None;
         self.request = self.request.wrapping_add(1);
         self.due = None;
         self.files = None;
+        self.github = None;
         self.highlighted = 0;
         self.dismissed = false;
     }
@@ -111,23 +272,68 @@ impl CompletionState {
     }
 
     /// Seeds a file-mention completion state for preview scenes.
-    pub fn preview_files(&mut self, query: &str, paths: Vec<String>, highlighted: usize) {
+    pub fn preview_files(&mut self, query: &str, files: Vec<FileSearchMatch>, highlighted: usize) {
         self.reset();
         self.token = Some(CompletionToken {
-            kind: CompletionKind::File,
+            kind: CompletionKind::Mention,
             range: 0..query.len() + 1,
             query: query.to_owned(),
         });
-        self.files = Some(Ok(paths));
+        self.files = Some(Ok(files));
         self.highlighted = highlighted;
     }
+
+    /// Seeds a `$` skill completion state for preview scenes.
+    pub fn preview_skills(&mut self, query: &str, highlighted: usize) {
+        self.reset();
+        self.token = Some(CompletionToken {
+            kind: CompletionKind::Skill,
+            range: 0..query.len() + 1,
+            query: query.to_owned(),
+        });
+        self.highlighted = highlighted;
+    }
+
+    /// Seeds a `#` GitHub PR/issue completion state for preview scenes.
+    pub fn preview_github(&mut self, query: &str, items: Vec<GitHubItem>, highlighted: usize) {
+        self.reset();
+        self.token = Some(CompletionToken {
+            kind: CompletionKind::PullRequest,
+            range: 0..query.len() + 1,
+            query: query.to_owned(),
+        });
+        self.github = Some(Ok(items));
+        self.highlighted = highlighted;
+    }
+}
+
+/// Pure state of the Home hero searchable Project Picker combobox.
+#[derive(Debug, Clone, Default)]
+pub struct HomeProjectPickerState {
+    /// Search text inside the Home project picker.
+    pub query: String,
+    /// Keyboard-highlighted row index.
+    pub highlighted: usize,
+}
+
+/// Pure state of the Home context strip branch search combobox.
+#[derive(Debug, Clone, Default)]
+pub struct DraftBranchPickerState {
+    /// Search text inside the draft branch picker.
+    pub query: String,
+    /// Keyboard-highlighted row index.
+    pub highlighted: usize,
 }
 
 /// Pure composer state: active draft, per-environment saved drafts, pickers,
 /// completions, and model favorites.
 #[derive(Debug, Clone, Default)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "four independent composer UI state flags"
+)]
 pub struct ComposerState {
-    /// Text and attachments currently in the composer.
+    /// Text, inline pills, and attachments currently in the composer.
     pub draft: DraftData,
     /// Whether the composer text field currently has keyboard focus.
     pub draft_focused: bool,
@@ -135,14 +341,39 @@ pub struct ComposerState {
     pub drafts_by_env: BTreeMap<String, BTreeMap<ThreadId, DraftData>>,
     /// In-flight attachment reads preventing overlapping reads on one target.
     pub attachment_reads: HashSet<AttachmentTarget>,
-    /// Slash and `@file` completion state.
+    /// True while files are being dragged over the composer drop zone.
+    pub drag_over: bool,
+    /// Index of the image attachment open in the full-size lightbox preview.
+    pub lightbox: Option<usize>,
+    /// Slash, `@`, `$`, and `#` completion state.
     pub completion: CompletionState,
+    /// Home project picker combobox search and highlight state.
+    pub home_project: HomeProjectPickerState,
+    /// Home context strip branch picker search and highlight state.
+    pub draft_branch: DraftBranchPickerState,
     /// Model picker popover state.
     pub model_menu: super::ModelMenuState,
     /// Key of whichever inline picker menu is currently open.
     pub open_picker: Option<String>,
     /// User-starred model identifiers persisted in client preferences.
     pub favorite_models: Vec<String>,
+    /// Sent prompt history per thread for `ArrowUp` / `ArrowDown` recall.
+    pub prompt_history: BTreeMap<ThreadId, Vec<String>>,
+    /// Active index while walking prompt history (`0` = oldest).
+    pub history_cursor: Option<usize>,
+    /// Unsent draft stashed when entering prompt history recall.
+    pub history_stash: Option<DraftData>,
+    /// Queued run currently loaded into the composer for inline editing.
+    pub editing_queued: Option<RunId>,
+    /// Draft stashed while editing a queued message.
+    pub editing_stash: Option<DraftData>,
+    /// Whether queued messages past the first 3 are expanded.
+    pub queued_expanded: bool,
+    /// Optional compact-before-send toggle when context usage is high.
+    pub compact_before_send: bool,
+    /// Clock deadline (`s`) until which Stop click guard suppresses accidental
+    /// double-presses.
+    pub stop_guard_until: Option<f64>,
 }
 
 /// Local action executable from the command palette.

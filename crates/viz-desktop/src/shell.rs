@@ -75,7 +75,7 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
             .h_full()
             .min_h(0.0)
             .mt(crate::header::CHAT_HEADER_HEIGHT - TOOLBAR_HEIGHT)
-            .child(ui::rule(t).key("header-rule"))
+            .children((!crate::home::is_active(&s.model)).then(|| ui::rule(t).key("header-rule")))
             .child(main.grow(1.0)),
     );
     let mut sidebar = sidebar.child(

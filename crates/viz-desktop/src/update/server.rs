@@ -221,6 +221,11 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                 model.composer.completion.files = Some(result);
             }
         }
+        ServerMsg::GitHubSearchResult { request, result } => {
+            if model.composer.completion.request == request {
+                model.composer.completion.github = Some(result);
+            }
+        }
         ServerMsg::ThreadSearchResult { request, result } => {
             if model.palette.open
                 && model.palette.request == request

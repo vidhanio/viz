@@ -338,6 +338,19 @@ impl Session<'_> {
                 self.project_palette(request, command);
                 Ok(())
             }
+            ServerEffect::SearchGitHub {
+                project,
+                request,
+                query,
+            } => {
+                self.search_github(project, request, query);
+                Ok(())
+            }
+            ServerEffect::SteerQueued { thread, run } => self.steer_queued(thread, run).await,
+            ServerEffect::UpdateQueued { thread, run, text } => {
+                self.update_queued(thread, run, &text).await
+            }
+            ServerEffect::RemoveQueued { thread, run } => self.remove_queued(thread, run).await,
             ServerEffect::SearchThreads { request, query } => {
                 requests::search_threads(self.ui, &self.client, request, query);
                 Ok(())

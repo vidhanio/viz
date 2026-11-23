@@ -2,8 +2,8 @@
 //! environments, and empty/offline states.
 
 use viz_client::protocol::{
-    Attachment, EntryId, Environment, EnvironmentStatus, Harness, Project, SearchHit, SlashCommand,
-    ThreadId, WorktreeTarget,
+    Attachment, EntryId, Environment, EnvironmentStatus, FileSearchKind, FileSearchMatch, Harness,
+    Project, SearchHit, SlashCommand, ThreadId, WorktreeTarget,
 };
 
 use super::{
@@ -126,13 +126,18 @@ pub(super) fn attachments(s: &mut Desktop) {
     seed_workspace(&mut s.model);
     s.model.cache_mut().open_thread_mut(THREAD).transcript =
         transcript(&["export-before.png", "notes.md"]);
-    s.model.composer.draft.attachments = ["Screenshot 2026-11-18.png", "export.log"]
-        .map(|name| Attachment {
-            name: name.into(),
+    s.model.composer.draft.attachments = vec![
+        Attachment {
+            name: "Screenshot 2026-11-18.png".into(),
             mime: "image/png".into(),
             data: String::new(),
-        })
-        .into();
+        },
+        Attachment {
+            name: "export.log".into(),
+            mime: "text/plain".into(),
+            data: "bGluZSAxCmxpbmUgMgo=".into(),
+        },
+    ];
     s.sync_widgets_from_model();
 }
 
@@ -297,11 +302,18 @@ pub(super) fn mentions(s: &mut Desktop) {
     s.model.composer.draft_focused = true;
     s.model.composer.completion.preview_files(
         "export",
-        vec![
-            "src/export/markdown.rs".into(),
-            "src/export/line_ending.rs".into(),
-            "crates/workbench/src/export/mod.rs".into(),
-        ],
+        [
+            "src/export/markdown.rs",
+            "src/export/line_ending.rs",
+            "crates/workbench/src/export/mod.rs",
+        ]
+        .map(|path| FileSearchMatch {
+            path: path.into(),
+            kind: FileSearchKind::File,
+            score: 100,
+            positions: Vec::new(),
+        })
+        .into(),
         1,
     );
     s.sync_widgets_from_model();

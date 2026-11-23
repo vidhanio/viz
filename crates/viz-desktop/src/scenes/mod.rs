@@ -4,6 +4,7 @@
 mod data;
 mod fixtures;
 mod git;
+mod home_composer;
 mod model_picker;
 mod overlays;
 mod projects;
@@ -100,6 +101,16 @@ pub const SCENES: &[Scene] = &[
     ("sidebar-context", sidebar::context),
     ("sidebar-undo", sidebar::undo),
     ("sidebar-collapsed", sidebar::collapsed),
+    ("home-no-project", home_composer::home_no_project),
+    ("home-project-menu", home_composer::home_project_menu),
+    ("home-project", home_composer::home_project),
+    ("home-empty", home_composer::home_empty),
+    ("composer-chips", home_composer::composer_chips),
+    ("composer-at", home_composer::composer_at),
+    ("composer-slash", home_composer::composer_slash),
+    ("composer-dollar", home_composer::composer_dollar),
+    ("composer-hash", home_composer::composer_hash),
+    ("composer-queued", home_composer::composer_queued),
 ];
 
 fn components(s: &mut Desktop) {

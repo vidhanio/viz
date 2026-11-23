@@ -26,8 +26,21 @@ pub enum SelectionMsg {
     CreateHere,
     /// Set or clear the active draft's project path.
     ChooseDraftProject(Option<String>),
+    /// Switch cleanly to a projectless draft while preserving typed composer
+    /// text, pills, and attachments.
+    StartWithoutProject,
     /// Set the active draft's Git worktree target.
     ChooseDraftWorktree(WorktreeTarget),
+    /// Toggle `Start from remote` for a draft's `New worktree` base ref.
+    ToggleDraftRemoteBase,
+    /// Pick a branch or base ref for the active draft from the Home context
+    /// strip.
+    ChooseDraftBranch {
+        /// Selected branch name.
+        name: String,
+        /// Optional tracked upstream ref.
+        upstream: Option<String>,
+    },
     /// Move an idle thread to another Git worktree.
     MoveThread {
         /// Thread id.
@@ -57,21 +70,9 @@ pub(super) fn update(model: &mut Model, msg: SelectionMsg) -> Vec<Effect> {
             prepare_draft(model, draft, &mut effects);
         }
         SelectionMsg::ChooseDraftProject(path) => {
-            model.composer.open_picker = None;
-            let project = path
-                .as_deref()
-                .and_then(|path| model.cache().project(path))
-                .cloned();
-            if let Some(thread) = model
-                .selection
-                .new_thread
-                .as_mut()
-                .filter(|thread| !thread.sending)
-            {
-                thread.set_project(project.as_ref());
-            }
-            effects.push(focus_draft());
+            choose_draft_project(model, path.as_deref(), &mut effects);
         }
+        SelectionMsg::StartWithoutProject => start_without_project(model, &mut effects),
         SelectionMsg::ChooseDraftWorktree(target) => {
             model.composer.open_picker = None;
             if let Some(draft) = model
@@ -83,6 +84,19 @@ pub(super) fn update(model: &mut Model, msg: SelectionMsg) -> Vec<Effect> {
                 draft.worktree = (target != WorktreeTarget::Local).then_some(target);
             }
             effects.push(focus_draft());
+        }
+        SelectionMsg::ToggleDraftRemoteBase => {
+            if let Some(draft) = model
+                .selection
+                .new_thread
+                .as_mut()
+                .filter(|draft| !draft.sending)
+            {
+                draft.remote_base = !draft.remote_base;
+            }
+        }
+        SelectionMsg::ChooseDraftBranch { name, upstream } => {
+            choose_draft_branch(model, name, upstream, &mut effects);
         }
         SelectionMsg::MoveThread { thread, worktree } => {
             model.composer.open_picker = None;
@@ -107,6 +121,92 @@ pub(super) const fn focus_draft() -> Effect {
         select_all: false,
         when_shown: false,
     }
+}
+
+fn choose_draft_project(model: &mut Model, path: Option<&str>, effects: &mut Vec<Effect>) {
+    model.composer.open_picker = None;
+    model.composer.home_project.query.clear();
+    model.composer.home_project.highlighted = 0;
+    effects.push(Effect::SyncEdit(EditSync::Clear(
+        EditTarget::HomeProjectQuery,
+    )));
+    let project = path.and_then(|p| model.cache().project(p)).cloned();
+    if let Some(thread) = model
+        .selection
+        .new_thread
+        .as_mut()
+        .filter(|thread| !thread.sending)
+    {
+        thread.set_project(project.as_ref());
+    } else if model.selection.selected.is_none() && model.connected() {
+        let mut draft = NewThread::new(model.selection.next_draft, project.as_ref());
+        model.selection.next_draft += 1;
+        draft.loading_choices = false;
+        model.selection.new_thread = Some(draft);
+    }
+    if let Some(project) = project.filter(|project| project.git) {
+        effects.push(Effect::Server(ServerEffect::LoadCheckouts(project.path)));
+    }
+    effects.push(focus_draft());
+}
+
+fn start_without_project(model: &mut Model, effects: &mut Vec<Effect>) {
+    model.composer.open_picker = None;
+    model.composer.home_project.query.clear();
+    model.composer.home_project.highlighted = 0;
+    effects.push(Effect::SyncEdit(EditSync::Clear(
+        EditTarget::HomeProjectQuery,
+    )));
+    if let Some(thread) = model
+        .selection
+        .new_thread
+        .as_mut()
+        .filter(|thread| !thread.sending)
+    {
+        thread.set_project(None);
+    } else if model.connected() {
+        let draft = NewThread::new(model.selection.next_draft, None);
+        prepare_draft(model, draft, effects);
+        return;
+    }
+    effects.push(focus_draft());
+}
+
+fn choose_draft_branch(
+    model: &mut Model,
+    name: String,
+    upstream: Option<String>,
+    effects: &mut Vec<Effect>,
+) {
+    model.composer.open_picker = None;
+    model.composer.draft_branch.query.clear();
+    model.composer.draft_branch.highlighted = 0;
+    effects.push(Effect::SyncEdit(EditSync::Clear(
+        EditTarget::DraftBranchQuery,
+    )));
+    if let Some(draft) = model
+        .selection
+        .new_thread
+        .as_mut()
+        .filter(|draft| !draft.sending)
+    {
+        let base = if draft.remote_base {
+            upstream.unwrap_or_else(|| {
+                if name.contains('/') {
+                    name
+                } else {
+                    format!("origin/{name}")
+                }
+            })
+        } else {
+            name
+        };
+        draft.worktree = Some(WorktreeTarget::New {
+            base: Some(base),
+            branch: None,
+        });
+    }
+    effects.push(focus_draft());
 }
 
 pub(super) fn select_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec<Effect>) {
@@ -196,6 +296,7 @@ pub(super) fn show_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec
         .and_then(|drafts| drafts.remove(&thread))
         .unwrap_or_default();
     let text = restored.text.clone();
+    let pills = restored.pills.clone();
     model.composer.draft = restored;
     reset_active_view(model);
     let open = model.cache_mut().open_thread_mut(thread);
@@ -203,10 +304,9 @@ pub(super) fn show_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec
     open.state = None;
     open.loading = true;
     open.history_loading = false;
-    effects.push(Effect::SyncEdit(EditSync::Replace {
-        target: EditTarget::Draft,
+    effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
         text,
-        select_all: false,
+        pills,
     }));
     if draft_saved {
         effects.push(Effect::SavePrefs(model.to_prefs()));
@@ -260,6 +360,14 @@ pub(super) fn reset_active_view(model: &mut Model) {
     model.timeline.reset_viewport();
     model.composer.completion.reset();
     model.composer.open_picker = None;
+    model.composer.drag_over = false;
+    model.composer.lightbox = None;
+    model.composer.history_cursor = None;
+    model.composer.history_stash = None;
+    model.composer.editing_queued = None;
+    model.composer.editing_stash = None;
+    model.composer.queued_expanded = false;
+    model.composer.compact_before_send = false;
 }
 
 pub(super) fn prepare_draft(model: &mut Model, mut thread: NewThread, effects: &mut Vec<Effect>) {

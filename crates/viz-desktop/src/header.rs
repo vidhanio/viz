@@ -31,6 +31,9 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
         Some(0.0),
         Some(0.0),
     ));
+    if crate::home::is_active(m) {
+        return toolbar;
+    }
     let page = match (m.selection.selected, &m.selection.new_thread) {
         (Some(id), _) => format!("title-{id}"),
         (None, Some(draft)) => format!("title-draft-{}", draft.id),

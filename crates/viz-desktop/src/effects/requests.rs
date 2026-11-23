@@ -8,7 +8,7 @@ use viz_client::{
     Client, Error, Result,
     protocol::{
         EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks, ListWorktrees,
-        ProjectIconResult, ReadProjectIcon, RemoveProject, RetitleThread, SearchFiles,
+        ProjectIconResult, ProjectSettingsPatch, ReadProjectIcon, RemoveProject, RetitleThread,
         SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
@@ -224,6 +224,18 @@ impl Session<'_> {
                     })
                     .await
             }
+            ProjectChange::Pin { id, pinned } => {
+                self.client
+                    .update_project(&UpdateProject {
+                        changes: Some(ProjectSettingsPatch {
+                            pinned: Some(*pinned),
+                            ..ProjectSettingsPatch::default()
+                        }),
+                        project: id,
+                        name: None,
+                    })
+                    .await
+            }
             ProjectChange::Remove(id) => {
                 self.client
                     .remove_project(&RemoveProject { project: id })
@@ -287,32 +299,6 @@ impl Session<'_> {
                 Err(error)
             }
         }
-    }
-
-    pub(super) fn search_files(&self, thread: ThreadId, request: u64, query: String) {
-        let ui = self.ui.clone();
-        let client = self.client.clone();
-        tokio::spawn(async move {
-            let result = client
-                .search_files(&SearchFiles {
-                    thread,
-                    query: &query,
-                    limit: Some(24),
-                })
-                .await
-                .map(|matches| matches.into_iter().map(|found| found.path).collect())
-                .map_err(|error| error.to_string());
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::FileSearchResult {
-                        thread,
-                        request,
-                        result,
-                    }),
-                    tx,
-                );
-            });
-        });
     }
 
     pub(super) fn load_checkouts(&self, project: String) {

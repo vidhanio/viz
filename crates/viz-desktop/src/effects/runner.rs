@@ -240,6 +240,9 @@ impl Desktop {
                     edit.set_selection(0, text.len());
                 }
             }
+            EditSync::ReplaceDraftWithPills { text, pills } => {
+                self.replace_draft_with_pills(&text, &pills);
+            }
             EditSync::Clear(target) => {
                 self.edit_mut(target).clear();
             }
@@ -267,7 +270,23 @@ impl Desktop {
                 {
                     draft.set_caret(draft.focus + separator.len_utf8());
                 }
-                self.model.composer.draft.text.clone_from(&draft.text);
+                self.sync_draft_text();
+            }
+            EditSync::InsertDraftPill {
+                start,
+                end,
+                id,
+                label,
+                trailing_space,
+            } => {
+                let draft = &mut self.widgets.draft;
+                draft.replace_with_pill(start..end, id, &label);
+                if trailing_space {
+                    draft.insert(" ");
+                } else if let Some(separator) = draft.text[draft.focus..].chars().next() {
+                    draft.set_caret(draft.focus + separator.len_utf8());
+                }
+                self.sync_draft_text();
             }
         }
     }
@@ -280,6 +299,8 @@ impl Desktop {
             EditTarget::SidebarDialog => &mut self.widgets.sidebar_dialog,
             EditTarget::PaletteQuery => &mut self.widgets.palette_query,
             EditTarget::ModelQuery => &mut self.widgets.model_query,
+            EditTarget::HomeProjectQuery => &mut self.widgets.home_project_query,
+            EditTarget::DraftBranchQuery => &mut self.widgets.draft_branch_query,
         }
     }
 }
