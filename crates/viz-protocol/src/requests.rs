@@ -106,6 +106,7 @@ pub struct ListBranches<'a> {
 pub struct BranchList {
     /// Short names usable as a worktree base, local branches first.
     pub branches: Vec<GitBranch>,
+    pub default: Option<String>,
     pub next: Option<usize>,
 }
 
@@ -116,6 +117,10 @@ pub struct GitBranch {
     pub name: String,
     /// Whether this is a remote-tracking branch.
     pub remote: bool,
+    /// The currently tracked branch, if configured.
+    pub upstream: Option<String>,
+    /// A local branch checked out in a different worktree.
+    pub checked_out_elsewhere: bool,
 }
 
 /// List the worktrees of a project's repository.

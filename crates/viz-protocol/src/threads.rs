@@ -85,14 +85,14 @@ pub struct LaunchThread {
     pub attachments: Vec<Attachment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
-    /// Project directory; absent uses the default working directory.
+    /// Project directory. Omit to create a private scratch directory.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
     /// Configured runner; absent uses the server default.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
-    /// Where in the project's repository to run; absent uses the project's
-    /// checkout. Requires `project`.
+    /// Where in the project's repository to run. Omit to use the project's
+    /// default checkout mode. Requires `project`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeTarget>,
     /// Initial configuration by option id.

@@ -16,7 +16,7 @@ use viz_protocol::{
     UpdateThread, WaitThread,
 };
 
-use super::{Workspace, runs, sql::row, store, worktree};
+use super::{Workspace, runs, sql::row, store};
 use crate::{error::Error, rpc::handlers, wire::OptionValue};
 
 handlers! {
@@ -106,12 +106,17 @@ handlers! {
             let query = query.unwrap_or_default().to_lowercase();
             let offset = offset.unwrap_or_default();
             let limit = page_limit(limit, 100)?;
-            let mut branches = worktree::branches(Path::new(&project.path)).await?
-                .into_iter().filter(|branch| branch.name.to_lowercase().contains(&query))
-                .skip(offset).take(limit + 1).collect::<Vec<_>>();
+            let repo = viz_git::Repository::discover(Path::new(&project.path), &workspace.closing).await?;
+            let all = repo.branches(&workspace.closing).await?;
+            let mut branches = all.entries.into_iter()
+                .filter(|branch| branch.name.to_lowercase().contains(&query))
+                .skip(offset).take(limit + 1).map(|branch| viz_protocol::GitBranch {
+                    name: branch.name, remote: branch.remote, upstream: branch.upstream,
+                    checked_out_elsewhere: branch.checked_out_elsewhere,
+                }).collect::<Vec<_>>();
             let next = (branches.len() > limit).then(|| offset.saturating_add(limit));
             branches.truncate(limit);
-            Ok(BranchList { branches, next })
+            Ok(BranchList { branches, next, default: all.default })
         }
         ListWorktrees<'static>, ProjectKey, |workspace, ProjectKey { project }| {
             workspace.list_worktrees(&project).await

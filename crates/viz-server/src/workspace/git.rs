@@ -97,6 +97,7 @@ impl Workspace {
             entry.insert(action_name(&action));
             drop(actions);
         }
+        self.git_activity();
         let result = if guarded {
             let result = run_action(&repo, action, &self.closing).await;
             drop(db);
@@ -106,6 +107,10 @@ impl Workspace {
             run_action(&repo, action, &self.closing).await
         };
         self.git_actions.lock().await.remove(&checkout);
+        self.git_activity();
+        if guarded && result.is_ok() {
+            self.invalidate_checkout_pulls(&checkout);
+        }
         result.map(|commit| GitActionResult { commit })
     }
 
@@ -137,9 +142,9 @@ impl Workspace {
     pub(super) async fn git_diff(&self, request: GitDiffRequest) -> Result<GitDiff, Error> {
         let repo = self.git_repository(request.thread).await?;
         let target = match &request.target {
-            GitDiffTarget::Working => DiffTarget::WorkingTree,
+            GitDiffTarget::Working => DiffTarget::Uncommitted,
             GitDiffTarget::Staged => DiffTarget::Staged,
-            GitDiffTarget::Base { revision } => DiffTarget::Against(revision),
+            GitDiffTarget::Base { revision } => DiffTarget::Base(revision),
             GitDiffTarget::Commit { revision } => DiffTarget::Commit(revision),
             GitDiffTarget::Turn { run } => {
                 return self

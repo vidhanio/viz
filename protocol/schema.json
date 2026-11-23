@@ -6267,7 +6267,7 @@
                 ]
               },
               "project": {
-                "description": "Project directory; absent uses the default working directory.",
+                "description": "Project directory. Omit to create a private scratch directory.",
                 "type": [
                   "string",
                   "null"
@@ -6281,7 +6281,7 @@
                 ]
               },
               "worktree": {
-                "description": "Where in the project's repository to run; absent uses the project's\ncheckout. Requires `project`.",
+                "description": "Where in the project's repository to run. Omit to use the project's\ndefault checkout mode. Requires `project`.",
                 "anyOf": [
                   {
                     "$ref": "#/$defs/WorktreeTarget"
@@ -7158,7 +7158,7 @@
             ]
           },
           "project": {
-            "description": "Project directory; absent uses the default working directory.",
+            "description": "Project directory. Omit to create a private scratch directory.",
             "type": [
               "string",
               "null"
@@ -7172,7 +7172,7 @@
             ]
           },
           "worktree": {
-            "description": "Where in the project's repository to run; absent uses the project's\ncheckout. Requires `project`.",
+            "description": "Where in the project's repository to run. Omit to use the project's\ndefault checkout mode. Requires `project`.",
             "anyOf": [
               {
                 "$ref": "#/$defs/WorktreeTarget"
@@ -7336,7 +7336,7 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ForkThread",
-        "description": "Copy a thread's history up to a point into a new idle thread, in the same\ndirectory unless `worktree` says otherwise. The source is unchanged.",
+        "description": "Copy a thread's history into a new idle thread. A projectless fork gets its\nown scratch folder. A project fork shares the source checkout unless a\ndifferent worktree is requested.",
         "type": "object",
         "properties": {
           "thread": {
@@ -8590,6 +8590,12 @@
               "$ref": "#/$defs/GitBranch"
             }
           },
+          "default": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "next": {
             "type": [
               "integer",
@@ -8614,11 +8620,23 @@
               "remote": {
                 "description": "Whether this is a remote-tracking branch.",
                 "type": "boolean"
+              },
+              "upstream": {
+                "description": "The currently tracked branch, if configured.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "checked_out_elsewhere": {
+                "description": "A local branch checked out in a different worktree.",
+                "type": "boolean"
               }
             },
             "required": [
               "name",
-              "remote"
+              "remote",
+              "checked_out_elsewhere"
             ]
           }
         }

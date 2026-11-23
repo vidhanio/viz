@@ -21,6 +21,7 @@ pub(super) struct Pulls(Mutex<HashMap<ThreadId, Cached>>);
 struct Cached {
     cwd: String,
     pull: GitHubPull,
+    remote: RemoteRepository,
     finished_at: Option<i64>,
 }
 
@@ -41,6 +42,14 @@ impl Workspace {
             .map(|cached| cached.pull.clone())
     }
 
+    pub(super) fn invalidate_checkout_pulls(&self, checkout: &Path) {
+        let mut pulls = self.pulls.0.lock().expect("pull requests lock poisoned");
+        pulls.retain(|_, cached| !Path::new(&cached.cwd).starts_with(checkout));
+        drop(pulls);
+        self.changed(None);
+        self.pull_due.notify_one();
+    }
+
     pub(super) async fn finished_pull(
         &self,
         thread: ThreadId,
@@ -57,13 +66,16 @@ impl Workspace {
         let repo = Repository::discover(Path::new(cwd), &self.closing)
             .await
             .ok()?;
-        let Head::Branch { name, .. } = repo.head(&self.closing).await.ok()? else {
+        let Head::Branch { name, commit } = repo.head(&self.closing).await.ok()? else {
             return None;
         };
-        (name == cached.pull.head).then_some(viz_core::lifecycle::PullRequest {
-            finished: true,
-            changed_at: cached.finished_at?,
-        })
+        (name == cached.pull.head
+            && commit == cached.pull.head_commit
+            && self.github_remote(&repo).await.ok()? == cached.remote)
+            .then_some(viz_core::lifecycle::PullRequest {
+                finished: true,
+                changed_at: cached.finished_at?,
+            })
     }
 
     pub(super) async fn poll_pulls(self: Arc<Self>) {
@@ -124,16 +136,20 @@ impl Workspace {
             .await;
             let Some((remote, name)) = resolved else {
                 for thread in threads {
-                    self.update_pull(thread, &cwd, None);
+                    self.update_pull(thread, None);
                 }
                 continue;
             };
             for &thread in &threads {
-                if self
-                    .pull_summary(thread, &cwd)
-                    .is_some_and(|pull| pull.head != name)
-                {
-                    self.update_pull(thread, &cwd, None);
+                let stale = self
+                    .pulls
+                    .0
+                    .lock()
+                    .expect("pull requests lock poisoned")
+                    .get(&thread)
+                    .is_some_and(|cached| cached.pull.head != name || cached.remote != remote);
+                if stale {
+                    self.update_pull(thread, None);
                 }
             }
             batches
@@ -155,7 +171,11 @@ impl Workspace {
                 for names in names.chunks(20) {
                     for (name, pull) in client.pulls_for_branches(&remote, names).await? {
                         for thread in &branches[&name] {
-                            self.update_pull(*thread, &known[thread], pull.as_ref());
+                            self.update_pull(
+                                *thread,
+                                pull.as_ref()
+                                    .and_then(|pull| cached(pull, &known[thread], &remote)),
+                            );
                         }
                     }
                 }
@@ -167,8 +187,7 @@ impl Workspace {
         Ok(())
     }
 
-    fn update_pull(&self, thread: ThreadId, cwd: &str, remote: Option<&PullRequest>) {
-        let new = remote.and_then(|pull| cached(pull, cwd));
+    fn update_pull(&self, thread: ThreadId, new: Option<Cached>) {
         let changed = {
             let mut pulls = self.pulls.0.lock().expect("pull requests lock poisoned");
             if pulls.get(&thread) == new.as_ref() {
@@ -215,7 +234,7 @@ impl Backoff {
     }
 }
 
-fn cached(pull: &PullRequest, cwd: &str) -> Option<Cached> {
+fn cached(pull: &PullRequest, cwd: &str, remote: &RemoteRepository) -> Option<Cached> {
     let (state, finished_at) = match pull.state.as_str() {
         "OPEN" => (GitHubPullState::Open, None),
         "MERGED" => (GitHubPullState::Merged, pull.merged_at.as_deref()),
@@ -224,6 +243,7 @@ fn cached(pull: &PullRequest, cwd: &str) -> Option<Cached> {
     };
     Some(Cached {
         cwd: cwd.to_owned(),
+        remote: remote.clone(),
         finished_at: finished_at
             .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
             .map(|at| at.timestamp_millis()),

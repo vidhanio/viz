@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use super::{EntryId, PromptAttachment, ThreadId, WorktreeTarget};
 
-/// Copy a thread's history up to a point into a new idle thread, in the same
-/// directory unless `worktree` says otherwise. The source is unchanged.
+/// Copy a thread's history into a new idle thread. A projectless fork gets its
+/// own scratch folder. A project fork shares the source checkout unless a
+/// different worktree is requested.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct ForkThread {

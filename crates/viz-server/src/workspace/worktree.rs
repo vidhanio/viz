@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 use viz_core::placement::{self, Checkout};
 use viz_git::{Head, Repository, WorktreeRemoval};
-use viz_protocol::GitBranch;
 
 use super::store;
 use crate::error::Error;
@@ -60,21 +59,6 @@ pub(super) async fn list(dir: &Path) -> Result<Vec<Listed>, Error> {
             })
         })
         .collect()
-}
-
-pub(super) async fn branches(dir: &Path) -> Result<Vec<GitBranch>, Error> {
-    let cancel = CancellationToken::new();
-    let repo = discover(dir, &cancel).await?;
-    Ok(repo
-        .branches(&cancel)
-        .await?
-        .entries
-        .into_iter()
-        .map(|branch| GitBranch {
-            name: branch.name,
-            remote: branch.remote,
-        })
-        .collect())
 }
 
 pub(super) async fn existing(source: &Path, path: &str) -> Result<Placement, Error> {

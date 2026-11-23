@@ -17,6 +17,7 @@ pub(crate) enum Change {
     Thread(ThreadId),
     Settled(ThreadId),
     Directory,
+    GitActivity,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -90,6 +91,10 @@ impl Workspace {
     pub(super) fn relist(&self, thread: ThreadId) {
         self.changed(Some(thread));
         self.changed(None);
+    }
+
+    pub(super) fn git_activity(&self) {
+        let _ = self.updates.changes.send(Change::GitActivity);
     }
 
     pub(super) fn settled(&self, thread: ThreadId) {

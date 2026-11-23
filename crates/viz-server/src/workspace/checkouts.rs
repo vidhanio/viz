@@ -83,35 +83,41 @@ impl Workspace {
     pub(super) async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, Error> {
         let project = store::project(&mut *self.db.lock().await, project).await?;
         let listed = worktree::list(Path::new(&project.path)).await?;
-        let mut db = self.db.lock().await;
-        let mut worktrees = Vec::with_capacity(listed.len());
-        let here = worktree::repository(&project.path).await;
-        for checkout in listed {
-            let threads = if checkout.main {
-                let filed = rows(
-                    &mut db,
-                    "SELECT id, cwd FROM threads WHERE project = ?1 AND worktree IS NULL ORDER BY id",
-                    [project.path.as_str().into()],
-                )
-                .await?;
-                let mut running = Vec::new();
-                for mut row in filed {
-                    let cwd = row.str(1)?;
-                    if cwd == project.path || worktree::repository(&cwd).await == here {
-                        running.push(row.id(0)?);
-                    }
+        let filed = rows(
+            &mut *self.db.lock().await,
+            "SELECT id, cwd FROM threads WHERE project = ?1 OR worktree IS NOT NULL ORDER BY id",
+            [project.path.as_str().into()],
+        )
+        .await?;
+        let mut by_checkout = std::collections::HashMap::<String, Vec<ThreadId>>::new();
+        let mut resolved = std::collections::HashMap::new();
+        for mut row in filed {
+            let cwd = row.str(1)?;
+            let root = match resolved.entry(cwd) {
+                std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    let repo =
+                        viz_git::Repository::discover(Path::new(entry.key()), &self.closing).await;
+                    let checkout = repo.ok().and_then(|repo| {
+                        repo.identity()
+                            .checkout
+                            .as_deref()
+                            .and_then(Path::to_str)
+                            .map(str::to_owned)
+                    });
+                    entry.insert(checkout)
                 }
-                running
-            } else {
-                rows(
-                    &mut db,
-                    "SELECT id FROM threads WHERE worktree = ?1 ORDER BY id",
-                    [checkout.path.as_str().into()],
-                )
-                .await?
-                .map(|row| row.id(0))
-                .collect::<Result<_, _>>()?
             };
+            if let Some(path) = root {
+                by_checkout
+                    .entry(path.clone())
+                    .or_default()
+                    .push(row.id(0)?);
+            }
+        }
+        let mut worktrees = Vec::with_capacity(listed.len());
+        for checkout in listed {
+            let threads = by_checkout.remove(&checkout.path).unwrap_or_default();
             worktrees.push(Worktree {
                 managed: !checkout.main && worktree::managed(&self.worktrees, &checkout.path).await,
                 path: checkout.path,
@@ -120,7 +126,6 @@ impl Workspace {
                 threads,
             });
         }
-        drop(db);
         Ok(WorktreeList { worktrees })
     }
 
@@ -134,7 +139,10 @@ impl Workspace {
     ) -> Result<(), Error> {
         let user = row(
             db,
-            "SELECT id FROM threads WHERE worktree = ?1 AND id IS NOT ?2 LIMIT 1",
+            "SELECT id FROM threads
+             WHERE id IS NOT ?2 AND (
+                 worktree = ?1 OR cwd = ?1 OR substr(cwd, 1, length(?1) + 1) = ?1 || '/'
+             ) LIMIT 1",
             [path.into(), except.into()],
         )
         .await?
@@ -147,12 +155,33 @@ impl Workspace {
         )?)
     }
 
-    pub(super) async fn remove_worktree(&self, path: &str, force: bool) -> Result<(), Error> {
-        self.removable(&mut *self.db.lock().await, path, None)
-            .await?;
-        worktree::remove(&self.worktrees, path, force).await?;
-        self.changed(None);
-        Ok(())
+    pub(super) async fn remove_worktree(
+        self: &Arc<Self>,
+        path: &str,
+        force: bool,
+    ) -> Result<(), Error> {
+        let workspace = Arc::clone(self);
+        let path = path.to_owned();
+        self.jobs
+            .spawn(async move {
+                let mut db = workspace.db.lock().await;
+                workspace.removable(&mut db, &path, None).await?;
+                if workspace
+                    .git_actions
+                    .lock()
+                    .await
+                    .contains_key(Path::new(&path))
+                {
+                    return Err(viz_git::Error::Busy.into());
+                }
+                let result = worktree::remove(&workspace.worktrees, &path, force).await;
+                drop(db);
+                result?;
+                workspace.changed(None);
+                Ok(())
+            })
+            .await
+            .map_err(viz_git::Error::from)?
     }
 
     /// Moves an idle thread. Its harness stops; the next run starts a new

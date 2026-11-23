@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use git2::ErrorCode;
+use git2::{ErrorCode, RepositoryOpenFlags};
 use tokio_util::sync::CancellationToken;
 
 use crate::{Error, blocking, check, command::run};
@@ -43,14 +43,19 @@ pub struct Repository {
 
 impl Repository {
     /// Resolve the repository from a directory inside a checkout or a bare
-    /// repository.
+    /// repository. Stop at filesystem boundaries, as Git does by default.
     ///
     /// # Errors
     /// Returns an error when the repository cannot be discovered or opened.
     pub async fn discover(path: &Path, cancel: &CancellationToken) -> Result<Self, Error> {
         let path = path.to_owned();
         blocking(cancel, move |_| {
-            let repo = git2::Repository::discover(path).map_err(|error| match error.code() {
+            let repo = git2::Repository::open_ext(
+                path,
+                RepositoryOpenFlags::empty(),
+                std::iter::empty::<&Path>(),
+            )
+            .map_err(|error| match error.code() {
                 ErrorCode::NotFound => Error::NotRepository,
                 _ => Error::Git(error),
             })?;

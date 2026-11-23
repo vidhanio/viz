@@ -765,6 +765,8 @@ fn checkouts(s: &mut Desktop) {
                 .map(|name| GitBranch {
                     name: name.into(),
                     remote: name.starts_with("origin/"),
+                    upstream: None,
+                    checked_out_elsewhere: false,
                 })
                 .into(),
             worktrees: vec![

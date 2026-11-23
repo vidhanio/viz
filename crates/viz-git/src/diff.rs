@@ -13,13 +13,13 @@ const MAX_PATCH_BYTES: usize = 2 * 1024 * 1024;
 const MAX_LINES: usize = 20_000;
 const MAX_FILES: usize = 1_000;
 
-/// Which two states to compare. Working tree and base diffs include untracked
-/// files.
+/// Which two states to compare. Worktree comparisons include untracked files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DiffTarget<'a> {
     WorkingTree,
     Staged,
-    Against(&'a str),
+    /// Compare the merge base with the current HEAD.
+    Base(&'a str),
     Commit(&'a str),
     Uncommitted,
 }
@@ -106,9 +106,7 @@ impl Repository {
         cancel: &CancellationToken,
     ) -> Result<Diff, Error> {
         let revision = match target {
-            DiffTarget::Against(revision) | DiffTarget::Commit(revision) => {
-                Some(revision.to_owned())
-            }
+            DiffTarget::Base(revision) | DiffTarget::Commit(revision) => Some(revision.to_owned()),
             _ => None,
         };
         let staged = target == DiffTarget::Staged;
@@ -116,7 +114,7 @@ impl Repository {
         let combined = target == DiffTarget::Uncommitted;
         self.read(cancel, move |repo, cancel| {
             let mut opts = options();
-            let workdir = !staged && !committed;
+            let workdir = !staged && revision.is_none();
             opts.include_untracked(workdir)
                 .recurse_untracked_dirs(workdir)
                 .show_untracked_content(workdir);
@@ -131,7 +129,10 @@ impl Repository {
                     };
                     repo.diff_tree_to_tree(parent.as_ref(), Some(&tree), Some(&mut opts))?
                 } else {
-                    repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))?
+                    let head = repo.head()?.peel_to_commit()?;
+                    let merge_base = repo.merge_base(commit.id(), head.id())?;
+                    let base = repo.find_commit(merge_base)?.tree()?;
+                    repo.diff_tree_to_tree(Some(&base), Some(&head.tree()?), Some(&mut opts))?
                 }
             } else if staged || combined {
                 let head = if crate::repository::head_unborn(repo)? {

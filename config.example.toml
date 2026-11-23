@@ -18,7 +18,9 @@
 # state_dir = "/var/lib/viz"
 # Stable identity; required to differ from every linked environment's ID.
 # environment = "workstation"
-# Working directory of threads without a project (default $HOME).
+# Default folder-picker directory (default $HOME).
+# Each projectless thread gets a private folder under the server state directory.
+# Use a state directory outside Git checkouts to enable projectless threads.
 # cwd = "/home/me"
 # A sole harness is the implicit default. With several, set this or select per thread.
 # default_harness = "claude"

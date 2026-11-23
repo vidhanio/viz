@@ -251,7 +251,7 @@ impl Workspace {
     /// Deletes a thread, and with `remove_worktree` the clean worktree viz
     /// created for it once its harness has stopped.
     pub(super) async fn delete(
-        &self,
+        self: &Arc<Self>,
         thread: ThreadId,
         remove_worktree: bool,
     ) -> Result<(), Error> {
@@ -304,12 +304,9 @@ impl Workspace {
             }
         }
         if let Some(path) = checkout {
-            worktree::remove(&self.worktrees, &path, false)
-                .await
-                .map_err(|error| {
-                    Error::invalid(format!("deleted the thread, but not its worktree: {error}"))
-                })?;
-            self.changed(None);
+            self.remove_worktree(&path, false).await.map_err(|error| {
+                Error::invalid(format!("deleted the thread, but not its worktree: {error}"))
+            })?;
         }
         Ok(())
     }

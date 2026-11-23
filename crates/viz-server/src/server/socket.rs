@@ -217,7 +217,7 @@ async fn local_session(
     let mut tasks = server.tasks.subscribe();
     let mut calls = JoinSet::new();
     let mut watches = HashMap::new();
-    let mut git_watches = HashMap::new();
+    let mut git_watches: HashMap<ThreadId, AbortHandle> = HashMap::new();
     let mut git_jobs = JoinSet::new();
     let app = client.kind == ClientKind::App;
     let result = async {
@@ -229,6 +229,7 @@ async fn local_session(
                     Ok(Change::Thread(id) | Change::Settled(id)) => {
                         refresh_watch(&server, &mut watches, id, &outgoing).await?;
                     }
+                    Ok(Change::GitActivity) => {},
                     Ok(Change::Directory) => if app {
                         send_note(&outgoing, Notification::ThreadsChanged(Empty {})).await?;
                     },
@@ -243,7 +244,12 @@ async fn local_session(
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_note(&outgoing, Notification::TasksChanged(Empty {})).await?,
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
-                _ = git_jobs.join_next(), if !git_jobs.is_empty() => {},
+                result = git_jobs.join_next_with_id(), if !git_jobs.is_empty() => {
+                    if let Some(result) = result {
+                        let id = result.map_or_else(|error| error.id(), |(id, ())| id);
+                        git_watches.retain(|_, handle| handle.id() != id);
+                    }
+                },
                 _ = calls.join_next(), if !calls.is_empty() => {},
                 frame = read.next() => {
                     let Some(frame) = frame else { break; };
@@ -296,7 +302,13 @@ async fn local_session(
         Ok::<(), anyhow::Error>(())
     }.await;
     calls.abort_all();
+    git_jobs.abort_all();
     writer.abort();
+    close_watches(&server, watches, app).await;
+    result
+}
+
+async fn close_watches(server: &Server, watches: HashMap<ThreadId, WatchCursor>, app: bool) {
     if app {
         for id in watches.into_keys() {
             if let Err(error) = server.workspace.watched(id, WatchChange::Close).await {
@@ -304,7 +316,6 @@ async fn local_session(
             }
         }
     }
-    result
 }
 
 /// The WebSocket owns the jobs, so closing it releases every checkout watch.
@@ -365,6 +376,12 @@ async fn watch_checkout(
             },
             event = changes.recv() => {
                 match event {
+                    Ok(Change::GitActivity) => {
+                        if !push_git_status(&server, &outgoing, thread, &repo, &mut previous).await {
+                            break;
+                        }
+                        continue;
+                    }
                     Ok(Change::Thread(id) | Change::Settled(id)) if id == thread => {}
                     Err(broadcast::error::RecvError::Lagged(_)) => {}
                     Err(broadcast::error::RecvError::Closed) => break,
@@ -383,17 +400,27 @@ async fn watch_checkout(
                 }
             }
         }
-        let status = server.workspace.git_status(&repo).await.ok();
-        if status != previous {
-            previous.clone_from(&status);
-            if send_note(&outgoing, Notification::GitChanged { thread, status })
-                .await
-                .is_err()
-            {
-                break;
-            }
+        if !push_git_status(&server, &outgoing, thread, &repo, &mut previous).await {
+            break;
         }
     }
+}
+
+async fn push_git_status(
+    server: &Server,
+    outgoing: &mpsc::Sender<Message>,
+    thread: ThreadId,
+    repo: &viz_git::Repository,
+    previous: &mut Option<viz_protocol::GitStatus>,
+) -> bool {
+    let status = server.workspace.git_status(repo).await.ok();
+    if status == *previous {
+        return true;
+    }
+    previous.clone_from(&status);
+    send_note(outgoing, Notification::GitChanged { thread, status })
+        .await
+        .is_ok()
 }
 
 async fn write_frames(
