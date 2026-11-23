@@ -228,6 +228,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
         git::dispatch(s, update::GitMsg::PaneWidth(diff_width), tx);
     }
     let zoom = s.widgets.image_zoom.poll(clock, tx);
+    let math = s.widgets.math.changed();
     let completion = poll_completion(s, clock, tx);
     let palette = poll_palette(s, clock, tx);
     let has_tool_timeout = s.model.transcript().acp_partial.iter().any(|item| {
@@ -259,6 +260,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
         || pane_changed
         || diff_resized
         || zoom
+        || math
         || completion
         || palette
         || tool_timer
@@ -401,6 +403,7 @@ fn main() {
         families: theme::families(),
         scenes: scenes::SCENES,
         setup: Some(|s, waker| {
+            s.widgets.math.set_waker(waker.clone());
             s.widgets.images = Some(ImageCache::new(waker));
         }),
         on_key: Some(on_key),

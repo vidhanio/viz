@@ -71,6 +71,9 @@ pub struct ShellWidgets {
     pub closed_toasts: Vec<u64>,
     /// Off-thread image decoder cache initialized in `AppSpec::setup`.
     pub images: Option<ImageCache>,
+    /// Background LaTeX math render client wired in `AppSpec::setup` and
+    /// polled for completed renders.
+    pub math: rune_kit::math::Client,
     /// Decoded project icon images keyed by `"{env}\0{project_path}"`.
     pub project_icons: HashMap<String, Image>,
     /// Decoded images for the active draft, in attachment order.
@@ -122,6 +125,7 @@ impl Default for ShellWidgets {
             toasts: ToastStack::default(),
             closed_toasts: Vec::new(),
             images: None,
+            math: rune_kit::math::Client::default(),
             project_icons: HashMap::new(),
             attachment_images: crate::attachments::DraftImages::default(),
         }

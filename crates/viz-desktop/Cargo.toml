@@ -17,7 +17,7 @@ mime_guess.workspace = true
 notify-rust = { workspace = true, features = ["z-with-tokio"] }
 rfd = { workspace = true, features = ["xdg-portal", "wayland"] }
 rune = { workspace = true, features = ["native-file-dialog"] }
-rune-kit = { workspace = true, features = ["markdown"] }
+rune-kit = { workspace = true, features = ["markdown", "mermaid", "math"] }
 serde = { workspace = true, features = ["derive"] }
 serde-saphyr.workspace = true
 serde_json.workspace = true
