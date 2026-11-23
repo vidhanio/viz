@@ -4,9 +4,11 @@
 //! Nothing under `update` imports Rune, Tokio, channels, or performs I/O.
 
 mod composer;
+mod model_picker;
 mod palette;
 mod selection;
 mod server;
+mod server_sync;
 mod shell;
 mod sidebar;
 mod timeline;

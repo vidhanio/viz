@@ -4,7 +4,9 @@ mod completion;
 mod draft;
 mod model;
 mod settings;
+mod task_row;
 mod tasks;
+mod thinking;
 
 use rune::{Color, El, KeyEvent, Tx, col, el, icon, row, text_input};
 pub use tasks::DOCK_KEY as TASKS_DOCK_KEY;

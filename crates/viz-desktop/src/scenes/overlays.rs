@@ -6,8 +6,9 @@ use viz_client::protocol::{
     ThreadId, WorktreeTarget,
 };
 
-use super::fixtures::{
-    THREAD, option, options, seed_checkouts, seed_workspace, select_preview, transcript,
+use super::{
+    data::{THREAD, option, options, transcript},
+    fixtures::{seed_checkouts, seed_workspace, select_preview},
 };
 use crate::{
     app::Desktop,

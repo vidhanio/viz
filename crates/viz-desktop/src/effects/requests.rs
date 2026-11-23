@@ -12,7 +12,10 @@ use viz_client::{
     },
 };
 
-use super::{ProjectChange, ThreadChange, server::Session};
+use super::{
+    ProjectChange, ServerEffect, ThreadChange, platform,
+    server::{Session, dispatch_ui, toast},
+};
 use crate::{
     app::Desktop,
     model::{Checkouts, Transcript},
@@ -337,4 +340,96 @@ pub(super) fn search_threads(
             );
         });
     });
+}
+
+/// Handles a command while disconnected; returns `false` to reconnect now.
+pub(super) fn offline(
+    ui: &AppHandle<Desktop>,
+    command: ServerEffect,
+    selected: &mut Option<ThreadId>,
+    target: &mut Option<String>,
+) -> bool {
+    match command {
+        ServerEffect::Select(thread) => *selected = Some(thread),
+        ServerEffect::ClearSelection => *selected = None,
+        ServerEffect::Environment {
+            environment,
+            thread,
+        } => {
+            *selected = thread;
+            *target = Some(environment);
+            return false;
+        }
+        ServerEffect::Create { draft, params } => {
+            dispatch_ui(
+                ui,
+                ServerMsg::LaunchFailed {
+                    draft,
+                    params: Box::new(params),
+                    title: "Offline".into(),
+                    detail: None,
+                },
+            );
+        }
+        ServerEffect::LoadDraft(draft) => {
+            dispatch_ui(
+                ui,
+                ServerMsg::DraftHarnessesLoaded {
+                    draft,
+                    result: None,
+                },
+            );
+        }
+        ServerEffect::SendInput(input) => {
+            dispatch_ui(
+                ui,
+                ServerMsg::SendFailed {
+                    input: Box::new(input),
+                    title: "Offline".into(),
+                    detail: None,
+                },
+            );
+        }
+        ServerEffect::SearchFiles { .. } => {}
+        ServerEffect::SearchThreads { request, .. } => {
+            dispatch_ui(
+                ui,
+                ServerMsg::ThreadSearchResult {
+                    request,
+                    result: Err("Offline".into()),
+                },
+            );
+        }
+        ServerEffect::LoadEarlier { thread, .. } => {
+            dispatch_ui(
+                ui,
+                ServerMsg::EarlierLoaded {
+                    thread,
+                    transcript: None,
+                },
+            );
+        }
+        ServerEffect::Update { op_id, .. }
+        | ServerEffect::Project {
+            op_id: Some(op_id), ..
+        } => {
+            dispatch_ui(
+                ui,
+                ServerMsg::MutationFailed {
+                    op_id,
+                    title: "Offline".into(),
+                    detail: "Server disconnected".into(),
+                },
+            );
+        }
+        ServerEffect::Attach {
+            scope,
+            target,
+            source,
+        } => platform::spawn_attach(ui, scope, target, source),
+        ServerEffect::Notify { title, body } => platform::spawn_notify(&title, body),
+        ServerEffect::Reconnect => return false,
+        _ => toast(ui, "Offline", "Server disconnected".into()),
+    }
+    true
 }

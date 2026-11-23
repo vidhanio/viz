@@ -57,7 +57,11 @@ fn dispatch(ui: &AppHandle<Desktop>, msg: ServerMsg) {
     ui.update(move |s, tx| s.dispatch(Msg::Server(msg), tx));
 }
 
-fn toast(ui: &AppHandle<Desktop>, title: &str, detail: String) {
+pub(super) fn dispatch_ui(ui: &AppHandle<Desktop>, msg: ServerMsg) {
+    dispatch(ui, msg);
+}
+
+pub(super) fn toast(ui: &AppHandle<Desktop>, title: &str, detail: String) {
     dispatch(
         ui,
         ServerMsg::RequestFailed {
@@ -86,7 +90,7 @@ async fn run(
             dispatch(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
             signal(&mut first);
             while let Some(command) = commands.recv().await {
-                if !offline(ui, command, &mut None, &mut None) {
+                if !requests::offline(ui, command, &mut None, &mut None) {
                     dispatch(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
                 }
             }
@@ -127,7 +131,7 @@ async fn run(
             tokio::select! {
                 () = &mut retry => break,
                 command = commands.recv() => match command {
-                    Some(command) => if !offline(ui, command, &mut selected, &mut environment) {
+                    Some(command) => if !requests::offline(ui, command, &mut selected, &mut environment) {
                         break;
                     },
                     None => return,
@@ -135,98 +139,6 @@ async fn run(
             }
         }
     }
-}
-
-/// Handles a command while disconnected; returns `false` to reconnect now.
-fn offline(
-    ui: &AppHandle<Desktop>,
-    command: ServerEffect,
-    selected: &mut Option<ThreadId>,
-    target: &mut Option<String>,
-) -> bool {
-    match command {
-        ServerEffect::Select(thread) => *selected = Some(thread),
-        ServerEffect::ClearSelection => *selected = None,
-        ServerEffect::Environment {
-            environment,
-            thread,
-        } => {
-            *selected = thread;
-            *target = Some(environment);
-            return false;
-        }
-        ServerEffect::Create { draft, params } => {
-            dispatch(
-                ui,
-                ServerMsg::LaunchFailed {
-                    draft,
-                    params: Box::new(params),
-                    title: "Offline".into(),
-                    detail: None,
-                },
-            );
-        }
-        ServerEffect::LoadDraft(draft) => {
-            dispatch(
-                ui,
-                ServerMsg::DraftHarnessesLoaded {
-                    draft,
-                    result: None,
-                },
-            );
-        }
-        ServerEffect::SendInput(input) => {
-            dispatch(
-                ui,
-                ServerMsg::SendFailed {
-                    input: Box::new(input),
-                    title: "Offline".into(),
-                    detail: None,
-                },
-            );
-        }
-        ServerEffect::SearchFiles { .. } => {}
-        ServerEffect::SearchThreads { request, .. } => {
-            dispatch(
-                ui,
-                ServerMsg::ThreadSearchResult {
-                    request,
-                    result: Err("Offline".into()),
-                },
-            );
-        }
-        ServerEffect::LoadEarlier { thread, .. } => {
-            dispatch(
-                ui,
-                ServerMsg::EarlierLoaded {
-                    thread,
-                    transcript: None,
-                },
-            );
-        }
-        ServerEffect::Update { op_id, .. }
-        | ServerEffect::Project {
-            op_id: Some(op_id), ..
-        } => {
-            dispatch(
-                ui,
-                ServerMsg::MutationFailed {
-                    op_id,
-                    title: "Offline".into(),
-                    detail: "Server disconnected".into(),
-                },
-            );
-        }
-        ServerEffect::Attach {
-            scope,
-            target,
-            source,
-        } => platform::spawn_attach(ui, scope, target, source),
-        ServerEffect::Notify { title, body } => platform::spawn_notify(&title, body),
-        ServerEffect::Reconnect => return false,
-        _ => toast(ui, "Offline", "Server disconnected".into()),
-    }
-    true
 }
 
 /// Why a live connection session ended.

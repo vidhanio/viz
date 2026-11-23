@@ -1,6 +1,7 @@
 //! Deterministic `AppSpec` scenes building pure [`crate::model::Model`]
 //! fixtures for headless visual verification across dark and light themes.
 
+mod data;
 mod fixtures;
 mod overlays;
 

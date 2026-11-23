@@ -5,6 +5,7 @@
 pub mod platform;
 pub mod prefs;
 pub mod requests;
+mod runner;
 pub mod server;
 
 use std::{path::PathBuf, time::Duration};

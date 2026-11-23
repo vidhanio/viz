@@ -5,11 +5,14 @@
 //! function.
 
 pub mod cache;
+pub mod completion;
+pub mod composer_state;
 pub mod palette;
 pub mod picker;
 pub mod prefs;
 pub mod sidebar;
 pub mod state;
+pub mod subagents;
 pub mod timeline;
 pub mod tool_parse;
 pub mod transcript;
@@ -22,26 +25,33 @@ use viz_client::protocol::{
 
 pub use self::{
     cache::{Checkouts, EnvironmentCache, OpenThread},
+    completion::{
+        completion_token_at, format_completion_insertion, matching_commands, matching_files,
+    },
+    composer_state::{
+        AttachmentTarget, CompletionKind, CompletionToken, ComposerState, DraftCursor, DraftData,
+        ModelMenuState, PaletteChoice, PaletteCommand, PaletteSearch, PaletteState,
+    },
     palette::{PaletteRow, palette_rows},
     picker::{
-        ModelEntry, ModelLevels, ModelPicker, OptionOwner, OptionRole, OptionTarget,
-        completion_token_at, format_completion_insertion, matching_commands, matching_files,
-        model_groups, option_role, provider_name, thinking_ids, unseen_model_levels,
+        ModelEntry, ModelLevels, ModelPicker, OptionOwner, OptionRole, OptionTarget, model_groups,
+        option_role, provider_name, thinking_ids, unseen_model_levels,
     },
     prefs::{Prefs, SidebarMode},
     sidebar::{SidebarOutline, sidebar_first_match, sidebar_position, top_level},
     state::{
-        AttachmentTarget, CompletionKind, CompletionToken, ConnectionState, ContextMenu,
-        DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH, DisclosureState, DraftCursor,
-        DraftData, ModelMenuState, NewThread, OptimisticLedger, OptimisticUndo, PaletteChoice,
-        PaletteCommand, PaletteSearch, PaletteState, PaneSwitch, PanelsState,
+        ConnectionState, ContextMenu, DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH,
+        DisclosureState, NewThread, OptimisticLedger, OptimisticUndo, PaneSwitch, PanelsState,
         SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SelectionState, SidebarEdit,
         SidebarState, Status, TERMINAL_DEFAULT_HEIGHT, WINDOW_SIZE,
     },
+    subagents::{
+        AgentStanding, SubagentCall, child_link, delegated_task, local_child, spawned_subagent,
+        subagent_call, subagent_title,
+    },
     timeline::{
-        ActivityMark, ActivityTally, AgentStanding, SubagentCall, ToolAction, child_link,
-        delegated_task, first_non_empty_line, humanize_tool, is_activity, local_child,
-        relative_path, spawned_subagent, split_path, subagent_call, subagent_title,
+        ActivityMark, ActivityTally, ToolAction, first_non_empty_line, humanize_tool, is_activity,
+        relative_path, split_path,
     },
     tool_parse::is_command,
     transcript::{Item, PlanStep, TaskResult, Tool, ToolStatus, Transcript, TurnEnd, User},
@@ -65,7 +75,7 @@ pub struct Model {
     /// Sidebar filter, mode, collapses, menus, and dialogs.
     pub sidebar: SidebarState,
     /// Composer draft, saved drafts, completions, pickers, and favorites.
-    pub composer: state::ComposerState,
+    pub composer: ComposerState,
     /// Command palette modal state.
     pub palette: PaletteState,
     /// Timeline disclosure toggles, tool clock, and window focus.
@@ -90,7 +100,7 @@ impl Model {
             selection: SelectionState::default(),
             panels: PanelsState::default(),
             sidebar: SidebarState::default(),
-            composer: state::ComposerState::default(),
+            composer: ComposerState::default(),
             palette: PaletteState::default(),
             disclosure: DisclosureState {
                 tool_clock: now_ms,

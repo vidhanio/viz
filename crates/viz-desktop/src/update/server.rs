@@ -4,17 +4,21 @@
 use std::sync::Arc;
 
 use viz_client::protocol::{
-    Attachment, ConfigOption, Entry, EntryId, Environment, Harness, LaunchThread, LiveDelta,
-    Project, SearchHit, SendInput, Task, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    ConfigOption, Entry, EntryId, Environment, Harness, LaunchThread, LiveDelta, Project,
+    SearchHit, SendInput, Task, ThreadId, ThreadState, ThreadSummary,
 };
 
-use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
-use crate::{
-    effects::{ATTACHMENT_ENCODED_LIMIT, EditSync, Effect, LoadedAttachments, ServerEffect},
-    model::{
-        AttachmentTarget, Checkouts, Model, OptimisticUndo, PaletteSearch, PaneSwitch, Status,
-        Transcript, thread_title,
+use super::{
+    selection::{clear_selection, focus_draft, show_thread},
+    server_sync::{
+        apply_attachments_loaded, apply_earlier_loaded, apply_launch_failed, apply_select_failed,
+        apply_send_failed, apply_thread_created, apply_thread_state, apply_thread_view,
+        apply_workspace_sync, rollback_optimistic,
     },
+};
+use crate::{
+    effects::{Effect, LoadedAttachments},
+    model::{AttachmentTarget, Checkouts, Model, PaletteSearch, Status, Transcript},
 };
 
 /// Events pushed from the background server runtime or blocking platform tasks.
@@ -268,17 +272,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             model.cache_mut().harnesses = harnesses;
         }
         ServerMsg::ThreadState { thread, state } => {
-            if model.selection.selected != Some(thread) {
-                return effects;
-            }
-            let status_changed = model.thread_state().map(|prev| prev.status) != Some(state.status);
-            let open = model.cache_mut().open_thread_mut(thread);
-            open.transcript.sync_acp(state.live.as_ref());
-            open.state = Some(*state);
-            model.composer.model_menu.loading_levels = None;
-            if status_changed {
-                effects.push(Effect::SetWindowTitle(model.window_title()));
-            }
+            apply_thread_state(model, thread, *state, &mut effects);
         }
         ServerMsg::ThreadLive { thread, delta } => {
             if model.selection.selected == Some(thread) {
@@ -294,40 +288,9 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             entries,
             reset,
             before,
-        } => {
-            if model.selection.selected != Some(thread) {
-                return effects;
-            }
-            let open = model.cache_mut().open_thread_mut(thread);
-            if reset {
-                open.transcript = Transcript::from_entries(entries.iter(), before);
-                open.loading = false;
-                open.history_loading = false;
-            } else {
-                open.transcript.append(entries.iter());
-            }
-            let live = open.state.as_ref().and_then(|state| state.live.as_ref());
-            open.transcript.sync_acp(live);
-        }
+        } => apply_thread_view(model, thread, &entries, reset, before),
         ServerMsg::EarlierLoaded { thread, transcript } => {
-            if model.selection.selected != Some(thread) {
-                return effects;
-            }
-            let first_key = model
-                .transcript()
-                .items
-                .first()
-                .map(|item| item.key().to_owned());
-            let open = model.cache_mut().open_thread_mut(thread);
-            open.history_loading = false;
-            if let Some(transcript) = transcript {
-                if let Some(first_key) = first_key {
-                    effects.push(Effect::KeepOnScreen(first_key));
-                }
-                open.transcript = transcript;
-                let live = open.state.as_ref().and_then(|state| state.live.as_ref());
-                open.transcript.sync_acp(live);
-            }
+            apply_earlier_loaded(model, thread, transcript, &mut effects);
         }
         ServerMsg::SelectFailed {
             failed,
@@ -335,26 +298,15 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             entries,
             before,
             error,
-        } => {
-            if model.selection.selected == Some(failed) {
-                if let Some(previous) = previous {
-                    show_thread(model, previous, &mut effects);
-                    let open = model.cache_mut().open_thread_mut(previous);
-                    open.transcript = Transcript::from_entries(&entries, before);
-                    open.loading = false;
-                    open.history_loading = false;
-                    let live = open.state.as_ref().and_then(|state| state.live.as_ref());
-                    open.transcript.sync_acp(live);
-                } else {
-                    clear_selection(model, &mut effects);
-                }
-                effects.push(Effect::SetWindowTitle(model.window_title()));
-            }
-            effects.push(Effect::Toast {
-                title: "Request failed".into(),
-                detail: Some(error),
-            });
-        }
+        } => apply_select_failed(
+            model,
+            failed,
+            previous,
+            &entries,
+            before,
+            error,
+            &mut effects,
+        ),
         ServerMsg::DraftHarnessesLoaded { draft, result } => {
             if model
                 .selection
@@ -411,89 +363,19 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             }
         }
         ServerMsg::ThreadCreated { draft, thread } => {
-            let Some(project) = model
-                .selection
-                .new_thread
-                .as_ref()
-                .filter(|pending| pending.id == draft)
-                .map(|pending| pending.project.clone())
-            else {
-                return effects;
-            };
-            let expanded = project
-                .as_deref()
-                .is_some_and(|path| model.sidebar.collapsed_projects.remove(path));
-            model.selection.new_thread = None;
-            model.selection.selected = Some(thread);
-            model.selection.switch = PaneSwitch::Cut;
-            let open = model.cache_mut().open_thread_mut(thread);
-            open.transcript = Transcript::default();
-            open.state = None;
-            open.loading = true;
-            open.history_loading = false;
-            effects.push(focus_draft());
-            effects.push(Effect::Server(ServerEffect::Select(thread)));
-            if expanded {
-                effects.push(Effect::SavePrefs(model.to_prefs()));
-            }
+            apply_thread_created(model, draft, thread, &mut effects);
         }
         ServerMsg::LaunchFailed {
             draft,
             params,
             title,
             detail,
-        } => {
-            if let Some(thread) = model
-                .selection
-                .new_thread
-                .as_mut()
-                .filter(|thread| thread.id == draft)
-            {
-                thread.sending = false;
-                let text = params.text.unwrap_or_default();
-                prepend_draft_data(
-                    &mut model.composer.draft.text,
-                    &mut model.composer.draft.attachments,
-                    &text,
-                    params.attachments,
-                );
-                if !text.is_empty() {
-                    effects.push(Effect::SyncEdit(EditSync::PrependDraft(text)));
-                }
-            }
-            effects.push(Effect::Toast { title, detail });
-        }
+        } => apply_launch_failed(model, draft, *params, title, detail, &mut effects),
         ServerMsg::SendFailed {
             input,
             title,
             detail,
-        } => {
-            let thread = input.thread;
-            let text = input.text;
-            let files = input.attachments;
-            if model.selection.selected == Some(thread) {
-                prepend_draft_data(
-                    &mut model.composer.draft.text,
-                    &mut model.composer.draft.attachments,
-                    &text,
-                    files,
-                );
-                if !text.is_empty() {
-                    effects.push(Effect::SyncEdit(EditSync::PrependDraft(text)));
-                }
-            } else {
-                let env = model.active_env_key().to_owned();
-                let entry = model
-                    .composer
-                    .drafts_by_env
-                    .entry(env)
-                    .or_default()
-                    .entry(thread)
-                    .or_default();
-                prepend_draft_data(&mut entry.text, &mut entry.attachments, &text, files);
-            }
-            effects.push(Effect::Toast { title, detail });
-        }
+        } => apply_send_failed(model, *input, title, detail, &mut effects),
         ServerMsg::ProjectAdded(project) => {
             if let Some(thread) = &mut model.selection.new_thread
                 && !thread.sending
@@ -568,181 +450,4 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         }
     }
     effects
-}
-
-fn apply_workspace_sync(
-    model: &mut Model,
-    projects: Vec<Project>,
-    threads: Vec<ThreadSummary>,
-    effects: &mut Vec<Effect>,
-) {
-    use ThreadStatus::{Failed, Idle, Working};
-
-    for thread in &threads {
-        let Some(before) = model.summary(thread.id).map(|old| old.status) else {
-            continue;
-        };
-        let ran = before == Working;
-        let watched = model.disclosure.focused && model.selection.selected == Some(thread.id);
-        let body = match thread.status {
-            _ if before == thread.status || watched => continue,
-            _ if thread.parent.is_some() => continue,
-            Idle if ran => "Finished",
-            Failed if ran => "Failed",
-            _ => continue,
-        };
-        effects.push(Effect::Notify {
-            title: thread_title(thread).to_owned(),
-            body,
-        });
-    }
-    let fallback = model
-        .selection
-        .selected
-        .and_then(|id| model.summary(id))
-        .filter(|thread| !threads.iter().any(|current| current.id == thread.id))
-        .and_then(|old| {
-            let mut ancestor = old.parent.filter(|_| {
-                old.parent_environment
-                    .as_ref()
-                    .is_none_or(|env| Some(env) == model.connection.environment.as_ref())
-            });
-            while let Some(id) = ancestor {
-                if threads.iter().any(|current| current.id == id) {
-                    return Some(id);
-                }
-                ancestor = model.summary(id).and_then(|parent| parent.parent);
-            }
-            None
-        });
-    let cache = model.cache_mut();
-    cache.set_projects(projects);
-    cache.set_threads(threads);
-    if model.connected()
-        && model.selection.new_thread.is_none()
-        && model
-            .selection
-            .selected
-            .is_some_and(|id| model.summary(id).is_none())
-    {
-        if let Some(id) = fallback {
-            select_thread(model, id, effects);
-        } else {
-            clear_selection(model, effects);
-            effects.push(Effect::Server(ServerEffect::ClearSelection));
-        }
-    }
-}
-
-fn apply_attachments_loaded(
-    model: &mut Model,
-    scope: u64,
-    target: AttachmentTarget,
-    loaded: LoadedAttachments,
-    effects: &mut Vec<Effect>,
-) {
-    if scope != model.connection.epoch || !model.composer.attachment_reads.remove(&target) {
-        return;
-    }
-    let mut errors = loaded.errors;
-    if !loaded.attachments.is_empty() {
-        let env = model.active_env_key().to_owned();
-        let existing = match target {
-            AttachmentTarget::Draft(id) => {
-                if model
-                    .selection
-                    .new_thread
-                    .as_ref()
-                    .is_none_or(|thread| thread.id != id)
-                {
-                    return;
-                }
-                &mut model.composer.draft.attachments
-            }
-            AttachmentTarget::Thread(id) if model.selection.selected == Some(id) => {
-                &mut model.composer.draft.attachments
-            }
-            AttachmentTarget::Thread(id) => {
-                &mut model
-                    .composer
-                    .drafts_by_env
-                    .entry(env)
-                    .or_default()
-                    .entry(id)
-                    .or_default()
-                    .attachments
-            }
-        };
-        let mut size: usize = existing.iter().map(|file| file.data.len()).sum();
-        for file in loaded.attachments {
-            if size + file.data.len() > ATTACHMENT_ENCODED_LIMIT {
-                errors.push(format!(
-                    "{}: attachments exceed the message limit",
-                    file.name
-                ));
-            } else {
-                size += file.data.len();
-                existing.push(file);
-            }
-        }
-    }
-    if !errors.is_empty() {
-        effects.push(Effect::Toast {
-            title: "Couldn’t attach files".into(),
-            detail: Some(errors.join("\n")),
-        });
-    }
-}
-
-fn prepend_draft_data(
-    draft_text: &mut String,
-    draft_attachments: &mut Vec<Attachment>,
-    text: &str,
-    mut files: Vec<Attachment>,
-) {
-    if !text.is_empty() {
-        if draft_text.is_empty() {
-            draft_text.push_str(text);
-        } else {
-            let mut combined = String::with_capacity(text.len() + 2 + draft_text.len());
-            combined.push_str(text);
-            combined.push_str("\n\n");
-            combined.push_str(draft_text);
-            *draft_text = combined;
-        }
-    }
-    files.append(draft_attachments);
-    *draft_attachments = files;
-}
-
-fn rollback_optimistic(model: &mut Model, undo: OptimisticUndo) {
-    match undo {
-        OptimisticUndo::ThreadSummary { env, id, prior } => {
-            if let Some(cache) = model.caches.get_mut(&env)
-                && let Some(current) = cache.summary_mut(id)
-            {
-                *current = *prior;
-            }
-        }
-        OptimisticUndo::ProjectRename {
-            env,
-            path,
-            prior_name,
-        } => {
-            if let Some(cache) = model.caches.get_mut(&env)
-                && let Some(project) = cache.project_mut(&path)
-            {
-                project.name = prior_name;
-            }
-        }
-        OptimisticUndo::ProjectRemove {
-            env,
-            index,
-            project,
-        } => {
-            if let Some(cache) = model.caches.get_mut(&env) {
-                cache.restore_project(index, *project);
-            }
-        }
-    }
 }
