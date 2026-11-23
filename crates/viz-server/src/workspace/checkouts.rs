@@ -85,14 +85,23 @@ impl Workspace {
         let listed = worktree::list(Path::new(&project.path)).await?;
         let mut db = self.db.lock().await;
         let mut worktrees = Vec::with_capacity(listed.len());
+        let here = worktree::repository(&project.path).await;
         for checkout in listed {
             let threads = if checkout.main {
-                rows(
+                let filed = rows(
                     &mut db,
-                    "SELECT id FROM threads WHERE project = ?1 AND worktree IS NULL ORDER BY id",
+                    "SELECT id, cwd FROM threads WHERE project = ?1 AND worktree IS NULL ORDER BY id",
                     [project.path.as_str().into()],
                 )
-                .await?
+                .await?;
+                let mut running = Vec::new();
+                for mut row in filed {
+                    let cwd = row.str(1)?;
+                    if cwd == project.path || worktree::repository(&cwd).await == here {
+                        running.push(row.id(0)?);
+                    }
+                }
+                running
             } else {
                 rows(
                     &mut db,
@@ -100,9 +109,9 @@ impl Workspace {
                     [checkout.path.as_str().into()],
                 )
                 .await?
-            }
-            .map(|row| row.id(0))
-            .collect::<Result<_, _>>()?;
+                .map(|row| row.id(0))
+                .collect::<Result<_, _>>()?
+            };
             worktrees.push(Worktree {
                 managed: !checkout.main && self.managed(&checkout.path),
                 path: checkout.path,
