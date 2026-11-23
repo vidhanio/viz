@@ -3,42 +3,23 @@
 //!
 //! Server-shared state (pins, order, settle, snooze, project settings, unread)
 //! lives in the viz server database. This schema holds only client-local UI
-//! preferences: panel widths, sidebar open/mode, collapsed shelves/projects,
-//! favorite models, window geometry, and unsent drafts.
+//! preferences: panel widths, sidebar open state, collapsed shelves, favorite
+//! models, window geometry, and unsent drafts.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value, json};
 
+use super::sidebar::{SHELF_SETTLED, SHELF_SNOOZED};
+
 /// Current schema version written to `desktop.json`.
 pub const PREFS_VERSION: u32 = 1;
 
-/// How the sidebar lists top-level threads.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SidebarMode {
-    /// Newest first, each with its project under the title.
-    #[default]
-    Recent,
-    /// Under their collapsible projects, newest first.
-    Projects,
-}
-
-impl SidebarMode {
-    /// Wire and prefs string representation.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Recent => "recent",
-            Self::Projects => "projects",
-        }
-    }
-
-    fn from_wire(value: &str) -> Self {
-        match value {
-            "projects" => Self::Projects,
-            _ => Self::Recent,
-        }
-    }
+/// Default collapsed shelves on a fresh workspace (Working starts open;
+/// Snoozed and Settled start collapsed).
+#[must_use]
+pub fn default_collapsed_shelves() -> BTreeSet<String> {
+    BTreeSet::from([SHELF_SNOOZED.to_owned(), SHELF_SETTLED.to_owned()])
 }
 
 /// Persisted window dimensions in points.
@@ -55,8 +36,6 @@ pub struct WindowGeometry {
 pub struct Prefs {
     /// Schema version (currently [`PREFS_VERSION`]).
     pub version: u32,
-    /// Sidebar list grouping mode.
-    pub sidebar: SidebarMode,
     /// Saved sidebar width in points.
     pub sidebar_width: Option<f32>,
     /// Whether the sidebar is open.
@@ -65,8 +44,6 @@ pub struct Prefs {
     pub diff_width: Option<f32>,
     /// Saved docked terminal height in points.
     pub terminal_height: Option<f32>,
-    /// Project paths collapsed in the sidebar Projects view.
-    pub collapsed_projects: BTreeSet<String>,
     /// Shelf names collapsed in the sidebar triage view.
     pub collapsed_shelves: BTreeSet<String>,
     /// User-starred model identifiers (`harness/model` or model id).
@@ -81,13 +58,11 @@ impl Default for Prefs {
     fn default() -> Self {
         Self {
             version: PREFS_VERSION,
-            sidebar: SidebarMode::default(),
             sidebar_width: None,
             sidebar_open: None,
             diff_width: None,
             terminal_height: None,
-            collapsed_projects: BTreeSet::new(),
-            collapsed_shelves: BTreeSet::new(),
+            collapsed_shelves: default_collapsed_shelves(),
             favorite_models: Vec::new(),
             drafts: BTreeMap::new(),
             window: None,
@@ -109,27 +84,29 @@ impl Prefs {
             .and_then(Value::as_u64)
             .and_then(|v| u32::try_from(v).ok())
             .unwrap_or(PREFS_VERSION);
-        let sidebar = root
-            .get("sidebar")
-            .and_then(Value::as_str)
-            .map_or_else(SidebarMode::default, SidebarMode::from_wire);
         let sidebar_width = positive_f32(&root, "sidebarWidth");
         let sidebar_open = root.get("sidebarOpen").and_then(Value::as_bool);
         let diff_width = positive_f32(&root, "diffWidth");
         let terminal_height = positive_f32(&root, "terminalHeight");
-        let collapsed_projects = string_set(&root, "collapsedProjects");
-        let collapsed_shelves = string_set(&root, "collapsedShelves");
+        let collapsed_shelves = root
+            .get("collapsedShelves")
+            .and_then(Value::as_array)
+            .map_or_else(default_collapsed_shelves, |items| {
+                items
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect()
+            });
         let favorite_models = string_vec(&root, "favoriteModels");
         let drafts = parse_drafts(&root);
         let window = parse_window(&root);
         Self {
             version,
-            sidebar,
             sidebar_width,
             sidebar_open,
             diff_width,
             terminal_height,
-            collapsed_projects,
             collapsed_shelves,
             favorite_models,
             drafts,
@@ -143,7 +120,6 @@ impl Prefs {
     pub fn to_json(&self) -> String {
         let mut root = Map::new();
         root.insert("version".into(), json!(PREFS_VERSION));
-        root.insert("sidebar".into(), json!(self.sidebar.as_str()));
         if let Some(width) = self.sidebar_width.filter(|w| w.is_finite() && *w > 0.0) {
             root.insert("sidebarWidth".into(), json!(width));
         }
@@ -156,14 +132,9 @@ impl Prefs {
         if let Some(height) = self.terminal_height.filter(|h| h.is_finite() && *h > 0.0) {
             root.insert("terminalHeight".into(), json!(height));
         }
-        let collapsed_projects: Vec<&str> =
-            self.collapsed_projects.iter().map(String::as_str).collect();
-        root.insert("collapsedProjects".into(), json!(collapsed_projects));
-        if !self.collapsed_shelves.is_empty() {
-            let collapsed_shelves: Vec<&str> =
-                self.collapsed_shelves.iter().map(String::as_str).collect();
-            root.insert("collapsedShelves".into(), json!(collapsed_shelves));
-        }
+        let collapsed_shelves: Vec<&str> =
+            self.collapsed_shelves.iter().map(String::as_str).collect();
+        root.insert("collapsedShelves".into(), json!(collapsed_shelves));
         if !self.favorite_models.is_empty() {
             root.insert("favoriteModels".into(), json!(&self.favorite_models));
         }
@@ -190,16 +161,6 @@ fn positive_f32(root: &Map<String, Value>, key: &str) -> Option<f32> {
     )]
     let value = raw as f32;
     (value.is_finite() && value > 0.0).then_some(value)
-}
-
-fn string_set(root: &Map<String, Value>, key: &str) -> BTreeSet<String> {
-    root.get(key)
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_owned)
-        .collect()
 }
 
 fn string_vec(root: &Map<String, Value>, key: &str) -> Vec<String> {

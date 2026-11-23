@@ -3,11 +3,13 @@
 
 use std::mem;
 
-use viz_client::protocol::{ThreadId, WorktreeTarget};
+use viz_client::protocol::{ThreadId, TriageAction, WorktreeTarget};
 
 use crate::{
     effects::{EditSync, EditTarget, Effect, ServerEffect, ThreadChange},
-    model::{DraftData, Model, NewThread, OptimisticUndo, PaneSwitch, Status, top_level},
+    model::{
+        DraftData, Model, NewThread, OptimisticUndo, PaneSwitch, Status, apply_optimistic_triage,
+    },
 };
 
 /// Messages governing the active thread, draft, checkout target, and
@@ -22,8 +24,6 @@ pub enum SelectionMsg {
     GoForward,
     /// Start a fresh draft in the active thread's project, if any.
     CreateHere,
-    /// Start a fresh draft in the project identified by `path`.
-    CreateInProject(String),
     /// Set or clear the active draft's project path.
     ChooseDraftProject(Option<String>),
     /// Set the active draft's Git worktree target.
@@ -57,12 +57,6 @@ pub(super) fn update(model: &mut Model, msg: SelectionMsg) -> Vec<Effect> {
         SelectionMsg::CreateHere => {
             let draft = NewThread::new(model.selection.next_draft, model.project());
             prepare_draft(model, draft, &mut effects);
-        }
-        SelectionMsg::CreateInProject(path) => {
-            if let Some(project) = model.cache().project(&path).cloned() {
-                let draft = NewThread::new(model.selection.next_draft, Some(&project));
-                prepare_draft(model, draft, &mut effects);
-            }
         }
         SelectionMsg::ChooseDraftProject(path) => {
             model.composer.open_picker = None;
@@ -183,7 +177,13 @@ pub(super) fn open_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec
             .summary(thread)
             .is_some_and(|summary| summary.lifecycle.unread)
     {
-        apply_thread_change(model, thread, ThreadChange::Unread(false), effects);
+        apply_thread_change(
+            model,
+            thread,
+            ThreadChange::Triage(TriageAction::MarkRead),
+            model.disclosure.tool_clock,
+            effects,
+        );
     }
 }
 
@@ -219,13 +219,12 @@ pub(super) fn show_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec
     open.state = None;
     open.loading = true;
     open.history_loading = false;
-    let expanded_project = reveal_project(model, thread);
     effects.push(Effect::SyncEdit(EditSync::Replace {
         target: EditTarget::Draft,
         text,
         select_all: false,
     }));
-    if expanded_project || draft_saved {
+    if draft_saved {
         effects.push(Effect::SavePrefs(model.to_prefs()));
     }
 }
@@ -276,15 +275,6 @@ pub(super) fn reset_active_view(model: &mut Model) {
     model.disclosure.expanded.clear();
     model.composer.completion.reset();
     model.composer.open_picker = None;
-}
-
-pub(super) fn reveal_project(model: &mut Model, id: ThreadId) -> bool {
-    let top = top_level(model.cache(), id, model.connection.environment.as_deref());
-    let project = model.summary(top).and_then(|thread| thread.project.clone());
-    if let Some(project) = project {
-        return model.sidebar.collapsed_projects.remove(&project);
-    }
-    false
 }
 
 pub(super) fn prepare_draft(model: &mut Model, mut thread: NewThread, effects: &mut Vec<Effect>) {
@@ -348,6 +338,7 @@ pub(super) fn apply_thread_change(
     model: &mut Model,
     thread: ThreadId,
     change: ThreadChange,
+    now_ms: i64,
     effects: &mut Vec<Effect>,
 ) {
     let env = model.active_env_key().to_owned();
@@ -355,11 +346,7 @@ pub(super) fn apply_thread_change(
         if let Some(summary) = model.cache_mut().summary_mut(thread) {
             match &change {
                 ThreadChange::Title(title) => summary.title.clone_from(title),
-                ThreadChange::Archive(archived) => summary.lifecycle.archived = *archived,
-                ThreadChange::Pin(pinned) => {
-                    summary.lifecycle.pin = pinned.then_some(0);
-                }
-                ThreadChange::Unread(unread) => summary.lifecycle.unread = *unread,
+                ThreadChange::Triage(action) => apply_optimistic_triage(summary, action, now_ms),
                 ThreadChange::Project(project) => summary.project.clone_from(project),
             }
         }

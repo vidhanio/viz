@@ -22,13 +22,11 @@ mod input;
 mod project_icon;
 mod row;
 mod surface;
-mod tree;
 
 use std::borrow::Cow;
 
 use rune::{Color, El, el, text};
 use rune_kit::Spinner;
-use viz_client::protocol::ThreadStatus;
 
 #[expect(
     unused_imports,
@@ -42,8 +40,7 @@ pub use self::{
     button::{Button, button},
     controls::{Segmented, SegmentedWidth, Switch, segmented, switch},
     dialog::{
-        Dialog, DialogForm, ToastCard, dialog, dialog_actions, dialog_body, sheet, toast,
-        toast_card,
+        Dialog, DialogForm, ToastCard, dialog, dialog_actions, dialog_body, sheet, toast_card,
     },
     feedback::{
         Banner, EmptyState, LoadingDelay, empty, empty_state, error_banner, loading_state,
@@ -79,7 +76,6 @@ pub use self::{
         anchored_popover, combobox_shell, marked_trigger, menu_items, picker, picker_menu,
         popover_frame, scroll_viewport, select_trigger, tucked_deck, tucked_drawer,
     },
-    tree::{TreeLine, section_row, trailing},
 };
 use crate::theme::{ICON, ICON_SMALL, READING_INSET, READING_WIDTH, Theme};
 
@@ -146,27 +142,6 @@ pub fn radar(size: f32, color: Color, t: &Theme) -> El {
 /// Accent radar spinner at [`ICON_SMALL`] size.
 pub fn spinner(t: &Theme) -> El {
     radar(ICON_SMALL, t.accent, t)
-}
-
-/// A thread's run state as an icon-sized mark: a radar spinner while working,
-/// a danger dot after failure, nothing while idle.
-pub fn status(status: ThreadStatus, active: bool, t: &Theme) -> Option<El> {
-    let (mark, label) = match status {
-        ThreadStatus::Idle => return None,
-        ThreadStatus::Working => (
-            radar(ICON_SMALL, if active { t.accent } else { t.muted }, t),
-            "Working",
-        ),
-        ThreadStatus::Failed => (dot(t.danger), "Failed"),
-    };
-    Some(
-        el().size(ICON, ICON)
-            .center()
-            .child(mark)
-            .role("status")
-            .label(label)
-            .help(label),
-    )
 }
 
 /// Selectable wrapped monospace code block body.

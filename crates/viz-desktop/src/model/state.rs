@@ -8,16 +8,19 @@ use viz_client::protocol::{
     Environment, Harness, OptionValue, Project, ThreadId, ThreadSummary, WorktreeTarget,
 };
 
-use super::prefs::SidebarMode;
+use super::{
+    prefs::default_collapsed_shelves,
+    sidebar::{ContextSubmenu, InlineRename, ProjectFilter, SETTLED_PAGE_SIZE, SidebarDrag},
+};
 
 /// The window's default size on launch, in points; headless renders use it too.
 pub const WINDOW_SIZE: (f32, f32) = (1240.0, 760.0);
 /// Default sidebar pane width in points.
-pub const SIDEBAR_DEFAULT_WIDTH: f32 = 256.0;
+pub const SIDEBAR_DEFAULT_WIDTH: f32 = 264.0;
 /// Minimum resizable sidebar width in points.
 pub const SIDEBAR_MIN_WIDTH: f32 = 220.0;
 /// Maximum resizable sidebar width in points.
-pub const SIDEBAR_MAX_WIDTH: f32 = 384.0;
+pub const SIDEBAR_MAX_WIDTH: f32 = 440.0;
 /// Default docked diff inspector width in points.
 pub const DIFF_DEFAULT_WIDTH: f32 = 480.0;
 /// Minimum docked diff inspector width in points.
@@ -212,46 +215,40 @@ impl Default for PanelsState {
     }
 }
 
-/// Open context menu state for a sidebar thread or project row.
+/// Open context menu state for a sidebar thread card.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextMenu {
-    /// Row element key (`thread-<id>` or `project-<path>`).
+    /// Row element key (`thread-<id>`).
     pub key: String,
     /// Pointer coordinates when opened via secondary press.
     pub point: Option<(f32, f32)>,
-    /// Whether the "Move to project" submenu is expanded.
-    pub moving: bool,
+    /// Currently expanded submenu, if any.
+    pub submenu: Option<ContextSubmenu>,
 }
 
 impl ContextMenu {
-    /// Creates a menu anchored to the row's actions button.
-    #[must_use]
-    pub fn anchored(key: impl Into<String>) -> Self {
-        Self {
-            key: key.into(),
-            point: None,
-            moving: false,
-        }
-    }
-
     /// Creates a menu anchored at pointer position `(x, y)`.
     #[must_use]
     pub fn at(key: impl Into<String>, x: f32, y: f32) -> Self {
         Self {
             key: key.into(),
             point: Some((x, y)),
-            moving: false,
+            submenu: None,
         }
     }
 
-    /// Creates a context menu with its Move submenu expanded for scene
-    /// previews.
+    /// Creates a context menu with `submenu` expanded for scene previews.
     #[must_use]
-    pub fn preview(key: impl Into<String>, x: f32, y: f32) -> Self {
+    pub fn preview(
+        key: impl Into<String>,
+        x: f32,
+        y: f32,
+        submenu: Option<ContextSubmenu>,
+    ) -> Self {
         Self {
             key: key.into(),
             point: Some((x, y)),
-            moving: true,
+            submenu,
         }
     }
 }
@@ -260,32 +257,49 @@ impl ContextMenu {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarEdit {
     /// Rename a registered project.
+    #[expect(dead_code, reason = "project settings actions wired in Track P")]
     RenameProject(String),
     /// Confirm removing a project record.
+    #[expect(dead_code, reason = "project settings actions wired in Track P")]
     RemoveProject(String),
-    /// Rename a thread.
-    RenameThread(ThreadId),
     /// Confirm deleting a thread (keeping its worktree, if any).
     DeleteThread(ThreadId),
     /// Confirm deleting a thread together with its managed worktree.
     DeleteWithWorktree(ThreadId),
 }
 
-/// Pure sidebar UI state (filters, collapsed trees/shelves, menus, dialogs).
-#[derive(Debug, Clone, Default)]
+/// Pure sidebar UI state: project filter, triage shelf collapses, hover card,
+/// inline rename, drag-and-drop state, popovers, menus, and dialogs.
+#[derive(Debug, Clone)]
 pub struct SidebarState {
-    /// Top-level grouping mode (Recent vs Projects).
-    pub mode: SidebarMode,
-    /// Current filter query text.
-    pub filter: String,
-    /// Project paths collapsed in Projects mode.
-    pub collapsed_projects: BTreeSet<String>,
+    /// Active project filter (`All`, one project path, or `NoProject`).
+    pub project_filter: ProjectFilter,
+    /// Whether the project filter combobox popup is open.
+    pub filter_open: bool,
+    /// Search query typed inside the project filter combobox.
+    pub filter_query: String,
+    /// Highlighted row index inside the project filter combobox.
+    pub filter_active: usize,
     /// Parent thread ids whose delegated child subtrees are collapsed.
     pub collapsed_parents: HashSet<ThreadId>,
-    /// Shelf names collapsed in triage mode (persisted in prefs for Phase 1).
+    /// Shelf keys collapsed in the triage list (`working`, `snoozed`,
+    /// `settled`).
     pub collapsed_shelves: BTreeSet<String>,
+    /// Maximum number of settled threads currently shown in the Settled shelf.
+    pub settled_limit: usize,
+    /// Thread currently displaying the delayed right-anchored hover preview
+    /// card.
+    pub hover_card: Option<ThreadId>,
+    /// Thread whose hover quick-action snooze preset popover is open.
+    pub snooze_popover: Option<ThreadId>,
+    /// Active inline title rename state on a thread card.
+    pub inline_rename: Option<InlineRename>,
+    /// Active pointer drag state for pinning and reordering cards.
+    pub drag: Option<SidebarDrag>,
     /// Whether the footer environment switcher menu is open.
     pub env_menu: bool,
+    /// Whether the footer read-only workspace/shortcuts popover is open.
+    pub info_menu: bool,
     /// Open row context menu, if any.
     pub menu: Option<ContextMenu>,
     /// Active confirmation or rename dialog, if any.
@@ -294,10 +308,48 @@ pub struct SidebarState {
     pub edit_value: String,
 }
 
+impl Default for SidebarState {
+    fn default() -> Self {
+        Self {
+            project_filter: ProjectFilter::All,
+            filter_open: false,
+            filter_query: String::new(),
+            filter_active: 0,
+            collapsed_parents: HashSet::new(),
+            collapsed_shelves: default_collapsed_shelves(),
+            settled_limit: SETTLED_PAGE_SIZE,
+            hover_card: None,
+            snooze_popover: None,
+            inline_rename: None,
+            drag: None,
+            env_menu: false,
+            info_menu: false,
+            menu: None,
+            edit: None,
+            edit_value: String::new(),
+        }
+    }
+}
+
 impl SidebarState {
-    /// Closes sidebar popovers and modal dialogs.
+    /// Whether the collapsible shelf identified by `key` is currently open.
+    #[must_use]
+    pub fn is_shelf_open(&self, key: &str) -> bool {
+        !self.collapsed_shelves.contains(key)
+    }
+
+    /// Closes all sidebar popovers, hover cards, inline edits, drags, and modal
+    /// dialogs.
     pub fn dismiss_overlays(&mut self) {
+        self.filter_open = false;
+        self.filter_query.clear();
+        self.filter_active = 0;
+        self.hover_card = None;
+        self.snooze_popover = None;
+        self.inline_rename = None;
+        self.drag = None;
         self.env_menu = false;
+        self.info_menu = false;
         self.menu = None;
         self.edit = None;
     }

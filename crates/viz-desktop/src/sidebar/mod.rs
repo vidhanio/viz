@@ -1,46 +1,74 @@
-//! Sidebar view: filter, pinned threads, Recent / Projects modes, delegated
-//! task subtrees, context menus, confirmation dialogs, and connection/env
-//! footer.
+//! Unified thread-triage sidebar: titlebar chrome, search & utility bar,
+//! project filter combobox, triage shelves (Drafts, Pinned, Working, Active,
+//! Snoozed, Settled), hover preview cards, drag-and-drop, context menus, and
+//! environments footer.
 
 mod actions;
+mod card;
+mod card_meta;
+mod draft;
+mod filter;
 mod footer;
-mod rows;
+mod hover_card;
+mod menu;
+mod project_mark;
+mod shelves;
 
-use rune::{Color, El, col, el, row, text};
-use rune_kit::{IconButtonVariant, shell::Sidebar};
+use rune::{Color, El, TextStyle, col, icon, row, text};
+use rune_kit::IconButtonVariant;
 
 use crate::{
     app::Desktop,
-    model::{SidebarMode, SidebarOutline},
-    theme::{self, HAIRLINE, ROW_INSET, S8, S12, Size, Theme},
-    ui,
-    update::{Msg, SelectionMsg, SidebarMsg},
+    model::{ProjectFilter, SidebarOutline},
+    motion,
+    theme::{
+        self, HAIRLINE, ICON_MD, RADIUS_CONTROL, S2, S4, S6, S8, S12, SIDEBAR_PAD, Size,
+        TOOLBAR_HEIGHT, Theme,
+    },
+    ui::{self, ScrollMode},
+    update::{Msg, PaletteMsg, SidebarMsg},
 };
 
-/// Builds the workspace sidebar view and mounts its popovers into `layer`.
-pub fn sidebar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
-    let tree = thread_tree(s, t, layer);
-    let mut bar = Sidebar::new()
-        .label("Workspace")
-        .inset(0.0)
-        .header_gap(S8)
-        .header_padding(0.0, 0.0)
-        .header(filter(s, t))
-        .child(tree);
-    if let Some(footer) = footer::footer(s, t, layer) {
-        bar = bar.footer(footer);
+/// Builds the unified triage workspace sidebar and mounts its overlays into
+/// `layer`.
+pub fn sidebar(s: &Desktop, titlebar_inset: f32, t: &Theme, layer: &mut Vec<El>) -> El {
+    let now = theme::now_ms();
+    let outline = SidebarOutline::derive(&s.model, now);
+
+    let titlebar = titlebar_wordmark(titlebar_inset, t);
+    let action_bar = utility_bar(s, now, t, layer);
+    let filter_chip = active_filter_chip(s, t);
+    let body = ui::scroll_viewport(
+        "sidebar-scroll",
+        ScrollMode::Top,
+        shelves::primary_shelves(s, &outline, t, layer),
+        t,
+    );
+    let settled = shelves::settled_drawer(s, &outline, t, layer);
+    let bottom = footer::footer(s, t, layer);
+    hover_card::mount(s, &outline, t, layer);
+
+    let mut root = col()
+        .key("sidebar")
+        .w_full()
+        .h_full()
+        .min_h(0.0)
+        .child(titlebar)
+        .child(action_bar);
+    if let Some(chip) = filter_chip {
+        root = root.child(chip);
     }
-    bar.build(&t.k)
+    root.child(body).child(settled).child(bottom)
 }
 
-/// Mounts sidebar confirmation and rename dialogs independently of whether
-/// the sidebar is visible.
+/// Mounts sidebar confirmation and rename dialogs independently of whether the
+/// sidebar is visible.
 pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     actions::dialog(s, t, layer);
 }
 
-/// New thread, as an icon button: in the sidebar's mode row while the sidebar
-/// is open, after the sidebar toggle in the toolbar while it's closed.
+/// New thread icon button used in Row 2 while the sidebar is open and in the
+/// main toolbar while the sidebar is collapsed.
 pub fn new_thread_button(s: &Desktop, size: Size, t: &Theme) -> El {
     let m = &s.model;
     ui::icon_button(
@@ -51,164 +79,219 @@ pub fn new_thread_button(s: &Desktop, size: Size, t: &Theme) -> El {
     )
     .shortcut(ui::shortcut("N"))
     .disabled(!m.connected() || m.selection.new_thread.is_some())
-    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Selection(SelectionMsg::CreateHere), tx))
+    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::NewThread), tx))
     .build(&t.k)
     .key("new-thread")
 }
 
-fn add_project_button(s: &Desktop, t: &Theme) -> El {
-    ui::icon_button(
+/// Row 1 titlebar band (`viz` wordmark sitting directly beside `SplitView`'s
+/// `PanelLeft` toggle button).
+fn titlebar_wordmark(titlebar_inset: f32, t: &Theme) -> El {
+    let lights = if titlebar_inset > 0.0 {
+        titlebar_inset + S8
+    } else {
+        S12
+    };
+    let toggle_side = Size::Compact.height();
+    let wordmark_left = lights + toggle_side + S8;
+    let wordmark_style = TextStyle {
+        size: 13.0,
+        weight: 600.0,
+        line_height: 18.0,
+        ..t.panel_row
+    };
+    row()
+        .key("sidebar-wordmark")
+        .pin(
+            Some(-SIDEBAR_PAD),
+            Some(-TOOLBAR_HEIGHT),
+            Some(-SIDEBAR_PAD),
+            None,
+        )
+        .h(TOOLBAR_HEIGHT)
+        .pl(wordmark_left)
+        .pr(S12)
+        .center_y()
+        .a11y_hidden()
+        .child(text("viz").font(wordmark_style).color(t.text_strong))
+}
+
+/// Row 2 search trigger button and right-aligned utility icon buttons
+/// (`Filter by project`, `Add project`, `New thread`).
+fn utility_bar(s: &Desktop, now: i64, t: &Theme, layer: &mut Vec<El>) -> El {
+    let m = &s.model;
+    filter::combobox(s, now, t, layer);
+
+    let add_project = ui::icon_button(
         &ui::FOLDER_PLUS,
         "Add project",
         IconButtonVariant::GhostMuted,
-        Size::Small,
+        Size::Compact,
     )
-    .disabled(!s.model.connected())
+    .disabled(!m.connected())
     .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::OpenAddProject), tx))
     .build(&t.k)
-    .key("add-project")
+    .key("add-project");
+
+    row()
+        .key("sidebar-action-bar")
+        .w_full()
+        .h(32.0)
+        .mb(S6)
+        .gap(S4)
+        .center_y()
+        .child(search_trigger(t))
+        .child(
+            row()
+                .gap(S2)
+                .center_y()
+                .child(filter_trigger(s, t))
+                .child(add_project)
+                .child(new_thread_button(s, Size::Compact, t)),
+        )
 }
 
-fn filter(s: &Desktop, t: &Theme) -> El {
-    ui::text_field(
-        &s.widgets.sidebar_filter,
-        "Filter threads",
-        "Filter threads",
-        Size::Default,
-    )
-    .leading_icon(&ui::SEARCH)
-    .on_edit(|s: &mut Desktop| &mut s.widgets.sidebar_filter)
-    .on_change(|s: &mut Desktop, tx| {
-        let query = s.widgets.sidebar_filter.text.clone();
-        s.dispatch(Msg::Sidebar(SidebarMsg::FilterChanged(query)), tx);
-    })
-    .on_submit(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::FilterSubmit), tx))
-    .build(&t.k)
-    .key("thread-filter")
-}
-
-fn thread_tree(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
-    let m = &s.model;
-    let outline = SidebarOutline::derive(m, theme::now_ms());
-    let recent = m.sidebar.mode == SidebarMode::Recent;
-    let mut tree = col()
-        .key("thread-tree")
-        .role("tree")
-        .label("Threads")
-        .w_full();
-    if !outline.pinned.is_empty() {
-        tree =
-            tree.child(ui::section_row("pinned-heading", "Pinned", None, t))
-                .children(outline.pinned.iter().map(|thread| {
-                    rows::thread_row(s, &outline, thread, t.muted, recent, t, layer)
-                }));
-    }
-    tree = tree.child(mode_switch(s, t));
-    if recent {
-        if outline.pinned.is_empty() && outline.recent.is_empty() {
-            return tree.children(empty_note(s, &outline.query, t));
-        }
-        return tree.children(
-            outline
-                .recent
-                .iter()
-                .map(|thread| rows::thread_row(s, &outline, thread, t.muted, true, t, layer)),
-        );
-    }
-    let projects: Vec<_> = m
-        .cache()
-        .projects()
-        .filter(|p| outline.visible_project(p))
-        .collect();
-    if !projects.is_empty() {
-        tree = tree.child(
-            col().key("project-groups").w_full().gap(S12).children(
-                projects
-                    .iter()
-                    .map(|p| rows::project_row(s, &outline, p, t, layer)),
-            ),
-        );
-    }
-    if !outline.loose.is_empty() {
-        tree =
-            tree.child(ui::section_row("threads-heading", "No project", None, t))
-                .children(
-                    outline.loose.iter().map(|thread| {
-                        rows::thread_row(s, &outline, thread, t.muted, false, t, layer)
-                    }),
-                );
-    }
-    if outline.pinned.is_empty() && projects.is_empty() && outline.loose.is_empty() {
-        tree = tree.children(empty_note(s, &outline.query, t));
-    }
-    tree
-}
-
-fn empty_note(s: &Desktop, query: &str, t: &Theme) -> Option<El> {
-    let label = if !query.is_empty() {
-        "No matching threads"
-    } else if s.model.connected() {
-        "No threads yet"
-    } else {
-        return None;
-    };
-    Some(
-        text(label)
-            .key("sidebar-empty")
-            .role("status")
-            .font(t.small)
-            .color(t.faint)
-            .px(ROW_INSET)
-            .py(S8),
-    )
-}
-
-/// The section row that picks how threads are listed, with the new thread and
-/// add project actions at its end.
-fn mode_switch(s: &Desktop, t: &Theme) -> El {
-    let current = s.model.sidebar.mode;
-    let tab = |mode: SidebarMode, label: &'static str| {
-        let active = mode == current;
+fn search_trigger(t: &Theme) -> El {
+    ui::with_tooltip(
         row()
-            .key(mode.as_str())
-            .role("radio")
-            .label(label)
-            .checked(active)
-            .h(Size::Small.height())
+            .key("sidebar-search-trigger")
+            .role("button")
+            .label("Search")
+            .grow(1.0)
+            .shrink()
+            .min_w(0.0)
+            .h(Size::Compact.height())
             .px(S8)
-            .center()
-            .radius(Size::Small.radius())
-            .fill(if active {
-                t.selected
-            } else {
-                Color::TRANSPARENT
-            })
+            .gap(S8)
+            .center_y()
+            .radius(RADIUS_CONTROL)
+            .fill(Color::TRANSPARENT)
             .hover_group()
+            .hover(t.hover_wash)
+            .press(t.pressed_wash)
+            .press_scale(motion::PRESS_SCALE)
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .on_press(move |s: &mut Desktop| {
-                s.dispatch_local(Msg::Sidebar(SidebarMsg::SetMode(mode)));
+            .on_press_tx(|s: &mut Desktop, tx| {
+                s.dispatch(Msg::Palette(PaletteMsg::Toggle), tx);
             })
             .child(
-                ui::section(label, t)
-                    .color(if active { t.text } else { t.muted })
+                icon(&ui::SEARCH, ICON_MD)
+                    .color(t.icon_muted)
                     .group_color(t.text)
                     .a11y_hidden(),
             )
+            .child(
+                text("Search")
+                    .font(t.panel_row)
+                    .color(t.muted)
+                    .group_color(t.text)
+                    .truncate()
+                    .a11y_hidden(),
+            ),
+        "Search",
+        Some(&ui::shortcut("K")),
+    )
+}
+
+fn filter_trigger(s: &Desktop, t: &Theme) -> El {
+    let m = &s.model;
+    let filtered = m.sidebar.project_filter != ProjectFilter::All;
+    let filter_active = filtered || m.sidebar.filter_open;
+    let filter_tip = match &m.sidebar.project_filter {
+        ProjectFilter::All => "Filter by project".to_owned(),
+        ProjectFilter::NoProject => "Filtered: No project".to_owned(),
+        ProjectFilter::Project(path) => {
+            let name = m
+                .cache()
+                .project(path)
+                .map_or(path.as_str(), |p| p.name.as_str());
+            format!("Filtered: {name}")
+        }
     };
-    row()
-        .key("sidebar-mode")
-        .role("radiogroup")
-        .label("List threads by")
-        .w_full()
-        .h(theme::TREE_ROW)
-        .mt(theme::S12)
-        .mb(theme::S4)
-        .gap(theme::S4)
-        .center_y()
-        .child(tab(SidebarMode::Recent, "Recent"))
-        .child(tab(SidebarMode::Projects, "Projects"))
-        .child(el().grow(1.0).a11y_hidden())
-        .child(new_thread_button(s, Size::Small, t))
-        .child(add_project_button(s, t))
+    let mut btn = row()
+        .key(filter::FILTER_TRIGGER_KEY)
+        .role("button")
+        .label(&filter_tip)
+        .help(&filter_tip)
+        .expanded(m.sidebar.filter_open)
+        .size(Size::Compact.height(), Size::Compact.height())
+        .center()
+        .radius(Size::Compact.radius())
+        .fill(if filter_active {
+            t.accent.alpha(0.15)
+        } else {
+            Color::TRANSPARENT
+        })
+        .hover_group()
+        .hover(if filter_active {
+            t.accent.alpha(0.20)
+        } else {
+            t.hover_wash
+        })
+        .press(t.pressed_wash)
+        .press_scale(motion::PRESS_SCALE)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .on_press_tx(|s: &mut Desktop, tx| {
+            s.dispatch(Msg::Sidebar(SidebarMsg::ToggleProjectFilter), tx);
+        })
+        .child(
+            icon(&ui::LIST_FILTER, 15.0)
+                .color(if filter_active {
+                    t.accent_text
+                } else {
+                    t.icon_muted
+                })
+                .group_color(if filter_active { t.accent_text } else { t.text })
+                .a11y_hidden(),
+        );
+    if filter_active {
+        btn = btn.border(HAIRLINE, t.accent.alpha(0.45));
+    }
+    btn
+}
+
+fn active_filter_chip(s: &Desktop, t: &Theme) -> Option<El> {
+    let (mark, name) = filter::active_chip_parts(s, t)?;
+    Some(
+        row()
+            .key("sidebar-active-filter")
+            .w_full()
+            .h(26.0)
+            .mb(S6)
+            .px(S8)
+            .gap(S6)
+            .center_y()
+            .radius(RADIUS_CONTROL)
+            .fill(t.surface_recessed)
+            .border(HAIRLINE, t.hairline)
+            .transition(motion::chip_enter())
+            .child(mark)
+            .child(
+                text(name)
+                    .font(t.small_medium)
+                    .color(t.text_strong)
+                    .grow(1.0)
+                    .shrink()
+                    .min_w(0.0)
+                    .truncate(),
+            )
+            .child(
+                ui::icon_button(
+                    &ui::CLOSE,
+                    "Clear filter",
+                    IconButtonVariant::GhostMuted,
+                    Size::Tiny,
+                )
+                .on_press_tx(|s: &mut Desktop, tx| {
+                    s.dispatch(
+                        Msg::Sidebar(SidebarMsg::SetProjectFilter(ProjectFilter::All)),
+                        tx,
+                    );
+                })
+                .build(&t.k)
+                .key("clear-project-filter"),
+            ),
+    )
 }

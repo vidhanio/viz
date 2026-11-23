@@ -299,10 +299,6 @@ impl InlineButton {
     }
 
     /// Registers a transaction-aware click/activation callback.
-    #[expect(
-        dead_code,
-        reason = "transaction-aware callback hook for Phase 1 timeline and header actions"
-    )]
     pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.press = Some(Box::new(move |el| el.on_press_tx(f)));
         self

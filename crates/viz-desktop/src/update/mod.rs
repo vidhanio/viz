@@ -14,12 +14,18 @@ mod server;
 mod server_sync;
 mod shell;
 mod sidebar;
+mod sidebar_triage;
 pub mod terminal;
 mod timeline;
 
 pub use self::{
-    composer::ComposerMsg, palette::PaletteMsg, selection::SelectionMsg, server::ServerMsg,
-    shell::ShellMsg, sidebar::SidebarMsg, timeline::TimelineMsg,
+    composer::ComposerMsg,
+    palette::PaletteMsg,
+    selection::SelectionMsg,
+    server::ServerMsg,
+    shell::ShellMsg,
+    sidebar::{INLINE_RENAME_INPUT, PROJECT_FILTER_INPUT, SidebarMsg},
+    timeline::TimelineMsg,
 };
 use crate::{effects::Effect, model::Model};
 

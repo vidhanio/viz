@@ -13,7 +13,10 @@ use super::{
 use crate::{
     app::Desktop,
     checkout,
-    model::{ContextMenu, NewThread, PaletteSearch, SidebarEdit, SidebarMode, Status, Transcript},
+    model::{
+        ContextMenu, ContextSubmenu, NewThread, PaletteSearch, ProjectFilter, SidebarEdit, Status,
+        Transcript,
+    },
     timeline,
 };
 
@@ -87,9 +90,10 @@ pub(super) fn new_agent(s: &mut Desktop) {
 pub(super) fn context_menu(s: &mut Desktop) {
     seed_workspace(&mut s.model);
     s.model.sidebar.menu = Some(ContextMenu::preview(
-        format!("thread-{}", ThreadId(10)),
+        format!("thread-{}", ThreadId(9)),
         120.0,
-        236.0,
+        280.0,
+        Some(ContextSubmenu::MoveToProject),
     ));
     s.sync_widgets_from_model();
 }
@@ -182,11 +186,7 @@ pub(super) fn projects(s: &mut Desktop) {
         git: false,
         branch: None,
     });
-    s.model.sidebar.mode = SidebarMode::Projects;
-    s.model
-        .sidebar
-        .collapsed_projects
-        .insert("/work/release-scripts".into());
+    s.model.sidebar.project_filter = ProjectFilter::Project("/work/workbench".into());
     s.sync_widgets_from_model();
 }
 

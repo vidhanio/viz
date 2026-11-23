@@ -30,6 +30,19 @@ pub struct OpenThread {
     pub history_loading: bool,
 }
 
+/// Cached project icon fetch metadata keyed by project path.
+///
+/// Decoded GPU textures live outside the pure model in `ShellWidgets`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectIconCache {
+    /// Server-supplied `ETag` of the cached image bytes, if any.
+    pub etag: Option<String>,
+    /// Whether the project has an image representation decoded in shell state.
+    pub has_image: bool,
+    /// True once a `project.icon` request has been issued for the current sync.
+    pub requested: bool,
+}
+
 /// Normalised cache of server-owned data for one environment.
 ///
 /// Upcoming Phase 1 tracks extend this cache with git working-tree status,
@@ -45,6 +58,8 @@ pub struct EnvironmentCache {
     pub open_threads: BTreeMap<ThreadId, OpenThread>,
     /// Branches and worktrees keyed by project path.
     pub checkouts: BTreeMap<String, Checkouts>,
+    /// Fetched project icon metadata keyed by project path.
+    pub project_icons: BTreeMap<String, ProjectIconCache>,
     /// Configured ACP harnesses advertised by this environment.
     pub harnesses: Vec<Harness>,
     /// Delegated tasks tracked in this environment.
@@ -60,6 +75,7 @@ impl EnvironmentCache {
         self.thread_order.clear();
         self.open_threads.clear();
         self.checkouts.clear();
+        self.project_icons.clear();
         self.harnesses.clear();
         self.tasks.clear();
     }

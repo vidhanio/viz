@@ -4,16 +4,17 @@
 use std::sync::Arc;
 
 use viz_client::protocol::{
-    ConfigOption, Entry, EntryId, Environment, Harness, LaunchThread, LiveDelta, Project,
-    SearchHit, SendInput, Task, ThreadId, ThreadState, ThreadSummary,
+    ConfigOption, Entry, EntryId, Environment, Harness, LaunchThread, Lifecycle, LiveDelta,
+    Project, SearchHit, SendInput, Task, ThreadId, ThreadState, ThreadSummary,
 };
 
 use super::{
-    selection::{clear_selection, focus_draft, show_thread},
+    selection::{clear_selection, focus_draft, select_thread, show_thread},
     server_sync::{
-        apply_attachments_loaded, apply_earlier_loaded, apply_launch_failed, apply_select_failed,
-        apply_send_failed, apply_thread_created, apply_thread_state, apply_thread_view,
-        apply_workspace_sync, rollback_optimistic,
+        apply_attachments_loaded, apply_earlier_loaded, apply_launch_failed,
+        apply_project_icon_loaded, apply_select_failed, apply_send_failed, apply_thread_created,
+        apply_thread_state, apply_thread_triaged, apply_thread_view, apply_workspace_sync,
+        is_active_env, queue_project_icon, rollback_optimistic,
     },
 };
 use crate::{
@@ -191,6 +192,38 @@ pub enum ServerMsg {
         /// Optimistic mutation id.
         op_id: u64,
     },
+    /// Thread triage mutation succeeded with authoritative server lifecycle.
+    ThreadTriaged {
+        /// Optimistic mutation id.
+        op_id: u64,
+        /// Target thread id.
+        thread: ThreadId,
+        /// Authoritative post-triage lifecycle.
+        lifecycle: Box<Lifecycle>,
+    },
+    /// Server regenerated a thread's title.
+    ThreadRetitled {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Regenerated title.
+        title: String,
+    },
+    /// Server created a fork of a thread.
+    ThreadForked {
+        /// Newly created forked thread id.
+        thread: ThreadId,
+    },
+    /// Server returned project icon bytes or confirmed no image exists.
+    ProjectIconLoaded {
+        /// Environment id.
+        environment: String,
+        /// Project path id.
+        project: String,
+        /// Updated `ETag` when an image exists.
+        etag: Option<String>,
+        /// `(media_type, raw_bytes)` when image data arrived.
+        image: Option<(String, Vec<u8>)>,
+    },
     /// Optimistic mutation failed on the server; roll back local cache and
     /// toast.
     MutationFailed {
@@ -250,28 +283,15 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             environment,
             projects,
             threads,
-        } => {
-            if model
-                .connection
-                .environment
-                .as_deref()
-                .is_none_or(|active| active == environment)
-            {
-                model.connection.environment.get_or_insert(environment);
-                apply_workspace_sync(model, projects, threads, &mut effects);
-            }
+        } if is_active_env(model, &environment) => {
+            model.connection.environment.get_or_insert(environment);
+            apply_workspace_sync(model, projects, threads, &mut effects);
         }
-        ServerMsg::TasksSynced { environment, tasks } => {
-            if model
-                .connection
-                .environment
-                .as_deref()
-                .is_none_or(|active| active == environment)
-            {
-                model.connection.environment.get_or_insert(environment);
-                model.cache_mut().tasks = tasks;
-            }
+        ServerMsg::TasksSynced { environment, tasks } if is_active_env(model, &environment) => {
+            model.connection.environment.get_or_insert(environment);
+            model.cache_mut().tasks = tasks;
         }
+        ServerMsg::WorkspaceSynced { .. } | ServerMsg::TasksSynced { .. } => {}
         ServerMsg::HarnessesSynced(harnesses) => {
             model.cache_mut().harnesses = harnesses;
         }
@@ -386,7 +406,9 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             {
                 thread.set_project(Some(&project));
             }
+            let icon_target = (*project).clone();
             model.cache_mut().insert_project_sorted(*project);
+            queue_project_icon(model, &icon_target, &mut effects);
         }
         ServerMsg::CheckoutsLoaded {
             environment,
@@ -430,8 +452,27 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             target,
             loaded,
         } => apply_attachments_loaded(model, scope, target, loaded, &mut effects),
-        ServerMsg::MutationOk { op_id } => {
-            model.optimistic.commit(op_id);
+        ServerMsg::MutationOk { op_id } => model.optimistic.commit(op_id),
+        ServerMsg::ThreadTriaged {
+            op_id,
+            thread,
+            lifecycle,
+        } => {
+            apply_thread_triaged(model, op_id, thread, *lifecycle);
+        }
+        ServerMsg::ThreadRetitled { thread, title } => {
+            if let Some(summary) = model.cache_mut().summary_mut(thread) {
+                summary.title = title;
+            }
+        }
+        ServerMsg::ThreadForked { thread } => select_thread(model, thread, &mut effects),
+        ServerMsg::ProjectIconLoaded {
+            environment,
+            project,
+            etag,
+            image,
+        } => {
+            apply_project_icon_loaded(model, &environment, &project, etag, image, &mut effects);
         }
         ServerMsg::MutationFailed {
             op_id,

@@ -4,15 +4,26 @@
 use std::sync::Arc;
 
 use viz_client::protocol::{
-    Attachment, Entry, EntryId, LaunchThread, Project, SendInput, ThreadId, ThreadState,
-    ThreadStatus, ThreadSummary,
+    Attachment, Entry, EntryId, LaunchThread, Lifecycle, Project, ProjectIcon, SendInput, ThreadId,
+    ThreadState, ThreadStatus, ThreadSummary,
 };
 
 use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
 use crate::{
     effects::{ATTACHMENT_ENCODED_LIMIT, EditSync, Effect, LoadedAttachments, ServerEffect},
-    model::{AttachmentTarget, Model, OptimisticUndo, PaneSwitch, Transcript, thread_title},
+    model::{
+        AttachmentTarget, Model, OptimisticUndo, PaneSwitch, Transcript, sync_summary_derived,
+        thread_title,
+    },
 };
+
+pub(super) fn is_active_env(model: &Model, env: &str) -> bool {
+    model
+        .connection
+        .environment
+        .as_deref()
+        .is_none_or(|active| active == env)
+}
 
 pub(super) fn apply_workspace_sync(
     model: &mut Model,
@@ -62,6 +73,10 @@ pub(super) fn apply_workspace_sync(
     let cache = model.cache_mut();
     cache.set_projects(projects);
     cache.set_threads(threads);
+    let icon_targets: Vec<Project> = model.cache().projects().cloned().collect();
+    for project in &icon_targets {
+        queue_project_icon(model, project, effects);
+    }
     if model.connected()
         && model.selection.new_thread.is_none()
         && model
@@ -180,18 +195,14 @@ pub(super) fn apply_thread_created(
     thread: ThreadId,
     effects: &mut Vec<Effect>,
 ) {
-    let Some(project) = model
+    if model
         .selection
         .new_thread
         .as_ref()
-        .filter(|pending| pending.id == draft)
-        .map(|pending| pending.project.clone())
-    else {
+        .is_none_or(|pending| pending.id != draft)
+    {
         return;
-    };
-    let expanded = project
-        .as_deref()
-        .is_some_and(|path| model.sidebar.collapsed_projects.remove(path));
+    }
     model.selection.new_thread = None;
     model.selection.selected = Some(thread);
     model.selection.switch = PaneSwitch::Cut;
@@ -202,8 +213,71 @@ pub(super) fn apply_thread_created(
     open.history_loading = false;
     effects.push(focus_draft());
     effects.push(Effect::Server(ServerEffect::Select(thread)));
-    if expanded {
-        effects.push(Effect::SavePrefs(model.to_prefs()));
+}
+
+pub(super) fn apply_thread_triaged(
+    model: &mut Model,
+    op_id: u64,
+    thread: ThreadId,
+    lifecycle: Lifecycle,
+) {
+    model.optimistic.commit(op_id);
+    let now = model.disclosure.tool_clock;
+    if let Some(summary) = model.cache_mut().summary_mut(thread) {
+        summary.lifecycle = lifecycle;
+        sync_summary_derived(summary, now);
+    }
+}
+
+pub(super) fn queue_project_icon(model: &mut Model, project: &Project, effects: &mut Vec<Effect>) {
+    let needs_fetch = matches!(
+        project.settings.icon,
+        ProjectIcon::Automatic | ProjectIcon::OwnerAvatar | ProjectIcon::Uploaded { .. }
+    );
+    if !needs_fetch {
+        return;
+    }
+    let entry = model
+        .cache_mut()
+        .project_icons
+        .entry(project.path.clone())
+        .or_default();
+    if entry.requested {
+        return;
+    }
+    entry.requested = true;
+    let etag = entry.etag.clone();
+    effects.push(Effect::Server(ServerEffect::ReadProjectIcon {
+        project: project.path.clone(),
+        etag,
+    }));
+}
+
+pub(super) fn apply_project_icon_loaded(
+    model: &mut Model,
+    environment: &str,
+    project: &str,
+    etag: Option<String>,
+    image: Option<(String, Vec<u8>)>,
+    effects: &mut Vec<Effect>,
+) {
+    if model.active_env_key() != environment {
+        return;
+    }
+    let entry = model
+        .cache_mut()
+        .project_icons
+        .entry(project.to_owned())
+        .or_default();
+    entry.etag = etag;
+    entry.has_image = image.is_some();
+    if let Some((media_type, bytes)) = image {
+        effects.push(Effect::DecodeProjectIcon {
+            environment: environment.to_owned(),
+            project: project.to_owned(),
+            media_type,
+            bytes,
+        });
     }
 }
 

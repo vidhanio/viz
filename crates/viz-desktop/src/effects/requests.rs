@@ -2,20 +2,19 @@
 
 use std::sync::Arc;
 
+use base64::Engine as _;
 use rune::AppHandle;
 use viz_client::{
     Client, Error, Result,
     protocol::{
-        CreateProject, EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries,
-        ListWorktrees, Position, RemoveProject, SearchFiles, SearchThreads, SendInput, ThreadId,
-        TriageAction, TriageThread, UpdateProject, UpdateThread,
+        CreateProject, EntryId, ForkPoint, ForkThread, HarnessOptions, LaunchThread, ListBranches,
+        ListEntries, ListWorktrees, ProjectIconResult, ReadProjectIcon, RemoveProject,
+        RetitleThread, SearchFiles, SearchThreads, SendInput, ThreadId, TriageThread,
+        UpdateProject, UpdateThread,
     },
 };
 
-use super::{
-    ProjectChange, ServerEffect, ThreadChange, platform,
-    server::{Session, dispatch_ui, toast},
-};
+use super::{ProjectChange, ThreadChange, server::Session};
 use crate::{
     app::Desktop,
     model::{Checkouts, Transcript},
@@ -85,49 +84,133 @@ impl Session<'_> {
         thread: ThreadId,
         change: &ThreadChange,
     ) -> Result<()> {
-        let result = self.run_thread_change(thread, change).await;
-        match result {
-            Ok(()) => {
-                self.dispatch(ServerMsg::MutationOk { op_id });
-                Ok(())
+        match change {
+            ThreadChange::Triage(action) => {
+                let request = TriageThread {
+                    thread,
+                    action: action.clone(),
+                };
+                match self.client.request(&request).await {
+                    Ok(triaged) => {
+                        self.dispatch(ServerMsg::ThreadTriaged {
+                            op_id,
+                            thread,
+                            lifecycle: Box::new(triaged.lifecycle),
+                        });
+                        Ok(())
+                    }
+                    Err(error) => self.fail_mutation(op_id, error),
+                }
             }
-            Err(error) => {
-                let detail = error.to_string();
-                let closed = matches!(error, Error::Closed);
-                self.dispatch(ServerMsg::MutationFailed {
-                    op_id,
-                    title: "Request failed".into(),
-                    detail,
-                });
-                if closed { Err(error) } else { Ok(()) }
+            ThreadChange::Title(title) => {
+                let params = UpdateThread {
+                    thread,
+                    title: Some(title),
+                    project: None,
+                };
+                match self.client.update_thread(&params).await {
+                    Ok(()) => {
+                        self.dispatch(ServerMsg::MutationOk { op_id });
+                        Ok(())
+                    }
+                    Err(error) => self.fail_mutation(op_id, error),
+                }
+            }
+            ThreadChange::Project(project) => {
+                let params = UpdateThread {
+                    thread,
+                    title: None,
+                    project: Some(project.as_deref()),
+                };
+                match self.client.update_thread(&params).await {
+                    Ok(()) => {
+                        self.dispatch(ServerMsg::MutationOk { op_id });
+                        Ok(())
+                    }
+                    Err(error) => self.fail_mutation(op_id, error),
+                }
             }
         }
     }
 
-    async fn run_thread_change(&self, thread: ThreadId, change: &ThreadChange) -> Result<()> {
-        let mut params = UpdateThread {
+    fn fail_mutation(&self, op_id: u64, error: Error) -> Result<()> {
+        let detail = error.to_string();
+        let closed = matches!(error, Error::Closed);
+        self.dispatch(ServerMsg::MutationFailed {
+            op_id,
+            title: "Request failed".into(),
+            detail,
+        });
+        if closed { Err(error) } else { Ok(()) }
+    }
+
+    pub(super) async fn retitle_thread(&self, thread: ThreadId) -> Result<()> {
+        let updated = self.client.request(&RetitleThread { thread }).await?;
+        self.dispatch(ServerMsg::ThreadRetitled {
             thread,
-            title: None,
-            project: None,
-        };
-        let triage = async |action| {
-            let request = TriageThread { thread, action };
-            self.client.request(&request).await.map(drop)
-        };
-        match change {
-            ThreadChange::Title(title) => params.title = Some(title),
-            ThreadChange::Archive(true) => return triage(TriageAction::Archive).await,
-            ThreadChange::Archive(false) => return triage(TriageAction::Unarchive).await,
-            ThreadChange::Pin(true) => {
-                let position = Position::Top;
-                return triage(TriageAction::Pin { position }).await;
+            title: updated.title,
+        });
+        Ok(())
+    }
+
+    pub(super) async fn fork_thread(&self, thread: ThreadId) -> Result<()> {
+        let forked = self
+            .client
+            .request(&ForkThread {
+                thread,
+                point: ForkPoint::Head,
+                worktree: None,
+                harness: None,
+                title: None,
+                request_id: None,
+            })
+            .await?;
+        self.dispatch(ServerMsg::ThreadForked {
+            thread: forked.thread,
+        });
+        Ok(())
+    }
+
+    pub(super) fn read_project_icon(&self, project: String, etag: Option<String>) {
+        let ui = self.ui.clone();
+        let client = self.client.clone();
+        let environment = self.environment.to_string();
+        tokio::spawn(async move {
+            let Ok(reply) = client
+                .project_icon(&ReadProjectIcon {
+                    project: project.clone(),
+                    etag,
+                })
+                .await
+            else {
+                return;
+            };
+            let payload = match reply {
+                ProjectIconResult::None => Some((None, None)),
+                ProjectIconResult::Unchanged { .. } => None,
+                ProjectIconResult::Image {
+                    etag,
+                    media_type,
+                    data,
+                } => {
+                    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok();
+                    Some((Some(etag), bytes.map(|bytes| (media_type, bytes))))
+                }
+            };
+            if let Some((etag, image)) = payload {
+                ui.update(move |s, tx| {
+                    s.dispatch(
+                        Msg::Server(ServerMsg::ProjectIconLoaded {
+                            environment,
+                            project,
+                            etag,
+                            image,
+                        }),
+                        tx,
+                    );
+                });
             }
-            ThreadChange::Pin(false) => return triage(TriageAction::Unpin).await,
-            ThreadChange::Unread(true) => return triage(TriageAction::MarkUnread).await,
-            ThreadChange::Unread(false) => return triage(TriageAction::MarkRead).await,
-            ThreadChange::Project(project) => params.project = Some(project.as_deref()),
-        }
-        self.client.update_thread(&params).await
+        });
     }
 
     pub(super) async fn project(&self, op_id: Option<u64>, change: ProjectChange) -> Result<()> {
@@ -340,107 +423,6 @@ pub(super) fn search_threads(
             );
         });
     });
-}
-
-/// Handles a command while disconnected; returns `false` to reconnect now.
-pub(super) fn offline(
-    ui: &AppHandle<Desktop>,
-    command: ServerEffect,
-    selected: &mut Option<ThreadId>,
-    target: &mut Option<String>,
-) -> bool {
-    match command {
-        ServerEffect::Select(thread) => *selected = Some(thread),
-        ServerEffect::ClearSelection => *selected = None,
-        ServerEffect::Environment {
-            environment,
-            thread,
-        } => {
-            *selected = thread;
-            *target = Some(environment);
-            return false;
-        }
-        ServerEffect::Create { draft, params } => {
-            dispatch_ui(
-                ui,
-                ServerMsg::LaunchFailed {
-                    draft,
-                    params: Box::new(params),
-                    title: "Offline".into(),
-                    detail: None,
-                },
-            );
-        }
-        ServerEffect::LoadDraft(draft) => {
-            dispatch_ui(
-                ui,
-                ServerMsg::DraftHarnessesLoaded {
-                    draft,
-                    result: None,
-                },
-            );
-        }
-        ServerEffect::SendInput(input) => {
-            dispatch_ui(
-                ui,
-                ServerMsg::SendFailed {
-                    input: Box::new(input),
-                    title: "Offline".into(),
-                    detail: None,
-                },
-            );
-        }
-        ServerEffect::SearchFiles { .. } => {}
-        ServerEffect::SearchThreads { request, .. } => {
-            dispatch_ui(
-                ui,
-                ServerMsg::ThreadSearchResult {
-                    request,
-                    result: Err("Offline".into()),
-                },
-            );
-        }
-        ServerEffect::LoadEarlier { thread, .. } => {
-            dispatch_ui(
-                ui,
-                ServerMsg::EarlierLoaded {
-                    thread,
-                    transcript: None,
-                },
-            );
-        }
-        ServerEffect::Update { op_id, .. }
-        | ServerEffect::Project {
-            op_id: Some(op_id), ..
-        } => {
-            dispatch_ui(
-                ui,
-                ServerMsg::MutationFailed {
-                    op_id,
-                    title: "Offline".into(),
-                    detail: "Server disconnected".into(),
-                },
-            );
-        }
-        ServerEffect::Attach {
-            scope,
-            target,
-            source,
-        } => platform::spawn_attach(ui, scope, target, source),
-        ServerEffect::Notify { title, body } => platform::spawn_notify(&title, body),
-        ServerEffect::Answer(answer) => ui.update(move |app, tx| {
-            app.dispatch(
-                Msg::Requests(crate::update::requests::RequestMsg::Finished(
-                    answer.request,
-                    Err("Server disconnected".into()),
-                )),
-                tx,
-            );
-        }),
-        ServerEffect::Reconnect => return false,
-        _ => toast(ui, "Offline", "Server disconnected".into()),
-    }
-    true
 }
 
 impl Session<'_> {

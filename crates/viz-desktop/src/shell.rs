@@ -4,17 +4,20 @@
 //! Slots not yet populated by Phase 1 feature tracks (`details`, `diff`,
 //! `terminal`) stay `None` and add zero layout nodes or visual chrome.
 
-use rune::{El, col, row};
+use std::time::Duration;
+
+use rune::{El, col, el, row};
 use rune_kit::{
-    ToastRegion,
-    shell::{SidebarToggle, SplitView, Toolbar},
+    ButtonVariant, ToastRegion,
+    shell::{SidebarPeek, SidebarToggle, SplitView, Toolbar},
 };
 
 use crate::{
     app::Desktop,
     motion,
-    theme::{S4, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT, Theme},
+    theme::{HAIRLINE, S8, S12, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT, Theme},
     ui,
+    update::{Msg, SidebarMsg},
 };
 
 /// Explicit structural slots composed by the desktop window shell.
@@ -36,7 +39,7 @@ pub struct ShellSlots {
 }
 
 /// Composes `slots` into the root window element with pane motion, titlebar
-/// insets, drag guards, and floating toasts.
+/// insets, drag guards, resize accent hairline, and floating toasts.
 pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool, t: &Theme) -> El {
     let ShellSlots {
         sidebar,
@@ -75,7 +78,7 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
             .child(ui::rule(t).key("header-rule"))
             .child(main.grow(1.0)),
     );
-    let sidebar = sidebar.child(
+    let mut sidebar = sidebar.child(
         ui::drag_guard("sidebar-drag-guard")
             .pin(
                 Some(-SIDEBAR_PAD),
@@ -85,6 +88,15 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
             )
             .h(TOOLBAR_HEIGHT),
     );
+    if s.widgets.sidebar_pane.is_resizing() {
+        sidebar = sidebar.child(
+            el().key("sidebar-resize-accent")
+                .pin(None, Some(-TOOLBAR_HEIGHT), Some(-SIDEBAR_PAD), Some(0.0))
+                .w(HAIRLINE)
+                .fill(t.accent)
+                .a11y_hidden(),
+        );
+    }
     let mut split = SplitView::new(main).sidebar(
         &s.widgets.sidebar_pane,
         |s: &mut Desktop| &mut s.widgets.sidebar_pane,
@@ -105,11 +117,17 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
         .sidebar_padding(SIDEBAR_PAD, SIDEBAR_PAD)
         .sidebar_toggle(
             SidebarToggle::new()
-                .size(Size::Default.kit())
-                .gap(S4)
+                .size(Size::Compact.kit())
+                .edge(S12)
+                .gap(S8)
                 .shortcut(ui::SIDEBAR_SHORTCUT)
-                .in_header()
                 .unread(s.model.has_unread()),
+        )
+        .sidebar_peek(
+            SidebarPeek::new()
+                .edge(6.0, Duration::from_millis(40))
+                .toggle_delay(Duration::from_millis(80))
+                .reduced_motion_fade(0.12),
         )
         .pane_motion(motion::pane_motion())
         .reduced_motion(reduced)
@@ -118,7 +136,7 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
     rune_kit::root(split, overlays).hover_motion_within(motion::INSTANT, motion::HOVER_OUT)
 }
 
-/// The floating toast stack, when non-empty.
+/// The floating toast stack, including triage undo toasts, when non-empty.
 fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
     let entries = s.widgets.toasts.entries();
     if entries.is_empty() {
@@ -129,14 +147,23 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
         .iter()
         .fold(ToastRegion::new(), |region, entry| {
             let id = entry.id;
-            region.toast(ui::toast(
-                format!("toast-{id}"),
-                &entry.options.title,
-                entry.options.detail.as_deref(),
-                ui::lead(ui::dot(t.danger), t.ui.line_height),
-                move |s: &mut Desktop, tx| s.dismiss_toast(id, tx),
-                t,
-            ))
+            let mut card = ui::toast_card(format!("toast-{id}"), &entry.options.title)
+                .tone(entry.options.tone)
+                .on_close(move |s: &mut Desktop, tx| s.dismiss_toast(id, tx), t);
+            if let Some(detail) = &entry.options.detail {
+                card = card.detail(detail);
+            }
+            if let Some(undo) = entry.options.undo.clone() {
+                let undo_btn = ui::button("Undo", ButtonVariant::Neutral, Size::Small)
+                    .on_press_tx(move |s: &mut Desktop, tx| {
+                        s.dismiss_toast(id, tx);
+                        s.dispatch(Msg::Sidebar(SidebarMsg::UndoTriage(undo.clone())), tx);
+                    })
+                    .build(&t.overlay)
+                    .key("undo");
+                card = card.action(undo_btn);
+            }
+            region.toast(card.build(t))
         });
     Some(
         region

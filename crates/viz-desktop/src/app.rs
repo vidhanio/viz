@@ -2,11 +2,13 @@
 //! effect sinks, and funnels every UI event through [`Desktop::dispatch`].
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
     time::Duration,
 };
 
-use rune::{TextEdit, Tx};
+use rune::{ImageCache, TextEdit, Tx, image::Image};
 use rune_kit::{ToastEffect, ToastEvent, ToastPage, ToastStack, shell::PaneState};
 use tokio::sync::mpsc;
 
@@ -14,11 +16,12 @@ use crate::{
     effects::{self, ServerEffect},
     model::{
         DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH, DraftCursor, Model, PaneSwitch,
-        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH,
+        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, UndoTriage,
     },
     motion::Switch,
     motion_scene::MotionDemo,
     theme,
+    ui::Tone,
     update::{self, Msg, ShellMsg},
 };
 
@@ -32,6 +35,10 @@ pub struct ToastContent {
     pub title: String,
     /// More, if there is any.
     pub detail: Option<String>,
+    /// Semantic tone dot color for the toast card.
+    pub tone: Tone,
+    /// Optional undo payload rendered as an inline `Undo` button.
+    pub undo: Option<UndoTriage>,
 }
 
 /// Stateful Rune and `rune-kit` widget controllers kept outside the pure
@@ -51,8 +58,10 @@ pub struct ShellWidgets {
     pub git_tree_open: bool,
     /// Main composer text editor.
     pub draft: TextEdit,
-    /// Sidebar thread filter input.
-    pub sidebar_filter: TextEdit,
+    /// Project filter combobox search input.
+    pub project_filter_query: TextEdit,
+    /// Sidebar inline thread title rename input.
+    pub inline_rename: TextEdit,
     /// Sidebar rename dialog input.
     pub sidebar_dialog: TextEdit,
     /// Command palette query input.
@@ -65,6 +74,21 @@ pub struct ShellWidgets {
     pub diff_pane: PaneState,
     /// Coalesced toast stack with hover and hidden-window timer pause.
     pub toasts: ToastStack<ToastContent>,
+    /// Off-thread image decoder cache initialized in `AppSpec::setup`.
+    pub images: Option<ImageCache>,
+    /// Decoded project icon images keyed by `"{env}\0{project_path}"`.
+    pub project_icons: HashMap<String, Image>,
+}
+
+impl std::fmt::Debug for ShellWidgets {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellWidgets")
+            .field("sidebar_pane", &self.sidebar_pane)
+            .field("diff_pane", &self.diff_pane)
+            .field("images_ready", &self.images.is_some())
+            .field("project_icons", &self.project_icons.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Default for ShellWidgets {
@@ -85,7 +109,8 @@ impl Default for ShellWidgets {
             git_diff_source: None,
             git_tree_open: false,
             draft,
-            sidebar_filter: TextEdit::new(""),
+            project_filter_query: TextEdit::new(""),
+            inline_rename: TextEdit::new(""),
             sidebar_dialog: TextEdit::new(""),
             palette_query: TextEdit::new(""),
             model_query: TextEdit::new(""),
@@ -95,6 +120,8 @@ impl Default for ShellWidgets {
                 .range(DIFF_MIN_WIDTH, DIFF_MAX_WIDTH)
                 .collapsed(),
             toasts: ToastStack::default(),
+            images: None,
+            project_icons: HashMap::new(),
         }
     }
 }
@@ -205,7 +232,17 @@ impl Desktop {
         self.widgets.draft = TextEdit::new(&self.model.composer.draft.text);
         self.widgets.draft.focused = self.model.composer.draft_focused;
 
-        self.widgets.sidebar_filter = TextEdit::new(&self.model.sidebar.filter);
+        self.widgets.project_filter_query = TextEdit::new(&self.model.sidebar.filter_query);
+        self.widgets.project_filter_query.focused = self.model.sidebar.filter_open;
+        if let Some(rename) = &self.model.sidebar.inline_rename {
+            self.widgets.inline_rename = TextEdit::new(&rename.value);
+            self.widgets.inline_rename.focused = true;
+            self.widgets
+                .inline_rename
+                .set_selection(0, rename.value.len());
+        } else {
+            self.widgets.inline_rename = TextEdit::new("");
+        }
         self.widgets.sidebar_dialog = TextEdit::new(&self.model.sidebar.edit_value);
 
         self.widgets.palette_query = TextEdit::new(&self.model.palette.query);
@@ -235,10 +272,53 @@ impl Desktop {
             options: ToastContent {
                 title: title.into(),
                 detail: Some(detail.into()),
+                tone: Tone::Danger,
+                undo: None,
             },
             secs: None,
             now: 0.0,
         });
+    }
+
+    /// Adds a persistent triage undo toast for preview scenes.
+    pub fn preview_undo_toast(&mut self, title: &str, detail: &str, undo: UndoTriage) {
+        let key = format!("undo-{}-{title}", undo.thread);
+        let _ = self.widgets.toasts.step(ToastEvent::Shown {
+            key,
+            options: ToastContent {
+                title: title.into(),
+                detail: Some(detail.into()),
+                tone: Tone::Neutral,
+                undo: Some(undo),
+            },
+            secs: None,
+            now: 0.0,
+        });
+    }
+
+    /// Returns the decoded image handle for `project` in the active
+    /// environment, if loaded.
+    #[must_use]
+    pub fn project_icon_image(&self, project: &str) -> Option<&Image> {
+        let key = format!("{}\0{project}", self.model.active_env_key());
+        self.widgets.project_icons.get(&key)
+    }
+
+    /// Decodes fetched project icon bytes on the image cache worker pool.
+    pub(crate) fn decode_project_icon(
+        &mut self,
+        environment: &str,
+        project: &str,
+        media_type: &str,
+        bytes: Vec<u8>,
+    ) {
+        let cache = self
+            .widgets
+            .images
+            .get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
+        let image = cache.load_mime(bytes, media_type, 24.0, 2.0);
+        let key = format!("{environment}\0{project}");
+        self.widgets.project_icons.insert(key, image);
     }
 
     /// Closes a toast early.
@@ -304,11 +384,46 @@ impl Desktop {
     ) {
         let title = title.into();
         let key = format!("{title}\n{}", detail.as_deref().unwrap_or_default());
+        let tone = if detail.is_some() {
+            Tone::Danger
+        } else {
+            Tone::Neutral
+        };
         self.step_toasts(
             ToastEvent::Shown {
                 key,
-                options: ToastContent { title, detail },
+                options: ToastContent {
+                    title,
+                    detail,
+                    tone,
+                    undo: None,
+                },
                 secs: Some(TOAST_LIFE.as_secs_f64()),
+                now: tx.clock(),
+            },
+            tx,
+        );
+    }
+
+    pub(crate) fn show_undo_toast(
+        &mut self,
+        tx: &mut Tx,
+        title: String,
+        detail: Option<String>,
+        undo: UndoTriage,
+        secs: f64,
+    ) {
+        let key = format!("undo-{}", undo.thread);
+        self.step_toasts(
+            ToastEvent::Shown {
+                key,
+                options: ToastContent {
+                    title,
+                    detail,
+                    tone: Tone::Neutral,
+                    undo: Some(undo),
+                },
+                secs: Some(secs),
                 now: tx.clock(),
             },
             tx,

@@ -125,7 +125,6 @@ pub fn combobox_shell(key: impl Into<String>) -> ComboboxShell {
 
 impl ComboboxShell {
     /// Sets the shell's fixed width in points (default `280pt`).
-    #[expect(dead_code, reason = "fixed width used by floating Phase 1 comboboxes")]
     pub const fn width(mut self, points: f32) -> Self {
         self.width = Some(points);
         self

@@ -2,7 +2,7 @@
 //! watches the selected thread, and feeds typed [`crate::update::ServerMsg`]
 //! events back into the UI.
 
-use std::{cmp::Reverse, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
 use rune::AppHandle;
 use tokio::sync::mpsc;
@@ -14,7 +14,7 @@ use viz_client::{
     },
 };
 
-use super::{ServerEffect, platform, requests};
+use super::{ServerEffect, offline, platform, requests};
 use crate::{
     app::Desktop,
     model::Status,
@@ -90,7 +90,7 @@ async fn run(
             dispatch(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
             signal(&mut first);
             while let Some(command) = commands.recv().await {
-                if !requests::offline(ui, command, &mut None, &mut None) {
+                if !offline::handle(ui, command, &mut None, &mut None) {
                     dispatch(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
                 }
             }
@@ -131,7 +131,7 @@ async fn run(
             tokio::select! {
                 () = &mut retry => break,
                 command = commands.recv() => match command {
-                    Some(command) => if !requests::offline(ui, command, &mut selected, &mut environment) {
+                    Some(command) => if !offline::handle(ui, command, &mut selected, &mut environment) {
                         break;
                     },
                     None => return,
@@ -245,6 +245,10 @@ impl Session<'_> {
         dispatch(self.ui, msg);
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single exhaustive server effect dispatcher"
+    )]
     async fn on_command(
         &mut self,
         command: ServerEffect,
@@ -284,6 +288,12 @@ impl Session<'_> {
                 thread,
                 change,
             } => self.update_thread(op_id, thread, &change).await,
+            ServerEffect::Retitle(thread) => self.retitle_thread(thread).await,
+            ServerEffect::Fork(thread) => self.fork_thread(thread).await,
+            ServerEffect::ReadProjectIcon { project, etag } => {
+                self.read_project_icon(project, etag);
+                Ok(())
+            }
             ServerEffect::Delete {
                 thread,
                 remove_worktree,
@@ -471,12 +481,11 @@ impl Session<'_> {
     }
 
     pub(super) async fn refresh_list(&self) -> viz_client::Result<()> {
-        let (mut threads, mut projects, ()) = tokio::try_join!(
+        let (threads, mut projects, ()) = tokio::try_join!(
             self.client.list_threads(),
             self.client.list_projects(),
             self.refresh_tasks(),
         )?;
-        threads.sort_unstable_by_key(|thread| Reverse((thread.updated_at, thread.id)));
         projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
         self.dispatch(ServerMsg::WorkspaceSynced {
             environment: self.environment.to_string(),

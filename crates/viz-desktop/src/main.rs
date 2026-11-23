@@ -43,7 +43,7 @@ mod update;
 use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
-use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Tx, col};
+use rune::{App, AppSpec, Chrome, Cx, El, ImageCache, Key, KeyEvent, Tx, col};
 use tokio::sync::mpsc;
 use viz_client::Endpoint;
 use viz_config::ClientFile;
@@ -85,7 +85,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     if let Some(dock) = dock {
         main = main.child(dock);
     }
-    let sidebar = sidebar::sidebar(s, t, &mut overlays);
+    let sidebar = sidebar::sidebar(s, cx.titlebar_inset(), t, &mut overlays);
     let toolbar = header::toolbar(s, t);
     let details = git::details_card::mount(s, t, &mut overlays);
     let diff = (s.model.git.status.is_some() || s.model.panels.diff.open)
@@ -148,11 +148,44 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         return true;
     }
     if ev.is_command('n') {
-        s.dispatch(Msg::Selection(SelectionMsg::CreateHere), tx);
+        s.dispatch(Msg::Sidebar(SidebarMsg::NewThread), tx);
         return true;
     }
     if ev.is_command('.') && s.model.busy() {
         s.dispatch(Msg::Composer(ComposerMsg::Abort), tx);
+        return true;
+    }
+    for digit in 1_u8..=9 {
+        let ch = char::from(b'0' + digit);
+        if ev.is_command(ch) {
+            s.dispatch(
+                Msg::Sidebar(SidebarMsg::JumpToIndex {
+                    index: usize::from(digit - 1),
+                    now: theme::now_ms(),
+                }),
+                tx,
+            );
+            return true;
+        }
+    }
+    if ev.key == Key::Function(2)
+        && !ev.mods.ctrl
+        && !ev.mods.cmd
+        && s.model.sidebar.edit.is_none()
+        && let Some(id) = s.model.selection.selected
+    {
+        s.dispatch(Msg::Sidebar(SidebarMsg::StartInlineRename(id)), tx);
+        return true;
+    }
+    if ev.key == Key::Escape
+        && (s.model.sidebar.inline_rename.is_some()
+            || s.model.sidebar.drag.is_some()
+            || s.model.sidebar.filter_open
+            || s.model.sidebar.snooze_popover.is_some()
+            || s.model.sidebar.info_menu
+            || s.model.sidebar.hover_card.is_some())
+    {
+        s.dispatch(Msg::Sidebar(SidebarMsg::DismissTransient), tx);
         return true;
     }
     false
@@ -305,6 +338,9 @@ fn main() {
         fonts: &[],
         families: theme::families(),
         scenes: scenes::SCENES,
+        setup: Some(|s, waker| {
+            s.widgets.images = Some(ImageCache::new(waker));
+        }),
         on_key: Some(on_key),
         poll: Some(poll),
         ..AppSpec::new("viz", WINDOW_SIZE, Desktop::detached, view)

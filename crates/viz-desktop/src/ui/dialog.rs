@@ -249,26 +249,6 @@ impl DialogForm<'_> {
     }
 }
 
-/// A flat toast notification card (`t.surface_raised`, `1px`
-/// `t.border_overlay`, zero drop shadow) with optional detail, mark, and close
-/// handler.
-pub fn toast<S: 'static>(
-    key: String,
-    title: &str,
-    detail: Option<&str>,
-    mark: El,
-    close: impl Fn(&mut S, &mut Tx) + 'static,
-    t: &Theme,
-) -> El {
-    let dismiss = icon_button(&CLOSE, "Close", IconButtonVariant::GhostMuted, Size::Small)
-        .on_press_tx(close)
-        .build(&t.overlay)
-        .key("close")
-        .mt(-S2)
-        .mr(-S4);
-    toast_frame(key, title, detail, mark, None, Some(dismiss), t)
-}
-
 /// Builder for a flat toast card with semantic tone dot, optional detail,
 /// optional inline action (such as `Undo`), and optional dismiss button.
 pub struct ToastCard {

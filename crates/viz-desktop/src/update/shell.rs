@@ -1,6 +1,8 @@
 //! Pure transitions for window lifecycle, shell panel slots, and persisted
 //! client preferences.
 
+use viz_client::protocol::TriageAction;
+
 use super::selection::apply_thread_change;
 use crate::{
     effects::{Effect, ThreadChange},
@@ -46,7 +48,13 @@ pub(super) fn update(model: &mut Model, msg: ShellMsg) -> Vec<Effect> {
                         .is_some_and(|thread| thread.lifecycle.unread)
                 })
             {
-                apply_thread_change(model, id, ThreadChange::Unread(false), &mut effects);
+                apply_thread_change(
+                    model,
+                    id,
+                    ThreadChange::Triage(TriageAction::MarkRead),
+                    model.disclosure.tool_clock,
+                    &mut effects,
+                );
             }
         }
         ShellMsg::WindowResized(width, height) => {

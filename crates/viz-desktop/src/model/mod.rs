@@ -13,6 +13,7 @@ pub mod picker;
 pub mod prefs;
 pub mod requests;
 pub mod sidebar;
+pub mod sidebar_outline;
 pub mod state;
 pub mod subagents;
 pub mod terminal;
@@ -40,8 +41,16 @@ pub use self::{
         ModelEntry, ModelLevels, ModelPicker, OptionOwner, OptionRole, OptionTarget, model_groups,
         option_role, provider_name, thinking_ids, unseen_model_levels,
     },
-    prefs::{Prefs, SidebarMode},
-    sidebar::{SidebarOutline, sidebar_first_match, sidebar_position, top_level},
+    prefs::Prefs,
+    sidebar::{
+        ContextSubmenu, DragShelf, InlineRename, ProjectFilter, SETTLED_PAGE_SIZE, SHELF_SETTLED,
+        SHELF_SNOOZED, SHELF_WORKING, SidebarDrag, SnoozePreset, UndoTriage,
+        apply_optimistic_triage, format_wake_label, sync_summary_derived,
+    },
+    sidebar_outline::{
+        DraftPreview, ProjectFilterOption, SidebarOutline, nth_visible_thread,
+        project_filter_options, sidebar_position,
+    },
     state::{
         ConnectionState, ContextMenu, DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH,
         DisclosureState, NewThread, OptimisticLedger, OptimisticUndo, PaneSwitch, PanelsState,
@@ -338,10 +347,6 @@ impl Model {
 
     /// Applies loaded client preferences onto the model.
     pub fn apply_prefs(&mut self, prefs: &Prefs) {
-        self.sidebar.mode = prefs.sidebar;
-        self.sidebar
-            .collapsed_projects
-            .clone_from(&prefs.collapsed_projects);
         self.sidebar
             .collapsed_shelves
             .clone_from(&prefs.collapsed_shelves);
@@ -406,7 +411,6 @@ impl Model {
         }
         Prefs {
             version: prefs::PREFS_VERSION,
-            sidebar: self.sidebar.mode,
             sidebar_width: Some(self.panels.sidebar.width),
             sidebar_open: Some(self.panels.sidebar.open),
             diff_width: (self.panels.diff.width - DIFF_DEFAULT_WIDTH)
@@ -417,7 +421,6 @@ impl Model {
                 .abs()
                 .ge(&1.0)
                 .then_some(self.panels.terminal_height),
-            collapsed_projects: self.sidebar.collapsed_projects.clone(),
             collapsed_shelves: self.sidebar.collapsed_shelves.clone(),
             favorite_models: self.composer.favorite_models.clone(),
             drafts,

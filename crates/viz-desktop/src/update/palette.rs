@@ -2,6 +2,8 @@
 
 use std::time::Duration;
 
+use viz_client::protocol::{Position, TriageAction};
+
 use super::{
     NavKey,
     selection::{apply_thread_change, prepare_draft, select_thread},
@@ -214,12 +216,36 @@ fn run_command(model: &mut Model, command: PaletteCommand, effects: &mut Vec<Eff
         }
         PaletteCommand::Pin => {
             if let Some((id, pinned, _)) = thread {
-                apply_thread_change(model, id, ThreadChange::Pin(!pinned), effects);
+                let action = if pinned {
+                    TriageAction::Unpin
+                } else {
+                    TriageAction::Pin {
+                        position: Position::Top,
+                    }
+                };
+                apply_thread_change(
+                    model,
+                    id,
+                    ThreadChange::Triage(action),
+                    model.disclosure.tool_clock,
+                    effects,
+                );
             }
         }
         PaletteCommand::Archive => {
             if let Some((id, _, archived)) = thread {
-                apply_thread_change(model, id, ThreadChange::Archive(!archived), effects);
+                let action = if archived {
+                    TriageAction::Unarchive
+                } else {
+                    TriageAction::Archive
+                };
+                apply_thread_change(
+                    model,
+                    id,
+                    ThreadChange::Triage(action),
+                    model.disclosure.tool_clock,
+                    effects,
+                );
             }
         }
         PaletteCommand::Delete => {

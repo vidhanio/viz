@@ -80,6 +80,24 @@ impl Desktop {
                         self.show_toast(tx, title, detail);
                     }
                 }
+                Effect::UndoToast {
+                    title,
+                    detail,
+                    undo,
+                    secs,
+                } => {
+                    if let Some(tx) = tx.as_deref_mut() {
+                        self.show_undo_toast(tx, title, detail, undo, secs);
+                    }
+                }
+                Effect::DecodeProjectIcon {
+                    environment,
+                    project,
+                    media_type,
+                    bytes,
+                } => {
+                    self.decode_project_icon(&environment, &project, &media_type, bytes);
+                }
                 Effect::Focus {
                     key,
                     select_all,
@@ -249,7 +267,8 @@ impl Desktop {
     const fn edit_mut(&mut self, target: EditTarget) -> &mut TextEdit {
         match target {
             EditTarget::Draft => &mut self.widgets.draft,
-            EditTarget::SidebarFilter => &mut self.widgets.sidebar_filter,
+            EditTarget::ProjectFilter => &mut self.widgets.project_filter_query,
+            EditTarget::InlineRename => &mut self.widgets.inline_rename,
             EditTarget::SidebarDialog => &mut self.widgets.sidebar_dialog,
             EditTarget::PaletteQuery => &mut self.widgets.palette_query,
             EditTarget::ModelQuery => &mut self.widgets.model_query,

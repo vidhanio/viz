@@ -1,36 +1,86 @@
-//! Pure transitions for the sidebar: grouping mode, filter, collapses,
-//! context menus, rename/delete dialogs, and optimistic project/thread edits.
+//! Pure transitions for the unified triage sidebar: shelves, project filter
+//! combobox, hover cards, inline rename, drag-and-drop, and routing into
+//! [`super::sidebar_triage`].
 
-use viz_client::protocol::ThreadId;
+use viz_client::protocol::{ThreadId, TriageAction, WorktreeTarget};
 
-use super::selection::{apply_thread_change, select_thread};
+pub(super) use super::sidebar_triage::open_edit;
+use super::{
+    NavKey,
+    selection::{clear_selection, prepare_draft, select_thread},
+    sidebar_triage::{
+        apply_triage, commit_inline_rename, finish_drag, handle_filter_key, start_filtered_draft,
+        start_inline_rename, submit_edit,
+    },
+};
 use crate::{
     effects::{EditSync, EditTarget, Effect, ProjectChange, ServerEffect, ThreadChange},
-    model::{ContextMenu, Model, OptimisticUndo, SidebarEdit, SidebarMode, sidebar_first_match},
+    model::{
+        ContextMenu, ContextSubmenu, DragShelf, Model, NewThread, ProjectFilter, SETTLED_PAGE_SIZE,
+        SidebarDrag, SidebarEdit, SidebarOutline, SnoozePreset, UndoTriage, nth_visible_thread,
+    },
 };
 
-/// Messages emitted by the sidebar view, its dialogs, and shortcuts.
+/// Element key of the project filter combobox search input.
+pub const PROJECT_FILTER_INPUT: &str = "project-filter-input";
+/// Element key of the inline thread title rename input.
+pub const INLINE_RENAME_INPUT: &str = "sidebar-inline-rename";
+
+/// Messages emitted by the sidebar view, overlays, drag gestures, and
+/// shortcuts.
 #[derive(Debug)]
 pub enum SidebarMsg {
-    /// Switch between Recent and Projects modes.
-    SetMode(SidebarMode),
-    /// Filter query text edited.
-    FilterChanged(String),
-    /// Submit active sidebar filter to open the first matching thread.
-    FilterSubmit,
-    /// Expand or collapse a project folder in Projects mode.
-    ToggleProject(String),
+    /// Start a new draft thread seeded from the active project filter or
+    /// current thread's project.
+    NewThread,
+    /// Start a new draft thread seeded with an explicit project and optional
+    /// branch.
+    NewThreadIn {
+        /// Target project path, or `None` for No project.
+        project: Option<String>,
+        /// Optional branch name to base a new worktree on when non-default.
+        branch: Option<String>,
+    },
+    /// Discard the active unsent draft thread.
+    DiscardDraft,
+    /// Open or close the Project Filter Combobox.
+    ToggleProjectFilter,
+    /// Close the Project Filter Combobox.
+    CloseProjectFilter,
+    /// Project filter search text edited.
+    ProjectFilterQueryChanged(String),
+    /// Keyboard navigation key inside the Project Filter Combobox.
+    ProjectFilterKey {
+        /// Navigation key.
+        key: NavKey,
+        /// Current timestamp in Unix ms for counting threads.
+        now: i64,
+    },
+    /// Apply a project filter (`All`, one project path, or `NoProject`).
+    SetProjectFilter(ProjectFilter),
+    /// Toggle a collapsible triage shelf (`working`, `snoozed`, `settled`).
+    ToggleShelf(&'static str),
+    /// Reveal the next page of settled threads in the Settled drawer.
+    LoadMoreSettled,
     /// Expand or collapse a parent thread's delegated children.
     ToggleParent(ThreadId),
-    /// Open or close the footer environment menu.
+    /// Show or hide the delayed right-anchored hover preview card.
+    HoverCard(Option<ThreadId>),
+    /// Open or close the hover quick-action snooze preset popover for `thread`.
+    ToggleSnoozePopover(ThreadId),
+    /// Close any open snooze preset popover.
+    CloseSnoozePopover,
+    /// Open or close the footer environment switcher menu.
     ToggleEnvMenu,
-    /// Close the footer environment menu.
+    /// Close the footer environment switcher menu.
     CloseEnvMenu,
-    /// Toggle the row actions menu anchored to `key`.
-    ToggleRowMenu(String),
-    /// Open the row context menu at pointer coordinates `(x, y)`.
+    /// Open or close the footer workspace/shortcuts info popover.
+    ToggleInfoMenu,
+    /// Close the footer workspace/shortcuts info popover.
+    CloseInfoMenu,
+    /// Open the thread context menu at pointer coordinates `(x, y)`.
     OpenRowMenuAt {
-        /// Row element key.
+        /// Row element key (`thread-<id>`).
         key: String,
         /// Horizontal pointer coordinate.
         x: f32,
@@ -39,16 +89,90 @@ pub enum SidebarMsg {
     },
     /// Close any open row context menu.
     CloseRowMenu,
-    /// Toggle the "Move to project" submenu inside the open thread menu.
-    ToggleMoveSubmenu,
-    /// Open a rename or delete confirmation dialog.
+    /// Expand or collapse a submenu inside the open thread context menu.
+    ToggleSubmenu(ContextSubmenu),
+    /// Apply a lifecycle triage action optimistically with optional 5s undo
+    /// toast.
+    Triage {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Protocol triage action.
+        action: TriageAction,
+        /// When `Some`, emits a 5-second bottom undo toast with this title.
+        undo_title: Option<&'static str>,
+        /// Current wall-clock timestamp in Unix ms.
+        now: i64,
+    },
+    /// Restore a prior lifecycle from a triage undo toast.
+    UndoTriage(UndoTriage),
+    /// Snooze `thread` using one of the standard presets.
+    SnoozePreset {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Chosen preset.
+        preset: SnoozePreset,
+        /// Current wall-clock timestamp in Unix ms.
+        now: i64,
+    },
+    /// Regenerate `thread`'s title from the harness or conversation.
+    RetitleThread(ThreadId),
+    /// Fork `thread` from its head and select the forked copy.
+    ForkThread(ThreadId),
+    /// Copy `value` to the clipboard and surface a short confirmation toast.
+    CopyText {
+        /// Human-readable label of what was copied.
+        label: &'static str,
+        /// Plain text copied to the clipboard.
+        value: String,
+    },
+    /// Reassign a thread to another project or detach it.
+    MoveThreadToProject {
+        /// Target thread id.
+        thread: ThreadId,
+        /// Destination project path, or `None` for No project.
+        project: Option<String>,
+    },
+    /// Begin inline title editing inside Row 2 of `thread`'s card.
+    StartInlineRename(ThreadId),
+    /// Inline rename field text changed.
+    InlineRenameChanged(String),
+    /// Commit the active inline title edit.
+    CommitInlineRename,
+    /// Cancel the active inline title edit.
+    CancelInlineRename,
+    /// Pointer pressed on a draggable Pinned or Active thread card.
+    DragStart {
+        /// Thread id.
+        thread: ThreadId,
+        /// Source shelf (`Pinned` or `Active`).
+        shelf: DragShelf,
+        /// Card index within `shelf`.
+        index: usize,
+    },
+    /// Pointer moved during a card drag gesture.
+    DragMove {
+        /// Vertical displacement from press point in points.
+        dy: f32,
+        /// Height of the dragged card in points.
+        height: f32,
+        /// Current timestamp in Unix ms.
+        now: i64,
+    },
+    /// Pointer released or cancelled on a card drag gesture.
+    DragEnd {
+        /// True when cancelled (e.g., Escape or lost focus).
+        cancelled: bool,
+        /// Current timestamp in Unix ms.
+        now: i64,
+    },
+    /// Open a modal rename or delete confirmation dialog.
     OpenEdit {
         /// Dialog variant.
         edit: SidebarEdit,
         /// Initial field text (empty for confirmations).
         initial_value: String,
     },
-    /// Rename dialog field text edited.
+    /// Modal dialog field text edited.
     EditValueChanged(String),
     /// Dismiss the active sidebar modal dialog.
     CloseEdit,
@@ -60,109 +184,254 @@ pub enum SidebarMsg {
     ProjectFolderPicked(String),
     /// Opening the OS folder picker failed.
     ProjectFolderFailed(String),
-    /// Pin or unpin a thread (optimistic with rollback).
-    PinThread {
-        /// Target thread id.
-        thread: ThreadId,
-        /// Desired pinned state.
-        pinned: bool,
-    },
-    /// Archive or unarchive a thread (optimistic with rollback).
-    ArchiveThread {
-        /// Target thread id.
-        thread: ThreadId,
-        /// Desired archived state.
-        archived: bool,
-    },
-    /// Move a thread to another project or detach it (optimistic with
-    /// rollback).
-    MoveThreadToProject {
-        /// Target thread id.
-        thread: ThreadId,
-        /// Destination project path, or `None` for No project.
-        project: Option<String>,
-    },
     /// Open delete confirmation for `thread` if present.
     OpenDeleteThread(ThreadId),
-    /// Toggle sidebar open/closed (keyboard shortcut or palette).
+    /// Toggle sidebar open/closed (`Cmd/Ctrl+B`).
     TogglePane,
+    /// Jump to the `index`-th (`0`-based) visible thread (`Cmd/Ctrl+1..9`).
+    JumpToIndex {
+        /// Zero-based position across visible primary shelves.
+        index: usize,
+        /// Current timestamp in Unix ms.
+        now: i64,
+    },
+    /// Dismiss transient popovers, inline rename, or an active drag on Escape.
+    DismissTransient,
 }
 
 #[expect(
     clippy::too_many_lines,
-    reason = "single exhaustive handler for sidebar view and dialog messages"
+    reason = "single exhaustive reducer over sidebar messages"
 )]
 pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
     let mut effects = Vec::new();
     match msg {
-        SidebarMsg::SetMode(mode) => {
-            if model.sidebar.mode != mode {
-                model.sidebar.mode = mode;
-                effects.push(Effect::SavePrefs(model.to_prefs()));
+        SidebarMsg::NewThread => start_filtered_draft(model, &mut effects),
+        SidebarMsg::NewThreadIn { project, branch } => {
+            model.sidebar.menu = None;
+            let resolved = project
+                .as_deref()
+                .and_then(|path| model.cache().project(path))
+                .cloned();
+            let mut draft = NewThread::new(model.selection.next_draft, resolved.as_ref());
+            if let (Some(project), Some(branch)) = (&resolved, branch)
+                && project.git
+                && project.branch.as_deref() != Some(branch.as_str())
+            {
+                draft.worktree = Some(WorktreeTarget::New {
+                    base: Some(branch),
+                    branch: None,
+                });
+            }
+            prepare_draft(model, draft, &mut effects);
+        }
+        SidebarMsg::DiscardDraft => {
+            if model.selection.new_thread.take().is_some() {
+                clear_selection(model, &mut effects);
+                effects.push(Effect::SetWindowTitle(model.window_title()));
             }
         }
-        SidebarMsg::FilterChanged(query) => {
-            model.sidebar.filter = query;
-        }
-        SidebarMsg::FilterSubmit => {
-            if let Some(id) = sidebar_first_match(model) {
-                model.sidebar.filter.clear();
-                effects.push(Effect::SyncEdit(EditSync::Clear(EditTarget::SidebarFilter)));
-                select_thread(model, id, &mut effects);
+        SidebarMsg::ToggleProjectFilter => {
+            if model.sidebar.filter_open {
+                close_project_filter(model, &mut effects);
+            } else {
+                model.sidebar.dismiss_overlays();
+                model.sidebar.filter_open = true;
+                effects.push(Effect::SyncEdit(EditSync::Clear(EditTarget::ProjectFilter)));
+                effects.push(Effect::Focus {
+                    key: PROJECT_FILTER_INPUT,
+                    select_all: false,
+                    when_shown: true,
+                });
             }
         }
-        SidebarMsg::ToggleProject(path) => {
-            if !model.sidebar.collapsed_projects.remove(&path) {
-                model.sidebar.collapsed_projects.insert(path);
+        SidebarMsg::CloseProjectFilter => close_project_filter(model, &mut effects),
+        SidebarMsg::ProjectFilterQueryChanged(query) => {
+            model.sidebar.filter_query = query;
+            model.sidebar.filter_active = 0;
+        }
+        SidebarMsg::ProjectFilterKey { key, now } => {
+            handle_filter_key(model, key, now, &mut effects);
+        }
+        SidebarMsg::SetProjectFilter(filter) => {
+            model.sidebar.project_filter = filter;
+            model.sidebar.menu = None;
+            close_project_filter(model, &mut effects);
+        }
+        SidebarMsg::ToggleShelf(key) => {
+            if !model.sidebar.collapsed_shelves.remove(key) {
+                model.sidebar.collapsed_shelves.insert(key.to_owned());
             }
             effects.push(Effect::SavePrefs(model.to_prefs()));
+        }
+        SidebarMsg::LoadMoreSettled => {
+            model.sidebar.settled_limit = model
+                .sidebar
+                .settled_limit
+                .saturating_add(SETTLED_PAGE_SIZE);
         }
         SidebarMsg::ToggleParent(id) => {
             if !model.sidebar.collapsed_parents.remove(&id) {
                 model.sidebar.collapsed_parents.insert(id);
             }
         }
-        SidebarMsg::ToggleEnvMenu => {
-            model.sidebar.env_menu = !model.sidebar.env_menu;
+        SidebarMsg::HoverCard(target) => {
+            let blocked = model.sidebar.menu.is_some()
+                || model.sidebar.snooze_popover.is_some()
+                || model.sidebar.filter_open
+                || model.sidebar.inline_rename.is_some()
+                || model.sidebar.drag.is_some_and(|d| d.active);
+            model.sidebar.hover_card = if blocked { None } else { target };
         }
-        SidebarMsg::CloseEnvMenu => {
-            model.sidebar.env_menu = false;
-        }
-        SidebarMsg::ToggleRowMenu(key) => {
-            model.sidebar.menu = if model
-                .sidebar
-                .menu
-                .as_ref()
-                .is_some_and(|ctx| ctx.key == key)
-            {
+        SidebarMsg::ToggleSnoozePopover(thread) => {
+            model.sidebar.hover_card = None;
+            model.sidebar.menu = None;
+            model.sidebar.snooze_popover = if model.sidebar.snooze_popover == Some(thread) {
                 None
             } else {
-                Some(ContextMenu::anchored(key))
+                Some(thread)
             };
         }
+        SidebarMsg::CloseSnoozePopover => model.sidebar.snooze_popover = None,
+        SidebarMsg::ToggleEnvMenu => {
+            let open = !model.sidebar.env_menu;
+            model.sidebar.info_menu = false;
+            model.sidebar.env_menu = open;
+        }
+        SidebarMsg::CloseEnvMenu => model.sidebar.env_menu = false,
+        SidebarMsg::ToggleInfoMenu => {
+            let open = !model.sidebar.info_menu;
+            model.sidebar.env_menu = false;
+            model.sidebar.info_menu = open;
+        }
+        SidebarMsg::CloseInfoMenu => model.sidebar.info_menu = false,
         SidebarMsg::OpenRowMenuAt { key, x, y } => {
             if model.connected() {
+                model.sidebar.hover_card = None;
+                model.sidebar.snooze_popover = None;
                 model.sidebar.menu = Some(ContextMenu::at(key, x, y));
             }
         }
-        SidebarMsg::CloseRowMenu => {
-            model.sidebar.menu = None;
-        }
-        SidebarMsg::ToggleMoveSubmenu => {
+        SidebarMsg::CloseRowMenu => model.sidebar.menu = None,
+        SidebarMsg::ToggleSubmenu(sub) => {
             if let Some(menu) = &mut model.sidebar.menu {
-                menu.moving = !menu.moving;
+                menu.submenu = if menu.submenu == Some(sub) {
+                    None
+                } else {
+                    Some(sub)
+                };
             }
         }
+        SidebarMsg::Triage {
+            thread,
+            action,
+            undo_title,
+            now,
+        } => apply_triage(model, thread, action, undo_title, now, &mut effects),
+        SidebarMsg::UndoTriage(undo) => {
+            if model.connected() {
+                super::selection::apply_thread_change(
+                    model,
+                    undo.thread,
+                    ThreadChange::Triage(TriageAction::Restore {
+                        lifecycle: undo.prior,
+                    }),
+                    model.disclosure.tool_clock,
+                    &mut effects,
+                );
+            }
+        }
+        SidebarMsg::SnoozePreset {
+            thread,
+            preset,
+            now,
+        } => apply_triage(
+            model,
+            thread,
+            TriageAction::Snooze {
+                until: preset.until_ms(now),
+            },
+            Some("Thread snoozed"),
+            now,
+            &mut effects,
+        ),
+        SidebarMsg::RetitleThread(thread) => {
+            model.sidebar.menu = None;
+            if model.connected() {
+                effects.push(Effect::Server(ServerEffect::Retitle(thread)));
+            }
+        }
+        SidebarMsg::ForkThread(thread) => {
+            model.sidebar.menu = None;
+            if model.connected() {
+                effects.push(Effect::Server(ServerEffect::Fork(thread)));
+            }
+        }
+        SidebarMsg::CopyText { label, value } => {
+            model.sidebar.menu = None;
+            effects.push(Effect::CopyText(value));
+            effects.push(Effect::Toast {
+                title: format!("{label} copied"),
+                detail: None,
+            });
+        }
+        SidebarMsg::MoveThreadToProject { thread, project } => {
+            model.sidebar.menu = None;
+            super::selection::apply_thread_change(
+                model,
+                thread,
+                ThreadChange::Project(project),
+                model.disclosure.tool_clock,
+                &mut effects,
+            );
+        }
+        SidebarMsg::StartInlineRename(thread) => start_inline_rename(model, thread, &mut effects),
+        SidebarMsg::InlineRenameChanged(value) => {
+            if let Some(rename) = &mut model.sidebar.inline_rename {
+                rename.value = value;
+            }
+        }
+        SidebarMsg::CommitInlineRename => commit_inline_rename(model, &mut effects),
+        SidebarMsg::CancelInlineRename => model.sidebar.inline_rename = None,
+        SidebarMsg::DragStart {
+            thread,
+            shelf,
+            index,
+        } => {
+            if model.connected() {
+                model.sidebar.hover_card = None;
+                model.sidebar.drag = Some(SidebarDrag {
+                    thread,
+                    source_shelf: shelf,
+                    source_index: index,
+                    target_shelf: shelf,
+                    target_index: index,
+                    dy: 0.0,
+                    pitch: 64.0,
+                    active: false,
+                });
+            }
+        }
+        SidebarMsg::DragMove { dy, height, now } => {
+            let (pinned_len, active_len) = {
+                let outline = SidebarOutline::derive(model, now);
+                (outline.pinned.len(), outline.active.len())
+            };
+            if let Some(drag) = &mut model.sidebar.drag {
+                drag.move_to(dy, height, pinned_len, active_len);
+                if drag.active {
+                    model.sidebar.hover_card = None;
+                    model.sidebar.snooze_popover = None;
+                }
+            }
+        }
+        SidebarMsg::DragEnd { cancelled, now } => finish_drag(model, cancelled, now, &mut effects),
         SidebarMsg::OpenEdit {
             edit,
             initial_value,
         } => open_edit(model, edit, initial_value, &mut effects),
-        SidebarMsg::EditValueChanged(value) => {
-            model.sidebar.edit_value = value;
-        }
-        SidebarMsg::CloseEdit => {
-            model.sidebar.edit = None;
-        }
+        SidebarMsg::EditValueChanged(value) => model.sidebar.edit_value = value,
+        SidebarMsg::CloseEdit => model.sidebar.edit = None,
         SidebarMsg::SubmitEdit => submit_edit(model, &mut effects),
         SidebarMsg::OpenAddProject => {
             if model.connected() {
@@ -182,27 +451,6 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
                 detail: Some(error),
             });
         }
-        SidebarMsg::PinThread { thread, pinned } => {
-            model.sidebar.menu = None;
-            if model.connected() {
-                apply_thread_change(model, thread, ThreadChange::Pin(pinned), &mut effects);
-            }
-        }
-        SidebarMsg::ArchiveThread { thread, archived } => {
-            model.sidebar.menu = None;
-            if model.connected() {
-                apply_thread_change(model, thread, ThreadChange::Archive(archived), &mut effects);
-            }
-        }
-        SidebarMsg::MoveThreadToProject { thread, project } => {
-            model.sidebar.menu = None;
-            if let Some(path) = &project
-                && model.sidebar.collapsed_projects.remove(path)
-            {
-                effects.push(Effect::SavePrefs(model.to_prefs()));
-            }
-            apply_thread_change(model, thread, ThreadChange::Project(project), &mut effects);
-        }
         SidebarMsg::OpenDeleteThread(id) => {
             if model.summary(id).is_some() {
                 open_edit(
@@ -221,103 +469,28 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
             });
             effects.push(Effect::SavePrefs(model.to_prefs()));
         }
+        SidebarMsg::JumpToIndex { index, now } => {
+            if let Some(id) = nth_visible_thread(model, index, now) {
+                select_thread(model, id, &mut effects);
+            }
+        }
+        SidebarMsg::DismissTransient => {
+            model.sidebar.inline_rename = None;
+            model.sidebar.drag = None;
+            model.sidebar.hover_card = None;
+            model.sidebar.snooze_popover = None;
+            model.sidebar.info_menu = false;
+            if model.sidebar.filter_open {
+                close_project_filter(model, &mut effects);
+            }
+        }
     }
     effects
 }
 
-pub(super) fn open_edit(
-    model: &mut Model,
-    edit: SidebarEdit,
-    initial_value: String,
-    effects: &mut Vec<Effect>,
-) {
-    if !model.connected() {
-        return;
-    }
-    model.sidebar.menu = None;
-    model.sidebar.edit = Some(edit);
-    model.sidebar.edit_value.clone_from(&initial_value);
-    effects.push(Effect::SyncEdit(EditSync::Replace {
-        target: EditTarget::SidebarDialog,
-        text: initial_value,
-        select_all: true,
-    }));
-    effects.push(Effect::Focus {
-        key: "edit-value",
-        select_all: false,
-        when_shown: true,
-    });
-}
-
-fn submit_edit(model: &mut Model, effects: &mut Vec<Effect>) {
-    if !model.connected() {
-        return;
-    }
-    let Some(edit) = model.sidebar.edit.clone() else {
-        return;
-    };
-    let value = model.sidebar.edit_value.trim().to_owned();
-    if value.is_empty()
-        && !matches!(
-            edit,
-            SidebarEdit::RemoveProject(_)
-                | SidebarEdit::DeleteThread(_)
-                | SidebarEdit::DeleteWithWorktree(_)
-        )
-    {
-        return;
-    }
-    model.sidebar.edit = None;
-    let env = model.active_env_key().to_owned();
-    match edit {
-        SidebarEdit::RenameProject(id) => {
-            let prior_name = model.cache_mut().project_mut(&id).map(|project| {
-                let prior = project.name.clone();
-                project.name.clone_from(&value);
-                prior
-            });
-            let op_id = prior_name.map(|prior_name| {
-                model.optimistic.record(OptimisticUndo::ProjectRename {
-                    env,
-                    path: id.clone(),
-                    prior_name,
-                })
-            });
-            effects.push(Effect::Server(ServerEffect::Project {
-                op_id,
-                change: ProjectChange::Rename { id, name: value },
-            }));
-        }
-        SidebarEdit::RemoveProject(id) => {
-            let op_id = model
-                .cache_mut()
-                .remove_project(&id)
-                .map(|(index, project)| {
-                    model.optimistic.record(OptimisticUndo::ProjectRemove {
-                        env,
-                        index,
-                        project: Box::new(project),
-                    })
-                });
-            effects.push(Effect::Server(ServerEffect::Project {
-                op_id,
-                change: ProjectChange::Remove(id),
-            }));
-        }
-        SidebarEdit::RenameThread(id) => {
-            apply_thread_change(model, id, ThreadChange::Title(value), effects);
-        }
-        SidebarEdit::DeleteThread(thread) => {
-            effects.push(Effect::Server(ServerEffect::Delete {
-                thread,
-                remove_worktree: false,
-            }));
-        }
-        SidebarEdit::DeleteWithWorktree(thread) => {
-            effects.push(Effect::Server(ServerEffect::Delete {
-                thread,
-                remove_worktree: true,
-            }));
-        }
-    }
+pub(super) fn close_project_filter(model: &mut Model, effects: &mut Vec<Effect>) {
+    model.sidebar.filter_open = false;
+    model.sidebar.filter_query.clear();
+    model.sidebar.filter_active = 0;
+    effects.push(Effect::SyncEdit(EditSync::Clear(EditTarget::ProjectFilter)));
 }

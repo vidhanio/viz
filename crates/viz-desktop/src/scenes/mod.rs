@@ -5,6 +5,7 @@ mod data;
 mod fixtures;
 mod git;
 mod overlays;
+mod sidebar;
 mod terminal_panel;
 
 use crate::{app::Desktop, motion_scene::MotionDemo};
@@ -63,6 +64,12 @@ pub const SCENES: &[Scene] = &[
     ("move-thread", overlays::move_thread),
     ("environments", overlays::environments),
     ("offline", overlays::offline),
+    ("sidebar-triage", sidebar::triage),
+    ("sidebar-filter", sidebar::filter),
+    ("sidebar-hover", sidebar::hover),
+    ("sidebar-context", sidebar::context),
+    ("sidebar-undo", sidebar::undo),
+    ("sidebar-collapsed", sidebar::collapsed),
 ];
 
 fn components(s: &mut Desktop) {

@@ -3,6 +3,7 @@
 //! file.
 
 pub mod git;
+mod offline;
 pub mod platform;
 pub mod prefs;
 pub mod requests;
@@ -13,10 +14,11 @@ mod terminal;
 use std::{path::PathBuf, time::Duration};
 
 use viz_client::protocol::{
-    Attachment, EntryId, LaunchThread, OptionValue, SendInput, ThreadId, WorktreeTarget,
+    Attachment, EntryId, LaunchThread, OptionValue, SendInput, ThreadId, TriageAction,
+    WorktreeTarget,
 };
 
-use crate::model::{AttachmentTarget, Prefs};
+use crate::model::{AttachmentTarget, Prefs, UndoTriage};
 
 /// Maximum base64-encoded bytes per message across all attachments.
 pub const ATTACHMENT_ENCODED_LIMIT: usize = platform::ENCODED_LIMIT;
@@ -60,6 +62,29 @@ pub enum Effect {
         title: String,
         /// Optional multi-line detail.
         detail: Option<String>,
+    },
+    /// Show a floating undo toast with an inline `Undo` button restoring prior
+    /// thread triage state.
+    UndoToast {
+        /// Short summary (e.g., `"Thread settled"`).
+        title: String,
+        /// Optional thread title detail.
+        detail: Option<String>,
+        /// Prior lifecycle restored when the user clicks `Undo`.
+        undo: UndoTriage,
+        /// Auto-dismiss lifetime in seconds.
+        secs: f64,
+    },
+    /// Decode fetched project icon image bytes in the shell's image cache.
+    DecodeProjectIcon {
+        /// Environment id owning this project.
+        environment: String,
+        /// Project path id.
+        project: String,
+        /// MIME media type (raster or `image/svg+xml`).
+        media_type: String,
+        /// Decoded raw image bytes.
+        bytes: Vec<u8>,
     },
     /// Move keyboard focus to element `key`.
     Focus {
@@ -124,8 +149,10 @@ pub enum Effect {
 pub enum EditTarget {
     /// Main composer prompt editor.
     Draft,
-    /// Sidebar thread filter field.
-    SidebarFilter,
+    /// Project filter combobox search input.
+    ProjectFilter,
+    /// Sidebar inline thread title rename input.
+    InlineRename,
     /// Sidebar rename modal input field.
     SidebarDialog,
     /// Command palette query input.
@@ -229,6 +256,17 @@ pub enum ServerEffect {
         /// Requested thread mutation.
         change: ThreadChange,
     },
+    /// Regenerate a thread's title from the harness or conversation.
+    Retitle(ThreadId),
+    /// Fork a thread from its head and open the resulting copy.
+    Fork(ThreadId),
+    /// Read a project's image icon if its `ETag` changed.
+    ReadProjectIcon {
+        /// Project path id.
+        project: String,
+        /// Previously cached `ETag`, if any.
+        etag: Option<String>,
+    },
     /// Delete a thread and optionally its managed worktree.
     Delete {
         /// Target thread id.
@@ -313,12 +351,8 @@ pub enum ServerEffect {
 pub enum ThreadChange {
     /// User rename.
     Title(String),
-    /// Archive (`true`) or unarchive (`false`).
-    Archive(bool),
-    /// Pin (`true`) or unpin (`false`).
-    Pin(bool),
-    /// Mark unread (`true`) or read (`false`).
-    Unread(bool),
+    /// Lifecycle triage mutation (`thread.triage`).
+    Triage(TriageAction),
     /// Reassign project path (or detach from project when `None`).
     Project(Option<String>),
 }
