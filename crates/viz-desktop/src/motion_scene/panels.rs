@@ -3,7 +3,7 @@
 use rune::{Edge, El, col, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, Placement, SegmentedControl};
 
-use super::{DIFF_STEPS, MotionDemo, card, with_demo};
+use super::{DIFF_STEPS, WorkbenchDemo, card, with_demo};
 use crate::{
     app::Desktop,
     motion,
@@ -27,7 +27,7 @@ const DRAWER_FILES: [(&str, &str); 4] = [
     ("crates/viz-desktop/src/header.rs", "title switch"),
 ];
 
-pub(super) fn shimmer_presence_card(demo: &MotionDemo, t: &Theme, overlays: &mut Vec<El>) -> El {
+pub(super) fn shimmer_presence_card(demo: &WorkbenchDemo, t: &Theme, overlays: &mut Vec<El>) -> El {
     let mut drawer_host = col().key("presence-host").w_full().gap(S6);
     if demo.overlays.drawer {
         drawer_host = drawer_host.child(tucked_files_drawer(t));
@@ -236,7 +236,7 @@ fn details_popover(t: &Theme) -> El {
     motion::anchored_popover(card, "btn-popover", Placement::TopStart, S6)
 }
 
-pub(super) fn diff_inspector(demo: &MotionDemo, t: &Theme) -> El {
+pub(super) fn diff_inspector(demo: &WorkbenchDemo, t: &Theme) -> El {
     let (added, removed, _) = DIFF_STEPS[demo.diff_step % DIFF_STEPS.len()];
     let mode_toggle = SegmentedControl::new(&["Unified", "Split"], Some(demo.diff_mode))
         .label("Diff layout")

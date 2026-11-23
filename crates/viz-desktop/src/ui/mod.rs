@@ -6,60 +6,21 @@
 //! on [`crate::motion`]. Views compose these primitives without inventing
 //! ad-hoc buttons, inputs, rows, or overlays.
 
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod badge;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod button;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod controls;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod dialog;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod feedback;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
+pub mod gallery;
 mod icon_button;
 #[expect(
     dead_code,
     reason = "tokens.md §7 icon catalog for Phase 1 feature tracks"
 )]
 mod icons;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod input;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod project_icon;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod row;
-#[expect(
-    dead_code,
-    reason = "Phase 0b component primitives; exercised by gallery and Phase 1 tracks"
-)]
 mod surface;
 mod tree;
 

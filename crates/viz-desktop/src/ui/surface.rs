@@ -102,7 +102,7 @@ pub fn anchored_popover(
 /// empty or loading fallback, and optional footer.
 pub struct ComboboxShell {
     key: String,
-    width: f32,
+    width: Option<f32>,
     max_height: f32,
     search: Option<El>,
     items: Vec<El>,
@@ -114,7 +114,7 @@ pub struct ComboboxShell {
 pub fn combobox_shell(key: impl Into<String>) -> ComboboxShell {
     ComboboxShell {
         key: key.into(),
-        width: 280.0,
+        width: Some(280.0),
         max_height: 280.0,
         search: None,
         items: Vec::new(),
@@ -125,8 +125,15 @@ pub fn combobox_shell(key: impl Into<String>) -> ComboboxShell {
 
 impl ComboboxShell {
     /// Sets the shell's fixed width in points (default `280pt`).
+    #[expect(dead_code, reason = "fixed width used by floating Phase 1 comboboxes")]
     pub const fn width(mut self, points: f32) -> Self {
-        self.width = points;
+        self.width = Some(points);
+        self
+    }
+
+    /// Stretches the shell to fill its parent container width.
+    pub const fn fill_width(mut self) -> Self {
+        self.width = None;
         self
     }
 
@@ -166,11 +173,14 @@ impl ComboboxShell {
     pub fn build(self, t: &Theme) -> El {
         let mut shell = col()
             .key(&self.key)
-            .w(self.width)
             .radius(RADIUS_SURFACE)
             .fill(t.surface_raised)
             .border(HAIRLINE, t.border_overlay)
             .clip_rounded(RADIUS_SURFACE);
+        shell = match self.width {
+            Some(points) => shell.w(points),
+            None => shell.w_full(),
+        };
 
         if let Some(search) = self.search {
             shell = shell

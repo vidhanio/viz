@@ -24,9 +24,34 @@ use crate::{
     ui,
 };
 
-/// State backing the deterministic `motion` and `motion-reduced` scenes.
+/// State backing the deterministic `motion`, `motion-reduced`, `components`,
+/// and `components-reduced` scenes.
 #[derive(Debug)]
-pub struct MotionDemo {
+pub enum MotionDemo {
+    /// Interactive motion workbench exercising every [`crate::motion`]
+    /// primitive.
+    Workbench(Box<WorkbenchDemo>),
+    /// Interactive UI component gallery exercising every [`crate::theme`] token
+    /// and [`crate::ui`] component.
+    Components(Box<ui::gallery::GalleryState>),
+}
+
+impl Default for MotionDemo {
+    fn default() -> Self {
+        Self::Workbench(Box::default())
+    }
+}
+
+impl MotionDemo {
+    /// Creates a fresh state for the `components` UI gallery scene.
+    pub fn components() -> Self {
+        Self::Components(Box::default())
+    }
+}
+
+/// State backing the `motion` and `motion-reduced` workbench scenes.
+#[derive(Debug)]
+pub struct WorkbenchDemo {
     fold: FoldState,
     threads: Vec<DemoThread>,
     drag: DragOrder,
@@ -95,7 +120,7 @@ enum CtaMode {
     Steer,
 }
 
-impl Default for MotionDemo {
+impl Default for WorkbenchDemo {
     fn default() -> Self {
         Self {
             fold: FoldState::default(),
@@ -150,14 +175,22 @@ impl Default for MotionDemo {
 
 const DIFF_STEPS: [(u32, u32, u32); 4] = [(5, 1, 9), (42, 13, 10), (118, 27, 14), (19, 4, 6)];
 
-fn with_demo(s: &mut Desktop, f: impl FnOnce(&mut MotionDemo)) {
-    if let Some(demo) = s.motion_demo.as_mut() {
+fn with_demo(s: &mut Desktop, f: impl FnOnce(&mut WorkbenchDemo)) {
+    if let Some(MotionDemo::Workbench(demo)) = s.motion_demo.as_mut() {
         f(demo);
     }
 }
 
-/// Renders the motion workbench inside viz's flat base16 theme.
+/// Renders either the motion workbench or the UI component gallery inside viz's
+/// flat base16 theme.
 pub fn view(demo: &MotionDemo, reduced: bool, t: &Theme) -> El {
+    match demo {
+        MotionDemo::Workbench(workbench) => workbench_view(workbench, reduced, t),
+        MotionDemo::Components(gallery) => ui::gallery::view(gallery, reduced, t),
+    }
+}
+
+fn workbench_view(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> El {
     let mut overlays = Vec::new();
     let top_row = row()
         .key("top-row")
@@ -207,7 +240,10 @@ pub fn view(demo: &MotionDemo, reduced: bool, t: &Theme) -> El {
         .toolbar_in_panel()
         .inspector(
             &demo.panel,
-            |s: &mut Desktop| &mut s.motion_demo.as_mut().expect("motion demo").panel,
+            |s: &mut Desktop| match s.motion_demo.as_mut() {
+                Some(MotionDemo::Workbench(demo)) => &mut demo.panel,
+                _ => unreachable!("workbench inspector toggled outside workbench"),
+            },
             diff_inspector(demo, t),
         )
         .hide_sidebar_toggle()
@@ -222,7 +258,7 @@ pub fn view(demo: &MotionDemo, reduced: bool, t: &Theme) -> El {
     rune_kit::root(split, overlays).hover_motion_within(motion::INSTANT, motion::HOVER_OUT)
 }
 
-fn workbench_toolbar(demo: &MotionDemo, reduced: bool, t: &Theme) -> Toolbar {
+fn workbench_toolbar(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> Toolbar {
     let leading = row()
         .key("workbench-title")
         .gap(S8)

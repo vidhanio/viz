@@ -5,7 +5,7 @@ use std::f32::consts::FRAC_PI_2;
 use rune::{El, ScrollSpec, col, icon, row, text};
 use rune_kit::{ButtonVariant, ScrollBar, ScrollBarStyle};
 
-use super::{DemoThread, MotionDemo, card, with_demo};
+use super::{DemoThread, MotionDemo, WorkbenchDemo, card, with_demo};
 use crate::{
     app::Desktop,
     motion::{self, DragOrder},
@@ -13,7 +13,7 @@ use crate::{
     ui,
 };
 
-pub(super) fn disclosure_card(demo: &MotionDemo, t: &Theme) -> El {
+pub(super) fn disclosure_card(demo: &WorkbenchDemo, t: &Theme) -> El {
     let mut inner = motion::fold_container(col().key("fold-timeline-inner").w_full().gap(S8))
         .child(user_bubble("Audit motion tokens across viz-desktop", t))
         .child(fold_toggle_row(demo.fold.open, t));
@@ -69,10 +69,10 @@ pub(super) fn disclosure_card(demo: &MotionDemo, t: &Theme) -> El {
 
     let launch_btn = ui::button("Launch msg", ButtonVariant::GhostMuted, Size::Small)
         .on_press_tx(|s: &mut Desktop, tx| {
-            let next = s
-                .motion_demo
-                .as_ref()
-                .map_or(1, |d| d.launched_messages + 1);
+            let next = match s.motion_demo.as_ref() {
+                Some(MotionDemo::Workbench(d)) => d.launched_messages + 1,
+                _ => 1,
+            };
             motion::launch_from(tx, "btn-launch", format!("launched-msg-{next}"));
             with_demo(s, |d| d.launched_messages = next);
         })
@@ -176,7 +176,7 @@ fn tool_line(glyph: &'static rune::Icon, label: &str, detail: &str, t: &Theme) -
         .child(text(detail).font(t.mono_micro).color(t.faint))
 }
 
-pub(super) fn reorder_card(demo: &MotionDemo, t: &Theme) -> El {
+pub(super) fn reorder_card(demo: &WorkbenchDemo, t: &Theme) -> El {
     let actions = row()
         .gap(S6)
         .center_y()

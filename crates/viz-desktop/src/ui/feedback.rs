@@ -282,6 +282,7 @@ pub fn loading_state(label: &str, detail: Option<&str>, delay: LoadingDelay, t: 
         .key("loading-state")
         .role("status")
         .label(label)
+        .w_full()
         .gap(S6)
         .items_center()
         .transition(motion::fade(motion::SETTLE_PAIR))
@@ -295,8 +296,10 @@ pub fn loading_state(label: &str, detail: Option<&str>, delay: LoadingDelay, t: 
     if let Some(detail) = detail {
         stack = stack.child(
             text(detail)
+                .w_full()
                 .font(t.small)
                 .color(t.faint)
+                .wrap()
                 .align(Align::Center),
         );
     }

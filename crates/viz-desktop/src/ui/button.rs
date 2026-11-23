@@ -331,7 +331,7 @@ impl Button {
             ));
         }
         if disabled && !matches!(self.variant, ButtonVariant::Submit) {
-            el = el.layer_opacity(0.45);
+            el = el.layer_opacity(0.50);
         }
         if interactive && let Some(press) = self.press {
             el = press(el);

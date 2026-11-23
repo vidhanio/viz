@@ -58,6 +58,10 @@ impl Switch {
     }
 
     /// Registers a transaction-aware toggle callback.
+    #[expect(
+        dead_code,
+        reason = "transaction-aware callback hook for Phase 1 settings and toggles"
+    )]
     pub fn on_toggle_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.press = Some(Box::new(move |el| el.on_press_tx(f)));
         self
@@ -134,7 +138,7 @@ impl Switch {
         }
 
         if self.disabled {
-            root = root.layer_opacity(0.45);
+            root = root.layer_opacity(0.50);
         } else if let Some(press) = self.press {
             root = press(root);
         }
@@ -143,6 +147,10 @@ impl Switch {
 }
 
 /// Sizing behavior for [`Segmented`].
+#[expect(
+    dead_code,
+    reason = "Full width and fixed width variants are used by Phase 1 panels and dialogs"
+)]
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum SegmentedWidth {
     /// Equal segments sized to the widest label.
@@ -222,6 +230,11 @@ impl Segmented {
         if let Some(pick) = self.pick {
             control = pick(control);
         }
-        control.build(&t.k)
+        let mut seg_kit = t.k.clone();
+        seg_kit.c.layer_01 = t.surface_recessed;
+        seg_kit.c.bg_base = t.surface_raised;
+        seg_kit.c.border_base = t.hairline;
+        seg_kit.c.border_strong = t.border_control;
+        control.build(&seg_kit)
     }
 }

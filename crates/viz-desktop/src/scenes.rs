@@ -22,6 +22,8 @@ use crate::{
 type Scene = (&'static str, fn(&mut Desktop));
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
+    ("components", components),
+    ("components-reduced", components_reduced),
     ("motion", motion),
     ("motion-reduced", motion_reduced),
     ("activity", activity),
@@ -54,6 +56,18 @@ pub const SCENES: &[Scene] = &[
 
 const THREAD: ThreadId = ThreadId(11);
 const WORKTREE: &str = "/state/worktrees/workbench/viz-trim-export-whitespace";
+
+/// Interactive UI component gallery exercising every design token and `ui/*`
+/// primitive.
+fn components(s: &mut Desktop) {
+    s.motion_demo = Some(MotionDemo::components());
+}
+
+/// The same UI component gallery with Reduce Motion forced on for proofs.
+fn components_reduced(s: &mut Desktop) {
+    s.reduced_motion = Some(true);
+    s.motion_demo = Some(MotionDemo::components());
+}
 
 /// Interactive motion workbench showcasing every primitive in
 /// [`crate::motion`].

@@ -151,6 +151,7 @@ impl ListRow {
     }
 
     /// Overrides the accessibility role (defaults to `"option"`).
+    #[expect(dead_code, reason = "role override for Phase 1 sidebar and menu lists")]
     pub const fn role(mut self, role: &'static str) -> Self {
         self.role = role;
         self
@@ -163,6 +164,10 @@ impl ListRow {
     }
 
     /// Registers a transaction-aware click/activation callback.
+    #[expect(
+        dead_code,
+        reason = "transaction-aware row press hook for Phase 1 lists"
+    )]
     pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.press = Some(Box::new(move |el| el.on_press_tx(f)));
         self
@@ -268,7 +273,7 @@ impl ListRow {
             item = item.child(trailing);
         }
         if self.disabled {
-            item = item.layer_opacity(0.45);
+            item = item.layer_opacity(0.50);
         } else if let Some(press) = self.press {
             item = press(item);
         }
@@ -327,6 +332,10 @@ impl SectionHeader {
 
     /// Registers a transaction-aware toggle callback (pair with
     /// [`motion::toggle_anchored`]).
+    #[expect(
+        dead_code,
+        reason = "scroll-anchored toggle hook for Phase 1 collapsible sections"
+    )]
     pub fn on_toggle_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.toggle = Some(Box::new(move |el| el.on_press_tx(f)));
         self

@@ -56,10 +56,6 @@ pub fn families() -> (&'static str, &'static str) {
 
 /// Resolved base16 palette, typography scale, and `rune-kit` configurations for
 /// one appearance (dark or light).
-#[expect(
-    dead_code,
-    reason = "tokens.md palette and typography slots are consumed by ui components and Phase 1 tracks"
-)]
 #[derive(Debug)]
 pub struct Theme {
     /// Primary `rune-kit` theme tokens.

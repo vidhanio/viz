@@ -1,12 +1,15 @@
 //! Text inputs, search fields, and labeled form field layouts.
 
-use rune::{El, KeyEvent, TextEdit, Tx, col, icon, row, text};
-use rune_kit::TextInput;
+use rune::{El, KeyEvent, TextEdit, Tx, col, icon, row, text, text_input};
+use rune_kit::{IconButtonVariant, TextInput};
 
-use super::icons::{CIRCLE_ALERT, SEARCH};
-use crate::theme::{ICON_SMALL, S4, S6, Size, Theme};
+use super::{
+    icon_button::icon_button,
+    icons::{CIRCLE_ALERT, CLOSE, SEARCH},
+};
+use crate::theme::{HAIRLINE, ICON_SMALL, S4, S6, S8, Size, Theme};
 
-type InputHook = Box<dyn FnOnce(TextInput) -> TextInput>;
+type ElHook = Box<dyn FnOnce(El) -> El>;
 
 /// Standard single-line text input configured with viz's [`Size`] height and
 /// full parent width.
@@ -30,19 +33,22 @@ pub enum SearchStyle {
     Plain,
 }
 
-/// Search field with leading [`SEARCH`] icon, optional clear button when
-/// non-empty, active-descendant wiring, and bordered/plain styles.
+/// Flat base16 search field with leading [`SEARCH`] icon, optional clear button
+/// when non-empty, exact `input_key` for [`super::ListRow::focus_ring_for`],
+/// active-descendant wiring, and bordered/plain styles.
 pub struct SearchInput {
     edit: TextEdit,
     placeholder: String,
     label: Option<String>,
+    input_key: Option<String>,
     style: SearchStyle,
     size: Size,
     disabled: bool,
     invalid: bool,
     active: Option<String>,
     trailing: Option<El>,
-    hooks: Vec<InputHook>,
+    clear: Option<ElHook>,
+    hooks: Vec<ElHook>,
 }
 
 /// Starts a [`SearchInput`] bound to `edit`.
@@ -51,12 +57,14 @@ pub fn search_input(edit: &TextEdit, placeholder: impl Into<String>) -> SearchIn
         edit: edit.clone(),
         placeholder: placeholder.into(),
         label: None,
+        input_key: None,
         style: SearchStyle::Bordered,
         size: Size::Compact,
         disabled: false,
         invalid: false,
         active: None,
         trailing: None,
+        clear: None,
         hooks: Vec::new(),
     }
 }
@@ -65,6 +73,13 @@ impl SearchInput {
     /// Sets the accessible label (defaults to `placeholder`).
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    /// Sets the element key on the inner focusable text input so sibling rows
+    /// can target it with [`super::ListRow::focus_ring_for`].
+    pub fn input_key(mut self, key: impl Into<String>) -> Self {
+        self.input_key = Some(key.into());
         self
     }
 
@@ -88,6 +103,7 @@ impl SearchInput {
     }
 
     /// Highlights the input border in `t.danger` for invalid filter syntax.
+    #[expect(dead_code, reason = "validation state hook for Phase 1 filter inputs")]
     pub const fn invalid(mut self, invalid: bool) -> Self {
         self.invalid = invalid;
         self
@@ -115,59 +131,124 @@ impl SearchInput {
     }
 
     /// Intercepts keyboard navigation (ArrowUp/Down, Enter, Escape).
+    #[expect(
+        dead_code,
+        reason = "keyboard nav hook for Phase 1 comboboxes and palette"
+    )]
     pub fn on_key<S: 'static>(
         mut self,
         f: impl Fn(&mut S, &KeyEvent, &mut Tx) -> bool + 'static,
     ) -> Self {
-        self.hooks.push(Box::new(move |input| input.on_key(f)));
+        self.hooks
+            .push(Box::new(move |input| input.on_input_key(f)));
         self
     }
 
     /// Fires when the user presses Enter.
+    #[expect(dead_code, reason = "submit hook for Phase 1 search inputs")]
     pub fn on_submit<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.hooks.push(Box::new(move |input| input.on_submit(f)));
         self
     }
 
-    /// Shows the trailing clear button whenever the query is non-empty and
+    /// Shows a trailing clear button whenever the query is non-empty and
     /// invokes `f` on press.
     pub fn on_clear<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        let non_empty = !self.edit.text.is_empty();
-        self.hooks.push(Box::new(move |input| {
-            if non_empty {
-                input.clear_button().on_action(f)
-            } else {
-                input
-            }
-        }));
+        self.clear = Some(Box::new(move |btn| btn.on_press_tx(f)));
         self
     }
 
-    /// Builds the search input against `t`.
+    /// Builds the flat search input against `t`.
     pub fn build(self, t: &Theme) -> El {
-        let mut input = TextInput::new(&self.edit)
-            .placeholder(self.placeholder)
-            .height(self.size.height())
-            .width(None)
-            .leading_icon(&SEARCH)
-            .leading_icon_size(self.size.icon_size())
-            .text_style(self.size.font(t))
+        let non_empty = !self.edit.text.is_empty();
+        let a11y_label = self
+            .label
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&self.placeholder);
+        let ink = if self.invalid && !self.disabled {
+            t.danger
+        } else {
+            t.text
+        };
+        let hint = if self.invalid && !self.disabled {
+            t.danger
+        } else {
+            t.faint
+        };
+        let mut editor = text_input(&self.edit, self.size.font(t))
+            .single_line()
+            .key(self.input_key.as_deref().unwrap_or("search-input"))
+            .label(a11y_label)
+            .placeholder(self.placeholder, hint)
+            .color(ink)
+            .caret(ink, t.k.selection())
             .disabled(self.disabled)
-            .invalid(self.invalid)
-            .active_descendant(self.active);
-        if let Some(label) = self.label {
-            input = input.label(label);
+            .no_focus_ring()
+            .grow(1.0)
+            .shrink()
+            .min_w(0.0);
+        if let Some(active) = self.active {
+            editor = editor.active_descendant(active);
         }
-        if self.style == SearchStyle::Plain {
-            input = input.plain();
+        if !self.disabled {
+            for hook in self.hooks {
+                editor = hook(editor);
+            }
+        }
+
+        let mut shell = row()
+            .w_full()
+            .h(self.size.height())
+            .px(S8)
+            .gap(S6)
+            .center_y()
+            .child(
+                icon(&SEARCH, self.size.icon_size())
+                    .color(t.icon_muted)
+                    .a11y_hidden(),
+            )
+            .child(editor);
+
+        if non_empty
+            && !self.disabled
+            && let Some(clear) = self.clear
+        {
+            let btn = icon_button(
+                &CLOSE,
+                "Clear search",
+                IconButtonVariant::GhostMuted,
+                Size::Tiny,
+            )
+            .build(&t.k)
+            .key("clear");
+            shell = shell.child(clear(btn));
         }
         if let Some(trailing) = self.trailing {
-            input = input.trailing(trailing);
+            shell = shell.child(trailing);
         }
-        for hook in self.hooks {
-            input = hook(input);
+
+        if self.style == SearchStyle::Bordered {
+            let border = if self.invalid && !self.disabled {
+                t.danger
+            } else {
+                t.border_control
+            };
+            let focus = if self.invalid { t.danger } else { t.accent };
+            shell = shell
+                .radius(self.size.radius())
+                .fill(t.canvas)
+                .border(HAIRLINE, border);
+            if !self.disabled {
+                shell = shell
+                    .hover(t.hover_wash)
+                    .focus_within_ring(HAIRLINE, -HAIRLINE, focus);
+            }
         }
-        input.build(&t.k)
+        if self.disabled {
+            shell = shell.layer_opacity(0.50);
+        }
+        shell
     }
 }
 
@@ -262,15 +343,24 @@ impl Field {
                     .key("field-error")
                     .w_full()
                     .gap(S4)
-                    .center_y()
+                    .items_start()
                     .a11y_hidden()
-                    .child(icon(&CIRCLE_ALERT, ICON_SMALL).color(t.danger))
-                    .child(text(error).font(t.small).color(t.danger).wrap()),
+                    .child(icon(&CIRCLE_ALERT, ICON_SMALL).color(t.danger).mt(2.0))
+                    .child(
+                        text(error)
+                            .font(t.small)
+                            .color(t.danger)
+                            .grow(1.0)
+                            .shrink()
+                            .min_w(0.0)
+                            .wrap(),
+                    ),
             );
         } else if let Some(description) = self.description {
             group = group.child(
                 text(description)
                     .key("field-desc")
+                    .w_full()
                     .font(t.small)
                     .color(t.muted)
                     .wrap()

@@ -3,7 +3,7 @@
 use rune::{Color, El, col, el, icon, row, text};
 use rune_kit::ButtonVariant;
 
-use super::{CtaMode, DIFF_STEPS, MotionDemo, card, with_demo};
+use super::{CtaMode, DIFF_STEPS, WorkbenchDemo, card, with_demo};
 use crate::{
     app::Desktop,
     motion::{self, Switch},
@@ -20,7 +20,7 @@ const PROVIDERS: [(&str, &rune::Icon); 3] = [
     ("omp", &ui::OMP),
 ];
 
-pub(super) fn shared_morph_roll_card(demo: &MotionDemo, t: &Theme) -> El {
+pub(super) fn shared_morph_roll_card(demo: &WorkbenchDemo, t: &Theme) -> El {
     let right_col = col()
         .grow(1.0)
         .shrink()
@@ -142,7 +142,7 @@ fn cta_morph_button(mode: CtaMode, t: &Theme) -> El {
     )
 }
 
-fn morph_controls(demo: &MotionDemo, t: &Theme) -> El {
+fn morph_controls(demo: &WorkbenchDemo, t: &Theme) -> El {
     let cta_btn = cta_morph_button(demo.cta_mode, t);
     let copy_btn = motion::pressable(
         row()
