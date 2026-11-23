@@ -7,7 +7,7 @@ use viz_protocol::{CheckpointEdge, GitDiff, RestoreCheckpoint, RunId, ThreadId};
 
 use super::{
     Workspace, git,
-    sql::{Connection, exec, row},
+    sql::{Connection, exec, row, rows},
     store,
 };
 use crate::error::Error;
@@ -33,6 +33,7 @@ impl Workspace {
     ) -> Result<(), Error> {
         let repo = self.git_repository(thread).await?;
         let git_dir = store::path_text(&repo.identity().git_dir)?;
+        let common_dir = store::path_text(&repo.identity().common_dir)?;
         if edge == CheckpointEdge::After {
             let existing = row(&mut *self.db.lock().await,
                 "SELECT 1 FROM run_checkpoints WHERE run = ?1 AND git_dir = ?2 AND after_ref IS NULL",
@@ -47,8 +48,8 @@ impl Workspace {
             let mut db = self.db.lock().await;
             match edge {
                 CheckpointEdge::Before => exec(&mut db,
-                    "INSERT INTO run_checkpoints (run, git_dir, before_ref) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
-                    [run.into(), git_dir.into(), value.into()]).await,
+                    "INSERT INTO run_checkpoints (run, git_dir, before_ref, common_dir) VALUES (?1, ?2, ?3, ?4) ON CONFLICT DO NOTHING",
+                    [run.into(), git_dir.into(), value.into(), common_dir.into()]).await,
                 CheckpointEdge::After => exec(&mut db,
                     "UPDATE run_checkpoints SET after_ref = ?3 WHERE run = ?1 AND git_dir = ?2 AND after_ref IS NULL",
                     [run.into(), git_dir.into(), value.into()]).await,
@@ -61,6 +62,37 @@ impl Workspace {
             }
         }
         result.map(drop)
+    }
+
+    /// Retry ref cleanup after a thread deletion. Git I/O stays outside the
+    /// workspace write lease, and a missing ref counts as released.
+    pub(super) async fn release_checkpoints(&self) -> Result<(), Error> {
+        let releases = rows(
+            &mut *self.db.lock().await,
+            "SELECT ref_id, git_dir FROM checkpoint_releases",
+            [],
+        )
+        .await?;
+        for mut row in releases {
+            let reference = row.str(0)?;
+            let git_dir = row.str(1)?;
+            let id = reference.parse().map_err(Error::corrupt)?;
+            match Repository::release_checkpoint(Path::new(&git_dir), id, &self.closing).await {
+                Ok(()) => {
+                    exec(
+                        &mut *self.db.lock().await,
+                        "DELETE FROM checkpoint_releases WHERE ref_id = ?1",
+                        [reference.into()],
+                    )
+                    .await?;
+                }
+                Err(viz_git::Error::Cancelled) => break,
+                Err(error) => {
+                    tracing::warn!(%id, %error, "could not release deleted thread checkpoint");
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) async fn checkpoint_diff(
@@ -132,6 +164,19 @@ impl Workspace {
         drop(db);
         Ok(result?)
     }
+}
+
+/// Save ref cleanup work before deletion cascades to run checkpoints.
+pub(super) async fn queue_releases(db: &mut Connection, thread: ThreadId) -> Result<(), Error> {
+    exec(db,
+        "INSERT OR IGNORE INTO checkpoint_releases (ref_id, git_dir)
+         SELECT c.before_ref, coalesce(c.common_dir, c.git_dir)
+            FROM run_checkpoints c JOIN runs r ON r.id = c.run WHERE r.thread = ?1
+         UNION ALL
+         SELECT c.after_ref, coalesce(c.common_dir, c.git_dir)
+            FROM run_checkpoints c JOIN runs r ON r.id = c.run WHERE r.thread = ?1 AND c.after_ref IS NOT NULL",
+        [thread.into()]).await?;
+    Ok(())
 }
 
 async fn snapshot(

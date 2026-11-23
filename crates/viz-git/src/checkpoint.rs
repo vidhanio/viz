@@ -136,22 +136,45 @@ impl Repository {
         .await
     }
 
-    /// Release a snapshot so normal Git garbage collection can reclaim its
-    /// objects.
+    /// Release a snapshot in this repository.
     ///
     /// # Errors
-    /// Returns an error if the snapshot ref is missing or cannot be removed.
+    /// Returns an error if the snapshot ref cannot be removed.
     pub async fn delete_checkpoint(
         &self,
         id: CheckpointId,
         cancel: &CancellationToken,
     ) -> Result<(), Error> {
-        self.write(cancel, move |repo, _, _| {
-            let mut reference = repo.find_reference(&id.reference())?;
-            reference.delete()?;
-            Ok(())
+        self.read(cancel, move |repo, _| remove_reference(repo, id))
+            .await
+    }
+
+    /// Release a snapshot by its stored Git directory, including when its
+    /// original worktree has been removed.
+    ///
+    /// # Errors
+    /// Returns an error if the repository exists but cannot be opened or its
+    /// snapshot ref cannot be removed.
+    pub async fn release_checkpoint(
+        git_dir: &Path,
+        id: CheckpointId,
+        cancel: &CancellationToken,
+    ) -> Result<(), Error> {
+        let git_dir = git_dir.to_owned();
+        crate::blocking(cancel, move |_| match git_dir.symlink_metadata() {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error.into()),
+            Ok(_) => remove_reference(&git2::Repository::open(&git_dir)?, id),
         })
         .await
+    }
+}
+
+fn remove_reference(repo: &git2::Repository, id: CheckpointId) -> Result<(), Error> {
+    match repo.find_reference(&id.reference()) {
+        Ok(mut reference) => Ok(reference.delete()?),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
     }
 }
 

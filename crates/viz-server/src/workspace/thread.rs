@@ -277,6 +277,7 @@ impl Workspace {
             let mut db = self.db.lock().await;
             let mut tx = db.transaction().await?;
             tasks::store::release(&mut tx, thread).await?;
+            super::checkpoints::queue_releases(&mut tx, thread).await?;
             let count = exec(
                 &mut tx,
                 "DELETE FROM threads WHERE id = ?1",
@@ -293,6 +294,7 @@ impl Workspace {
             driver
         };
         self.settled(thread);
+        self.due.notify_one();
         if let Some(driver) = driver {
             driver.close().await;
         }

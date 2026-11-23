@@ -75,6 +75,9 @@ impl Workspace {
     /// Wake and settle threads as their time comes.
     pub(super) async fn keep_time(self: Arc<Self>) {
         loop {
+            if let Err(error) = self.release_checkpoints().await {
+                tracing::warn!(%error, "releasing deleted thread checkpoints");
+            }
             let wait = match self.pass_time().await {
                 Ok(wait) => wait,
                 Err(error) => {
