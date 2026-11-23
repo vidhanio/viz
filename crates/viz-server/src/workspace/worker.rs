@@ -17,11 +17,10 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 use tokio_util::sync::CancellationToken;
-use viz_core::runs::EndStatus;
 use viz_protocol::{OptionValue, RunId, ThreadId};
 
 use super::{
-    Workspace, runs, runtime::settle_outcome, sessions::SessionSlot, sql::exec, store,
+    Workspace, runs, runtime::turn_end, sessions::SessionSlot, sql::exec, store,
     worktree::Placement,
 };
 use crate::error::Error;
@@ -390,11 +389,7 @@ impl Workspace {
             let result = driver
                 .interpret(&turn, self.prompt(thread, slot, claim, &turn))
                 .await;
-            let settlement = settle_outcome(result, &self.closing, &turn.cancel, &turn.steer);
-            if settlement.status == EndStatus::Interrupted {
-                slot.clear();
-            }
-            if let Err(error) = self.finish(thread, driver, &turn, settlement).await {
+            if let Err(error) = self.finish(thread, driver, &turn, turn_end(result)).await {
                 self.abandon(thread, turn.run, &error).await;
                 return Err(error);
             }

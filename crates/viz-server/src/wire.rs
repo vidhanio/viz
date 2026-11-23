@@ -11,7 +11,7 @@ pub(crate) use viz_protocol::{
     DependentChoice, DependentOption, Entry, EntryData as NewEntry, EntryId, EntryPage,
     Environment, EnvironmentStatus, Harness, Hello, HelloParams, LiveText, LiveTextKind, LiveTurn,
     Notification, OptionChoice, OptionKind, OptionValue, Origin, PROTOCOL_VERSION, PlanEntry,
-    PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, Run, RunEnd, RunId, RunKind,
+    PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, Run, RunId, RunKind,
     RunStatus, SearchHit, SlashCommand as Command, Task, TaskStatus, ThreadId, ThreadState,
     ThreadStatus, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord, WaitResult,
 };

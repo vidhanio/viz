@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 
 use viz_core::{
-    runs::{self as decisions, Move, Place, QueueRejection, Settlement},
+    runs::{self as decisions, Move, Place, Settlement},
     threads::Patch,
     titles,
 };
@@ -49,7 +49,7 @@ pub(super) async fn enqueue(
     let attachments = (!new.attachments.is_empty())
         .then(|| store::json(new.attachments))
         .transpose()?;
-    let position = queue_position(db, thread, new.place, None).await?;
+    let position = queue_position(db, thread, new.place).await?;
     let run = row(db, "INSERT INTO runs (thread, status, position, text, origin, attachments, request_id, prompt_entry)
         VALUES (?1, 'queued', ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id", [
         thread.into(), position.into(), new.text.into(), origin.into(), attachments.into(),
@@ -199,6 +199,18 @@ pub(super) async fn status(
     .transpose()
 }
 
+/// The name stored in `runs.status`.
+const fn status_name(status: RunStatus) -> &'static str {
+    match status {
+        RunStatus::Queued => "queued",
+        RunStatus::Running => "running",
+        RunStatus::Completed => "completed",
+        RunStatus::Failed => "failed",
+        RunStatus::Cancelled => "cancelled",
+        RunStatus::Interrupted => "interrupted",
+    }
+}
+
 pub(super) fn decode_status(value: &str) -> Result<RunStatus, Error> {
     Ok(match value {
         "queued" => RunStatus::Queued,
@@ -337,7 +349,7 @@ pub(super) async fn settle(
     settlement: Settlement,
     unread: bool,
 ) -> Result<(), Error> {
-    let status = settlement.status.as_str();
+    let status = status_name(settlement.status.into());
     let data = NewEntry::Run(settlement.end);
     let entry = store::append(db, thread, &data).await?;
     let NewEntry::Run(end) = data else {
@@ -373,17 +385,12 @@ pub(super) async fn recover(db: &mut Connection) -> Result<(), Error> {
     Ok(())
 }
 
-async fn queue_position(
-    db: &mut Connection,
-    thread: ThreadId,
-    place: Place,
-    exclude: Option<RunId>,
-) -> Result<i64, Error> {
+async fn queue_position(db: &mut Connection, thread: ThreadId, place: Place) -> Result<i64, Error> {
     let bounds = row(
         db,
         "SELECT min(position), max(position) FROM runs
-        WHERE thread = ?1 AND status = 'queued' AND (?2 IS NULL OR id <> ?2)",
-        [thread.into(), exclude.into()],
+        WHERE thread = ?1 AND status = 'queued'",
+        [thread.into()],
     )
     .await?
     .expect("aggregate query returns a row");
@@ -393,46 +400,71 @@ async fn queue_position(
         .ok_or_else(|| Error::corrupt("run queue position overflow"))
 }
 
-/// Move the existing run ahead of other queued inputs, preserving its payload.
-pub(super) async fn promote_queued(
-    db: &mut Connection,
-    thread: ThreadId,
-    run: RunId,
-) -> Result<(), Error> {
-    if status(db, thread, run).await? != Some(RunStatus::Queued) {
-        return Err(QueueRejection::NotQueued.into());
-    }
-    let position = queue_position(db, thread, Place::Front, Some(run)).await?;
+/// The queued runs in dispatch order.
+async fn queue(db: &mut Connection, thread: ThreadId) -> Result<Vec<RunId>, Error> {
+    rows(
+        db,
+        "SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
+        [thread.into()],
+    )
+    .await?
+    .map(|row| row.id(0))
+    .collect()
+}
+
+async fn save_order(db: &mut Connection, queue: &[RunId]) -> Result<(), Error> {
     exec(
         db,
-        "UPDATE runs SET position = ?2 WHERE id = ?1",
-        [run.into(), position.into()],
+        "UPDATE runs AS r SET position = j.key FROM json_each(?1) AS j
+         WHERE r.id = j.value AND r.position <> j.key",
+        [store::json(queue)?.into()],
     )
     .await?;
     Ok(())
 }
 
-pub(super) async fn remove_queued(
+async fn cancel_queued(db: &mut Connection, runs: &[RunId], reason: &str) -> Result<(), Error> {
+    exec(
+        db,
+        "UPDATE runs SET status = 'cancelled', error = ?2
+         WHERE id IN (SELECT value FROM json_each(?1))",
+        [store::json(runs)?.into(), reason.into()],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Move a queued run to the front, keeping its identity and payload.
+pub(super) async fn promote(
     db: &mut Connection,
     thread: ThreadId,
     run: RunId,
 ) -> Result<(), Error> {
-    let changed = exec(db, "UPDATE runs SET status = 'cancelled', error = 'removed from queue' WHERE thread = ?1 AND id = ?2 AND status = 'queued'",
-        [thread.into(), run.into()]).await?;
-    if changed == 0 {
-        return Err(QueueRejection::NotQueued.into());
-    }
-    Ok(())
+    let order = decisions::promote(&queue(db, thread).await?, run)?;
+    save_order(db, &order).await
 }
 
-pub(super) async fn cancel_queued(
+pub(super) async fn remove(db: &mut Connection, thread: ThreadId, run: RunId) -> Result<(), Error> {
+    let run = decisions::remove(&queue(db, thread).await?, run)?;
+    cancel_queued(db, &[run], "removed from queue").await
+}
+
+/// Cancel the queued runs a stop covers, and return the running one for the
+/// worker to stop.
+pub(super) async fn cancel(
     db: &mut Connection,
     thread: ThreadId,
-    run: Option<RunId>,
-) -> Result<(), Error> {
-    exec(db, "UPDATE runs SET status = 'cancelled', error = 'cancelled before dispatch' WHERE thread = ?1 AND status = 'queued' AND (?2 IS NULL OR id = ?2)",
-        [thread.into(), run.into()]).await?;
-    Ok(())
+    wanted: Option<RunId>,
+) -> Result<Option<RunId>, Error> {
+    let cancellation =
+        decisions::cancel(queue(db, thread).await?, active(db, thread).await?, wanted);
+    cancel_queued(db, &cancellation.queued, "cancelled before dispatch").await?;
+    Ok(cancellation.active)
+}
+
+pub(super) async fn idle(db: &mut Connection, thread: ThreadId) -> Result<(), Error> {
+    let queued = queued(db, thread).await?;
+    Ok(decisions::idle(queued, active(db, thread).await?)?)
 }
 
 pub(super) async fn update_queue(
@@ -442,22 +474,13 @@ pub(super) async fn update_queue(
     text: Option<&str>,
     before: Patch<RunId>,
 ) -> Result<(), Error> {
-    let queue = rows(
-        db,
-        "SELECT id FROM runs WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
-        [thread.into()],
-    )
-    .await?
-    .map(|row| row.id(0))
-    .collect::<Result<Vec<_>, _>>()?;
     let placement = match before {
         Patch::Set(target) => Move::Before(target),
         Patch::Clear => Move::End,
         Patch::Keep => Move::Keep,
     };
-    if let Some(queue) = decisions::reorder(queue, run, placement)? {
-        exec(db, "UPDATE runs AS r SET position = j.key FROM json_each(?1) AS j WHERE r.id = j.value AND r.position <> j.key",
-            [store::json(&queue)?.into()]).await?;
+    if let Some(order) = decisions::reorder(queue(db, thread).await?, run, placement)? {
+        save_order(db, &order).await?;
     }
     if let Some(text) = text {
         exec(

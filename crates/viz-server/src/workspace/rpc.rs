@@ -121,8 +121,10 @@ handlers! {
         }
         RemoveQueuedInput, RemoveQueuedInput, |workspace, RemoveQueuedInput { thread, run }| {
             let mut db = workspace.db.lock().await;
-            store::require(&mut db, thread).await?;
-            runs::remove_queued(&mut db, thread, run).await?;
+            let mut tx = db.transaction().await?;
+            store::require(&mut tx, thread).await?;
+            runs::remove(&mut tx, thread, run).await?;
+            tx.commit().await?;
             drop(db);
             workspace.settled(thread);
             Ok(Empty {})
@@ -169,7 +171,7 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         store::require(&mut tx, thread).await?;
         let active = runs::active(&mut tx, thread).await?;
-        runs::promote_queued(&mut tx, thread, input.run).await?;
+        runs::promote(&mut tx, thread, input.run).await?;
         tx.commit().await?;
         if let Some(active) = active {
             self.steer_active(thread, active);

@@ -195,8 +195,7 @@ impl Workspace {
                 return Err(Error::NoRun { thread, run });
             }
             let mut tx = db.transaction().await?;
-            runs::cancel_queued(&mut tx, thread, requested).await?;
-            let active = decisions::cancel_active(runs::active(&mut tx, thread).await?, requested);
+            let active = runs::cancel(&mut tx, thread, requested).await?;
             tx.commit().await?;
             if let Some(active) = active
                 && let Some(driver) = self.workers.get(thread)

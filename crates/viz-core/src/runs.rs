@@ -1,18 +1,14 @@
-//! Run queue transitions are applied while the shell holds a workspace write
-//! lease.
+//! A thread's runs: the queue, the single running slot, and how runs end.
 //!
-//! Request IDs return the original run before evaluating placement or
-//! attachments. A new input goes at the end, or in front when steering an
-//! active run. Promoting an existing queued input preserves its identity and
-//! payload. The worker claims the queue head and persists its prompt in the
-//! same commit before calling ACP. Idle ACP output starts a running
-//! continuation with a continued entry instead. Dispatch and continuations
-//! share the single running slot. Removing or stopping queued inputs cancels
-//! them without transcript entries. Stopping a running input signals the worker
-//! after commit. Settlement appends an end entry once and may
-//! enqueue a delegated continuation answer. On restart a running input is
-//! settled as interrupted, with no replay. If settlement itself fails,
-//! abandoning it frees the slot through a bare failure update.
+//! Decisions are applied while the shell holds the workspace's write lease. A
+//! request ID replays the run it first created. A new input goes to the end of
+//! the queue, or to its front when it steers the running one. The worker
+//! claims the queue's head and persists its prompt in the same commit, before
+//! the harness sees it; agent output outside a turn claims the same slot as a
+//! continuation instead. Removing or stopping queued inputs cancels them
+//! without transcript entries, and stopping the running one signals the
+//! worker after the commit. A run ends once, with an end entry. A run found
+//! running at startup was interrupted, and is never replayed.
 
 use viz_protocol::{RunEnd, RunId, RunStatus, SendMode};
 
@@ -116,17 +112,76 @@ pub fn reorder(
     Ok(Some(queue))
 }
 
+/// The order that puts a queued input ahead of the others.
+///
+/// # Errors
+/// The input must be queued.
+pub fn promote(queue: &[RunId], run: RunId) -> Result<Vec<RunId>, QueueRejection> {
+    if !queue.contains(&run) {
+        return Err(QueueRejection::NotQueued);
+    }
+    let rest = queue.iter().copied().filter(|&other| other != run);
+    Ok(std::iter::once(run).chain(rest).collect())
+}
+
 /// Select the queue head only if the thread has a free running slot.
 #[must_use]
 pub const fn claim(active: Option<RunId>, next: Option<RunId>) -> Option<RunId> {
     if active.is_none() { next } else { None }
 }
 
-/// Select the active run to signal after queued inputs are cancelled.
-#[must_use]
-pub fn cancel_active(active: Option<RunId>, wanted: Option<RunId>) -> Option<RunId> {
-    active.filter(|active| wanted.is_none_or(|wanted| wanted == *active))
+/// What stopping a thread, or one of its runs, does.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Cancellation {
+    /// Queued inputs to cancel where they are.
+    pub queued: Vec<RunId>,
+    /// The running run, for its worker to stop.
+    pub active: Option<RunId>,
 }
+
+/// Stop `wanted`, or everything.
+#[must_use]
+pub fn cancel(
+    mut queued: Vec<RunId>,
+    active: Option<RunId>,
+    wanted: Option<RunId>,
+) -> Cancellation {
+    let applies = |run: RunId| wanted.is_none_or(|wanted| wanted == run);
+    queued.retain(|&run| applies(run));
+    Cancellation {
+        queued,
+        active: active.filter(|&run| applies(run)),
+    }
+}
+
+/// Take one input out of the queue.
+///
+/// # Errors
+/// The input must be queued.
+pub fn remove(queue: &[RunId], run: RunId) -> Result<RunId, QueueRejection> {
+    if queue.contains(&run) {
+        Ok(run)
+    } else {
+        Err(QueueRejection::NotQueued)
+    }
+}
+
+/// Whether the thread has no queued or running input, so its session can be
+/// replaced.
+///
+/// # Errors
+/// A busy thread must be stopped first.
+pub const fn idle(queued: bool, active: Option<RunId>) -> Result<(), Busy> {
+    if queued || active.is_some() {
+        Err(Busy)
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("stop the thread's runs before moving it")]
+pub struct Busy;
 
 /// A terminal status is required wherever the shell persists a run end.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,16 +192,84 @@ pub enum EndStatus {
     Interrupted,
 }
 
-impl EndStatus {
-    /// Use the same names in SQLite and on the wire.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-            Self::Interrupted => "interrupted",
+impl From<EndStatus> for RunStatus {
+    fn from(status: EndStatus) -> Self {
+        match status {
+            EndStatus::Completed => Self::Completed,
+            EndStatus::Failed => Self::Failed,
+            EndStatus::Cancelled => Self::Cancelled,
+            EndStatus::Interrupted => Self::Interrupted,
         }
+    }
+}
+
+/// How the harness ended a turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnEnd {
+    pub answer: String,
+    pub stop: Stop,
+    /// The harness's name for the reason; a continuation has none.
+    pub reason: Option<String>,
+}
+
+/// What the harness's stop reason means for the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stop {
+    Finished,
+    Cancelled,
+    Refused,
+}
+
+/// Why the shell may have ended the turn itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Signals {
+    /// The server is shutting down.
+    pub closing: bool,
+    /// The run was stopped, or its thread deleted.
+    pub stopped: bool,
+    /// A steering input was waiting.
+    pub steered: bool,
+}
+
+/// Settle a run at the end of its turn. The shell's own reasons win over
+/// whatever the harness made of them, except that a turn which finished before
+/// steering reached it counts as finished.
+#[must_use]
+pub fn settle(signals: Signals, turn: Result<TurnEnd, String>) -> Settlement {
+    if signals.closing {
+        return Settlement::interrupted();
+    }
+    if signals.stopped {
+        return Settlement::stopped(EndStatus::Cancelled, "cancelled", None);
+    }
+    let TurnEnd {
+        answer,
+        stop,
+        reason,
+    } = match turn {
+        Ok(end) => end,
+        Err(error) => return Settlement::failed(error),
+    };
+    let (status, error) = match stop {
+        Stop::Cancelled if signals.steered => {
+            let mut settlement = Settlement::stopped(EndStatus::Cancelled, "steered", None);
+            settlement.end.answer = Some(answer).filter(|answer| !answer.is_empty());
+            return settlement;
+        }
+        Stop::Finished => (EndStatus::Completed, None),
+        Stop::Cancelled => (EndStatus::Cancelled, None),
+        Stop::Refused => (
+            EndStatus::Failed,
+            Some("ACP runner refused the prompt".into()),
+        ),
+    };
+    Settlement {
+        status,
+        end: RunEnd {
+            stop_reason: reason,
+            answer: Some(answer),
+            error,
+        },
     }
 }
 
@@ -168,9 +291,7 @@ impl Settlement {
         )
     }
 
-    /// A failed dispatch or prompt with no answer.
-    #[must_use]
-    pub fn failed(error: String) -> Self {
+    fn failed(error: String) -> Self {
         Self {
             status: EndStatus::Failed,
             end: RunEnd {
@@ -181,9 +302,7 @@ impl Settlement {
         }
     }
 
-    /// Record why an active turn stopped.
-    #[must_use]
-    pub fn stopped(status: EndStatus, reason: &str, error: Option<&str>) -> Self {
+    fn stopped(status: EndStatus, reason: &str, error: Option<&str>) -> Self {
         Self {
             status,
             end: RunEnd {

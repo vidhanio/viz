@@ -3,7 +3,11 @@
 //! Callers branch on [`Error::kind`] or on a variant; only `crate::wire` knows
 //! JSON-RPC codes.
 
-use viz_core::{placement, runs::QueueRejection, threads};
+use viz_core::{
+    placement,
+    runs::{Busy, QueueRejection},
+    threads,
+};
 use viz_protocol::{RunId, TaskId, ThreadId};
 
 #[derive(Debug, thiserror::Error)]
@@ -20,6 +24,8 @@ pub(crate) enum Error {
     NotFound(String),
     #[error(transparent)]
     Queue(#[from] QueueRejection),
+    #[error(transparent)]
+    Busy(#[from] Busy),
     #[error(transparent)]
     Thread(#[from] threads::Rejection),
     #[error(transparent)]
@@ -102,6 +108,7 @@ impl Error {
             | Self::NoProject(_)
             | Self::NotFound(_) => Kind::NotFound,
             Self::Queue(_)
+            | Self::Busy(_)
             | Self::Thread(_)
             | Self::Placement(_)
             | Self::Invalid(_)

@@ -5,10 +5,9 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use tokio::time::{Instant, sleep_until};
-use tokio_util::sync::CancellationToken;
 use viz_core::{
     handoff,
-    runs::{EndStatus, Settlement},
+    runs::{self as decisions, Signals, Stop, TurnEnd},
 };
 use viz_protocol::ThreadId;
 
@@ -26,7 +25,7 @@ use crate::{
         transcript::{Output, Transcript},
     },
     error::Error,
-    wire::{LiveTurn, RunEnd, RunId, RunStatus, ToolCallStatus},
+    wire::{LiveTurn, RunId, RunStatus, ToolCallStatus},
 };
 
 /// ACP sends no stop signal for idle output. Allow four seconds between
@@ -115,18 +114,15 @@ impl Workspace {
                 }
                 self.publish(thread, run, session.id(), transcript.finish(), None, None)
                     .await?;
-                Ok::<_, Error>(Settlement {
-                    status: EndStatus::Completed,
-                    end: RunEnd {
-                        stop_reason: None,
-                        answer: Some(transcript.answer().to_owned()),
-                        error: None,
-                    },
+                Ok::<_, Error>(TurnEnd {
+                    answer: transcript.answer().to_owned(),
+                    stop: Stop::Finished,
+                    reason: None,
                 })
             })
             .await;
         let result = match result {
-            Ok(settlement) => self.finish(thread, driver, &turn, settlement).await,
+            Ok(end) => self.finish(thread, driver, &turn, Ok(end)).await,
             Err(error) => Err(error),
         };
         if let Err(error) = &result {
@@ -136,23 +132,25 @@ impl Workspace {
         result
     }
 
+    /// Settle the turn's run unless something else already has.
     pub(super) async fn finish(
         &self,
         thread: ThreadId,
         driver: &Driver,
         turn: &Turn,
-        mut settlement: Settlement,
+        end: Result<TurnEnd, String>,
     ) -> Result<(), Error> {
         let run = turn.run;
         let mut db = self.db.lock().await;
         if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
             return Ok(());
         }
-        if self.closing.is_cancelled() {
-            settlement = Settlement::interrupted();
-        } else if driver.stopping(turn.run) {
-            settlement = Settlement::stopped(EndStatus::Cancelled, "cancelled", None);
-        }
+        let signals = Signals {
+            closing: self.closing.is_cancelled(),
+            stopped: driver.stopping(run),
+            steered: turn.steer.is_cancelled(),
+        };
+        let settlement = decisions::settle(signals, end);
         let mut tx = db.transaction().await?;
         runs::settle(&mut tx, thread, run, settlement, self.unread(thread)).await?;
         tx.commit().await?;
@@ -288,58 +286,21 @@ impl Workspace {
     }
 }
 
-pub(super) fn settle_outcome(
-    result: anyhow::Result<Outcome>,
-    closing: &CancellationToken,
-    cancel: &CancellationToken,
-    steer: &CancellationToken,
-) -> Settlement {
-    if closing.is_cancelled() {
-        return Settlement::interrupted();
-    }
-    if cancel.is_cancelled() {
-        return Settlement::stopped(EndStatus::Cancelled, "cancelled", None);
-    }
-    if steer.is_cancelled()
-        && let Ok(Outcome {
-            answer,
-            stop_reason: StopReason::Cancelled,
-        }) = result
-    {
-        let mut settlement = Settlement::stopped(EndStatus::Cancelled, "steered", None);
-        if !answer.is_empty() {
-            settlement.end.answer = Some(answer);
-        }
-        return settlement;
-    }
-    outcome(result)
-}
-
-fn outcome(outcome: anyhow::Result<Outcome>) -> Settlement {
-    match outcome {
-        Err(error) => Settlement::failed(error.to_string()),
-        Ok(Outcome {
-            answer,
-            stop_reason,
-        }) => {
-            let (status, error) = match stop_reason {
-                StopReason::Cancelled => (EndStatus::Cancelled, None),
-                StopReason::Refusal => (
-                    EndStatus::Failed,
-                    Some("ACP runner refused the prompt".into()),
-                ),
-                _ => (EndStatus::Completed, None),
-            };
-            Settlement {
-                status,
-                end: RunEnd {
-                    stop_reason: Some(stop_reason_name(stop_reason)),
-                    answer: Some(answer),
-                    error,
-                },
-            }
-        }
-    }
+/// What the harness's answer to a prompt says about the turn.
+pub(super) fn turn_end(outcome: anyhow::Result<Outcome>) -> Result<TurnEnd, String> {
+    let Outcome {
+        answer,
+        stop_reason,
+    } = outcome.map_err(|error| error.to_string())?;
+    Ok(TurnEnd {
+        answer,
+        stop: match stop_reason {
+            StopReason::Cancelled => Stop::Cancelled,
+            StopReason::Refusal => Stop::Refused,
+            _ => Stop::Finished,
+        },
+        reason: Some(stop_reason_name(stop_reason)),
+    })
 }
 
 /// Load the durable turns for the first prompt after a move.

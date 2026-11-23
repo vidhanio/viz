@@ -14,7 +14,7 @@ use viz_core::{
 use viz_protocol::{MoveThread, Moved, ThreadId, Worktree, WorktreeList, WorktreeTarget};
 
 use super::{
-    Workspace,
+    Workspace, runs,
     sql::{exec, row, rows},
     store,
     worktree::{self, Placement},
@@ -149,7 +149,7 @@ impl Workspace {
         let (binding, title) = {
             let mut db = self.db.lock().await;
             let binding = store::binding(&mut db, thread).await?;
-            idle(&mut db, thread).await?;
+            runs::idle(&mut db, thread).await?;
             let title = row(
                 &mut db,
                 "SELECT title FROM threads WHERE id = ?1",
@@ -217,7 +217,7 @@ impl Workspace {
         if current.checkout != before.checkout {
             return Err(threads::Rejection::Moved.into());
         }
-        idle(&mut tx, thread).await?;
+        runs::idle(&mut tx, thread).await?;
         let prompted = row(
             &mut tx,
             "SELECT 1 FROM runs WHERE thread = ?1 LIMIT 1",
@@ -247,20 +247,6 @@ impl Workspace {
         drop(db);
         Ok(())
     }
-}
-
-async fn idle(db: &mut crate::workspace::sql::Connection, thread: ThreadId) -> Result<(), Error> {
-    if row(
-        db,
-        "SELECT 1 FROM runs WHERE thread = ?1 AND status IN ('queued', 'running') LIMIT 1",
-        [thread.into()],
-    )
-    .await?
-    .is_some()
-    {
-        return Err(Error::invalid("stop the thread's runs before moving it"));
-    }
-    Ok(())
 }
 
 fn moved(checkout: Checkout) -> Moved {
