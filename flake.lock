@@ -35,23 +35,7 @@
         "type": "github"
       }
     },
-    "nixpkgs-xtool": {
-      "locked": {
-        "lastModified": 1794806700,
-        "narHash": "sha256-uQw1chMP3vee4Y7frj4pRGE8pdeuHhYiZ8/aPn7gVxM=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "619cca8e8e8840df58cdf155f7ce7efc0c4afa05",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "pull/548520/head",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
-    "nixpkgs_2": {
+    "nixpkgs": {
       "locked": {
         "lastModified": 1794537146,
         "narHash": "sha256-Wpz/7x/YWnDIBu7yj6ixe8j6fIMsidd9Y+o1PqPF3iM=",
@@ -71,10 +55,9 @@
       "inputs": {
         "crane": "crane",
         "flake-parts": "flake-parts",
-        "nixpkgs": "nixpkgs_2",
-        "nixpkgs-xtool": "nixpkgs-xtool",
+        "nixpkgs": "nixpkgs",
         "rust-overlay": "rust-overlay",
-        "systems": "systems_2",
+        "systems": "systems",
         "treefmt-nix": "treefmt-nix"
       }
     },
@@ -98,7 +81,7 @@
         "type": "github"
       }
     },
-    "systems_2": {
+    "systems": {
       "locked": {
         "lastModified": 1689347949,
         "narHash": "sha256-12tWmuL2zgBgZkdoB6qXZsgJEH9LR3oUgpaQq2RbI80=",

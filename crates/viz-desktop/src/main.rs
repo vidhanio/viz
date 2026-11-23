@@ -48,7 +48,7 @@ use clap::Parser;
 use rune::{App, AppSpec, Chrome, Cx, El, ImageCache, Key, KeyEvent, Tx, col};
 use tokio::sync::mpsc;
 use viz_client::Endpoint;
-use viz_config::ClientFile;
+use viz_config::Component;
 
 use crate::{
     app::Desktop,
@@ -336,14 +336,14 @@ fn poll_palette(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
 #[derive(Parser)]
 #[command(disable_help_flag = true)]
 struct Args {
-    /// Use this desktop config file instead of the environment or default
+    /// Use this config file instead of `$VIZ_DESKTOP_CONFIG` or the default
     /// location.
     #[arg(long)]
     config: Option<PathBuf>,
 }
 
 /// Strip viz-specific flags before Rune handles its own tooling arguments.
-fn args() -> (ClientFile, Vec<String>) {
+fn args() -> (Option<PathBuf>, Vec<String>) {
     let mut input = std::env::args();
     let mut viz: Vec<_> = input.next().into_iter().collect();
     let mut rune = Vec::new();
@@ -358,11 +358,7 @@ fn args() -> (ClientFile, Vec<String>) {
         }
     }
     let args = Args::parse_from(viz);
-    (
-        args.config
-            .map_or_else(ClientFile::desktop, ClientFile::path),
-        rune,
-    )
+    (args.config, rune)
 }
 
 fn main() {
@@ -382,7 +378,7 @@ fn main() {
     let scene_theme = preview
         .then(|| std::env::var("VIZ_SCENE_THEME").ok())
         .flatten();
-    let (theme_error, endpoint) = match viz_config::load::<DesktopConfig>(&file) {
+    let (theme_error, endpoint) = match Component::Desktop.load::<DesktopConfig>(file.as_deref()) {
         Ok(config) => {
             let endpoint = Endpoint::from_connection(&config.server).map_err(|e| e.to_string());
             (

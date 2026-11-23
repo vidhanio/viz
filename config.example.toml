@@ -1,8 +1,8 @@
-# Copy to config.toml in $VIZ_CONFIG_DIR or $XDG_CONFIG_HOME/viz (default ~/.config/viz).
-# Server only. With Home Manager, use programs.viz.settings instead.
-# Then load config.d/*.toml in lexical order from that same directory:
-# tables merge recursively, and other values are replaced by later layers.
-# $VIZ_CONFIG selects a single existing file instead (no drop-ins).
+# Copy to ~/.config/viz/config.toml ($XDG_CONFIG_HOME/viz/config.toml).
+# One file for every viz program; each reads only its own table and ignores the rest.
+# Override the path with $VIZ_SERVER_CONFIG, $VIZ_DESKTOP_CONFIG or $VIZ_CLI_CONFIG
+# (or --config). A missing file or table uses defaults.
+# With Home Manager, use programs.viz.settings instead.
 #
 # Secrets accept "inline", { file = "/run/secrets/x" } (one trailing line ending
 # is removed), or { env = "NAME" }. Prefer file or env for real credentials.
@@ -27,13 +27,13 @@
 
 # Configure peers in both directions for remote delegation. A peer's token
 # is the bearer token configured on that peer. Use a base URL, not the RPC route.
-# [environments.lab]
+# [server.environments.lab]
 # url = "https://lab.example.com"
 # token = { file = "/run/secrets/viz-lab-token" }
 
 # Trusted ACP runners run under the server account and own their model credentials.
 # viz does not add a sandbox or interactive permission policy.
-# [harnesses.claude]
+# [server.harnesses.claude]
 # Display name for selectors; the table key is still used in requests. Omit to show the key.
 # name = "Claude Code"
 # Required executable on PATH or an absolute path.
@@ -45,10 +45,39 @@
 # the runner. Thread choices take precedence over these defaults.
 # model = "claude-opus-5-5"
 # effort = "high"
-# [harnesses.codex]
+# [server.harnesses.codex]
 # name = "Codex"
 # command = "codex-acp"
-# [harnesses.omp]
+# [server.harnesses.omp]
 # name = "Oh My Pi"
 # command = "omp"
 # args = ["acp"]
+
+[desktop.server]
+# Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
+# url = "https://viz.example.com"
+# token = { file = "/run/secrets/viz-token" }
+
+[desktop.theme]
+# Follows the system appearance. Pick a built-in base16 scheme for each side.
+# Defaults: dark = "github-dark", light = "github".
+dark = "tokyo-night-dark"
+light = "tokyo-night-light"
+
+# For a custom side, remove its built-in key above. Set `file` under
+# [desktop.theme.dark] or [desktop.theme.light] to load tinted-theming YAML, or
+# supply a nested [desktop.theme.dark.colors] or [desktop.theme.light.colors]
+# table with all 16 keys base00 through base0F, each a "#RRGGBB" string.
+# [desktop.theme.dark]
+# file = "~/.config/viz/themes/mine.yaml"
+
+[cli]
+# Default thread for `viz send`; override with `--thread`.
+# thread = 42
+# Optional peer environment, otherwise the server you connect to.
+# environment = "workstation"
+
+[cli.server]
+# Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
+# url = "https://viz.example.com"
+# token = { file = "/run/secrets/viz-token" }

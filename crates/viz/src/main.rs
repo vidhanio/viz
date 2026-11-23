@@ -1,7 +1,7 @@
 //! `viz`: inspect configuration and talk to the server from a terminal.
 
 use std::{
-    env, fs, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -11,7 +11,7 @@ use viz_client::{
     Client, Endpoint,
     protocol::{ClientInfo, ClientKind, SendInput, ThreadId, WaitThread},
 };
-use viz_config::{ClientFile, Connection, DEFAULT_URL, Paths};
+use viz_config::{Component, Connection, DEFAULT_URL};
 
 /// The CLI's client name.
 const NAME: &str = "cli";
@@ -19,7 +19,8 @@ const NAME: &str = "cli";
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
-    /// Use this CLI config file instead of the environment or default location.
+    /// Use this config file instead of `$VIZ_CLI_CONFIG` or the default
+    /// location.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
 
@@ -61,11 +62,10 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_writer(io::stderr)
         .init();
-    let file = cli.config.map_or_else(ClientFile::cli, ClientFile::path);
-    let config: CliConfig = viz_config::load(&file)?;
+    let config: CliConfig = Component::Cli.load(cli.config.as_deref())?;
     let endpoint = || Endpoint::from_connection(&config.server);
     match cli.command {
-        Command::Config => print_config(&file, &Paths::from_env()?, config),
+        Command::Config => print_config(cli.config.as_deref(), config),
         Command::Status => status(&endpoint()?, config.environment).await,
         Command::Send { thread, text } => {
             let thread = thread
@@ -78,25 +78,16 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-fn print_config(file: &ClientFile, paths: &Paths, config: CliConfig) -> anyhow::Result<()> {
-    let server_override = env::var_os("VIZ_CONFIG").filter(|value| !value.is_empty());
-    if let Some(path) = server_override {
-        print_path("server", Path::new(&path))?;
-    } else {
-        print_path("server", &paths.config_dir.join("config.toml"))?;
-        print_dropins(&paths.config_dir.join("config.d"))?;
-    }
-    print_path("desktop", &ClientFile::desktop().resolve()?)?;
-    print_path("cli", &file.resolve()?)?;
-    for name in ["discord", "imessage"] {
-        print_path(name, &ClientFile::connector(name).resolve()?)?;
-    }
+fn print_config(explicit: Option<&Path>, config: CliConfig) -> anyhow::Result<()> {
+    print_path("server", &Component::Server.path(None)?)?;
+    print_path("desktop", &Component::Desktop.path(None)?)?;
+    print_path("cli", &Component::Cli.path(explicit)?)?;
     let CliConfig {
         server,
         thread,
         environment,
     } = config;
-    println!("\nCLI [server]");
+    println!("\n[cli.server]");
     let url = server.url.as_deref().unwrap_or(DEFAULT_URL);
     println!(
         "url: {}",
@@ -119,27 +110,6 @@ fn print_config(file: &ClientFile, paths: &Paths, config: CliConfig) -> anyhow::
     }
     if let Some(environment) = environment {
         println!("environment: {environment}");
-    }
-    Ok(())
-}
-
-fn print_dropins(dir: &Path) -> anyhow::Result<()> {
-    print_path("server drop-ins", dir)?;
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(error).with_context(|| format!("listing {}", dir.display())),
-    };
-    let mut dropins = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        if entry.file_name().as_encoded_bytes().ends_with(b".toml") {
-            dropins.push(entry.path());
-        }
-    }
-    dropins.sort_unstable();
-    for path in dropins {
-        print_path("  drop-in", &path)?;
     }
     Ok(())
 }

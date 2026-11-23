@@ -1,16 +1,17 @@
-//! Layered server TOML. Client files and runner credentials stay separate.
+//! The `[server]` table of the shared viz config file. Runner credentials stay
+//! with their runners.
 
 use std::{
     collections::BTreeMap,
-    env, fmt, fs, io,
+    env, fmt,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::Deserialize;
 use url::Url;
-use viz_config::{Paths, Secret};
+use viz_config::{Component, Paths, Secret};
 
 #[derive(Debug)]
 pub(crate) struct Config {
@@ -41,14 +42,6 @@ impl fmt::Debug for PeerConfig {
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
-struct File {
-    server: Server,
-    harnesses: BTreeMap<String, HarnessConfig>,
-    environments: BTreeMap<String, PeerFile>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-#[serde(default, deny_unknown_fields)]
 struct Server {
     environment: Option<String>,
     cwd: Option<PathBuf>,
@@ -56,6 +49,8 @@ struct Server {
     listen: Option<SocketAddr>,
     token: Option<Secret>,
     default_harness: Option<String>,
+    harnesses: BTreeMap<String, HarnessConfig>,
+    environments: BTreeMap<String, PeerFile>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -68,15 +63,9 @@ struct PeerFile {
 impl Config {
     pub(crate) fn load(explicit: Option<&Path>) -> Result<Self> {
         let paths = Paths::from_env()?;
-        let mut builder = config::Config::builder();
-        for path in layers(&paths.config_dir, explicit)? {
-            builder = builder.add_source(config::File::from(path).format(config::FileFormat::Toml));
-        }
-        let file: File = builder
-            .build()?
-            .try_deserialize()
+        let server: Server = Component::Server
+            .load(explicit)
             .context("invalid server configuration")?;
-        let server = file.server;
         let environment = server.environment.unwrap_or_else(|| String::from("local"));
         ensure!(
             valid_name(&environment),
@@ -90,10 +79,10 @@ impl Config {
             "non-loopback listeners require server.token"
         );
         ensure!(
-            file.environments.is_empty() || server.token.is_some(),
+            server.environments.is_empty() || server.token.is_some(),
             "linked environments require server.token"
         );
-        for (id, harness) in &file.harnesses {
+        for (id, harness) in &server.harnesses {
             ensure!(valid_name(id), "invalid harness ID {id:?}");
             ensure!(
                 harness
@@ -110,16 +99,16 @@ impl Config {
         let default_harness = match server.default_harness {
             Some(name) => {
                 ensure!(
-                    file.harnesses.contains_key(&name),
+                    server.harnesses.contains_key(&name),
                     "unconfigured default harness {name:?}"
                 );
                 Some(name)
             }
-            None if file.harnesses.len() == 1 => file.harnesses.keys().next().cloned(),
+            None if server.harnesses.len() == 1 => server.harnesses.keys().next().cloned(),
             None => None,
         };
         let mut environments = BTreeMap::new();
-        for (name, peer) in file.environments {
+        for (name, peer) in server.environments {
             ensure!(
                 valid_name(&name) && name != environment,
                 "invalid peer environment ID {name:?}"
@@ -150,7 +139,7 @@ impl Config {
             listen,
             token: server.token,
             default_harness,
-            harnesses: file.harnesses,
+            harnesses: server.harnesses,
             environments,
         })
     }
@@ -163,33 +152,6 @@ fn valid_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn layers(directory: &Path, explicit: Option<&Path>) -> Result<Vec<PathBuf>> {
-    if let Some(path) = explicit.map(Path::to_path_buf).or_else(|| {
-        env::var_os("VIZ_CONFIG")
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    }) {
-        return Ok(vec![path]);
-    }
-    let mut paths = Vec::new();
-    let main = directory.join("config.toml");
-    if main.try_exists()? {
-        paths.push(main);
-    }
-    let dropins = directory.join("config.d");
-    let mut files = match fs::read_dir(&dropins) {
-        Ok(files) => files
-            .map(|entry| entry.map(|entry| entry.path()))
-            .collect::<io::Result<Vec<_>>>()?,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(paths),
-        Err(error) => bail!("reading {}: {error}", dropins.display()),
-    };
-    files.retain(|path| path.extension().is_some_and(|ext| ext == "toml"));
-    files.sort_unstable();
-    paths.extend(files);
-    Ok(paths)
 }
 
 fn working_directory(configured: Option<PathBuf>) -> Result<PathBuf> {

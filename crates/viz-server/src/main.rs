@@ -36,7 +36,8 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
-    /// Read one server TOML file instead of the default layers.
+    /// Read this config file instead of `$VIZ_SERVER_CONFIG` or the default
+    /// location.
     #[arg(long, global = true)]
     config: Option<PathBuf>,
     #[command(subcommand)]

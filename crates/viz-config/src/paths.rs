@@ -7,7 +7,7 @@ use crate::{Error, Result};
 /// Filesystem locations viz uses, following the XDG base directory spec.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Paths {
-    /// `$VIZ_CONFIG_DIR`, default `$XDG_CONFIG_HOME/viz`.
+    /// `$XDG_CONFIG_HOME/viz`.
     pub config_dir: PathBuf,
     /// `$STATE_DIRECTORY` (systemd `StateDirectory=`), default
     /// `$XDG_STATE_HOME/viz`: databases and logs.
@@ -36,13 +36,10 @@ impl Paths {
 }
 
 pub fn config_dir() -> Result<PathBuf> {
-    match var("VIZ_CONFIG_DIR") {
-        Some(dir) => Ok(dir),
-        None => Ok(xdg("XDG_CONFIG_HOME", ".config")?.join("viz")),
-    }
+    Ok(xdg("XDG_CONFIG_HOME", ".config")?.join("viz"))
 }
 
-fn var(key: &str) -> Option<PathBuf> {
+pub fn var(key: &str) -> Option<PathBuf> {
     env::var_os(key)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)

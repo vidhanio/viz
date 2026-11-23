@@ -8,9 +8,9 @@ use serde::Deserialize;
 /// variable.
 ///
 /// ```toml
-/// bot_token = "inline"                         # discouraged outside throwaway setups
-/// bot_token = { file = "/run/secrets/discord" } # sops-nix, agenix, systemd credentials
-/// bot_token = { env = "DISCORD_TOKEN" }
+/// token = "inline"                         # discouraged outside throwaway setups
+/// token = { file = "/run/secrets/viz" } # sops-nix, agenix, systemd credentials
+/// token = { env = "VIZ_TOKEN" }
 /// ```
 ///
 /// `Debug` never shows an inline value.

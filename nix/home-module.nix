@@ -17,8 +17,10 @@ let
   vizPackages = self.packages.${pkgs.stdenv.hostPlatform.system};
 
   tomlFormat = pkgs.formats.toml { };
-  serverSettings = cfg.settings;
-  generatedSettings = tomlFormat.generate "viz-settings.toml" serverSettings;
+  settings = lib.recursiveUpdate cfg.settings (
+    lib.optionalAttrs applyStylix { desktop.theme = desktopTheme; }
+  );
+  generatedSettings = tomlFormat.generate "viz-settings.toml" settings;
 
   stylixColors = config.lib.stylix.colors or null;
   stylixPolarity = config.stylix.polarity or "either";
@@ -26,78 +28,15 @@ let
   base16 = lib.genAttrs (map (suffix: "base0${suffix}") (lib.stringToCharacters "0123456789ABCDEF")) (
     key: "#${stylixColors.${key}}"
   );
-  desktopSettings =
-    cfg.desktop.settings
-    // lib.optionalAttrs applyStylix {
-      theme =
-        lib.optionalAttrs (stylixPolarity != "light") { dark.colors = base16; }
-        // lib.optionalAttrs (stylixPolarity != "dark") { light.colors = base16; }
-        // (cfg.desktop.settings.theme or { });
-    };
-  cliSettings = cfg.cli.settings;
-  connectorSettings = lib.mapAttrs (_: connector: connector.settings) cfg.connectors;
-  connectorSources = lib.mapAttrs (
-    name: settings: tomlFormat.generate "viz-${name}.toml" settings
-  ) connectorSettings;
-
-  settingsOption =
-    file:
-    mkOption {
-      inherit (tomlFormat) type;
-      default = { };
-      description = ''
-        Client settings written to {file}`$XDG_CONFIG_HOME/viz/${file}`.
-        See `${lib.removeSuffix ".toml" file}.example.toml` for keys and defaults.
-        Reference secrets by file or environment variable, not inline.
-      '';
-    };
+  desktopTheme =
+    lib.optionalAttrs (stylixPolarity != "light") { dark.colors = base16; }
+    // lib.optionalAttrs (stylixPolarity != "dark") { light.colors = base16; }
+    // (cfg.settings.desktop.theme or { });
   settingsSource = pkgs.runCommand "viz-config.toml" { } ''
     settings="$(${lib.getExe pkgs.jaq} --from toml --to toml '.' ${generatedSettings})"
     printf '%s\n' "$settings" > "$out"
   '';
   settingsPath = "${config.xdg.configHome}/viz/config.toml";
-
-  service =
-    {
-      description,
-      package,
-      after ? [ ],
-      extraService ? { },
-      restartTriggers,
-    }:
-    {
-      Unit = {
-        Description = description;
-        After = [ "network.target" ] ++ after;
-        Wants = after;
-        X-Restart-Triggers = restartTriggers;
-      };
-      Service = {
-        ExecStart = lib.getExe package;
-        Restart = "on-failure";
-        RestartSec = 5;
-      }
-      // lib.optionalAttrs (cfg.environmentFile != null) { EnvironmentFile = cfg.environmentFile; }
-      // extraService;
-      Install.WantedBy = [ "default.target" ];
-    };
-
-  connectorModule =
-    { name, ... }:
-    {
-      options = {
-        enable = mkEnableOption "the viz ${name} connector service";
-        settings = settingsOption "connectors/${name}.toml";
-        package = mkOption {
-          type = types.package;
-          default = vizPackages.${name};
-          defaultText = lib.literalExpression "viz.packages.\${system}.${name}";
-          description = "The viz-${name} package.";
-        };
-      };
-    };
-
-  enabledConnectors = lib.filterAttrs (_: c: c.enable) cfg.connectors;
 in
 {
   options.programs.viz = {
@@ -121,21 +60,20 @@ in
             token.file = config.sops.secrets."viz/token".path;
             default_harness = "claude";
           };
-          harnesses.claude = {
+          server.harnesses.claude = {
             name = "Claude Code";
             command = "claude-agent-acp";
             env.ANTHROPIC_API_KEY.env = "ANTHROPIC_API_KEY";
           };
+          desktop.theme.dark = "tokyo-night-dark";
         }
       '';
       description = ''
-        Server configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`. Only
-        viz-server reads it, along with unmanaged drop-ins under
-        {file}`$XDG_CONFIG_HOME/viz/config.d/`. See `config.example.toml` for keys
-        and defaults. Reference secrets by file or environment variable so the
-        values stay out of the Nix store. Configure clients separately with
-        {option}`programs.viz.cli.settings`, {option}`programs.viz.desktop.settings`,
-        or {option}`programs.viz.connectors.<name>.settings`.
+        Configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`, shared by
+        every viz program: `[server]`, `[desktop]` and `[cli]` tables, each read only
+        by its own program. See `config.example.toml` for keys and defaults.
+        Reference secrets by file or environment variable so the values stay out of
+        the Nix store.
       '';
     };
 
@@ -149,7 +87,6 @@ in
         a declaration does not remove it from the file; comments are not preserved. New files get
         mode 0600. Switching back replaces the file only if it is byte-identical to the declared
         settings. Uses Home Manager's `mkImpureConfigMerger`.
-        Client file generation is unchanged.
       '';
     };
 
@@ -158,7 +95,7 @@ in
       default = null;
       example = "/run/secrets/viz-env";
       description = ''
-        `KEY=value` file loaded into every viz service: provider credentials for the server
+        `KEY=value` file loaded into the viz server service: provider credentials for the server
         (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, ...) and variables referenced by
         `{ env = "NAME"; }` secrets.
       '';
@@ -170,7 +107,7 @@ in
         default = true;
         description = ''
           Run `viz-server.service` as a systemd user service with `StateDirectory=viz`.
-          Changes to the generated server settings trigger a restart.
+          Changes to the generated settings trigger a restart.
         '';
       };
       package = mkOption {
@@ -183,7 +120,6 @@ in
 
     desktop = {
       enable = mkEnableOption "the viz desktop app";
-      settings = settingsOption "desktop.toml";
       stylix.enable = mkOption {
         type = types.bool;
         default = config.stylix.enable or false;
@@ -201,52 +137,18 @@ in
         description = "The viz-desktop package.";
       };
     };
-
-    cli.settings = settingsOption "cli.toml";
-
-    connectors = mkOption {
-      type = types.attrsOf (types.submodule connectorModule);
-      default = { };
-      example = lib.literalExpression ''
-        {
-          discord.enable = true;
-          discord.settings = {
-            bot_token.file = config.sops.secrets."viz/discord".path;
-            allowed_users = [ 123456789012345678 ];
-            thread = 42;
-          };
-        }
-      '';
-      description = ''
-        Connector settings and services. Each reads `connectors/<name>.toml` and runs
-        as `viz-<name>.service` when enabled. Changes to its generated settings
-        trigger a restart. Known connectors: `discord`, `imessage`.
-      '';
-    };
   };
 
   config = mkIf cfg.enable {
     home.packages = [ cfg.package ] ++ lib.optional cfg.desktop.enable cfg.desktop.package;
 
     xdg.configFile = {
-      "viz/config.toml" = mkIf (!cfg.mutableSettings && serverSettings != { }) {
+      "viz/config.toml" = mkIf (!cfg.mutableSettings && settings != { }) {
         source = settingsSource;
       };
-      "viz/desktop.toml" = mkIf (desktopSettings != { }) {
-        source = tomlFormat.generate "viz-desktop.toml" desktopSettings;
-      };
-      "viz/cli.toml" = mkIf (cliSettings != { }) {
-        source = tomlFormat.generate "viz-cli.toml" cliSettings;
-      };
-    }
-    // lib.mapAttrs' (
-      name: _settings:
-      lib.nameValuePair "viz/connectors/${name}.toml" {
-        source = connectorSources.${name};
-      }
-    ) (lib.filterAttrs (_: settings: settings != { }) connectorSettings);
+    };
 
-    home.activation.vizMutableSettings = mkIf (cfg.mutableSettings && serverSettings != { }) (
+    home.activation.vizMutableSettings = mkIf (cfg.mutableSettings && settings != { }) (
       lib.hm.dag.entryAfter [ "linkGeneration" ] (
         lib.hm.generators.mkImpureConfigMerger {
           inherit pkgs;
@@ -260,7 +162,7 @@ in
       )
     );
 
-    home.activation.vizImmutableSettings = mkIf (!cfg.mutableSettings && serverSettings != { }) (
+    home.activation.vizImmutableSettings = mkIf (!cfg.mutableSettings && settings != { }) (
       lib.hm.dag.entryBetween [ "linkGeneration" ] [ "writeBoundary" ] (
         lib.hm.generators.mkImpureConfigCleanup {
           file = config.xdg.configFile."viz/config.toml";
@@ -268,31 +170,27 @@ in
       )
     );
 
-    systemd.user.services = {
-      viz-server = mkIf cfg.server.enable (service {
-        description = "viz server environment";
-        inherit (cfg.server) package;
-        restartTriggers = [ settingsSource ];
-        extraService = {
-          Type = "notify";
-          NotifyAccess = "main";
-          KillMode = "mixed";
-          UMask = "0077";
-          StandardOutput = "journal";
-          StandardError = "journal";
-          StateDirectory = "viz";
-          StateDirectoryMode = "0700";
-        };
-      });
-    }
-    // lib.mapAttrs' (
-      name: connector:
-      lib.nameValuePair "viz-${name}" (service {
-        description = "viz ${name} connector";
-        inherit (connector) package;
-        after = lib.optional cfg.server.enable "viz-server.service";
-        restartTriggers = lib.optional (connectorSettings.${name} != { }) connectorSources.${name};
-      })
-    ) enabledConnectors;
+    systemd.user.services.viz-server = mkIf cfg.server.enable {
+      Unit = {
+        Description = "viz server environment";
+        After = [ "network.target" ];
+        X-Restart-Triggers = [ settingsSource ];
+      };
+      Service = {
+        ExecStart = lib.getExe cfg.server.package;
+        Restart = "on-failure";
+        RestartSec = 5;
+        Type = "notify";
+        NotifyAccess = "main";
+        KillMode = "mixed";
+        UMask = "0077";
+        StandardOutput = "journal";
+        StandardError = "journal";
+        StateDirectory = "viz";
+        StateDirectoryMode = "0700";
+      }
+      // lib.optionalAttrs (cfg.environmentFile != null) { EnvironmentFile = cfg.environmentFile; };
+      Install.WantedBy = [ "default.target" ];
+    };
   };
 }

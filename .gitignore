@@ -7,17 +7,10 @@ result-*
 target/
 node_modules/
 
-# swift / xtool
-ios/.build/
-ios/.swiftpm/
-ios/xtool/
-
 # local state when running from the repo
 .env
 *.sqlite
 *.sqlite-*
 
-# development config and its state (see AGENTS.md, "Local config")
-viz.local.toml
-/viz.local/
-.viz/
+# development config and state (see AGENTS.md)
+/.viz.local/

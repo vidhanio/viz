@@ -1,5 +1,6 @@
-//! `desktop.toml`: the server connection and the theme. The file is optional;
-//! without it the desktop uses the default HTTP origin in the default schemes.
+//! The `[desktop]` table of the shared config file: the server connection
+//! (`[desktop.server]`) and the theme. The table is optional; without it the
+//! desktop uses the default HTTP origin in the default schemes.
 
 use serde::Deserialize;
 

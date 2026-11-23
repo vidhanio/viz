@@ -10,7 +10,6 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    nixpkgs-xtool.url = "github:NixOS/nixpkgs/pull/548520/head";
     flake-parts = {
       url = "github:hercules-ci/flake-parts";
       inputs.nixpkgs-lib.follows = "nixpkgs";
@@ -42,7 +41,6 @@
       perSystem =
         {
           config,
-          inputs',
           lib,
           pkgs,
           self',
@@ -50,8 +48,6 @@
           ...
         }:
         let
-          swiftPkgs = inputs'.nixpkgs-xtool.legacyPackages;
-
           craneLib = (inputs.crane.mkLib pkgs).overrideToolchain (
             p:
             p.rust-bin.nightly.latest.default.override {
@@ -142,8 +138,6 @@
           packages = {
             server = crate "viz-server" { };
             viz = crate "viz" { };
-            discord = crate "viz-discord" { };
-            imessage = crate "viz-imessage" { };
             desktop = crate "viz-desktop" {
               nativeBuildInputs = commonArgs.nativeBuildInputs ++ [ pkgs.makeWrapper ];
               postFixup = ''
@@ -158,8 +152,6 @@
               paths = with self'.packages; [
                 viz
                 server
-                discord
-                imessage
                 desktop
               ];
             };
@@ -180,25 +172,12 @@
               pkgs.cargo-edit
               pkgs.cargo-deny
               pkgs.pkg-config
-              swiftPkgs.swift
-              swiftPkgs.swiftpm
-              swiftPkgs.swift-format
-              swiftPkgs.sourcekit-lsp
-              swiftPkgs.xtool
-              pkgs.libimobiledevice
               pkgs.nil
               config.treefmt.build.wrapper
             ]
             ++ linkedLibs;
 
             LD_LIBRARY_PATH = lib.makeLibraryPath desktopRuntimeLibs;
-
-            shellHook = ''
-              if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
-                && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
-                echo "viz: no Darwin SDK for iOS builds; run 'xtool setup'" >&2
-              fi
-            '';
           };
 
           treefmt = {
@@ -210,10 +189,6 @@
               rustfmt = {
                 enable = true;
                 package = pkgs.rust-bin.nightly.latest.rustfmt;
-              };
-              swift-format = {
-                enable = true;
-                package = swiftPkgs.swift-format;
               };
             };
             settings.global.excludes = [

@@ -1,17 +1,17 @@
 //! Shared configuration for viz's Rust components.
 //!
-//! Each client reads only its own TOML file.
+//! One TOML file; each component reads only its own table.
 
-mod client_file;
 mod connection;
 mod error;
+mod file;
 mod paths;
 mod secret;
 
 pub use crate::{
-    client_file::{ClientFile, load},
     connection::{Connection, DEFAULT_URL},
     error::{Error, Result},
+    file::Component,
     paths::Paths,
     secret::{ResolveSecretError, Secret},
 };
