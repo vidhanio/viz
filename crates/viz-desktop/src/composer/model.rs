@@ -8,7 +8,7 @@ use std::{borrow::Cow, collections::HashMap};
 
 use rune::{
     Align, Color, Effect, El, Key, KeyEvent, MotionIntent, ScrollSpec, Side, Spring, SpringPair,
-    TextEdit, Transition, Tx, col, el, icon, row, text,
+    TextEdit, Transition, Tx, col, icon, row, text,
 };
 use rune_kit::{TextInput, scrim};
 use viz_client::protocol::{
@@ -20,8 +20,8 @@ use crate::{
     app::Desktop,
     server::Command,
     theme::{
-        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, RADIUS_CARD, RADIUS_CONTROL, S2,
-        S4, S6, S8, S16, S24, Size, Theme,
+        HAIRLINE, ICON_SMALL, MODEL_LIST_HEIGHT, MODEL_MENU_WIDTH, RADIUS_CARD, RADIUS_CONTROL, S4,
+        S6, S8, S16, S24, Size, Theme,
     },
     ui,
 };
@@ -30,47 +30,6 @@ use crate::{
 const KEY: &str = "model";
 const FIELD: &str = "model-query";
 const LIST: &str = "model-list";
-
-/// Visual tier for a thinking/effort choice, distinguishing `Xhigh` and `Max`
-/// with their own icons.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Effort {
-    Off,
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max,
-}
-
-impl Effort {
-    fn classify(value: &str, name: &str, index: usize, total: usize) -> Self {
-        let lower_val = value.to_ascii_lowercase();
-        let lower_name = name.to_ascii_lowercase();
-        let has = |needle: &str| lower_val.contains(needle) || lower_name.contains(needle);
-        let exact = |needle: &str| lower_val == needle || lower_name == needle;
-        if exact("none") || exact("off") || exact("disabled") {
-            Self::Off
-        } else if has("xhigh") || has("x-high") || has("extra-high") || has("extra high") {
-            Self::Xhigh
-        } else if exact("max") || has("maximum") || has("ultra") || lower_val.ends_with("max") {
-            Self::Max
-        } else if has("min") || has("low") {
-            Self::Low
-        } else if has("high") {
-            Self::High
-        } else if has("med") || has("default") || has("auto") || total <= 1 {
-            Self::Medium
-        } else {
-            match ((index * 3) / total.max(1) + 1).min(3) {
-                0 => Self::Off,
-                1 => Self::Low,
-                2 => Self::Medium,
-                _ => Self::High,
-            }
-        }
-    }
-}
 
 /// The open menu's search, keyboard highlight, pending thinking choice, and
 /// loading state while a newly selected model's thinking levels arrive.
@@ -248,8 +207,8 @@ impl<'a> Picker<'a> {
         }
     }
 
-    /// Selected thinking level plus its visual [`Effort`] tier.
-    fn effort(&self) -> Option<(Levels<'a>, Cow<'a, str>, Effort)> {
+    /// Selected thinking level plus its visual [`ui::Effort`] tier.
+    fn effort(&self) -> Option<(Levels<'a>, Cow<'a, str>, ui::Effort)> {
         let levels = self.levels?;
         let value = levels.value(self.target)?;
         let label = levels.label(value);
@@ -259,44 +218,8 @@ impl<'a> Picker<'a> {
             .iter()
             .position(|(choice, _)| *choice == value)
             .unwrap_or(0);
-        let effort = Effort::classify(value, label.as_ref(), index, total);
+        let effort = ui::Effort::classify(value, label.as_ref(), index, total);
         Some((levels, label, effort))
-    }
-}
-
-/// Signal bars for `Off`..`High`, lightning bolt for `Xhigh`, and flame for
-/// `Max`.
-fn effort_glyph(effort: Effort, on_accent: bool, t: &Theme) -> El {
-    match effort {
-        Effort::Xhigh => icon(&ui::ZAP, ICON_SMALL)
-            .color(if on_accent { t.on_accent } else { t.steer })
-            .a11y_hidden(),
-        Effort::Max => icon(&ui::FLAME, ICON_SMALL)
-            .color(if on_accent { t.on_accent } else { t.danger })
-            .a11y_hidden(),
-        Effort::Off | Effort::Low | Effort::Medium | Effort::High => {
-            let bars = match effort {
-                Effort::Off => 0,
-                Effort::Low => 1,
-                Effort::Medium => 2,
-                Effort::High => 3,
-                Effort::Xhigh | Effort::Max => unreachable!(),
-            };
-            let lit = if on_accent { t.on_accent } else { t.text };
-            let dim = if on_accent {
-                t.on_accent.alpha(0.35)
-            } else {
-                t.hairline
-            };
-            row().gap(1.5).items_end().h(10.0).a11y_hidden().children(
-                [4.0, 7.0, 10.0].into_iter().enumerate().map(|(i, height)| {
-                    el().w(S2)
-                        .h(height)
-                        .radius(HAIRLINE)
-                        .fill(if i < bars { lit } else { dim })
-                }),
-            )
-        }
     }
 }
 
@@ -359,7 +282,7 @@ pub(super) fn picker(s: &Desktop, picker: &Picker<'_>, t: &Theme, layer: &mut Ve
                     .a11y_hidden(),
             );
         }
-        trigger = trigger.child(effort_glyph(tier, false, t)).child(
+        trigger = trigger.child(ui::effort_glyph(tier, false, t)).child(
             text(effort_label)
                 .font(t.ui)
                 .color(if open { t.text } else { t.muted })
@@ -725,7 +648,7 @@ fn thinking_chips(
     for (index, (value, choice)) in choices.into_iter().enumerate() {
         let on = selected == Some(value);
         let label = levels.choice_label(value, choice);
-        let tier = Effort::classify(value, label.as_ref(), index, total);
+        let tier = ui::Effort::classify(value, label.as_ref(), index, total);
         let key = format!("level-{value}");
         let id = id.to_owned();
         let value = value.to_owned();
@@ -751,7 +674,7 @@ fn thinking_chips(
                         set_level(s, tx, owner, &id, &value);
                     }
                 })
-                .child(effort_glyph(tier, on, t))
+                .child(ui::effort_glyph(tier, on, t))
                 .child(
                     text(label)
                         .font(t.small_medium)

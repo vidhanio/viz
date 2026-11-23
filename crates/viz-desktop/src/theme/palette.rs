@@ -319,7 +319,12 @@ pub(super) fn build_theme(scheme: &Scheme) -> Theme {
     k.motion.control = crate::motion::QUICK;
     k.motion.overlay = crate::motion::SNAP;
     k.motion.disclosure = crate::motion::SETTLE;
-    k.elevation = rune_kit::Elevation::default();
+    let input_ring = Shadow {
+        spread: HAIRLINE,
+        color: border_control,
+        ..Shadow::default()
+    };
+    k.elevation = rune_kit::Elevation::default().with_input(vec![input_ring]);
     k.elevation.floating = Vec::new();
     k.elevation.md = Vec::new();
     k.elevation.overlay = Vec::new();
