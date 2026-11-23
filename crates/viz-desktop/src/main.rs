@@ -30,6 +30,7 @@ mod motion;
 mod motion_scene;
 mod palette;
 mod scenes;
+mod shell;
 mod sidebar;
 mod terminal;
 mod theme;
@@ -41,10 +42,6 @@ use std::{path::PathBuf, time::Duration};
 
 use clap::Parser;
 use rune::{App, AppSpec, Chrome, Cx, El, KeyEvent, Tx, col};
-use rune_kit::{
-    ToastRegion,
-    shell::{SidebarToggle, SplitView},
-};
 use tokio::sync::mpsc;
 use viz_client::Endpoint;
 use viz_config::ClientFile;
@@ -53,7 +50,8 @@ use crate::{
     app::Desktop,
     config::DesktopConfig,
     model::{PaletteSearch, WINDOW_SIZE},
-    theme::{S4, SIDEBAR_PAD, Size, TOOLBAR_HEIGHT, Theme},
+    shell::ShellSlots,
+    theme::Theme,
     update::{ComposerMsg, Msg, PaletteMsg, SelectionMsg, ShellMsg, SidebarMsg, TimelineMsg},
 };
 
@@ -86,71 +84,20 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     if let Some(dock) = dock {
         main = main.child(dock);
     }
-    let main = motion::stable_content(main);
-    let sidebar = sidebar::sidebar(s, t, &mut overlays).child(
-        ui::drag_guard("sidebar-drag-guard")
-            .pin(
-                Some(-SIDEBAR_PAD),
-                Some(-TOOLBAR_HEIGHT),
-                Some(-SIDEBAR_PAD),
-                None,
-            )
-            .h(TOOLBAR_HEIGHT),
-    );
-    let titlebar_inset = cx.titlebar_inset();
-    let split = SplitView::new(main)
-        .sidebar(
-            &s.widgets.sidebar_pane,
-            |s: &mut Desktop| &mut s.widgets.sidebar_pane,
-            sidebar,
-        )
-        .toolbar(header::toolbar(s, t, &mut overlays))
-        .titlebar_inset(titlebar_inset)
-        .frame_inset(0.0)
-        .toolbar_in_panel()
-        .sidebar_padding(SIDEBAR_PAD, SIDEBAR_PAD)
-        .sidebar_toggle(
-            SidebarToggle::new()
-                .size(Size::Default.kit())
-                .gap(S4)
-                .shortcut(ui::SIDEBAR_SHORTCUT)
-                .in_header()
-                .unread(s.model.has_unread()),
-        )
-        .pane_motion(motion::pane_motion())
-        .reduced_motion(reduced)
-        .build(&t.shell);
+    let sidebar = sidebar::sidebar(s, t, &mut overlays);
+    let toolbar = header::toolbar(s, t, &mut overlays);
     sidebar::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
-    overlays.extend(toasts(s, t));
-    rune_kit::root(split, overlays).hover_motion_within(motion::INSTANT, motion::HOVER_OUT)
-}
-
-/// The toast stack, when there's anything in it.
-fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
-    let entries = s.widgets.toasts.entries();
-    if entries.is_empty() {
-        return None;
-    }
-    let start = entries.len().saturating_sub(rune_kit::toast_stack::VISIBLE);
-    let region = entries[start..]
-        .iter()
-        .fold(ToastRegion::new(), |region, entry| {
-            let id = entry.id;
-            region.toast(ui::toast(
-                format!("toast-{id}"),
-                &entry.options.title,
-                entry.options.detail.as_deref(),
-                ui::lead(ui::dot(t.danger), t.ui.line_height),
-                move |s: &mut Desktop, tx| s.dismiss_toast(id, tx),
-                t,
-            ))
-        });
-    Some(
-        region
-            .build(&t.k)
-            .on_hover_change(|s: &mut Desktop, inside, tx| s.toast_hover(inside, tx)),
-    )
+    let slots = ShellSlots {
+        sidebar,
+        toolbar,
+        main,
+        details: None,
+        diff: None,
+        terminal: None,
+        overlays,
+    };
+    shell::build(s, slots, cx.titlebar_inset(), reduced, t)
 }
 
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
