@@ -70,7 +70,7 @@ in
       '';
       description = ''
         Configuration written to {file}`$XDG_CONFIG_HOME/viz/config.toml`, shared by
-        every viz program: `[server]`, `[desktop]` and `[cli]` tables, each read only
+        every viz program: `[server]`, `[client]` and `[desktop]` tables, each read only
         by its own program. See `config.example.toml` for keys and defaults.
         Reference secrets by file or environment variable so the values stay out of
         the Nix store.

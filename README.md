@@ -20,7 +20,7 @@ nix run .#desktop
 nix run .#viz -- send --thread 42 "hello"
 ```
 
-One file configures everything: see [`config.example.toml`](config.example.toml). The server reads `[server]`; the desktop and CLI read the shared `[client]` plus their own `[desktop]` or `[cli]`; override the path with `VIZ_SERVER_CONFIG`, `VIZ_DESKTOP_CONFIG`, or `VIZ_CLI_CONFIG`.
+One file configures everything: see [`config.example.toml`](config.example.toml). The server reads `[server]`; the desktop and CLI read the shared `[client]`, and the desktop also reads `[desktop]`; override the path with `VIZ_SERVER_CONFIG`, `VIZ_DESKTOP_CONFIG`, or `VIZ_CLI_CONFIG`.
 
 All clients use a base URL, defaulting to `http://127.0.0.1:7420`. To connect across hosts, use an HTTPS reverse proxy and a bearer token. Link environments in both directions in their server configs. No VPN is required.
 

@@ -1,7 +1,7 @@
 //! Locating and loading viz's single TOML configuration file.
 //!
 //! Every component reads the same file and deserializes only its own top-level
-//! table (`[server]`, `[desktop]`, `[cli]`). Clients also read the shared
+//! table (`[server]`, `[desktop]`). Clients also read the shared
 //! `[client]` table. The file location is, in order: an
 //! explicit `--config` path, the component's environment variable
 //! (`$VIZ_SERVER_CONFIG`, `$VIZ_DESKTOP_CONFIG`, `$VIZ_CLI_CONFIG`), then
@@ -28,7 +28,7 @@ pub enum Component {
     Server,
     /// `viz-desktop`, table `[desktop]`.
     Desktop,
-    /// The `viz` command, table `[cli]`.
+    /// The `viz` command, which has no table of its own.
     Cli,
 }
 
@@ -77,6 +77,15 @@ impl Component {
         let path = self.path(explicit)?;
         let mut file = read(&path)?;
         take(&mut file, self.table(), &path)
+    }
+
+    /// Loads only the shared `[client]` table.
+    ///
+    /// # Errors
+    /// As [`Component::load`].
+    pub fn client(self, explicit: Option<&Path>) -> Result<Client> {
+        let path = self.path(explicit)?;
+        take(&mut read(&path)?, "client", &path)
     }
 
     /// Loads the shared `[client]` table together with this component's own

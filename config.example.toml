@@ -71,9 +71,3 @@ light = "tokyo-night-light"
 # table with all 16 keys base00 through base0F, each a "#RRGGBB" string.
 # [desktop.theme.dark]
 # file = "~/.config/viz/themes/mine.yaml"
-
-[cli]
-# Default thread for `viz send`; override with `--thread`.
-# thread = 42
-# Optional peer environment, otherwise the server you connect to.
-# environment = "workstation"

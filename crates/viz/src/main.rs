@@ -30,25 +30,18 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Print component config locations and the CLI's own effective settings.
+    /// Print config file locations and the effective server connection.
     Config,
     /// Connect to the server and print its `hello`.
     Status,
     /// Send a message to a thread and print its reply.
     Send {
-        /// Target thread id (overrides the CLI config).
+        /// Target thread id.
         #[arg(long)]
-        thread: Option<u64>,
+        thread: u64,
         /// The message.
         text: Vec<String>,
     },
-}
-
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(default, deny_unknown_fields)]
-struct CliConfig {
-    thread: Option<ThreadId>,
-    environment: Option<String>,
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -61,34 +54,25 @@ async fn main() -> anyhow::Result<()> {
         )
         .with_writer(io::stderr)
         .init();
-    let (client, config): (_, CliConfig) = Component::Cli.load_client(cli.config.as_deref())?;
+    let client = Component::Cli.client(cli.config.as_deref())?;
     let endpoint = || Endpoint::from_connection(&client.server);
     match cli.command {
-        Command::Config => print_config(cli.config.as_deref(), &client.server, config),
-        Command::Status => status(&endpoint()?, config.environment).await,
+        Command::Config => print_config(cli.config.as_deref(), &client.server),
+        Command::Status => status(&endpoint()?).await,
         Command::Send { thread, text } => {
-            let thread = thread
+            let thread = Some(thread)
+                .filter(|id| *id > 0)
                 .map(ThreadId)
-                .or(config.thread)
-                .filter(|id| id.0 > 0)
-                .context("specify --thread or configure a positive thread id in CLI config")?;
-            send(&endpoint()?, config.environment, thread, text.join(" ")).await
+                .context("--thread must be a positive thread id")?;
+            send(&endpoint()?, thread, text.join(" ")).await
         }
     }
 }
 
-fn print_config(
-    explicit: Option<&Path>,
-    server: &Connection,
-    config: CliConfig,
-) -> anyhow::Result<()> {
+fn print_config(explicit: Option<&Path>, server: &Connection) -> anyhow::Result<()> {
     print_path("server", &Component::Server.path(None)?)?;
     print_path("desktop", &Component::Desktop.path(None)?)?;
     print_path("cli", &Component::Cli.path(explicit)?)?;
-    let CliConfig {
-        thread,
-        environment,
-    } = config;
     println!("\n[client.server]");
     let url = server.url.as_deref().unwrap_or(DEFAULT_URL);
     println!(
@@ -107,12 +91,6 @@ fn print_config(
             "<not configured>"
         }
     );
-    if let Some(thread) = thread {
-        println!("thread: {thread}");
-    }
-    if let Some(environment) = environment {
-        println!("environment: {environment}");
-    }
     Ok(())
 }
 
@@ -128,8 +106,8 @@ fn print_path(component: &str, path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn status(endpoint: &Endpoint, environment: Option<String>) -> anyhow::Result<()> {
-    let hello = Client::connect(endpoint, info(), environment).await?.hello;
+async fn status(endpoint: &Endpoint) -> anyhow::Result<()> {
+    let hello = Client::connect(endpoint, info(), None).await?.hello;
     println!(
         "{endpoint}: viz-server {} (protocol {}), environment {}",
         hello.version, hello.protocol, hello.environment
@@ -137,16 +115,11 @@ async fn status(endpoint: &Endpoint, environment: Option<String>) -> anyhow::Res
     Ok(())
 }
 
-async fn send(
-    endpoint: &Endpoint,
-    environment: Option<String>,
-    thread: ThreadId,
-    text: String,
-) -> anyhow::Result<()> {
+async fn send(endpoint: &Endpoint, thread: ThreadId, text: String) -> anyhow::Result<()> {
     if text.is_empty() {
         bail!("nothing to send");
     }
-    let client = Client::connect(endpoint, info(), environment).await?.client;
+    let client = Client::connect(endpoint, info(), None).await?.client;
     let run = client
         .send(&SendInput {
             thread,
