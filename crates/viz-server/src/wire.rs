@@ -1,19 +1,17 @@
 //! Shared protocol types and the server's JSON-RPC envelope.
 
-use std::path::PathBuf;
-
 use jsonrpsee_types::{ErrorObject, Response as JsonResponse, ResponsePayload};
 pub(crate) use jsonrpsee_types::{Id, Request};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 pub(crate) use viz_protocol::{
-    Attachment, AttachmentCapabilities, ClientKind, ConfigOption, ContextUsage as Usage,
-    DependentChoice, DependentOption, Entry, EntryData as NewEntry, EntryId, EntryPage,
-    Environment, EnvironmentStatus, Harness, Hello, HelloParams, LiveText, LiveTextKind, LiveTurn,
-    Notification, OptionChoice, OptionKind, OptionValue, Origin, PROTOCOL_VERSION, PlanEntry,
-    PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput, Run, RunId, RunKind,
-    RunStatus, SearchHit, SlashCommand as Command, Task, TaskStatus, ThreadId, ThreadState,
-    ThreadStatus, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord, WaitResult,
+    Attachment, AttachmentCapabilities, ClientKind, ConfigOption, ContextUsage as Usage, Entry,
+    EntryData as NewEntry, EntryId, EntryPage, Environment, EnvironmentStatus, Harness, Hello,
+    HelloParams, LiveText, LiveTextKind, LiveTurn, Notification, OptionValue, Origin,
+    PROTOCOL_VERSION, PlanEntry, PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput,
+    Run, RunId, RunKind, RunStatus, SearchHit, SlashCommand as Command, Task, TaskStatus, ThreadId,
+    ThreadState, ThreadStatus, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord,
+    WaitResult,
 };
 
 use crate::error::{Error, Kind, RequestError};
@@ -21,13 +19,7 @@ use crate::error::{Error, Kind, RequestError};
 pub(crate) const RPC_PATH: &str = "/v2/rpc";
 pub(crate) const HEALTH_PATH: &str = "/v2/health";
 
-#[derive(Debug, Clone)]
-pub(crate) struct StoredAttachment {
-    pub(crate) id: String,
-    pub(crate) name: String,
-    pub(crate) mime: String,
-    pub(crate) path: PathBuf,
-}
+pub(crate) use viz_acp::StoredAttachment;
 
 const INVALID_PARAMS: i32 = -32602;
 const NOT_FOUND: i32 = -32001;

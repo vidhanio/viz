@@ -5,31 +5,33 @@ use std::collections::BTreeMap;
 
 use agent_client_protocol::v1::schema::{
     SessionConfigKind, SessionConfigOption, SessionConfigSelectOption, SessionConfigSelectOptions,
+    SessionModeState,
 };
 use serde::{Deserialize, Serialize};
-
-use crate::{
-    config::HarnessConfig,
-    wire::{ConfigOption, DependentChoice, DependentOption, OptionChoice, OptionKind, OptionValue},
+use viz_protocol::{
+    ConfigOption, DependentChoice, DependentOption, OptionChoice, OptionKind, OptionValue,
 };
 
+use crate::config::HarnessConfig;
+
 /// Option values by option id: what the user or config chose for a thread.
-pub(crate) type Desired = BTreeMap<String, OptionValue>;
+pub type Desired = BTreeMap<String, OptionValue>;
 
 const MODEL: &str = "model";
 const THOUGHT_LEVEL: &str = "thought_level";
 /// The category of a runner's own mode selector, which viz shows but never sets
 /// from config.
 const MODE: &str = "mode";
+pub const LEGACY_MODE: &str = "_acp_mode";
 
 /// Exact model and thinking selections for a delegated thread, applied before
 /// its first prompt.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Selection {
+pub struct Selection {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) model: Option<String>,
+    pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(crate) thinking: Option<String>,
+    pub thinking: Option<String>,
 }
 
 /// A model's thinking levels, learned when a session first reported that model.
@@ -43,7 +45,7 @@ struct ModelProfile {
 /// options, whose values stay as first observed, and a profile per observed
 /// model owning its model-dependent effort.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct Catalog {
+pub struct Catalog {
     options: Vec<ConfigOption>,
     profiles: Vec<ModelProfile>,
 }
@@ -52,7 +54,8 @@ impl Catalog {
     /// The catalog after a session reports `options`, or `None` when unchanged.
     /// `opened` holds the session's first-reported values, the baseline for
     /// options the catalog has not seen.
-    pub(crate) fn merge(
+    #[must_use]
+    pub fn merge(
         previous: Option<&Self>,
         options: &[ConfigOption],
         opened: &Desired,
@@ -103,24 +106,23 @@ impl Catalog {
     }
 
     /// Whether the catalog's model option offers `model`.
-    pub(crate) fn offers(&self, model: &str) -> bool {
+    #[must_use]
+    pub fn offers(&self, model: &str) -> bool {
         model_option(&self.options)
             .is_some_and(|option| valid_value(option, &OptionValue::Select(model.to_owned())))
     }
 
     /// Whether a session has reported `model`'s thinking levels.
-    pub(crate) fn has_profile(&self, model: &str) -> bool {
+    #[must_use]
+    pub fn has_profile(&self, model: &str) -> bool {
         self.profiles.iter().any(|profile| profile.model == model)
     }
 
     /// The options a new thread starts with: `selected` model (else the
     /// configured one, else the template's), its thinking levels, and the
     /// configured defaults.
-    pub(crate) fn options(
-        &self,
-        config: &HarnessConfig,
-        selected: Option<&str>,
-    ) -> Vec<ConfigOption> {
+    #[must_use]
+    pub fn options(&self, config: &HarnessConfig, selected: Option<&str>) -> Vec<ConfigOption> {
         let model = model_option(&self.options);
         let requested = selected
             .or(config.model.as_deref())
@@ -181,19 +183,19 @@ impl Catalog {
     }
 }
 
-pub(super) fn model_option(options: &[ConfigOption]) -> Option<&ConfigOption> {
+pub fn model_option(options: &[ConfigOption]) -> Option<&ConfigOption> {
     options
         .iter()
         .find(|option| option.category.as_deref() == Some(MODEL))
 }
 
-pub(super) fn thinking_option(options: &[ConfigOption]) -> Option<&ConfigOption> {
+pub fn thinking_option(options: &[ConfigOption]) -> Option<&ConfigOption> {
     options.iter().find(|option| {
         option.category.as_deref() == Some(THOUGHT_LEVEL) && option.kind == OptionKind::Select
     })
 }
 
-pub(super) fn valid_value(option: &ConfigOption, value: &OptionValue) -> bool {
+pub fn valid_value(option: &ConfigOption, value: &OptionValue) -> bool {
     match (option.kind, value) {
         (OptionKind::Boolean, OptionValue::Boolean(_)) => true,
         (OptionKind::Select, OptionValue::Select(value)) => {
@@ -205,7 +207,7 @@ pub(super) fn valid_value(option: &ConfigOption, value: &OptionValue) -> bool {
 
 /// The configured `model` and `effort`, by the option each applies to, when
 /// that option offers it.
-pub(super) fn defaults(config: &HarnessConfig, options: &[ConfigOption]) -> Desired {
+pub fn defaults(config: &HarnessConfig, options: &[ConfigOption]) -> Desired {
     let mut result = Desired::new();
     for (value, category, key) in [
         (&config.model, MODEL, "model"),
@@ -226,7 +228,7 @@ pub(super) fn defaults(config: &HarnessConfig, options: &[ConfigOption]) -> Desi
 
 /// The settings in `requested` the runner still offers, at the runner's actual
 /// values, so a clamped request persists as what the runner applied.
-pub(super) fn reconcile(options: &[ConfigOption], requested: &Desired) -> Desired {
+pub fn reconcile(options: &[ConfigOption], requested: &Desired) -> Desired {
     options
         .iter()
         .filter(|option| requested.contains_key(&option.id) && valid_value(option, &option.value))
@@ -237,7 +239,7 @@ pub(super) fn reconcile(options: &[ConfigOption], requested: &Desired) -> Desire
 /// viz's view of the runner's options: categories inferred from well-known ids,
 /// model choices grouped by provider, redundant name prefixes dropped, and a
 /// legacy mode selector that duplicates thinking levels removed.
-pub(super) fn normalize(options: Vec<SessionConfigOption>) -> Vec<ConfigOption> {
+pub fn normalize(options: Vec<SessionConfigOption>) -> Vec<ConfigOption> {
     let normalized: Vec<ConfigOption> = options.into_iter().filter_map(convert).collect();
     let Some(thinking) = thinking_option(&normalized) else {
         return normalized;
@@ -433,4 +435,47 @@ fn with_model_profiles(
             option
         })
         .collect()
+}
+
+/// V1 agents may supply modes separately from config options. Some expose the
+/// same choices as an option with a different category, such as pi's effort.
+pub fn with_legacy_modes(
+    mut options: Vec<ConfigOption>,
+    modes: Option<&SessionModeState>,
+) -> Vec<ConfigOption> {
+    let Some(modes) = modes else { return options };
+    if modes.available_modes.is_empty()
+        || options.iter().any(|option| {
+            option.category.as_deref() == Some(MODE)
+                || (option.choices.len() == modes.available_modes.len()
+                    && modes.available_modes.iter().all(|mode| {
+                        option
+                            .choices
+                            .iter()
+                            .any(|choice| choice.value == mode.id.0.as_ref())
+                    }))
+        })
+    {
+        return options;
+    }
+    options.push(ConfigOption {
+        id: LEGACY_MODE.to_owned(),
+        name: "Mode".to_owned(),
+        description: None,
+        category: Some(MODE.to_owned()),
+        kind: OptionKind::Select,
+        value: OptionValue::Select(modes.current_mode_id.0.to_string()),
+        choices: modes
+            .available_modes
+            .iter()
+            .map(|mode| OptionChoice {
+                value: mode.id.0.to_string(),
+                name: mode.name.clone(),
+                description: mode.description.clone(),
+                group: None,
+                thinking: None,
+            })
+            .collect(),
+    });
+    options
 }

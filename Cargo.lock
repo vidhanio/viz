@@ -6416,6 +6416,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "viz-acp"
+version = "0.1.0"
+dependencies = [
+ "agent-client-protocol",
+ "axum",
+ "base64 0.23.1",
+ "futures-util",
+ "reqwest 0.13.5",
+ "rmcp",
+ "rustix 1.1.6",
+ "serde",
+ "serde_json",
+ "subtle",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "viz-config",
+ "viz-protocol",
+]
+
+[[package]]
 name = "viz-client"
 version = "0.1.0"
 dependencies = [
@@ -6552,7 +6576,6 @@ dependencies = [
 name = "viz-server"
 version = "0.1.0"
 dependencies = [
- "agent-client-protocol",
  "anyhow",
  "async-trait",
  "axum",
@@ -6564,7 +6587,6 @@ dependencies = [
  "jsonrpsee-types",
  "listenfd",
  "reqwest 0.13.5",
- "rmcp",
  "rusqlite",
  "rustls 0.23.46",
  "schemars 1.2.3",
@@ -6581,6 +6603,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "viz-acp",
  "viz-config",
  "viz-core",
  "viz-protocol",

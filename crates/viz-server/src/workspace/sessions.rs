@@ -54,7 +54,7 @@ impl Workspace {
         thread: ThreadId,
         slot: &'slot mut SessionSlot,
         cancel: &CancellationToken,
-    ) -> anyhow::Result<Bound<'slot>> {
+    ) -> Result<Bound<'slot>, Error> {
         let Binding {
             harness,
             checkout,
@@ -76,7 +76,7 @@ impl Workspace {
         let endpoint = self.mcp.endpoint(thread);
         let running = tokio::select! {
             biased;
-            () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
+            () = cancel.cancelled() => return Err(Error::from(viz_acp::Error::Cancelled)),
             result = Session::open(config, Path::new(&checkout.cwd), session.session_id.as_deref(), Some(&endpoint)) => result?,
         };
         if session.session_id.as_deref() != Some(running.id()) {
@@ -89,7 +89,7 @@ impl Workspace {
         }
         let desired = tokio::select! {
             biased;
-            () = cancel.cancelled() => anyhow::bail!("ACP session setup cancelled"),
+            () = cancel.cancelled() => return Err(Error::from(viz_acp::Error::Cancelled)),
             result = running.restore(&session.desired, session.selection.as_ref()) => result?,
         };
         let updates = running.watch();
@@ -133,7 +133,10 @@ impl Workspace {
         let desired = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::unavailable("ACP configuration cancelled")),
-            result = session.configure(option, value, &desired) => result.map_err(|error| Error::invalid(error.to_string()))?,
+            result = session.configure(option, value, &desired) => result.map_err(|error| match error {
+                viz_acp::Error::InvalidOption(_) => Error::invalid(error.to_string()),
+                other => other.into(),
+            })?,
         };
         let snapshot = session.snapshot();
         let mut db = self.db.lock().await;
@@ -214,6 +217,19 @@ pub(super) async fn persist_snapshot(
     snapshot: SessionSnapshot,
     desired: Option<&Desired>,
 ) -> Result<bool, Error> {
+    let commands: Vec<_> = snapshot
+        .commands
+        .into_iter()
+        .map(|command| viz_protocol::SlashCommand {
+            name: command.name,
+            description: command.description,
+            hint: command.hint,
+        })
+        .collect();
+    let usage = snapshot.usage.map(|usage| viz_protocol::ContextUsage {
+        used: usage.used,
+        size: usage.size,
+    });
     let Labels { model, thinking } = Labels::from_options(&snapshot.options);
     let Some(mut prior) = row(
         db,
@@ -238,8 +254,8 @@ pub(super) async fn persist_snapshot(
           session = json_set(session, '$.session_id', ?2, '$.options', json(?3), '$.commands', json(?4), '$.images', json(?5), '$.usage', json(?6)),
           title = ?7,
           model = ?8, thinking = ?9, setup_failed = 0 WHERE id = ?1", [
-        thread.into(), snapshot.session_id.into(), store::json(&snapshot.options)?.into(), store::json(&snapshot.commands)?.into(),
-        if snapshot.images { "true" } else { "false" }.into(), store::json(&snapshot.usage)?.into(), title.into(), model.into(), thinking.into(),
+        thread.into(), snapshot.session_id.into(), store::json(&snapshot.options)?.into(), store::json(&commands)?.into(),
+        if snapshot.images { "true" } else { "false" }.into(), store::json(&usage)?.into(), title.into(), model.into(), thinking.into(),
     ]).await?;
     if let Some(desired) = desired {
         exec(db, "UPDATE threads SET session = json_set(session, '$.desired', json(?2), '$.selection', NULL) WHERE id = ?1",

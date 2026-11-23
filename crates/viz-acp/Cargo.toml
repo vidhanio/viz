@@ -1,0 +1,47 @@
+[package]
+name = "viz-acp"
+description = "Supervised ACP harness processes and sessions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+agent-client-protocol = { workspace = true, features = ["unstable"] }
+axum.workspace = true
+base64.workspace = true
+futures-util.workspace = true
+reqwest = { workspace = true, features = ["json", "rustls-no-provider"] }
+rmcp = { workspace = true, features = [
+  "client",
+  "transport-io",
+  "transport-streamable-http-server",
+  "transport-streamable-http-client-reqwest",
+  "reqwest",
+] }
+rustix = { workspace = true, features = ["fs", "process"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+subtle.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = [
+  "fs",
+  "io-std",
+  "io-util",
+  "macros",
+  "net",
+  "process",
+  "rt",
+  "sync",
+  "time",
+] }
+tokio-util = { workspace = true, features = ["rt"] }
+tracing.workspace = true
+url.workspace = true
+uuid = { workspace = true, features = ["v4"] }
+viz-config.workspace = true
+viz-protocol.workspace = true
+
+[lints]
+workspace = true

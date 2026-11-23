@@ -59,8 +59,8 @@ pub(crate) enum Error {
     #[error(transparent)]
     Io(#[from] std::io::Error),
     /// A harness operation failed.
-    #[error("{0}")]
-    Harness(anyhow::Error),
+    #[error(transparent)]
+    Harness(#[from] viz_acp::Error),
 }
 
 /// Failures of the JSON-RPC exchange itself.
@@ -131,11 +131,5 @@ impl Error {
     /// this answer was definitely refused.
     pub(crate) const fn rejected(&self) -> bool {
         matches!(self.kind(), Kind::Invalid | Kind::NotFound)
-    }
-}
-
-impl From<anyhow::Error> for Error {
-    fn from(error: anyhow::Error) -> Self {
-        error.downcast().unwrap_or_else(Self::Harness)
     }
 }

@@ -8,9 +8,6 @@ repository.workspace = true
 publish.workspace = true
 
 [dependencies]
-agent-client-protocol = { workspace = true, features = [
-  "unstable_session_options",
-] }
 anyhow.workspace = true
 async-trait.workspace = true
 axum = { workspace = true, features = ["ws"] }
@@ -22,13 +19,6 @@ futures-util = { workspace = true, features = ["sink"] }
 jsonrpsee-types.workspace = true
 listenfd.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls-no-provider"] }
-rmcp = { workspace = true, features = [
-  "client",
-  "transport-io",
-  "transport-streamable-http-server",
-  "transport-streamable-http-client-reqwest",
-  "reqwest",
-] }
 rusqlite.workspace = true
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }
 schemars.workspace = true
@@ -56,6 +46,7 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
+viz-acp.workspace = true
 viz-core.workspace = true
 viz-protocol.workspace = true
 viz-config.workspace = true

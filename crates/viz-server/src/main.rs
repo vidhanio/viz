@@ -61,7 +61,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let _ = rustls::crypto::ring::default_provider().install_default();
     match cli.command.unwrap_or(Command::Serve) {
-        Command::McpBridge => runtime()?.block_on(acp::bridge::run()),
+        Command::McpBridge => runtime()?.block_on(acp::bridge::run()).map_err(Into::into),
         Command::Schema { output } => {
             let schema = serde_json::json!({
                 "protocol": wire::PROTOCOL_VERSION,

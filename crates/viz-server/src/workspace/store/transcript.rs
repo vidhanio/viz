@@ -5,7 +5,7 @@ use super::{
     from_json, json, require,
 };
 use crate::{
-    acp::{tool_record::ToolContent, transcript::Output},
+    acp::Output,
     error::Error,
     wire::{Entry, EntryId, EntryPage, NewEntry, SearchHit, ThreadId, ToolCallStatus},
 };
@@ -17,12 +17,14 @@ pub(in crate::workspace) async fn publish(
     output: Output,
 ) -> Result<Option<(String, ToolCallStatus)>, Error> {
     let (entry, tool_session, patch) = match output {
-        Output::Entry(entry) => (*entry, Some(session), None),
-        Output::ToolPatch {
-            id,
-            fields,
-            receipts,
-        } => {
+        Output::Entry(entry) => {
+            let Some(entry) = crate::acp::entry(*entry) else {
+                return Ok(None);
+            };
+            (entry, Some(session), None)
+        }
+        Output::ToolPatch(report) => {
+            let id = &report.id;
             let previous = row(
                 db,
                 "SELECT id, data FROM entries WHERE thread = ?1 AND tool_session = ?2
@@ -37,9 +39,8 @@ pub(in crate::workspace) async fn publish(
                 data: NewEntry::Tool(record),
             }) = previous
             {
-                let updated = ToolContent::from_record(record.clone())
-                    .update(*fields, &receipts)
-                    .clone();
+                let updated =
+                    crate::acp::tool(&report.apply(crate::acp::tool_input(record.clone())));
                 let patch = Some((updated.id.clone(), updated.status));
                 if updated == record {
                     return Ok(patch);
@@ -59,7 +60,8 @@ pub(in crate::workspace) async fn publish(
                     patch,
                 )
             } else {
-                let record = ToolContent::new(id).update(*fields, &receipts).clone();
+                let call = viz_acp::ToolCall::new(id.clone());
+                let record = crate::acp::tool(&report.apply(call));
                 let patch = Some((record.id.clone(), record.status));
                 (NewEntry::Tool(record), Some(session), patch)
             }

@@ -24,18 +24,7 @@ pub(crate) struct Config {
     pub(crate) environments: BTreeMap<String, PeerConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct HarnessConfig {
-    pub(crate) name: Option<String>,
-    pub(crate) command: String,
-    #[serde(default)]
-    pub(crate) args: Vec<String>,
-    #[serde(default)]
-    pub(crate) env: BTreeMap<String, Secret>,
-    pub(crate) model: Option<String>,
-    pub(crate) effort: Option<String>,
-}
+pub(crate) use viz_acp::HarnessConfig;
 
 pub(crate) struct PeerConfig {
     pub(crate) url: Url,

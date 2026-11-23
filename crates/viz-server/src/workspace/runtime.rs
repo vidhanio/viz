@@ -21,11 +21,10 @@ use super::{
 };
 use crate::{
     acp::{
-        Outcome, Prompt, Session, SessionSnapshot, StopReason, stop_reason_name,
-        transcript::{Output, Transcript},
+        Outcome, Output, Prompt, Session, SessionSnapshot, StopReason, Transcript, stop_reason_name,
     },
     error::Error,
-    wire::{LiveTurn, RunId, RunStatus, ToolCallStatus},
+    wire::{RunId, RunStatus, ToolCallStatus},
 };
 
 /// ACP sends no stop signal for idle output. Allow four seconds between
@@ -186,7 +185,7 @@ impl Workspace {
         slot: &mut SessionSlot,
         claim: Claimed,
         turn: &Turn,
-    ) -> anyhow::Result<Outcome> {
+    ) -> Result<Outcome, Error> {
         let Bound { session, .. } = self.session(thread, slot, &turn.cancel).await?;
         let files = attachments::materialize(self, thread, claim.id, claim.attachments).await?;
         let mut text = if let Some(author) = claim
@@ -221,6 +220,7 @@ impl Workspace {
                     text: &text,
                     turn: claim.entry.to_string(),
                     run: claim.id,
+                    context: &[],
                     attachments: &files,
                     cancel: turn.cancel.clone(),
                     steer: turn.steer.clone(),
@@ -229,7 +229,6 @@ impl Workspace {
                     self.publish(thread, claim.id, id, entries, live, snapshot)
                         .await
                         .map(drop)
-                        .map_err(anyhow::Error::from)
                 },
             )
             .await;
@@ -241,7 +240,7 @@ impl Workspace {
             )
             .await?;
         }
-        outcome
+        outcome.map_err(Error::from)
     }
 
     async fn publish(
@@ -250,7 +249,7 @@ impl Workspace {
         run: RunId,
         session: &str,
         entries: Vec<Output>,
-        live: Option<LiveTurn>,
+        live: Option<viz_acp::LiveTurn>,
         snapshot: Option<SessionSnapshot>,
     ) -> Result<Vec<(String, ToolCallStatus)>, Error> {
         let mut db = self.db.lock().await;
@@ -275,7 +274,7 @@ impl Workspace {
             }
             tx.commit().await?;
         }
-        self.updates.live(thread, live);
+        self.updates.live(thread, live.map(crate::acp::live_turn));
         drop(db);
         if relist {
             self.relist(thread);
@@ -287,10 +286,11 @@ impl Workspace {
 }
 
 /// What the harness's answer to a prompt says about the turn.
-pub(super) fn turn_end(outcome: anyhow::Result<Outcome>) -> Result<TurnEnd, String> {
+pub(super) fn turn_end(outcome: Result<Outcome, Error>) -> Result<TurnEnd, String> {
     let Outcome {
         answer,
         stop_reason,
+        ..
     } = outcome.map_err(|error| error.to_string())?;
     Ok(TurnEnd {
         answer,

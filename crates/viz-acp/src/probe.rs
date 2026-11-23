@@ -8,30 +8,27 @@ use std::{
 };
 
 use agent_client_protocol::v1::schema::{SessionNotification, SessionUpdate};
-use anyhow::{Context as _, Result, anyhow, bail};
+use viz_protocol::{ConfigOption, OptionValue};
 
-use super::{
-    options::{Catalog, Desired, model_option, normalize, valid_value},
-    process::Agent,
-};
+use super::options::{Catalog, Desired, model_option, normalize, valid_value, with_legacy_modes};
 use crate::{
-    config::HarnessConfig,
-    wire::{ConfigOption, OptionValue},
+    Client, ClientEvents, Error, HarnessConfig, SessionSetup, error::Result,
+    lifecycle::method_missing,
 };
 
 /// Bounds each disposable process.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(15);
 
-/// The options a new thread of this harness starts with, from the `stored`
-/// catalog, which is probed from a disposable session when missing or when it
-/// lacks the requested model's thinking levels. Returns the catalog to
-/// store when it changed. A freshly probed catalog is returned even when the
-/// model probe after it fails, so the next call does not probe it again.
+/// Gets the options for new sessions and returns any catalog change to persist.
+///
+/// A disposable process fills a missing catalog or model profile. If a model
+/// probe fails after discovering the base catalog, the base catalog is
+/// returned.
 ///
 /// # Errors
 ///
 /// When `model` is not offered, or probing fails or times out.
-pub(crate) async fn catalog(
+pub async fn catalog(
     config: &HarnessConfig,
     cwd: &Path,
     stored: Option<&Catalog>,
@@ -57,10 +54,10 @@ pub(crate) async fn catalog(
                 Err(error) => return Err(error),
             }
         }
-        None if model.is_some() => bail!("Model not available"),
+        None if model.is_some() => return Err(Error::Unavailable("model".to_owned())),
         Some(_) | None => {}
     }
-    let catalog = catalog.context("the ACP options catalog is missing after probing")?;
+    let catalog = catalog.ok_or_else(|| Error::Unavailable("ACP options catalog".to_owned()))?;
     let options = catalog.options(config, model);
     Ok((options, changed.then_some(catalog)))
 }
@@ -80,20 +77,26 @@ async fn probe(
         let reported: Arc<Mutex<Option<Vec<ConfigOption>>>> = Arc::default();
         let sink = {
             let reported = Arc::clone(&reported);
-            Arc::new(move |notification: SessionNotification| {
+            Arc::new(move |notification: SessionNotification, _| {
                 if let SessionUpdate::ConfigOptionUpdate(update) = notification.update {
                     *reported.lock().expect("probe lock poisoned") =
                         Some(normalize(update.config_options));
                 }
             })
         };
-        let agent = Agent::start(config, cwd, sink).await?;
+        let agent = Client::start(config, cwd, sink, ClientEvents::default()).await?;
         if model.is_none()
             && let Some(options) = agent.session_options(cwd).await?
         {
-            return Ok(merge(catalog, &normalize(options)));
+            return Ok(merge(
+                catalog,
+                &with_legacy_modes(
+                    normalize(options.config_options.unwrap_or_default()),
+                    options.modes.as_ref(),
+                ),
+            ));
         }
-        let response = agent.new_session(cwd, Vec::new()).await?;
+        let response = agent.new_session(&SessionSetup::new(cwd)).await?;
         let session = response.session_id.0.to_string();
         let options = response.config_options.map_or_else(
             || {
@@ -105,21 +108,25 @@ async fn probe(
             },
             normalize,
         );
+        let options = with_legacy_modes(options, response.modes.as_ref());
         let result = select_model(&agent, &session, options, model, catalog).await;
-        if let Err(error) = agent.delete_session(&session).await {
+        if agent.capabilities().delete
+            && let Err(error) = agent.delete_session(&session).await
+            && !method_missing(&error)
+        {
             tracing::warn!("ACP {} catalog cleanup: {error:#}", agent.label());
         }
         result
     };
     tokio::time::timeout(PROBE_TIMEOUT, probing)
         .await
-        .map_err(|_| anyhow!("probing ACP options timed out"))?
+        .map_err(|_| Error::ProbeTimeout)?
 }
 
 /// Merges the probe session's `options` into `catalog`, then those after
 /// selecting `model`, if given.
 async fn select_model(
-    agent: &Agent,
+    agent: &Client,
     session: &str,
     options: Vec<ConfigOption>,
     model: Option<&str>,
@@ -137,7 +144,7 @@ async fn select_model(
     let id = setting
         .filter(|setting| valid_value(setting, &wanted))
         .map(|setting| setting.id.clone())
-        .context("Model not available")?;
+        .ok_or_else(|| Error::Unavailable("model".to_owned()))?;
     let selected = agent.set_option(session, &id, &wanted).await?;
     changed |= merge(catalog, &normalize(selected.config_options));
     Ok(changed)

@@ -12,14 +12,14 @@ use serde_json::{Value, json};
 use viz_protocol::{
     CreateProject, Empty, EnvironmentList, HarnessList, HarnessOptions, LaunchThread, Launched,
     ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method,
-    MoveThread, ReadProject, ReadThreadState, RemoveProject, RemoveWorktree, RunId, SearchThreads,
+    MoveThread, ReadProject, ReadThreadState, RemoveProject, RemoveWorktree, SearchThreads,
     SendInput, StopThread, TaskId, TaskList, TaskResult, ThreadId, ThreadStateResult,
     UpdateProject, UpdateThread, WaitThread,
 };
 
 use self::inputs::{SendText, ThreadUpdate, ToolInput};
 use crate::{
-    acp::mcp::Dispatch,
+    acp::mcp::{Dispatch, ToolDefinition, ToolResult, ToolScope},
     environments::Peers,
     error::Error,
     rpc::Handler,
@@ -34,28 +34,7 @@ use crate::{
     },
 };
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct ToolDefinition {
-    pub(crate) name: &'static str,
-    pub(crate) description: &'static str,
-    pub(crate) input_schema: Value,
-}
-
 const LISTED_MODELS: usize = 24;
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ToolScope {
-    pub(crate) thread: ThreadId,
-    pub(crate) run: RunId,
-}
-
-#[derive(Debug)]
-pub(crate) struct ToolResult {
-    pub(crate) text: String,
-    pub(crate) child: Option<ThreadId>,
-    pub(crate) child_environment: Option<String>,
-}
 
 #[derive(Clone)]
 pub(crate) struct Tools {
