@@ -8,7 +8,7 @@ use super::{GalleryState, edit_gallery, gallery_card, with_gallery};
 use crate::{
     app::Desktop,
     theme::{RADIUS_PILL, S6, S8, Size, Theme},
-    ui::{self, InlineStyle, Tone},
+    ui,
 };
 
 const DIFF_STEPS: [(u32, u32); 3] = [(42, 13), (128, 29), (7, 2)];
@@ -254,24 +254,27 @@ fn icon_and_inline_buttons(t: &Theme) -> El {
         .gap(S6)
         .center_y()
         .child(
-            ui::inline_button("Copy")
+            Button::new("Copy")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
                 .icon(&ui::COPY)
                 .on_press(|s: &mut Desktop| with_gallery(s, |g| g.diff_step += 1))
-                .build(t),
+                .build(&t.k),
         )
         .child(
-            ui::inline_button("Worked 5s")
-                .trailing_icon(&ui::CHEVRON)
-                .style(InlineStyle::InkOnly)
-                .build(t),
-        )
-        .child(
-            ui::inline_button("Retry")
-                .tone(Tone::Danger)
+            Button::new("Retry")
+                .variant(ButtonVariant::Danger)
+                .control_size(Size::Micro.kit())
                 .icon(&ui::ROTATE_CW)
-                .build(t),
+                .build(&t.k),
         )
-        .child(ui::inline_button("Locked").disabled(true).build(t));
+        .child(
+            Button::new("Locked")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .disabled(true)
+                .build(&t.k),
+        );
     col().w_full().gap(S6).child(icons).child(inline)
 }
 

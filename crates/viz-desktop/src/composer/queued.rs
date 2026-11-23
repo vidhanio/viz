@@ -9,7 +9,7 @@ use crate::{
     app::Desktop,
     motion,
     theme::{HAIRLINE, RADIUS_SURFACE, S2, S4, S8, S12, Size, Theme},
-    ui::{self, InlineStyle},
+    ui,
     update::{ComposerMsg, Msg},
 };
 
@@ -52,12 +52,13 @@ pub(super) fn stack(s: &Desktop, t: &Theme) -> Option<El> {
         };
         list = list.child(
             row().key("queued-overflow").w_full().justify_end().child(
-                ui::inline_button(label)
-                    .style(InlineStyle::Wash)
+                rune_kit::Button::new(label)
+                    .variant(rune_kit::ButtonVariant::GhostMuted)
+                    .control_size(crate::theme::Size::Micro.kit())
                     .on_press_tx(|s: &mut Desktop, tx| {
                         s.dispatch(Msg::Composer(ComposerMsg::ToggleQueuedExpanded), tx);
                     })
-                    .build(t),
+                    .build(&t.k),
             ),
         );
     }
@@ -144,13 +145,15 @@ fn queued_actions(
     connected: bool,
     t: &Theme,
 ) -> El {
-    let send_now = ui::inline_button("Send now")
+    let send_now = rune_kit::Button::new("Send now")
+        .variant(rune_kit::ButtonVariant::GhostMuted)
+        .control_size(crate::theme::Size::Micro.kit())
         .icon(&ui::ARROW_UP)
         .disabled(!connected)
         .on_press_tx(move |s: &mut Desktop, tx| {
             s.dispatch(Msg::Composer(ComposerMsg::SteerQueued(run)), tx);
         })
-        .build(t)
+        .build(&t.k)
         .key("send-now");
 
     let edit = rune_kit::IconButton::new(&ui::PENCIL)

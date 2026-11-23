@@ -10,7 +10,6 @@ mod badge;
 mod dialog;
 mod feedback;
 pub mod gallery;
-mod icon_button;
 
 mod icons;
 mod project_icon;
@@ -25,13 +24,9 @@ use rune_kit::Spinner;
     reason = "complete ui component API is exported for Phase 1 feature tracks and gallery"
 )]
 pub use self::{
-    badge::{Tone, ToneColors, diff_stat, diff_stat_rolling, dot, tooltip_text, with_tooltip},
+    badge::{Tone, diff_stat, diff_stat_rolling, dot, tooltip_text, with_tooltip},
     dialog::{DialogForm, dialog_actions, dialog_body, dialog_subject, sheet},
-    feedback::{
-        Banner, EmptyState, LoadingDelay, empty, empty_state, error_banner, loading_state,
-        skeleton_rows, status_banner,
-    },
-    icon_button::{InlineButton, InlineStyle, inline_button},
+    feedback::{EmptyState, LoadingDelay, empty, empty_state, loading_state, skeleton_rows},
     icons::{
         AGENT, ANTIGRAVITY, ARCHIVE, ARROW_DOWN, ARROW_LEFT, ARROW_UP, BOT, BRAIN, CHECK, CHEVRON,
         CHEVRON_OPEN, CHEVRON_UP, CHEVRONS_UP_DOWN, CIRCLE_ALERT, CIRCLE_CHECK, CIRCLE_DASHED,
@@ -50,7 +45,7 @@ pub use self::{
         no_project_mark, project_color, project_color_index, project_icon, project_initials,
         project_mark, project_monogram,
     },
-    row::{ListRow, RowDensity, SectionHeader, list_row, section_header},
+    row::{ListRow, RowDensity, list_row},
     surface::{
         Card, ComboboxShell, MENU_INSET, MENU_WIDTH, MODEL_TRIGGER_MAX, ScrollMode,
         anchored_popover, combobox_shell, menu_items, popover_frame, scroll_viewport,

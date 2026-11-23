@@ -14,7 +14,7 @@ use crate::{
         CARD_INSET, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_SM, RADIUS_SURFACE, S2, S4, S6,
         S8, S12, Size, Theme,
     },
-    ui::{self, InlineStyle},
+    ui,
     update::{Msg, TimelineMsg},
 };
 
@@ -178,8 +178,9 @@ fn bubble(
         };
         card = card.child(
             row().w_full().justify_start().child(
-                ui::inline_button(label)
-                    .style(InlineStyle::InkOnly)
+                rune_kit::Button::new(label)
+                    .variant(rune_kit::ButtonVariant::GhostMuted)
+                    .control_size(crate::theme::Size::Micro.kit())
                     .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                         s.dispatch(
                             Msg::Timeline(TimelineMsg::ToggleFold {
@@ -191,7 +192,7 @@ fn bubble(
                             tx,
                         );
                     })
-                    .build(t)
+                    .build(&t.k)
                     .key("toggle-full"),
             ),
         );

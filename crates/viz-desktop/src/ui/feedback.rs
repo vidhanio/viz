@@ -1,15 +1,13 @@
-//! Empty states, inline status/error banners, delayed loading captions, and
-//! shimmer skeleton rows.
+//! Empty states, delayed loading captions, and shimmer skeleton rows.
 
-use rune::{Align, El, Icon, Tx, col, el, icon, row, text};
-use rune_kit::{IconButton, IconButtonVariant};
+use rune::{Align, El, Icon, col, el, icon, row, text};
 
-use super::{badge::Tone, icons::CLOSE, radar};
+use super::radar;
 use crate::{
     motion,
     theme::{
-        EMPTY_WIDTH, HAIRLINE, ICON, ICON_MD, ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, S12, Size,
-        Theme, squircle_radius,
+        EMPTY_WIDTH, HAIRLINE, ICON, ICON_MD, ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, Theme,
+        squircle_radius,
     },
 };
 
@@ -144,111 +142,6 @@ impl EmptyState {
             body = body.child(actions);
         }
         body
-    }
-}
-
-/// Flat tinted inline status or error banner with semantic icon, title,
-/// optional detail, optional action button, and optional dismiss control.
-pub struct Banner {
-    key: String,
-    tone: Tone,
-    title: String,
-    detail: Option<String>,
-    action: Option<El>,
-    dismiss: Option<El>,
-}
-
-/// Starts a semantic [`Banner`] in `tone`.
-pub fn status_banner(key: impl Into<String>, tone: Tone, title: impl Into<String>) -> Banner {
-    Banner {
-        key: key.into(),
-        tone,
-        title: title.into(),
-        detail: None,
-        action: None,
-        dismiss: None,
-    }
-}
-
-/// Starts a [`Tone::Danger`] error banner.
-pub fn error_banner(key: impl Into<String>, title: impl Into<String>) -> Banner {
-    status_banner(key, Tone::Danger, title)
-}
-
-impl Banner {
-    /// Adds a quiet secondary detail line.
-    pub fn detail(mut self, detail: impl Into<String>) -> Self {
-        self.detail = Some(detail.into());
-        self
-    }
-
-    /// Adds a trailing action button (such as `Retry`).
-    pub fn action(mut self, action: El) -> Self {
-        self.action = Some(action);
-        self
-    }
-
-    /// Adds a trailing dismiss icon button invoking `on_dismiss`.
-    pub fn on_dismiss<S: 'static>(
-        mut self,
-        on_dismiss: impl Fn(&mut S, &mut Tx) + 'static,
-        t: &Theme,
-    ) -> Self {
-        self.dismiss = Some(
-            IconButton::new(&CLOSE)
-                .help("Dismiss")
-                .variant(IconButtonVariant::GhostMuted)
-                .control_size(Size::Micro.kit())
-                .on_press_tx(on_dismiss)
-                .build(&t.k)
-                .key("dismiss"),
-        );
-        self
-    }
-
-    /// Builds the flat tinted banner against `t`.
-    pub fn build(self, t: &Theme) -> El {
-        let colors = self.tone.colors(t);
-        let glyph = self.tone.glyph();
-        let mut copy = col().grow(1.0).shrink().min_w(0.0).gap(2.0).child(
-            text(&self.title)
-                .font(t.small_medium)
-                .color(colors.fg)
-                .wrap(),
-        );
-        if let Some(detail) = &self.detail {
-            copy = copy.child(text(detail).font(t.small).color(t.muted).wrap());
-        }
-        let mut banner = row()
-            .key(&self.key)
-            .role(if self.tone == Tone::Danger {
-                "alert"
-            } else {
-                "status"
-            })
-            .label(&self.title)
-            .w_full()
-            .px(S12)
-            .py(S8)
-            .gap(S8)
-            .items_start()
-            .radius(RADIUS_CONTROL)
-            .fill(colors.bg)
-            .transition(motion::row_enter(motion::TRAVEL_MICRO))
-            .child(
-                icon(glyph, ICON_SMALL)
-                    .color(colors.fg)
-                    .mt(2.0)
-                    .a11y_hidden(),
-            )
-            .child(copy);
-        if let Some(action) = self.action {
-            banner = banner.child(action);
-        }
-        if let Some(dismiss) = self.dismiss {
-            banner = banner.child(dismiss);
-        }
-        banner
     }
 }
 

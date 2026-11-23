@@ -15,7 +15,7 @@ use crate::{
         CARD_INSET, HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_CARD, RADIUS_SM, S2, S6, S8, S12, S14,
         S24, Theme,
     },
-    ui::{self, Card, InlineStyle},
+    ui::{self, Card},
     update::{Msg, TimelineMsg},
 };
 
@@ -108,12 +108,13 @@ fn changed_files_header(
     if !folder_keys.is_empty() {
         let next_expand = !all_open;
         header = header.child(
-            ui::inline_button(if all_open {
+            rune_kit::Button::new(if all_open {
                 "Collapse all"
             } else {
                 "Expand all"
             })
-            .style(InlineStyle::InkOnly)
+            .variant(rune_kit::ButtonVariant::GhostMuted)
+            .control_size(crate::theme::Size::Micro.kit())
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 s.dispatch(
                     Msg::Timeline(TimelineMsg::ToggleChangedFolders {
@@ -123,19 +124,20 @@ fn changed_files_header(
                     tx,
                 );
             })
-            .build(t)
+            .build(&t.k)
             .key("toggle-all"),
         );
     }
 
     header.child(
-        ui::inline_button("Open diff")
+        rune_kit::Button::new("Open diff")
+            .variant(rune_kit::ButtonVariant::GhostMuted)
+            .control_size(crate::theme::Size::Micro.kit())
             .icon(&ui::COLUMNS2)
-            .style(InlineStyle::Wash)
             .on_press_tx(|s: &mut Desktop, tx: &mut Tx| {
                 s.dispatch(Msg::Timeline(TimelineMsg::OpenDiff { path: None }), tx);
             })
-            .build(t)
+            .build(&t.k)
             .key("open-all-diffs"),
     )
 }

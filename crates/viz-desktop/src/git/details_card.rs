@@ -2,8 +2,8 @@
 
 use std::{collections::HashSet, time::Duration};
 
-use rune::{Align, El, Side, col, el, text};
-use rune_kit::Placement;
+use rune::{El, col, text};
+use rune_kit::{HoverCard, Placement, Progress, SidebarHeader};
 use viz_client::protocol::{TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use crate::{
@@ -14,7 +14,7 @@ use crate::{
         git::{self, CARD_INSET, CARD_WIDTH, Density},
         local_child, spawned_subagent, subagent_title, thread_title,
     },
-    theme::{HAIRLINE, RADIUS_CARD, S4, Theme},
+    theme::{HAIRLINE, RADIUS_CARD, Theme},
     ui,
     update::{GitMsg, Msg, TimelineMsg},
 };
@@ -329,12 +329,28 @@ impl SubagentRow<'_> {
                 );
             });
         }
-        if s.widgets.subagent_hover.as_deref() == Some(self.key.as_str()) {
+        let hovered = s.widgets.subagent_hover.as_deref() == Some(self.key.as_str());
+        let key = self.key.clone();
+        let trigger = row
+            .build(t)
+            .hover_delays(Duration::from_millis(450), Duration::ZERO)
+            .on_hover_change(move |s: &mut Desktop, inside, _| {
+                if inside {
+                    s.widgets.subagent_hover = Some(key.clone());
+                } else if s.widgets.subagent_hover.as_deref() == Some(key.as_str()) {
+                    s.widgets.subagent_hover = None;
+                }
+            });
+        let mut card = HoverCard::new(format!("{}-preview", self.key))
+            .trigger(trigger)
+            .placement(Placement::Left)
+            .open(hovered);
+        if hovered {
             let body = self.child.map_or_else(
                 || {
                     col()
-                        .w_full()
-                        .padding(12.0)
+                        .w(240.0)
+                        .padding(8.0)
                         .gap(6.0)
                         .child(
                             text(self.title)
@@ -357,22 +373,9 @@ impl SubagentRow<'_> {
                 },
                 |child| crate::sidebar::thread_preview(s, child, crate::theme::now_ms(), t),
             );
-            layer.push(
-                ui::popover_frame(format!("{}-preview", self.key), 248.0, body, t)
-                    .anchored_fit(&self.key, Side::Left, Align::Start, S4)
-                    .a11y_hidden(),
-            );
+            card = card.child(body.a11y_hidden());
         }
-        let key = self.key;
-        row.build(t)
-            .hover_delays(Duration::from_millis(450), Duration::ZERO)
-            .on_hover_change(move |s: &mut Desktop, inside, _| {
-                if inside {
-                    s.widgets.subagent_hover = Some(key.clone());
-                } else if s.widgets.subagent_hover.as_deref() == Some(key.as_str()) {
-                    s.widgets.subagent_hover = None;
-                }
-            })
+        card.build(&t.overlay, layer)
     }
 }
 
@@ -419,25 +422,12 @@ fn usage(s: &Desktop, t: &Theme) -> Option<El> {
     if usage.size == 0 {
         return None;
     }
-    let width = (u128::from(usage.used.min(usage.size)) * 244) / u128::from(usage.size.max(1));
-    let width = f32::from(u16::try_from(width).unwrap_or(244));
-    let bar = el()
-        .w_full()
-        .h(4.0)
-        .radius(2.0)
-        .fill(t.hairline)
-        .child(el().w(width).h(4.0).radius(2.0).fill(t.accent));
+    let bar = Progress::new(Some(crate::theme::fraction(usage.used, usage.size)))
+        .label(format!("{} / {} tokens", usage.used, usage.size))
+        .build(&t.k);
     Some(section(
         "Context Window",
-        [col()
-            .px(8.0)
-            .gap(6.0)
-            .child(
-                text(format!("{} / {} tokens", usage.used, usage.size))
-                    .font(t.small)
-                    .color(t.muted),
-            )
-            .child(bar)],
+        [col().w_full().px(8.0).py(4.0).child(bar)],
         t,
     ))
 }
@@ -447,6 +437,10 @@ fn section(label: &str, rows: impl IntoIterator<Item = El>, t: &Theme) -> El {
         .key(label)
         .w_full()
         .padding(8.0)
-        .child(ui::section_header(format!("details-{label}"), label).build(t))
+        .child(
+            SidebarHeader::new(label)
+                .build(&t.k)
+                .key(format!("details-{label}")),
+        )
         .children(rows)
 }

@@ -132,19 +132,24 @@ fn banner(list: &PickerList<'_>, t: &Theme) -> Option<El> {
             Tone::Danger
         };
         return Some(
-            ui::status_banner(format!("model-status-{id}"), tone, title)
-                .detail(detail)
-                .build(t),
+            rune_kit::Card::new()
+                .accent(tone.color(t))
+                .title(title, Some(tone.glyph()))
+                .description(detail)
+                .build(&t.k)
+                .key(format!("model-status-{id}")),
         );
     }
     (list.scope.locked && !catalog.own).then(|| {
-        ui::status_banner(
-            "model-locked",
-            Tone::Info,
-            format!("This thread runs on {}", list.scope.harness_name()),
-        )
-        .detail(format!("Start a new thread to use {}.", catalog.name))
-        .build(t)
+        rune_kit::Card::new()
+            .accent(Tone::Info.color(t))
+            .title(
+                format!("This thread runs on {}", list.scope.harness_name()),
+                Some(Tone::Info.glyph()),
+            )
+            .description(format!("Start a new thread to use {}.", catalog.name))
+            .build(&t.k)
+            .key("model-locked")
     })
 }
 

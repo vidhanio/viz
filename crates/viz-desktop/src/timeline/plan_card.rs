@@ -10,7 +10,7 @@ use crate::{
     model::{PlanBody, PlanCard, PlanStep, ToolStatus, relative_path},
     motion,
     theme::{CARD_INSET, HAIRLINE, ICON_MD, RADIUS_CARD, S4, S6, S8, Size, Theme},
-    ui::{self, InlineStyle},
+    ui,
     update::{Msg, TimelineMsg},
 };
 
@@ -231,17 +231,18 @@ fn markdown_body(s: &Desktop, key: &str, source: &str, t: &Theme) -> El {
         .py(S6)
         .center()
         .child(
-            ui::inline_button(if expanded {
+            rune_kit::Button::new(if expanded {
                 "Collapse plan"
             } else {
                 "Expand plan"
             })
+            .variant(rune_kit::ButtonVariant::GhostMuted)
+            .control_size(crate::theme::Size::Micro.kit())
             .icon(if expanded {
                 &ui::CHEVRON_UP
             } else {
                 &ui::CHEVRON_OPEN
             })
-            .style(InlineStyle::InkOnly)
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 s.dispatch(
                     Msg::Timeline(TimelineMsg::ToggleFold {
@@ -253,7 +254,7 @@ fn markdown_body(s: &Desktop, key: &str, source: &str, t: &Theme) -> El {
                     tx,
                 );
             })
-            .build(t)
+            .build(&t.k)
             .key("toggle"),
         );
 

@@ -17,21 +17,23 @@ pub(super) fn rows_card(state: &GalleryState, t: &Theme) -> El {
         .variant(IconButtonVariant::GhostMuted)
         .control_size(Size::Micro.kit())
         .build(&t.k);
-    let sec_open = ui::section_header("gal-sec-open", "Pinned")
-        .collapsible(state.sections.pinned_open)
+    let sec_open = rune_kit::SidebarHeader::new("Pinned")
+        .collapsed(!state.sections.pinned_open)
         .count(3)
-        .trailing(add_btn)
-        .on_toggle(|s: &mut Desktop| {
+        .action(add_btn)
+        .on_toggle(|s: &mut Desktop, _| {
             with_gallery(s, |g| g.sections.pinned_open = !g.sections.pinned_open);
         })
-        .build(t);
-    let sec_closed = ui::section_header("gal-sec-closed", "Snoozed")
-        .collapsible(state.sections.snoozed_open)
+        .build(&t.k)
+        .key("gal-sec-open");
+    let sec_closed = rune_kit::SidebarHeader::new("Snoozed")
+        .collapsed(!state.sections.snoozed_open)
         .count(2)
-        .on_toggle(|s: &mut Desktop| {
+        .on_toggle(|s: &mut Desktop, _| {
             with_gallery(s, |g| g.sections.snoozed_open = !g.sections.snoozed_open);
         })
-        .build(t);
+        .build(&t.k)
+        .key("gal-sec-closed");
 
     let row_rest = ui::list_row("gal-row-0", "Compact rest row")
         .density(RowDensity::Compact)
@@ -238,34 +240,53 @@ fn tucked_preview(t: &Theme) -> El {
         )
 }
 
-pub(super) fn feedback_card(state: &GalleryState, reduced: bool, t: &Theme) -> El {
-    let mut stack = col().w_full().gap(S8);
+fn feedback_cards(state: &GalleryState, t: &Theme) -> Vec<El> {
+    let mut cards = Vec::new();
     if state.sections.banner_visible {
-        stack = stack.child(
-            ui::error_banner("gal-err-banner", "Connection interrupted")
-                .detail("Reconnecting to local viz-server on 127.0.0.1:7420.")
+        cards.push(
+            rune_kit::Card::new()
+                .accent(Tone::Danger.color(t))
+                .title("Connection interrupted", Some(Tone::Danger.glyph()))
+                .description("Reconnecting to local viz-server on 127.0.0.1:7420.")
                 .action(
-                    ui::inline_button("Retry")
-                        .tone(Tone::Danger)
+                    rune_kit::Button::new("Retry")
+                        .variant(ButtonVariant::Danger)
+                        .control_size(Size::Micro.kit())
                         .icon(&ui::ROTATE_CW)
-                        .build(t),
+                        .build(&t.k),
                 )
-                .on_dismiss(
-                    |s: &mut Desktop, _tx| with_gallery(s, |g| g.sections.banner_visible = false),
-                    t,
+                .action(
+                    rune_kit::IconButton::new(&ui::CLOSE)
+                        .help("Dismiss")
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Micro.kit())
+                        .on_press_tx(|s: &mut Desktop, _tx| {
+                            with_gallery(s, |g| g.sections.banner_visible = false);
+                        })
+                        .build(&t.k),
                 )
-                .build(t),
+                .build(&t.k)
+                .key("gal-err-banner"),
         );
     }
-    stack = stack
-        .child(
-            ui::status_banner(
-                "gal-warn-banner",
-                Tone::Warning,
+    cards.push(
+        rune_kit::Card::new()
+            .accent(Tone::Warning.color(t))
+            .title(
                 "Approval needed before running git push",
+                Some(Tone::Warning.glyph()),
             )
-            .build(t),
-        )
+            .build(&t.k)
+            .key("gal-warn-banner"),
+    );
+    cards
+}
+
+pub(super) fn feedback_card(state: &GalleryState, reduced: bool, t: &Theme) -> El {
+    let stack = col()
+        .w_full()
+        .gap(S8)
+        .children(feedback_cards(state, t))
         .child(
             row()
                 .w_full()

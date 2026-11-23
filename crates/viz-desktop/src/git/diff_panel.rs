@@ -182,7 +182,11 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 col()
                     .w(144.0)
                     .min_h(0.0)
-                    .child(ui::section_header("diff-files-title", "Files").build(t))
+                    .child(
+                        rune_kit::SidebarHeader::new("Files")
+                            .build(&t.k)
+                            .key("diff-files-title"),
+                    )
                     .child(tree.grow(1.0).min_h(0.0)),
             ),
     )

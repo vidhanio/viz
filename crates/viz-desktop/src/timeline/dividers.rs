@@ -16,7 +16,7 @@ use crate::{
         CARD_INSET, HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_CARD, RADIUS_SM, S4, S6, S8, S12, Size,
         Theme,
     },
-    ui::{self, InlineStyle, Tone},
+    ui::{self, Tone},
     update::{Msg, TimelineMsg},
 };
 
@@ -230,13 +230,14 @@ pub fn omitted_divider(s: &Desktop, key: &str, source: &EntrySource, t: &Theme) 
         .center_y()
         .child(ui::rule(t).grow(1.0).w(0.0))
         .child(
-            ui::inline_button(if loading {
+            rune_kit::Button::new(if loading {
                 "Loading omitted entry…"
             } else {
                 "Load omitted entry"
             })
+            .variant(rune_kit::ButtonVariant::GhostMuted)
+            .control_size(crate::theme::Size::Micro.kit())
             .icon(&ui::DOWNLOAD)
-            .style(InlineStyle::Wash)
             .disabled(loading || !s.model.connected())
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 s.dispatch(
@@ -247,7 +248,7 @@ pub fn omitted_divider(s: &Desktop, key: &str, source: &EntrySource, t: &Theme) 
                     tx,
                 );
             })
-            .build(t)
+            .build(&t.k)
             .key("load"),
         )
         .child(ui::rule(t).grow(1.0).w(0.0))
@@ -305,13 +306,14 @@ pub fn media_card(media: &MediaItem, t: &Theme) -> El {
 
     if let Some(url) = uri {
         card = card.child(
-            ui::inline_button("Open")
+            rune_kit::Button::new("Open")
+                .variant(rune_kit::ButtonVariant::GhostMuted)
+                .control_size(crate::theme::Size::Micro.kit())
                 .icon(&ui::EXTERNAL_LINK)
-                .style(InlineStyle::Wash)
                 .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                     s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.clone())), tx);
                 })
-                .build(t)
+                .build(&t.k)
                 .key("open"),
         );
     }
@@ -336,20 +338,13 @@ pub fn error_banner(
         ErrorKind::Auth | ErrorKind::General => Tone::Danger,
     };
     let dismiss_key = key.to_owned();
-    let mut banner = ui::status_banner(key, tone, kind.heading())
-        .detail(message)
-        .on_dismiss(
-            move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::DismissError(dismiss_key.clone())),
-                    tx,
-                );
-            },
-            t,
-        );
+    let mut card = rune_kit::Card::new()
+        .accent(tone.color(t))
+        .title(kind.heading(), Some(tone.glyph()))
+        .description(message);
 
     if s.model.connected() && !s.model.busy() && kind != ErrorKind::Auth {
-        banner = banner.action(
+        card = card.action(
             rune_kit::Button::new("Retry")
                 .variant(ButtonVariant::Neutral)
                 .control_size(Size::Small.kit())
@@ -362,7 +357,22 @@ pub fn error_banner(
         );
     }
 
-    Some(banner.build(t).my(S6))
+    card = card.action(
+        rune_kit::IconButton::new(&ui::CLOSE)
+            .help("Dismiss")
+            .variant(rune_kit::IconButtonVariant::GhostMuted)
+            .control_size(Size::Micro.kit())
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::DismissError(dismiss_key.clone())),
+                    tx,
+                );
+            })
+            .build(&t.k)
+            .key("dismiss"),
+    );
+
+    Some(card.build(&t.k).key(key.to_owned()).my(S6))
 }
 
 fn hairline_divider(

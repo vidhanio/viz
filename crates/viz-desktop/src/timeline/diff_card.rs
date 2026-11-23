@@ -11,7 +11,7 @@ use crate::{
     app::Desktop,
     model::{Tool, relative_path, split_path},
     theme::{CARD_INSET, HAIRLINE, ICON_MD, RADIUS_CONTROL, S2, S4, S6, S8, S10, Size, Theme},
-    ui::{self, InlineStyle},
+    ui,
     update::{Msg, TimelineMsg},
 };
 
@@ -148,9 +148,10 @@ fn diff_header(s: &Desktop, file: &FileDiff, t: &Theme) -> El {
         )
         .child(ui::diff_stat(add, del, t))
         .child(
-            ui::inline_button("Open diff")
+            rune_kit::Button::new("Open diff")
+                .variant(rune_kit::ButtonVariant::GhostMuted)
+                .control_size(crate::theme::Size::Micro.kit())
                 .icon(&ui::FILE_DIFF)
-                .style(InlineStyle::Wash)
                 .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                     s.dispatch(
                         Msg::Timeline(TimelineMsg::OpenDiff {
@@ -159,7 +160,7 @@ fn diff_header(s: &Desktop, file: &FileDiff, t: &Theme) -> El {
                         tx,
                     );
                 })
-                .build(t)
+                .build(&t.k)
                 .key("open-diff"),
         )
         .child(

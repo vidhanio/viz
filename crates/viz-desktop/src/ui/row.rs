@@ -1,14 +1,9 @@
-//! List rows, collapsible section headers, and sidebar tree rows.
-
-use std::f32::consts::FRAC_PI_2;
+//! Interactive list rows for menus, comboboxes, command palette, and details
+//! cards.
 
 use rune::{Color, El, Icon, Tx, col, icon, row, text};
 
-use super::{icons::CHEVRON, section};
-use crate::{
-    motion,
-    theme::{HAIRLINE, ICON, ICON_SMALL, RADIUS_SM, RADIUS_XS, S2, S4, S6, S8, Theme},
-};
+use crate::theme::{HAIRLINE, ICON, RADIUS_XS, S2, S8, Theme};
 
 type ElHook = Box<dyn FnOnce(El) -> El>;
 
@@ -265,122 +260,5 @@ impl ListRow {
             item = press(item);
         }
         item
-    }
-}
-
-/// Static or collapsible section header row with optional count and trailing
-/// action.
-pub struct SectionHeader {
-    key: String,
-    label: String,
-    collapsible: Option<bool>,
-    count: Option<usize>,
-    trailing: Option<El>,
-    toggle: Option<ElHook>,
-}
-
-/// Starts a [`SectionHeader`] keyed by `key` with title `label`.
-pub fn section_header(key: impl Into<String>, label: impl Into<String>) -> SectionHeader {
-    SectionHeader {
-        key: key.into(),
-        label: label.into(),
-        collapsible: None,
-        count: None,
-        trailing: None,
-        toggle: None,
-    }
-}
-
-impl SectionHeader {
-    /// Enables a rotating disclosure chevron reflecting `open`.
-    pub const fn collapsible(mut self, open: bool) -> Self {
-        self.collapsible = Some(open);
-        self
-    }
-
-    /// Displays a quiet tabular count beside the section label.
-    pub const fn count(mut self, count: usize) -> Self {
-        self.count = Some(count);
-        self
-    }
-
-    /// Places a trailing action button (such as `+` new thread) at the right
-    /// edge.
-    pub fn trailing(mut self, action: El) -> Self {
-        self.trailing = Some(action);
-        self
-    }
-
-    /// Registers a toggle callback when [`Self::collapsible`] is set.
-    pub fn on_toggle<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
-        self.toggle = Some(Box::new(move |el| el.on_press(f)));
-        self
-    }
-
-    /// Builds the section header against `t`.
-    pub fn build(self, t: &Theme) -> El {
-        let mut head = row()
-            .key(&self.key)
-            .w_full()
-            .h(24.0)
-            .px(S8)
-            .gap(S6)
-            .center_y()
-            .radius(RADIUS_SM);
-
-        if let Some(open) = self.collapsible {
-            let mut trigger = row()
-                .key(format!("{}-toggle", self.key))
-                .role("button")
-                .label(&self.label)
-                .expanded(open)
-                .grow(1.0)
-                .shrink()
-                .min_w(0.0)
-                .h(24.0)
-                .gap(S4)
-                .center_y()
-                .radius(RADIUS_SM)
-                .hover_group()
-                .focusable(true)
-                .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-                .child(
-                    motion::chevron(&CHEVRON, ICON_SMALL, open, FRAC_PI_2)
-                        .color(t.faint)
-                        .group_color(t.text)
-                        .a11y_hidden(),
-                )
-                .child(
-                    text(&self.label)
-                        .font(t.small_medium)
-                        .color(t.muted)
-                        .group_color(t.text)
-                        .truncate()
-                        .a11y_hidden(),
-                );
-            if let Some(count) = self.count {
-                trigger = trigger.child(
-                    text(count.to_string())
-                        .font(t.mono_micro)
-                        .color(t.faint)
-                        .a11y_hidden(),
-                );
-            }
-            if let Some(toggle) = self.toggle {
-                trigger = toggle(trigger);
-            }
-            head = head.child(trigger);
-        } else {
-            head = head.child(section(&self.label, t).truncate());
-            if let Some(count) = self.count {
-                head = head.child(text(count.to_string()).font(t.mono_micro).color(t.faint));
-            }
-            head = head.child(rune::spacer());
-        }
-
-        if let Some(trailing) = self.trailing {
-            head = head.child(trailing);
-        }
-        head
     }
 }

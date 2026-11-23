@@ -127,12 +127,13 @@ pub(super) fn empty_primary_state(s: &Desktop, t: &Theme) -> El {
         ProjectFilter::All => (
             "No active threads".to_owned(),
             m.connected().then(|| {
-                ui::inline_button("Start a new thread")
-                    .tone(ui::Tone::Accent)
+                rune_kit::Button::new("Start a new thread")
+                    .variant(rune_kit::ButtonVariant::Ghost)
+                    .control_size(crate::theme::Size::Micro.kit())
                     .on_press_tx(|s: &mut Desktop, tx| {
                         s.dispatch(Msg::Sidebar(SidebarMsg::NewThread), tx);
                     })
-                    .build(t)
+                    .build(&t.k)
             }),
         ),
         ProjectFilter::NoProject => (
@@ -169,8 +170,9 @@ pub(super) fn empty_primary_state(s: &Desktop, t: &Theme) -> El {
 }
 
 fn clear_filter_button(t: &Theme) -> El {
-    ui::inline_button("Clear filter")
-        .tone(ui::Tone::Accent)
+    rune_kit::Button::new("Clear filter")
+        .variant(rune_kit::ButtonVariant::Ghost)
+        .control_size(crate::theme::Size::Micro.kit())
         .on_press_tx(|s: &mut Desktop, tx| {
             tx.instant();
             s.dispatch(
@@ -178,5 +180,5 @@ fn clear_filter_button(t: &Theme) -> El {
                 tx,
             );
         })
-        .build(t)
+        .build(&t.k)
 }

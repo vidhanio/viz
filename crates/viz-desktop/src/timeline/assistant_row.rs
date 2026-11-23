@@ -16,7 +16,7 @@ use crate::{
         CHAT_CONTENT_MAX_WIDTH, CHAT_LANE_PADDING_X, HAIRLINE, ICON_MD, RADIUS_CONTROL, S2, S4, S6,
         S12, Size, Theme,
     },
-    ui::{self, InlineStyle},
+    ui,
     update::{Msg, TimelineMsg},
 };
 
@@ -74,12 +74,13 @@ pub fn prose(
             .child(md)
             .child(
                 row().px(S4).child(
-                    ui::inline_button(if loading {
+                    rune_kit::Button::new(if loading {
                         "Loading full message…"
                     } else {
                         "Load full message"
                     })
-                    .style(InlineStyle::Wash)
+                    .variant(rune_kit::ButtonVariant::GhostMuted)
+                    .control_size(crate::theme::Size::Micro.kit())
                     .disabled(loading || !s.model.connected())
                     .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                         s.dispatch(
@@ -90,7 +91,7 @@ pub fn prose(
                             tx,
                         );
                     })
-                    .build(t)
+                    .build(&t.k)
                     .key("load-more"),
                 ),
             );

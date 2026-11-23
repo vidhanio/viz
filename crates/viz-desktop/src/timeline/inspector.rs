@@ -10,7 +10,7 @@ use crate::{
     app::Desktop,
     model::{Tool, ToolAction, ToolStatus, is_command, relative_path},
     theme::{HAIRLINE, RADIUS_CONTROL, S2, S4, S6, S10, S12, S28, Size, Theme},
-    ui::{self, InlineStyle},
+    ui,
     update::{Msg, TimelineMsg},
 };
 
@@ -379,13 +379,14 @@ fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
             .py(S6)
             .center_y()
             .child(
-                ui::inline_button(if loading {
+                rune_kit::Button::new(if loading {
                     "Loading full output…"
                 } else {
                     "Load full output"
                 })
+                .variant(rune_kit::ButtonVariant::GhostMuted)
+                .control_size(crate::theme::Size::Micro.kit())
                 .icon(&ui::DOWNLOAD)
-                .style(InlineStyle::Wash)
                 .disabled(loading || !s.model.connected())
                 .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                     s.dispatch(
@@ -396,7 +397,7 @@ fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
                         tx,
                     );
                 })
-                .build(t)
+                .build(&t.k)
                 .key("load-chunk"),
             ),
     )

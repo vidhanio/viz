@@ -13,7 +13,7 @@ use crate::{
     model::{DragShelf, DropZone, SHELF_SETTLED, SHELF_SNOOZED, SHELF_WORKING, SidebarOutline},
     motion,
     theme::{HAIRLINE, ICON_SMALL, RADIUS_CONTROL, RADIUS_SM, S2, S4, S6, S8, S10, S12, Theme},
-    ui::{self, InlineStyle},
+    ui,
     update::{Msg, SidebarMsg},
 };
 
@@ -263,12 +263,13 @@ pub(super) fn settled_drawer(
                         .pt(S4)
                         .center()
                         .child(
-                            ui::inline_button(format!("Load more ({remaining})"))
-                                .style(InlineStyle::Wash)
+                            rune_kit::Button::new(format!("Load more ({remaining})"))
+                                .variant(rune_kit::ButtonVariant::GhostMuted)
+                                .control_size(crate::theme::Size::Micro.kit())
                                 .on_press(|s: &mut Desktop| {
                                     s.dispatch_local(Msg::Sidebar(SidebarMsg::LoadMoreSettled));
                                 })
-                                .build(t),
+                                .build(&t.k),
                         ),
                 );
             }

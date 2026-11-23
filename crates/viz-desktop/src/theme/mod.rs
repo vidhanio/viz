@@ -277,17 +277,13 @@ impl Theme {
         palette::build_theme(scheme)
     }
 
-    /// Flat base16 tooltip appearance passed to `Cx::help_look`.
+    /// Flat base16 tooltip appearance built via `rune_kit::TooltipStyle` for
+    /// `Cx::help_look`.
     pub fn help_look(&self) -> HelpLook {
-        HelpLook::system(self.k.dark)
-            .fill(self.surface_raised)
-            .ink(self.text)
-            .ring(HAIRLINE, self.border_overlay)
+        rune_kit::TooltipStyle::from_kit(&self.overlay, rune_kit::TooltipAppearance::Compact)
             .radius(RADIUS_SM)
-            .padding(S8, S4)
             .font(self.small)
-            .keycaps(self.chip_fill, self.muted, self.mono_micro, false)
-            .shadows([])
+            .help_look()
     }
 
     /// Assistant prose typography and flat code block styling.

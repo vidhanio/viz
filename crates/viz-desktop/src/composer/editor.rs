@@ -16,7 +16,7 @@ use crate::{
     theme::{
         HAIRLINE, ICON_SMALL, RADIUS_SM, RADIUS_SURFACE, S4, S8, S10, S14, S16, S40, S44, Theme,
     },
-    ui::{self, InlineStyle},
+    ui,
     update::{ComposerMsg, Msg},
 };
 
@@ -171,12 +171,13 @@ fn editing_queued_banner(s: &Desktop, t: &Theme) -> Option<El> {
                     .grow(1.0),
             )
             .child(
-                ui::inline_button("Cancel")
-                    .style(InlineStyle::Wash)
+                rune_kit::Button::new("Cancel")
+                    .variant(rune_kit::ButtonVariant::GhostMuted)
+                    .control_size(crate::theme::Size::Micro.kit())
                     .on_press_tx(|s: &mut Desktop, tx| {
                         s.dispatch(Msg::Composer(ComposerMsg::CancelEditQueued), tx);
                     })
-                    .build(t)
+                    .build(&t.k)
                     .key("cancel-edit-queued"),
             )
     })

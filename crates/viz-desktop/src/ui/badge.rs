@@ -8,14 +8,12 @@ use crate::{
     theme::{DOT, ICON, S6, Theme},
 };
 
-/// Semantic accent role for badges, banners, and inline status elements.
+/// Semantic accent role for status cards, toasts, and inline status elements.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tone {
-    /// Quiet neutral chip fill.
+    /// Quiet neutral ink.
     #[default]
     Neutral,
-    /// Primary interactive accent (`base0D`).
-    Accent,
     /// Positive / open / added status (`base0B`).
     Success,
     /// Destructive / error / removed status (`base08`).
@@ -26,51 +24,31 @@ pub enum Tone {
     Info,
 }
 
-/// Resolved flat fill and ink for a [`Tone`].
-#[derive(Debug, Clone, Copy)]
-pub struct ToneColors {
-    /// Primary text and icon ink (`>= 4.5:1`).
-    pub fg: Color,
-    /// Subtle tinted background fill.
-    pub bg: Color,
-}
-
 impl Tone {
-    /// The status glyph banners and toasts lead with.
+    /// The status glyph cards and toasts lead with.
     pub const fn glyph(self) -> &'static Icon {
         match self {
             Self::Danger => &super::CIRCLE_ALERT,
             Self::Warning => &super::TRIANGLE_ALERT,
             Self::Success => &super::CIRCLE_CHECK,
-            Self::Neutral | Self::Accent | Self::Info => &super::INFO,
+            Self::Neutral | Self::Info => &super::INFO,
         }
     }
 
     /// The tone's [`Tone::glyph`] in its ink, as a toast's leading mark.
     pub fn mark(self, t: &Theme) -> El {
-        icon(self.glyph(), ICON).color(self.colors(t).fg)
+        icon(self.glyph(), ICON).color(self.color(t))
     }
 
-    /// Resolves foreground and subtle tinted fill from `t`.
-    pub fn colors(self, t: &Theme) -> ToneColors {
+    /// Resolves foreground ink from `t`.
+    pub const fn color(self, t: &Theme) -> Color {
         match self {
-            Self::Neutral => ToneColors {
-                fg: t.muted,
-                bg: t.chip_fill,
-            },
-            Self::Accent => tinted(t.accent_text, t.accent),
-            Self::Success => tinted(t.success, t.success),
-            Self::Danger => tinted(t.danger, t.danger),
-            Self::Warning => tinted(t.warning, t.warning),
-            Self::Info => tinted(t.info, t.info),
+            Self::Neutral => t.muted,
+            Self::Success => t.success,
+            Self::Danger => t.danger,
+            Self::Warning => t.warning,
+            Self::Info => t.info,
         }
-    }
-}
-
-fn tinted(fg: Color, tint: Color) -> ToneColors {
-    ToneColors {
-        fg,
-        bg: tint.alpha(0.12),
     }
 }
 
