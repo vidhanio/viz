@@ -16,6 +16,7 @@
 mod branches;
 mod changes;
 mod checkpoint;
+mod clone;
 mod command;
 mod diff;
 mod files;
@@ -29,6 +30,7 @@ use std::ffi::OsString;
 
 pub use branches::{Branch, Branches, Worktree, WorktreeRemoval};
 pub use checkpoint::CheckpointId;
+pub use clone::{ClonePhase, CloneProgress, clone_repository};
 pub use command::CommandFailure;
 pub use diff::{Diff, DiffFile, DiffLine, DiffTarget, FileKind, Hunk, LineStats, RevisionId};
 pub use files::{FileMatch, PathKind, find_files};

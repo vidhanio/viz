@@ -6,13 +6,14 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
-    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, ForkThread,
-    HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches, ListEntries, ListProjects,
-    ListWorktrees, MoveThread, ProjectList, ProjectResult, ReadProject, ReadProjectIcon,
+    BranchList, BrowseFolders, CancelClone, ConfigureThread, CreateFolder, CreateProject,
+    DeleteThread, Empty, FileList, ForkThread, GitHubRepositories, HarnessList, HarnessOptions,
+    HarnessOptionsResult, InitRepository, ListBranches, ListEntries, ListProjects, ListWorktrees,
+    MoveThread, ProjectList, ProjectResult, ReadClone, ReadProject, ReadProjectIcon,
     ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId,
-    SearchFiles, SearchHits, SearchThreads, SendInput, SteerQueuedInput, StopThread, ThreadId,
-    ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread,
-    WaitThread,
+    SearchFiles, SearchHits, SearchThreads, SendInput, StartClone, SteerQueuedInput, StopThread,
+    ThreadId, ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput,
+    UpdateThread, WaitThread,
 };
 
 use super::{Workspace, runs, sql::row, store, worktree};
@@ -55,6 +56,13 @@ handlers! {
             workspace.update_project(&project, name, changes.unwrap_or_default()).await?;
             Ok(Empty {})
         }
+        BrowseFolders, BrowseFolders, |workspace, args| { workspace.browse_folders(args).await }
+        CreateFolder, CreateFolder, |workspace, args| { workspace.create_folder(args).await }
+        InitRepository, InitRepository, |workspace, args| { workspace.init_repository(args).await }
+        StartClone, StartClone, |workspace, args| { workspace.start_clone(args).await }
+        ReadClone, ReadClone, |workspace, ReadClone { id }| { workspace.clone_status(id).await }
+        CancelClone, CancelClone, |workspace, CancelClone { id }| { workspace.cancel_clone(id).await }
+        GitHubRepositories, GitHubRepositories, |workspace, args| { workspace.github_repositories(args).await }
         ReadProjectIcon, ReadProjectIcon, |workspace, args| {
             workspace.project_icon(args).await
         }

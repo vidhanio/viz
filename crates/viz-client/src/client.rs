@@ -201,6 +201,83 @@ impl Client {
         Ok(self.request(params).await?.project)
     }
 
+    /// Browse the server’s directories and complete a typed path.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn browse_folders(
+        &self,
+        args: &viz_protocol::BrowseFolders,
+    ) -> Result<viz_protocol::FolderEntries> {
+        self.request(args).await
+    }
+
+    /// Create a directory on the server.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn create_folder(
+        &self,
+        args: &viz_protocol::CreateFolder,
+    ) -> Result<viz_protocol::FolderCreated> {
+        self.request(args).await
+    }
+
+    /// Initialize Git in a server directory.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn init_repository(
+        &self,
+        args: &viz_protocol::InitRepository,
+    ) -> Result<viz_protocol::FolderCreated> {
+        self.request(args).await
+    }
+
+    /// Start cloning and return a progress handle.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn start_clone(
+        &self,
+        args: &viz_protocol::StartClone,
+    ) -> Result<viz_protocol::CloneStatus> {
+        self.request(args).await
+    }
+
+    /// Read clone progress or its terminal result.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn clone_status(
+        &self,
+        args: &viz_protocol::ReadClone,
+    ) -> Result<viz_protocol::CloneStatus> {
+        self.request(args).await
+    }
+
+    /// Request cancellation of an in-progress clone.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn cancel_clone(
+        &self,
+        args: &viz_protocol::CancelClone,
+    ) -> Result<viz_protocol::CloneStatus> {
+        self.request(args).await
+    }
+
+    /// List or search repositories the authenticated GitHub viewer owns.
+    ///
+    /// # Errors
+    /// See [`Client::send`].
+    pub async fn github_repositories(
+        &self,
+        args: &viz_protocol::GitHubRepositories,
+    ) -> Result<viz_protocol::GitHubRepositoryList> {
+        self.request(args).await
+    }
+
     /// Get a project's image icon, or confirm that the caller’s `ETag` still
     /// matches.
     ///

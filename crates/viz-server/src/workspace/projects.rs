@@ -36,21 +36,33 @@ impl Workspace {
                 .to_owned()
         });
         let mut db = self.db.lock().await;
-        let created_at = store::now();
-        let count = exec(&mut db, "INSERT INTO projects (path, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
-            [path.into(), name.as_str().into(), created_at.into()]).await?;
+        let mut tx = db.transaction().await?;
+        let requested_at = store::now();
+        let count = exec(&mut tx, "INSERT INTO projects (path, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",
+            [path.into(), name.as_str().into(), requested_at.into()]).await?;
+        let (name, created_at, settings) = if count == 0 {
+            let (name, created_at, current) = store::preferences(&mut tx, path).await?;
+            let prefs = projects::edit(
+                current,
+                ProjectSettingsPatch {
+                    archived: Some(false),
+                    ..ProjectSettingsPatch::default()
+                },
+            )?;
+            exec(
+                &mut tx,
+                "UPDATE projects SET settings = ?2 WHERE path = ?1",
+                [path.into(), store::json(&prefs)?.into()],
+            )
+            .await?;
+            (name, created_at, prefs.settings)
+        } else {
+            (name, requested_at, ProjectSettings::default())
+        };
+        tx.commit().await?;
         drop(db);
-        if count == 0 {
-            return Err(Error::invalid(format!("project already exists: {path}")));
-        }
         self.changed(None);
-        Ok(store::project_at(
-            path.to_owned(),
-            name,
-            created_at,
-            ProjectSettings::default(),
-        )
-        .await)
+        Ok(store::project_at(path.to_owned(), name, created_at, settings).await)
     }
 
     pub(super) async fn update_project(

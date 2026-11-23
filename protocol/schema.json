@@ -4422,6 +4422,636 @@
         ]
       }
     },
+    "folders.browse": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "BrowseFolders",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "A directory or a typed path to complete. Relative paths use the project\nor server directory.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "showHidden": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "FolderEntries",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "parent": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "home": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "git": {
+            "type": "boolean"
+          },
+          "project": {
+            "type": "boolean"
+          },
+          "completion": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/FolderEntry"
+            }
+          },
+          "issue": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/FolderIssue"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "path",
+          "git",
+          "project",
+          "entries"
+        ],
+        "$defs": {
+          "FolderEntry": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "git": {
+                "type": "boolean"
+              },
+              "project": {
+                "type": "boolean"
+              },
+              "issue": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/FolderIssue"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "name",
+              "git",
+              "project"
+            ]
+          },
+          "FolderIssue": {
+            "type": "string",
+            "enum": [
+              "permissionDenied",
+              "notFound",
+              "notDirectory",
+              "unavailable"
+            ]
+          }
+        }
+      }
+    },
+    "folder.create": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CreateFolder",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "FolderCreated",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    "git.init": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "InitRepository",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "FolderCreated",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ]
+      }
+    },
+    "project.clone": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "StartClone",
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "url",
+          "path"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CloneStatus",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/CloneState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "$defs": {
+          "CloneState": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "running"
+                  },
+                  "phase": {
+                    "$ref": "#/$defs/ClonePhase"
+                  },
+                  "percent": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "uint8",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "required": [
+                  "kind",
+                  "phase"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "completed"
+                  },
+                  "project": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "failed"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "cancelled"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          },
+          "ClonePhase": {
+            "type": "string",
+            "enum": [
+              "preparing",
+              "counting",
+              "compressing",
+              "receiving",
+              "resolving",
+              "checkingOut"
+            ]
+          }
+        }
+      }
+    },
+    "project.cloneStatus": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ReadClone",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CloneStatus",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/CloneState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "$defs": {
+          "CloneState": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "running"
+                  },
+                  "phase": {
+                    "$ref": "#/$defs/ClonePhase"
+                  },
+                  "percent": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "uint8",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "required": [
+                  "kind",
+                  "phase"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "completed"
+                  },
+                  "project": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "failed"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "cancelled"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          },
+          "ClonePhase": {
+            "type": "string",
+            "enum": [
+              "preparing",
+              "counting",
+              "compressing",
+              "receiving",
+              "resolving",
+              "checkingOut"
+            ]
+          }
+        }
+      }
+    },
+    "project.cancelClone": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CancelClone",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "CloneStatus",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/CloneState"
+          }
+        },
+        "required": [
+          "id",
+          "state"
+        ],
+        "$defs": {
+          "CloneState": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "running"
+                  },
+                  "phase": {
+                    "$ref": "#/$defs/ClonePhase"
+                  },
+                  "percent": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "uint8",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "required": [
+                  "kind",
+                  "phase"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "completed"
+                  },
+                  "project": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "failed"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "message"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "cancelled"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          },
+          "ClonePhase": {
+            "type": "string",
+            "enum": [
+              "preparing",
+              "counting",
+              "compressing",
+              "receiving",
+              "resolving",
+              "checkingOut"
+            ]
+          }
+        }
+      }
+    },
+    "github.repositories": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubRepositories",
+        "type": "object",
+        "properties": {
+          "host": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "query": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitHubRepositoryList",
+        "type": "object",
+        "properties": {
+          "repositories": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GitHubRepository"
+            }
+          }
+        },
+        "required": [
+          "repositories"
+        ],
+        "$defs": {
+          "GitHubRepository": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "fullName": {
+                "type": "string"
+              },
+              "defaultBranch": {
+                "type": "string"
+              },
+              "cloneUrl": {
+                "type": "string"
+              },
+              "sshUrl": {
+                "type": "string"
+              },
+              "avatarUrl": {
+                "type": "string"
+              },
+              "private": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "fullName",
+              "defaultBranch",
+              "cloneUrl",
+              "sshUrl",
+              "avatarUrl",
+              "private"
+            ]
+          }
+        }
+      }
+    },
     "project.remove": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

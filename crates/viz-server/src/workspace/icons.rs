@@ -187,7 +187,7 @@ impl Workspace {
         let Some(remote) = remote else {
             return Ok(None);
         };
-        let github = viz_github::GitHub::new(&remote.host)?;
+        let github = self.github(&remote.host).await?;
         let image = github.owner_image(&remote).await?;
         download_avatar(&remote.host, &image).await
     }

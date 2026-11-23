@@ -4,9 +4,12 @@
 mod admission;
 mod attachments;
 mod checkouts;
+mod clones;
 mod files;
+mod folders;
 mod follow_ups;
 mod fork;
+mod github;
 mod icons;
 mod notifications;
 mod projects;
@@ -77,6 +80,8 @@ pub(crate) struct Workspace {
     workers: Workers,
     files: Files,
     icons: icons::Icons,
+    clones: clones::Clones,
+    github: Mutex<BTreeMap<String, viz_github::GitHub>>,
     mcp: Mcp,
     closing: CancellationToken,
     jobs: TaskTracker,
@@ -140,6 +145,8 @@ impl Workspace {
             due: Notify::new(),
             workers: Workers::default(),
             icons: icons::Icons::default(),
+            clones: clones::Clones::default(),
+            github: Mutex::default(),
             files: Files::default(),
             mcp,
             closing: CancellationToken::new(),

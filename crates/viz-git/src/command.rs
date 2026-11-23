@@ -119,23 +119,44 @@ pub fn output(command: &mut Command, operation: &'static str) -> Result<Vec<u8>,
         .as_ref()
         .is_some_and(|trace| hook_rejected(trace.as_file()).unwrap_or(false));
     let stdout = diagnostic_prefix(&result.stdout);
-    let kind = classify(operation, &format!("{stderr}\n{stdout}"), hook_rejected);
-    let message = sanitize(if stderr.trim().is_empty() {
+    let message = if stderr.trim().is_empty() {
         &stdout
     } else {
         &stderr
-    });
+    };
+    Err(command_error(
+        operation,
+        result.status,
+        &format!("{stderr}\n{stdout}"),
+        message,
+        hook_rejected,
+    ))
+}
+
+pub fn clone_failure(status: std::process::ExitStatus, message: &str) -> Error {
+    command_error("clone", status, message, message, false)
+}
+
+fn command_error(
+    operation: &'static str,
+    status: std::process::ExitStatus,
+    diagnostic: &str,
+    message: &str,
+    hook_rejected: bool,
+) -> Error {
+    let kind = classify(operation, diagnostic, hook_rejected);
+    let message = sanitize(message);
     let message = if message.is_empty() && hook_rejected {
         "Git hook exited unsuccessfully".to_owned()
     } else {
         message
     };
-    Err(Error::Command {
+    Error::Command {
         operation,
-        status: result.status,
+        status,
         kind,
         message,
-    })
+    }
 }
 
 /// Drains the pipe so Git never blocks on it, keeping the first whole lines

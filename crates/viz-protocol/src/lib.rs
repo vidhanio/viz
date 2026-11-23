@@ -5,6 +5,7 @@
 
 mod catalog;
 mod connections;
+mod folders;
 mod fork;
 mod history;
 mod ids;
@@ -23,6 +24,11 @@ pub use connections::{
     EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject, ReadThreadState,
     Run, RunKind, RunStatus, Task, TaskList, TaskResult, TaskStatus, TaskStatusRequest,
     TaskStatusResult, ThreadStateResult, Unwatch, WaitResult, WaitThread, Watch, Watching,
+};
+pub use folders::{
+    BrowseFolders, CancelClone, CloneId, ClonePhase, CloneState, CloneStatus, CreateFolder,
+    FolderCreated, FolderEntries, FolderEntry, FolderIssue, GitHubRepositories, GitHubRepository,
+    GitHubRepositoryList, InitRepository, ReadClone, StartClone,
 };
 pub use fork::{ForkPoint, ForkSource, ForkThread, Forked, ForkedPrompt};
 pub use history::{
@@ -118,6 +124,13 @@ methods! {
     CreateProject<'_> => "project.create", ProjectResult;
     UpdateProject<'_> => "project.update", Empty;
     ReadProjectIcon => "project.icon", ProjectIconResult;
+    BrowseFolders => "folders.browse", FolderEntries;
+    CreateFolder => "folder.create", FolderCreated;
+    InitRepository => "git.init", FolderCreated;
+    StartClone => "project.clone", CloneStatus;
+    ReadClone => "project.cloneStatus", CloneStatus;
+    CancelClone => "project.cancelClone", CloneStatus;
+    GitHubRepositories => "github.repositories", GitHubRepositoryList;
     RemoveProject<'_> => "project.remove", Empty;
     ListHarnesses => "harnesses.list", HarnessList;
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
