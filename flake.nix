@@ -107,6 +107,10 @@
                       cp crates/rune/assets/Inter-{Regular,Medium,SemiBold}.ttf crates/rune-text/assets/
                       substituteInPlace crates/rune-text/src/fonts/default_fonts.rs \
                         --replace-fail '../../../rune/assets/' '../../assets/'
+                      mkdir -p crates/rune-fx/src/shaders
+                      cp crates/rune/src/shaders/clip.wgsl crates/rune-fx/src/shaders/
+                      substituteInPlace crates/rune-fx/src/pipes.rs \
+                        --replace-fail '../../rune/src/shaders/clip.wgsl' 'shaders/clip.wgsl'
                     '';
                   }
                 else
