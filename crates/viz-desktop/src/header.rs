@@ -84,9 +84,9 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
     if m.selection.selected.is_some() {
         toolbar = toolbar.trailing(
             header_button(
-                &ui::PANEL_RIGHT,
+                &ui::SQUARE_MENU,
                 "Thread Details",
-                crate::model::git::details_visible(m),
+                m.panels.details_open,
                 crate::update::GitMsg::ToggleDetails,
                 t,
             )
@@ -107,6 +107,7 @@ fn header_button(
         .help(label)
         .variant(rune_kit::IconButtonVariant::Ghost)
         .control_size(Size::Small.kit())
+        .expanded(selected)
         .on_press_tx(move |s: &mut Desktop, tx| git::dispatch(s, msg.clone(), tx))
         .build(&t.k)
         .a11y_value(if selected { "Open" } else { "Closed" })

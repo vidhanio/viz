@@ -1,9 +1,9 @@
 //! Window shell layout with explicit slots for `sidebar`, `toolbar`, `main`,
-//! `details`, `diff`, and `overlays`.
+//! `diff`, and `overlays`.
 
 use std::time::Duration;
 
-use rune::{El, col, el, row};
+use rune::{El, col, el};
 use rune_kit::{
     Toast, ToastRegion,
     shell::{SidebarPeek, SidebarToggle, SplitView, Toolbar},
@@ -25,9 +25,7 @@ pub struct ShellSlots {
     pub toolbar: Toolbar,
     /// Primary thread or home content (timeline + composer).
     pub main: El,
-    /// Optional right-hand thread details card slot (Phase 1 Track G).
-    pub details: Option<El>,
-    /// Optional resizable right-hand diff inspector slot (Phase 1 Track G).
+    /// Optional resizable right-hand diff inspector slot.
     pub diff: Option<El>,
     /// Popovers, menus, dialogs, palette, and sheets rendered above the shell.
     pub overlays: Vec<El>,
@@ -39,21 +37,10 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
     let ShellSlots {
         sidebar,
         toolbar,
-        mut main,
-        details,
+        main,
         diff,
         mut overlays,
     } = slots;
-    if let Some(details) = details {
-        main = row()
-            .key("main-with-details")
-            .w_full()
-            .h_full()
-            .min_h(0.0)
-            .items_start()
-            .child(main.grow(1.0).shrink().min_w(0.0))
-            .child(details);
-    }
     let main = motion::stable_content(
         col()
             .w_full()

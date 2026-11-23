@@ -20,6 +20,10 @@ pub fn dispatch(s: &mut Desktop, msg: GitMsg, tx: &mut Tx) {
     s.dispatch(Msg::Git(msg), tx);
 }
 
+fn close_details(s: &mut Desktop) {
+    s.dispatch_local(Msg::Git(GitMsg::CloseDetails));
+}
+
 fn close_popup(s: &mut Desktop) {
     s.dispatch_local(Msg::Git(GitMsg::Popup(None)));
 }

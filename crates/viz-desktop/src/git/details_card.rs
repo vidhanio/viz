@@ -1,4 +1,4 @@
-//! Adaptive, flat thread details shared by the inline lane and header popover.
+//! Adaptive, flat thread details anchored as a header popover.
 
 use std::{collections::HashSet, time::Duration};
 
@@ -11,21 +11,22 @@ use crate::{
     effects::git::Request,
     model::{
         AgentStanding, Item, child_link, delegated_task, first_non_empty_line,
-        git::{self, CARD_INSET, CARD_WIDTH, Density},
+        git::{self, CARD_WIDTH, Density},
         local_child, spawned_subagent, subagent_title, thread_title,
     },
-    theme::{HAIRLINE, RADIUS_CARD, Theme},
+    theme::Theme,
     ui,
     update::{GitMsg, Msg, TimelineMsg},
 };
 
 pub const ANCHOR: &str = "thread-details-trigger";
 
-pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
-    let id = s.model.selection.selected?;
-    let inline = git::inline(&s.model);
-    if !git::details_visible(&s.model) {
-        return None;
+pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
+    let Some(id) = s.model.selection.selected else {
+        return;
+    };
+    if !s.model.panels.details_open {
+        return;
     }
     let height = (s.model.panels.window_height - 100.0).max(100.0);
     let density = git::density(height);
@@ -47,33 +48,18 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         .key("thread-details-scroll")
         .scroll_anchor()
         .max_h(height);
-    if inline {
-        Some(
-            col()
-                .key("thread-details-card")
-                .w(CARD_WIDTH)
-                .mt(CARD_INSET)
-                .mr(CARD_INSET)
-                .radius(RADIUS_CARD)
-                .fill(t.surface_raised)
-                .border(HAIRLINE, t.border_overlay)
-                .clip_rounded(RADIUS_CARD)
-                .child(body),
-        )
-    } else {
-        layer.insert(
-            overlay_start,
-            ui::anchored_popover(
-                "thread-details",
-                ANCHOR,
-                Placement::BottomEnd,
-                CARD_WIDTH,
-                body,
-                t,
-            ),
-        );
-        None
+    let mut popover = ui::anchored_popover(
+        "thread-details",
+        ANCHOR,
+        Placement::BottomEnd,
+        CARD_WIDTH,
+        body,
+        t,
+    );
+    if s.model.git.popup.is_none() && s.model.git.dialog.is_none() {
+        popover = popover.modal(true, super::close_details);
     }
+    layer.insert(overlay_start, popover);
 }
 
 fn workspace(s: &Desktop, density: Density, t: &Theme) -> Option<El> {

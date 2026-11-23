@@ -94,8 +94,8 @@ lucide! {
     STOP = Square;
     /// Toggle left sidebar.
     SIDEBAR = PanelLeft;
-    /// Toggle right inspector / diff panel.
-    PANEL_RIGHT = PanelRight;
+    /// Open thread details popover.
+    SQUARE_MENU = SquareMenu;
     /// Pin thread.
     PIN = Pin;
     /// Unpin thread.

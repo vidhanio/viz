@@ -23,7 +23,6 @@ pub const SCENES: &[Scene] = &[
     ("git-details", git::full),
     ("git-details-compact", git::compact),
     ("git-details-essential", git::essential),
-    ("git-popover", git::popover),
     ("git-branches", git::branch),
     ("git-actions", git::actions),
     ("git-commit", git::commit),

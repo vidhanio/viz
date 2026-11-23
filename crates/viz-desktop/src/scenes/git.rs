@@ -73,6 +73,7 @@ pub fn full(s: &mut Desktop) {
         },
         operation: None,
     });
+    s.model.panels.details_open = true;
     s.sync_widgets_from_model();
 }
 
@@ -84,13 +85,6 @@ pub fn compact(s: &mut Desktop) {
 pub fn essential(s: &mut Desktop) {
     full(s);
     s.model.panels.window_height = 490.0;
-}
-
-pub fn popover(s: &mut Desktop) {
-    full(s);
-    s.model.panels.sidebar.width = 320.0;
-    s.model.panels.details_open = Some(true);
-    s.sync_widgets_from_model();
 }
 
 pub fn branch(s: &mut Desktop) {
@@ -148,6 +142,7 @@ pub fn checks(s: &mut Desktop) {
 
 pub fn unified(s: &mut Desktop) {
     full(s);
+    s.model.panels.details_open = false;
     s.model.panels.diff.open = true;
     s.model.panels.diff.width = 550.0;
     s.model.git.diff = Some(example_diff().into());

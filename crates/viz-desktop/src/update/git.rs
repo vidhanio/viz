@@ -312,15 +312,18 @@ pub(super) fn update(model: &mut Model, msg: GitMsg) -> Vec<Effect> {
     match msg {
         GitMsg::RefreshDiff => refresh_diff(model, &mut effects),
         GitMsg::ToggleDetails => {
-            model.panels.details_open = Some(!crate::model::git::details_visible(model));
+            model.panels.details_open = !model.panels.details_open;
             model.git.popup = None;
         }
         GitMsg::CloseDetails => {
-            model.panels.details_open = Some(false);
+            model.panels.details_open = false;
             model.git.popup = None;
         }
         GitMsg::ToggleDiff => {
             model.panels.diff.open = !model.panels.diff.open;
+            if model.panels.diff.open {
+                model.panels.details_open = false;
+            }
             model.git.popup = None;
             effects.push(Effect::SyncDiffPane {
                 open: Some(model.panels.diff.open),

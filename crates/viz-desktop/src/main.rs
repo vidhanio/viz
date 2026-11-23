@@ -109,7 +109,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     };
     let sidebar = sidebar::sidebar(s, cx.titlebar_inset(), t, &mut overlays);
     let toolbar = header::toolbar(s, t);
-    let details = git::details_card::mount(s, t, &mut overlays);
+    git::details_card::mount(s, t, &mut overlays);
     let diff = (s.model.git.status.is_some() || s.model.panels.diff.open)
         .then(|| git::diff_panel::view(s, t, &mut overlays));
     git::dialogs(s, t, &mut overlays);
@@ -120,7 +120,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         sidebar,
         toolbar,
         main,
-        details,
         diff,
         overlays,
     };
@@ -130,8 +129,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if ev.key == rune::Key::Escape
         && !s.model.palette.open
-        && !crate::model::git::inline(&s.model)
-        && crate::model::git::details_visible(&s.model)
+        && s.model.panels.details_open
         && s.model.git.popup.is_none()
         && s.model.git.dialog.is_none()
     {

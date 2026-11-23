@@ -251,7 +251,7 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         TimelineMsg::OpenDiff { path } => {
             model.timeline.selected_diff_file.clone_from(&path);
             model.panels.diff.open = true;
-            model.panels.details_open = Some(false);
+            model.panels.details_open = false;
             model.git.popup = None;
             effects.push(Effect::SyncDiffPane {
                 open: Some(true),
@@ -268,6 +268,8 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             thread,
             environment,
         } => {
+            model.panels.details_open = false;
+            model.git.popup = None;
             if let Some(environment) = environment {
                 open_in_environment(model, environment, Some(thread), &mut effects);
             } else {

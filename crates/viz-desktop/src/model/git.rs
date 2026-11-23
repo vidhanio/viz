@@ -7,7 +7,6 @@ use viz_client::protocol::{
 use super::Model;
 
 pub const CARD_WIDTH: f32 = 280.0;
-pub const CARD_INSET: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Density {
@@ -90,20 +89,6 @@ impl Default for GitState {
             mutation_request: 0,
         }
     }
-}
-
-pub fn details_visible(model: &Model) -> bool {
-    model.panels.details_open.unwrap_or_else(|| inline(model))
-}
-
-pub fn inline(model: &Model) -> bool {
-    let panels = &model.panels;
-    let sidebar = if panels.sidebar.open {
-        panels.sidebar.width
-    } else {
-        0.0
-    };
-    !panels.diff.open && panels.window_width - sidebar >= 880.0 && panels.window_height >= 240.0
 }
 
 pub fn density(height: f32) -> Density {
