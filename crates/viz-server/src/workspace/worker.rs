@@ -440,6 +440,9 @@ impl Workspace {
             let result = driver
                 .interpret(&turn, Box::pin(self.prompt(thread, slot, claim, &turn)))
                 .await;
+            if let Err(error) = &result {
+                self.harness_failed(thread, error).await;
+            }
             if let Err(error) = self.finish(thread, driver, &turn, turn_end(result)).await {
                 self.abandon(thread, turn.run, &error).await;
                 return Err(error);

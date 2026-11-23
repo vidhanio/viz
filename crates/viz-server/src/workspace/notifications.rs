@@ -18,6 +18,7 @@ pub(crate) enum Change {
     Settled(ThreadId),
     Directory,
     GitActivity,
+    Harnesses,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -86,6 +87,10 @@ impl Workspace {
             .updates
             .changes
             .send(thread.map_or(Change::Directory, Change::Thread));
+    }
+
+    pub(super) fn harnesses_changed(&self) {
+        let _ = self.updates.changes.send(Change::Harnesses);
     }
 
     pub(crate) fn directory_changed(&self) {

@@ -445,18 +445,30 @@ fn new_agent(s: &mut Desktop) {
     s.new_thread = Some(thread);
     s.harnesses = vec![
         Harness {
+            icon: "omp".into(),
+            status: viz_client::protocol::HarnessStatus::Ready,
+            checked_at: None,
+            access: Vec::new(),
             id: "omp".into(),
             name: "Oh My Pi".into(),
             default: false,
             options: options(),
         },
         Harness {
+            icon: "codex".into(),
+            status: viz_client::protocol::HarnessStatus::Ready,
+            checked_at: None,
+            access: Vec::new(),
             id: "codex".into(),
             name: "Codex".into(),
             default: false,
             options: Vec::new(),
         },
         Harness {
+            icon: "gemini".into(),
+            status: viz_client::protocol::HarnessStatus::Ready,
+            checked_at: None,
+            access: Vec::new(),
             id: "agy".into(),
             name: "Google Antigravity".into(),
             default: true,

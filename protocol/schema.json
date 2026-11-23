@@ -7760,11 +7760,34 @@
                 "description": "Whether this is the server default.",
                 "type": "boolean"
               },
+              "icon": {
+                "description": "Which mark to show: `claude`, `codex`, `gemini`, `omp`, `pi`, or `acp`\nfor any other harness.",
+                "type": "string"
+              },
+              "status": {
+                "description": "Whether it can run threads, as of `checked_at`.",
+                "$ref": "#/$defs/HarnessStatus"
+              },
+              "checked_at": {
+                "description": "Unix milliseconds of the last check; `None` before the first.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
               "options": {
-                "description": "Session options advertised the last time the runner reported them.",
+                "description": "Session options advertised the last time the runner reported them:\nmodels with their groups and each model's thinking levels, then other\noptions such as speed.",
                 "type": "array",
                 "items": {
                   "$ref": "#/$defs/ConfigOption"
+                }
+              },
+              "access": {
+                "description": "The access modes a new thread can start in.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/AccessMode"
                 }
               }
             },
@@ -7772,7 +7795,114 @@
               "id",
               "name",
               "default",
-              "options"
+              "icon",
+              "status",
+              "options",
+              "access"
+            ]
+          },
+          "HarnessStatus": {
+            "description": "Whether a harness can run threads. A check runs in the background; the\nlist answers from what the last one found.",
+            "oneOf": [
+              {
+                "description": "Not checked yet.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "unchecked"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "ready"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "description": "Its command is not on the server's `PATH`.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "not_installed"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "message"
+                ]
+              },
+              {
+                "description": "It needs the user to sign in.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "signed_out"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "message"
+                ]
+              },
+              {
+                "description": "Its provider refuses work until the limit resets.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "limit_reached"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "reset": {
+                    "description": "The harness's own reset hint, such as `resets 8pm\n(America/Toronto)`.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "state",
+                  "message"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "failed"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "state",
+                  "message"
+                ]
+              }
             ]
           },
           "ConfigOption": {
@@ -7957,6 +8087,80 @@
             "required": [
               "value",
               "name"
+            ]
+          },
+          "AccessMode": {
+            "description": "One access mode a thread can run in: a harness's own mode where it has\none, or viz answering permission requests itself.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/AccessKind"
+              },
+              "label": {
+                "description": "The harness's label, or viz's for its own modes.",
+                "type": "string"
+              },
+              "native": {
+                "description": "The harness option value selecting this mode; `None` for a mode viz\nprovides.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NativeAccess"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ]
+          },
+          "AccessKind": {
+            "description": "The broad behaviour of an access mode.",
+            "oneOf": [
+              {
+                "description": "Every permission request is approved without asking.",
+                "type": "string",
+                "const": "full"
+              },
+              {
+                "description": "The harness decides most actions itself and asks about the rest.",
+                "type": "string",
+                "const": "auto"
+              },
+              {
+                "description": "File edits are approved; other actions ask.",
+                "type": "string",
+                "const": "accept_edits"
+              },
+              {
+                "description": "Actions ask before they run.",
+                "type": "string",
+                "const": "ask"
+              },
+              {
+                "description": "Read only, or planning without changes.",
+                "type": "string",
+                "const": "read_only"
+              }
+            ]
+          },
+          "NativeAccess": {
+            "description": "A harness configuration option value.",
+            "type": "object",
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option",
+              "value"
             ]
           }
         }
@@ -12047,6 +12251,23 @@
           "method": {
             "type": "string",
             "const": "tasks.changed"
+          },
+          "params": {
+            "$ref": "#/$defs/Empty"
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ]
+      },
+      {
+        "description": "A harness's status or options changed; list harnesses again.",
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "harnesses.changed"
           },
           "params": {
             "$ref": "#/$defs/Empty"

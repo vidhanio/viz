@@ -3,6 +3,7 @@
 use agent_client_protocol::ErrorCode;
 use serde_json::Value;
 use thiserror::Error;
+use viz_protocol::HarnessStatus;
 
 use crate::Error;
 
@@ -29,43 +30,74 @@ pub enum TurnFailure {
 }
 
 pub fn classify(error: Error, prose: &str) -> Error {
-    let failure = match error {
-        Error::Closed(message) => TurnFailure::HarnessCrash(message),
-        Error::Protocol { source, .. } => {
-            let detail = source.data.as_ref().and_then(error_detail);
-            let candidates = [Some(source.message.as_str()), detail, Some(prose)];
-            if let Some(limit) = candidates.into_iter().flatten().find_map(usage_limit) {
-                return Error::Turn(limit);
-            }
-            if source.code == ErrorCode::AUTH_REQUIRED {
-                TurnFailure::Authentication(detail.unwrap_or(&source.message).to_owned())
-            } else if let Some(message) = candidates.into_iter().flatten().find(|text| {
-                let text = text.to_ascii_lowercase();
-                [
-                    "authentication required",
-                    "authentication failed",
-                    "please log in",
-                    "invalid api key",
-                    "unauthorized",
-                ]
-                .iter()
-                .any(|phrase| text.contains(phrase))
-            }) {
-                TurnFailure::Authentication(message.trim().to_owned())
-            } else {
-                let message = detail.unwrap_or(&source.message);
-                if message.eq_ignore_ascii_case("internal error") {
-                    TurnFailure::Protocol(
-                        "the harness returned an internal error without further details".to_owned(),
-                    )
-                } else {
-                    TurnFailure::Protocol(message.to_owned())
-                }
-            }
+    match error {
+        Error::Closed(message) => Error::Turn(TurnFailure::HarnessCrash(message)),
+        Error::Protocol { source, .. } => Error::Turn(protocol_failure(&source, prose)),
+        other => other,
+    }
+}
+
+fn protocol_failure(source: &agent_client_protocol::Error, prose: &str) -> TurnFailure {
+    let detail = source.data.as_ref().and_then(error_detail);
+    let candidates = [Some(source.message.as_str()), detail, Some(prose)];
+    if let Some(limit) = candidates.into_iter().flatten().find_map(usage_limit) {
+        return limit;
+    }
+    if source.code == ErrorCode::AUTH_REQUIRED {
+        TurnFailure::Authentication(detail.unwrap_or(&source.message).to_owned())
+    } else if let Some(message) = candidates.into_iter().flatten().find(|text| {
+        let text = text.to_ascii_lowercase();
+        [
+            "authentication required",
+            "authentication failed",
+            "please log in",
+            "invalid api key",
+            "unauthorized",
+        ]
+        .iter()
+        .any(|phrase| text.contains(phrase))
+    }) {
+        TurnFailure::Authentication(message.trim().to_owned())
+    } else {
+        let message = detail.unwrap_or(&source.message);
+        if message.eq_ignore_ascii_case("internal error") {
+            TurnFailure::Protocol(
+                "the harness returned an internal error without further details".to_owned(),
+            )
+        } else {
+            TurnFailure::Protocol(message.to_owned())
         }
-        other => return other,
+    }
+}
+
+/// What an error says about whether the harness can run threads: `None`
+/// when it says nothing, as for a cancelled or refused request.
+#[must_use]
+pub fn availability(error: &Error) -> Option<HarnessStatus> {
+    let failure = match error {
+        Error::Spawn { source, .. } if source.kind() == std::io::ErrorKind::NotFound => {
+            return Some(HarnessStatus::NotInstalled {
+                message: error.to_string(),
+            });
+        }
+        Error::Turn(failure) => failure.clone(),
+        Error::Protocol { source, .. } => protocol_failure(source, ""),
+        Error::Spawn { .. } | Error::Closed(_) | Error::ProbeTimeout | Error::Version(_) => {
+            return Some(HarnessStatus::Failed {
+                message: error.to_string(),
+            });
+        }
+        _ => return None,
     };
-    Error::Turn(failure)
+    Some(match failure {
+        TurnFailure::UsageLimit { message, reset } => {
+            HarnessStatus::LimitReached { message, reset }
+        }
+        TurnFailure::Authentication(message) => HarnessStatus::SignedOut { message },
+        TurnFailure::HarnessCrash(message) | TurnFailure::Protocol(message) => {
+            HarnessStatus::Failed { message }
+        }
+    })
 }
 
 fn error_detail(data: &Value) -> Option<&str> {

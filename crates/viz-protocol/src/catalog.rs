@@ -75,6 +75,45 @@ pub struct Harness {
     pub name: String,
     /// Whether this is the server default.
     pub default: bool,
-    /// Session options advertised the last time the runner reported them.
+    /// Which mark to show: `claude`, `codex`, `gemini`, `omp`, `pi`, or `acp`
+    /// for any other harness.
+    pub icon: String,
+    /// Whether it can run threads, as of `checked_at`.
+    pub status: HarnessStatus,
+    /// Unix milliseconds of the last check; `None` before the first.
+    pub checked_at: Option<i64>,
+    /// Session options advertised the last time the runner reported them:
+    /// models with their groups and each model's thinking levels, then other
+    /// options such as speed.
     pub options: Vec<ConfigOption>,
+    /// The access modes a new thread can start in.
+    pub access: Vec<crate::AccessMode>,
+}
+
+/// Whether a harness can run threads. A check runs in the background; the
+/// list answers from what the last one found.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum HarnessStatus {
+    /// Not checked yet.
+    Unchecked,
+    Ready,
+    /// Its command is not on the server's `PATH`.
+    NotInstalled {
+        message: String,
+    },
+    /// It needs the user to sign in.
+    SignedOut {
+        message: String,
+    },
+    /// Its provider refuses work until the limit resets.
+    LimitReached {
+        message: String,
+        /// The harness's own reset hint, such as `resets 8pm
+        /// (America/Toronto)`.
+        reset: Option<String>,
+    },
+    Failed {
+        message: String,
+    },
 }

@@ -70,6 +70,9 @@ pub enum Notification {
     ThreadsChanged(Empty),
     #[serde(rename = "tasks.changed")]
     TasksChanged(Empty),
+    /// A harness's status or options changed; list harnesses again.
+    #[serde(rename = "harnesses.changed")]
+    HarnessesChanged(Empty),
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]

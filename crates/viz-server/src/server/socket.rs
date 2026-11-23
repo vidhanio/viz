@@ -235,20 +235,10 @@ async fn local_session(
             tokio::select! {
                 () = server.stop.cancelled() => break,
                 () = outgoing.closed() => break,
-                event = workspace_events.recv() => match event {
-                    Ok(Change::Thread(id) | Change::Settled(id)) => {
-                        refresh_watch(&server, &mut watches, id, &outgoing).await?;
+                event = workspace_events.recv() => {
+                    if !handle_workspace_event(event, &server, &mut watches, &outgoing, app).await? {
+                        break;
                     }
-                    Ok(Change::GitActivity) => {},
-                    Ok(Change::Directory) => if app {
-                        send_note(&outgoing, Notification::ThreadsChanged(Empty {})).await?;
-                    },
-                    Err(broadcast::error::RecvError::Lagged(_)) => {
-                        let ids: Vec<_> = watches.keys().copied().collect();
-                        for id in ids { refresh_watch(&server, &mut watches, id, &outgoing).await?; }
-                        if app { send_note(&outgoing, Notification::ThreadsChanged(Empty {})).await?; }
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
                 },
                 change = tasks.recv(), if app => match change {
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_note(&outgoing, Notification::TasksChanged(Empty {})).await?,
@@ -316,6 +306,38 @@ async fn local_session(
     writer.abort();
     close_watches(&server, watches, app).await;
     result
+}
+
+async fn handle_workspace_event(
+    event: std::result::Result<Change, broadcast::error::RecvError>,
+    server: &Server,
+    watches: &mut HashMap<ThreadId, WatchCursor>,
+    outgoing: &mpsc::Sender<Message>,
+    app: bool,
+) -> Result<bool> {
+    match event {
+        Ok(Change::Thread(id) | Change::Settled(id)) => {
+            refresh_watch(server, watches, id, outgoing).await?;
+        }
+        Ok(Change::Directory) if app => {
+            send_note(outgoing, Notification::ThreadsChanged(Empty {})).await?;
+        }
+        Ok(Change::Harnesses) if app => {
+            send_note(outgoing, Notification::HarnessesChanged(Empty {})).await?;
+        }
+        Ok(Change::GitActivity | Change::Directory | Change::Harnesses) => {}
+        Err(broadcast::error::RecvError::Lagged(_)) => {
+            let ids: Vec<_> = watches.keys().copied().collect();
+            for id in ids {
+                refresh_watch(server, watches, id, outgoing).await?;
+            }
+            if app {
+                send_note(outgoing, Notification::ThreadsChanged(Empty {})).await?;
+            }
+        }
+        Err(broadcast::error::RecvError::Closed) => return Ok(false),
+    }
+    Ok(true)
 }
 
 async fn close_watches(server: &Server, watches: HashMap<ThreadId, WatchCursor>, app: bool) {

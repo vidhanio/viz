@@ -201,7 +201,7 @@ handlers! {
             Ok(Empty {})
         }
         viz_protocol::ListHarnesses, Empty, |workspace, _| {
-            Ok(HarnessList { harnesses: workspace.list_harnesses().await })
+            Ok(HarnessList { harnesses: workspace.list_harnesses().await? })
         }
         HarnessOptions, HarnessOptions, |workspace, HarnessOptions { harness, model }| {
             let options = workspace.harness_options(&harness, Some(&model)).await?;

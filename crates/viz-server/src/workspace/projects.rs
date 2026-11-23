@@ -1,21 +1,16 @@
-//! Project registry and harness catalog operations exposed by workspace RPCs.
+//! Project registry operations exposed by workspace RPCs.
 
 use std::path::Path;
 
-use futures_util::{StreamExt as _, stream::FuturesUnordered};
 use viz_core::projects;
 use viz_protocol::{ProjectSettings, ProjectSettingsPatch, Setting};
 
 use super::{
-    Workspace, sessions,
+    Workspace,
     sql::{exec, rows},
     store,
 };
-use crate::{
-    acp,
-    error::Error,
-    wire::{Harness, Project},
-};
+use crate::{error::Error, wire::Project};
 
 impl Workspace {
     pub(super) async fn create_project(
@@ -136,50 +131,5 @@ impl Workspace {
             self.changed(Some(thread.id(0)?));
         }
         Ok(())
-    }
-
-    pub(super) async fn list_harnesses(&self) -> Vec<Harness> {
-        let pending = self
-            .harnesses
-            .keys()
-            .map(|name| self.harness_summary(name))
-            .collect::<FuturesUnordered<_>>();
-        let mut harnesses: Vec<_> = pending.collect().await;
-        harnesses.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
-        harnesses
-    }
-
-    async fn harness_summary(&self, name: &str) -> Harness {
-        let options = self
-            .harness_options(name, None)
-            .await
-            .unwrap_or_else(|error| {
-                tracing::warn!(harness = %name, %error, "ACP catalog unavailable");
-                Vec::new()
-            });
-        Harness {
-            id: name.to_owned(),
-            name: self.harness_name(name).to_owned(),
-            default: self.default_harness.as_deref() == Some(name),
-            options,
-        }
-    }
-
-    pub(super) async fn harness_options(
-        &self,
-        name: &str,
-        model: Option<&str>,
-    ) -> Result<Vec<crate::wire::ConfigOption>, Error> {
-        let (_, config) = self.harness(Some(name))?;
-        let stored = {
-            let mut db = self.db.lock().await;
-            sessions::catalog(&mut db, name).await?
-        };
-        let (options, updated) =
-            acp::catalog(config, self.default_cwd(), stored.as_ref(), model).await?;
-        if let Some(updated) = updated {
-            sessions::save_catalog(&mut *self.db.lock().await, name, &updated).await?;
-        }
-        Ok(options)
     }
 }

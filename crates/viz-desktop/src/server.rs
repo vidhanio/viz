@@ -574,6 +574,11 @@ impl Session<'_> {
         match notification {
             Notification::ThreadsChanged(_) => self.refresh_list().await,
             Notification::TasksChanged(_) => self.refresh_tasks().await,
+            Notification::HarnessesChanged(_) => {
+                let harnesses = self.client.list_harnesses().await?;
+                self.ui.update(move |s, _| s.harnesses = harnesses);
+                Ok(())
+            }
             Notification::ThreadState { thread, state } => {
                 self.ui.update(move |s, tx| s.set_state(thread, *state, tx));
                 Ok(())

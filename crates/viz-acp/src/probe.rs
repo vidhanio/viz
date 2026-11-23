@@ -62,6 +62,21 @@ pub async fn catalog(
     Ok((options, changed.then_some(catalog)))
 }
 
+/// Checks the harness with a disposable process and returns its catalog
+/// with the base options as reported now, keeping known model profiles.
+///
+/// # Errors
+/// When the harness fails to start, open a session, or answer in time.
+pub async fn refresh(
+    config: &HarnessConfig,
+    cwd: &Path,
+    stored: Option<&Catalog>,
+) -> Result<Catalog> {
+    let mut catalog = stored.cloned();
+    probe(config, cwd, None, &mut catalog).await?;
+    catalog.ok_or_else(|| Error::Unavailable("ACP options catalog".to_owned()))
+}
+
 /// Learns `catalog` from a disposable process. Without a `model`, an agent
 /// with `session/options` reports the defaults without creating a session.
 /// Otherwise, since ACP cannot fetch settings for an inactive model, this asks

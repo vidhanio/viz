@@ -20,7 +20,7 @@ mod threads;
 mod tool;
 mod transcript;
 
-pub use catalog::{ContextUsage, Harness, Project, ThreadWorktree, WorktreeTarget};
+pub use catalog::{ContextUsage, Harness, HarnessStatus, Project, ThreadWorktree, WorktreeTarget};
 pub use connections::{
     CancelTask, ClearTasks, Cleared, DelegateTask, DeleteTask, Environment, EnvironmentList,
     EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject, ReadThreadState,

@@ -11,6 +11,7 @@ mod follow_ups;
 mod fork;
 mod git;
 mod github;
+mod harnesses;
 mod icons;
 mod notifications;
 mod projects;
@@ -92,6 +93,7 @@ pub(crate) struct Workspace {
     /// PTYs owned by threads: the commands agents run, and later the user's
     /// own shells.
     terminals: Arc<Mutex<viz_terminal::pty::Terminals>>,
+    checks: harnesses::Checks,
     mcp: Mcp,
     closing: CancellationToken,
     jobs: TaskTracker,
@@ -162,6 +164,7 @@ impl Workspace {
             github: Mutex::default(),
             requests: Requests::default(),
             terminals: Arc::default(),
+            checks: harnesses::Checks::default(),
             mcp,
             closing: CancellationToken::new(),
             jobs: TaskTracker::new(),
