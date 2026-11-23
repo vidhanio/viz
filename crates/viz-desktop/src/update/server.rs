@@ -1,6 +1,8 @@
 //! Pure transitions for server responses, push notifications, and optimistic
 //! rollbacks.
 
+use viz_client::protocol::{ConfigOption, Harness};
+
 pub use super::server_msg::ServerMsg;
 use super::{
     selection::{clear_selection, focus_draft, show_thread},
@@ -42,7 +44,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             model.connection.status = Status::Connected { version };
             model.connection.environment = Some(environment);
             model.connection.environments = environments;
-            model.cache_mut().harnesses = harnesses;
+            refresh_harnesses(model, harnesses);
             if model.selection.new_thread.is_none() {
                 if let Some(thread) = watched {
                     show_thread(model, thread, &mut effects);
@@ -67,7 +69,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         }
         ServerMsg::WorkspaceSynced { .. } | ServerMsg::TasksSynced { .. } => {}
         ServerMsg::HarnessesSynced(harnesses) => {
-            model.cache_mut().harnesses = harnesses;
+            refresh_harnesses(model, harnesses);
         }
         ServerMsg::ThreadState { thread, state } => {
             apply_thread_state(model, thread, *state, &mut effects);
@@ -124,7 +126,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                 return effects;
             }
             match result {
-                Some(Ok(harnesses)) => model.cache_mut().harnesses = harnesses,
+                Some(Ok(harnesses)) => refresh_harnesses(model, harnesses),
                 Some(Err(error)) => effects.push(Effect::Toast {
                     title: "Couldn’t load harnesses".into(),
                     detail: Some(error),
@@ -143,11 +145,16 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         ServerMsg::HarnessOptionsLoaded {
             environment,
             harness,
+            model: requested_model,
             result,
         } => {
             if model.connection.environment.as_deref() != Some(environment.as_str()) {
                 return effects;
             }
+            let current = crate::model::picker_scope(model)
+                .is_some_and(|scope| scope.harness == harness)
+                && model.composer.model_menu.loading_levels.as_deref()
+                    == Some(requested_model.as_str());
             match result {
                 Ok(options) => {
                     if let Some(runner) = model
@@ -156,17 +163,20 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                         .iter_mut()
                         .find(|runner| runner.id == harness)
                     {
-                        runner.options = options;
+                        retain_model_effort(&mut runner.options, &options);
                     }
-                    model.composer.model_menu.loading_levels = None;
+                    if current {
+                        model.composer.model_menu.loading_levels = None;
+                    }
                 }
-                Err(error) => {
+                Err(error) if current => {
                     model.composer.model_menu.loading_levels = None;
                     effects.push(Effect::Toast {
                         title: "Couldn’t load model options".into(),
                         detail: Some(error),
                     });
                 }
+                Err(_) => {}
             }
         }
         ServerMsg::ThreadCreated { draft, thread } => {
@@ -210,14 +220,8 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                 }),
             }
         }
-        ServerMsg::FileSearchResult {
-            thread,
-            request,
-            result,
-        } => {
-            if model.selection.selected == Some(thread)
-                && model.composer.completion.request == request
-            {
+        ServerMsg::FileSearchResult { request, result } => {
+            if model.composer.completion.request == request {
                 model.composer.completion.files = Some(result);
             }
         }
@@ -291,4 +295,38 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         } => apply_entry_chunk_loaded(model, thread, &key, &source, result, &mut effects),
     }
     effects
+}
+
+/// Refreshes harness metadata while keeping profiles learned by model-specific
+/// requests.
+fn refresh_harnesses(model: &mut Model, mut harnesses: Vec<Harness>) {
+    for runner in &mut harnesses {
+        if let Some(previous) = model.harnesses().iter().find(|old| old.id == runner.id) {
+            retain_model_effort(&mut runner.options, &previous.options);
+        }
+    }
+    model.cache_mut().harnesses = harnesses;
+}
+
+/// Fills absent model effort profiles without changing the catalog's selected
+/// defaults or the draft's explicit option overrides.
+fn retain_model_effort(target: &mut [ConfigOption], source: &[ConfigOption]) {
+    for option in target {
+        let Some(previous) = source.iter().find(|previous| previous.id == option.id) else {
+            continue;
+        };
+        for choice in option
+            .choices
+            .iter_mut()
+            .filter(|choice| choice.thinking.is_none())
+        {
+            if let Some(prior) = previous
+                .choices
+                .iter()
+                .find(|prior| prior.value == choice.value)
+            {
+                choice.thinking.clone_from(&prior.thinking);
+            }
+        }
+    }
 }

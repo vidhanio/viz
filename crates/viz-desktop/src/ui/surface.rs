@@ -1,21 +1,18 @@
 //! Cards, flat popovers, combobox shells, tucked drawers, scroll viewports,
 //! and inline pickers.
 
-use rune::{El, Icon, ScrollFade, ScrollSpec, col, icon, row, text};
+use rune::{El, ScrollFade, ScrollSpec, col, row};
 use rune_kit::{Menu, MenuItem, Placement, ScrollBar, ScrollBarStyle};
 
-use super::{icons::CHEVRON_OPEN, rule};
+use super::rule;
 use crate::{
     motion,
     theme::{
         CARD_INSET, COMPOSER_DRAWER_INSET, COMPOSER_DRAWER_OVERLAP, DECK_INSET, DECK_OVERLAP,
-        HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_DECK, RADIUS_SURFACE, S4, S6, S8, S12, S16,
-        Size, Theme,
+        HAIRLINE, RADIUS_CARD, RADIUS_DECK, RADIUS_SURFACE, S4, S6, S8, S12, S16, Theme,
     },
 };
 
-/// The widest an inline select's trigger gets before truncating.
-pub const PICKER_TRIGGER_MAX: f32 = 156.0;
 /// The model picker's trigger max width.
 pub const MODEL_TRIGGER_MAX: f32 = 240.0;
 /// A menu's narrowest width.
@@ -279,124 +276,6 @@ pub fn scroll_viewport(key: impl Into<String>, mode: ScrollMode, content: El, t:
         .scroll_margin(S12)
         .child(content)
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
-}
-
-/// An inline select's trigger: its name, or `current` once chosen, and a
-/// rotating chevron, at most `max_w` wide.
-pub fn select_trigger(
-    id: &str,
-    name: &str,
-    current: Option<&str>,
-    open: bool,
-    max_w: f32,
-    t: &Theme,
-) -> El {
-    inline_trigger(id, name, current, None, open, Some(max_w), t)
-}
-
-/// An inline select led by a harness icon.
-#[expect(dead_code, reason = "inline select for Phase 1 settings surfaces")]
-pub fn marked_trigger(
-    id: &str,
-    name: &str,
-    current: &str,
-    mark: &'static Icon,
-    open: bool,
-    t: &Theme,
-) -> El {
-    inline_trigger(id, name, Some(current), Some(mark), open, None, t)
-}
-
-fn inline_trigger(
-    id: &str,
-    name: &str,
-    current: Option<&str>,
-    mark: Option<&'static Icon>,
-    open: bool,
-    max_w: Option<f32>,
-    t: &Theme,
-) -> El {
-    let label = current.unwrap_or(name);
-    let rest_text = if current.is_some() || open {
-        t.text
-    } else {
-        t.muted
-    };
-    let rest_icon = if open { t.text } else { t.muted };
-    let mut trigger = row()
-        .key(format!("{id}-trigger"))
-        .role("combobox")
-        .label(name)
-        .expanded(open)
-        .focusable(true)
-        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .hover_group()
-        .h(Size::Default.height())
-        .pl(if mark.is_some() { S6 } else { S8 })
-        .pr(S4)
-        .gap(S4)
-        .center_y()
-        .radius(Size::Default.radius())
-        .children(mark.map(|glyph| {
-            icon(glyph, ICON)
-                .color(rest_icon)
-                .group_color(t.text)
-                .a11y_hidden()
-        }))
-        .child(
-            text(label)
-                .font(t.ui_medium)
-                .color(rest_text)
-                .group_color(t.text)
-                .min_w(0.0)
-                .shrink()
-                .truncate()
-                .a11y_hidden(),
-        )
-        .child(
-            motion::chevron(&CHEVRON_OPEN, ICON_SMALL, open, std::f32::consts::PI)
-                .key("chevron")
-                .color(rest_icon)
-                .group_color(t.text)
-                .a11y_hidden(),
-        );
-    if let Some(current) = current {
-        trigger = trigger.a11y_value(current);
-    }
-    if let Some(max_w) = max_w {
-        trigger = trigger.max_w(max_w);
-    }
-    trigger
-}
-
-/// Builds an inline select trigger paired with its anchored [`Menu`].
-#[expect(dead_code, reason = "inline select for Phase 1 settings surfaces")]
-pub fn picker<S: 'static>(
-    id: &str,
-    name: &str,
-    current: Option<&str>,
-    open: bool,
-    toggle: impl Fn(&mut S) + 'static,
-    close: impl Fn(&mut S) + 'static,
-    t: &Theme,
-) -> Menu {
-    let trigger = select_trigger(id, name, current, open, PICKER_TRIGGER_MAX, t).on_press(toggle);
-    picker_menu(id, trigger, open, close)
-}
-
-/// Wraps a custom `trigger` in an anchored upward [`Menu`].
-pub fn picker_menu<S: 'static>(
-    id: &str,
-    trigger: El,
-    open: bool,
-    close: impl Fn(&mut S) + 'static,
-) -> Menu {
-    Menu::new(format!("{id}-picker"))
-        .placement(Placement::TopStart)
-        .min_width(MENU_WIDTH)
-        .open(open)
-        .on_close(close)
-        .trigger(trigger)
 }
 
 /// Appends an iterator of [`MenuItem`]s onto `menu`.

@@ -328,10 +328,11 @@ impl Session<'_> {
             ServerEffect::Project { op_id, change } => self.project(op_id, change).await,
             ServerEffect::SearchFiles {
                 thread,
+                project,
                 request,
                 query,
             } => {
-                self.search_files(thread, request, query);
+                self.search_files(thread, project, request, query);
                 Ok(())
             }
             ServerEffect::ProjectPalette(request, command) => {

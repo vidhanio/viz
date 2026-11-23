@@ -74,9 +74,15 @@ pub fn strip(s: &Desktop, t: &Theme) -> Option<El> {
 }
 
 fn media_tile(s: &Desktop, index: usize, attachment: &Attachment, t: &Theme) -> El {
-    let status = s.model.composer.draft.attachment_status(index);
-    let is_error = matches!(status, crate::model::AttachmentStatus::Error(_));
-    let border = if is_error { t.danger } else { t.hairline };
+    let decode_error = image_decode_error(s, attachment);
+    let status = decode_error
+        .as_ref()
+        .unwrap_or_else(|| s.model.composer.draft.attachment_status(index));
+    let border = if decode_error.is_some() {
+        t.danger
+    } else {
+        t.hairline
+    };
     let preview = s
         .attachment_image(attachment)
         .filter(|img| img.is_ready() && img.error().is_none())
@@ -131,26 +137,7 @@ fn media_tile(s: &Desktop, index: usize, attachment: &Attachment, t: &Theme) -> 
             );
         }
         crate::model::AttachmentStatus::Error(message) => {
-            let tip = format!("Retry ({message})");
-            tile = tile.child(
-                row()
-                    .key("retry")
-                    .role("button")
-                    .label("Retry attachment")
-                    .help(tip)
-                    .pin(Some(S4), None, None, Some(S4))
-                    .size(MEDIA_CLOSE, MEDIA_CLOSE)
-                    .center()
-                    .radius(RADIUS_PILL)
-                    .fill(t.canvas.alpha(0.85))
-                    .border(HAIRLINE, t.danger)
-                    .focusable(true)
-                    .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-                    .on_press_tx(move |s: &mut Desktop, tx| {
-                        s.dispatch(Msg::Composer(ComposerMsg::RetryAttachment(index)), tx);
-                    })
-                    .child(icon(&ui::ROTATE_CW, 11.0).color(t.danger).a11y_hidden()),
-            );
+            tile = tile.child(retry_thumbnail(index, message, t));
         }
     }
 
@@ -229,7 +216,8 @@ fn file_row(s: &Desktop, index: usize, attachment: &Attachment, t: &Theme) -> El
                         Size::Micro,
                     )
                     .on_press_tx(move |s: &mut Desktop, tx| {
-                        s.dispatch(Msg::Composer(ComposerMsg::RetryAttachment(index)), tx);
+                        crate::attachments::retry_draft_image(s, index);
+                        tx.wake_after(std::time::Duration::from_millis(32));
                     })
                     .build(&t.k)
                     .key("retry"),
@@ -322,4 +310,34 @@ pub fn lightbox(s: &Desktop, reduced: bool, t: &Theme, layer: &mut Vec<El>) {
 )]
 fn image_dims(size: Option<[u32; 2]>) -> [f32; 2] {
     size.map_or([320.0, 240.0], |[w, h]| [w as f32, h as f32])
+}
+
+fn image_decode_error(
+    s: &Desktop,
+    attachment: &Attachment,
+) -> Option<crate::model::AttachmentStatus> {
+    let error = s.attachment_image(attachment)?.error()?;
+    Some(crate::model::AttachmentStatus::Error(error.to_string()))
+}
+
+/// A retry badge over a thumbnail whose decoder reported an error.
+fn retry_thumbnail(index: usize, message: &str, t: &Theme) -> El {
+    row()
+        .key("retry")
+        .role("button")
+        .label("Retry attachment")
+        .help(format!("Retry ({message})"))
+        .pin(Some(S4), None, None, Some(S4))
+        .size(MEDIA_CLOSE, MEDIA_CLOSE)
+        .center()
+        .radius(RADIUS_PILL)
+        .fill(t.canvas.alpha(0.85))
+        .border(HAIRLINE, t.danger)
+        .focusable(true)
+        .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+        .on_press_tx(move |s: &mut Desktop, tx| {
+            crate::attachments::retry_draft_image(s, index);
+            tx.wake_after(std::time::Duration::from_millis(32));
+        })
+        .child(icon(&ui::ROTATE_CW, 11.0).color(t.danger).a11y_hidden())
 }

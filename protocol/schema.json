@@ -8256,6 +8256,17 @@
                   }
                 ]
               },
+              "access": {
+                "description": "Access override applied before the first input runs.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/AccessMode"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "options": {
                 "description": "Initial configuration by option id.",
                 "type": "object",
@@ -8399,6 +8410,80 @@
                   "path"
                 ]
               }
+            ]
+          },
+          "AccessMode": {
+            "description": "One access mode a thread can run in: a harness's own mode where it has\none, or viz answering permission requests itself.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/AccessKind"
+              },
+              "label": {
+                "description": "The harness's label, or viz's for its own modes.",
+                "type": "string"
+              },
+              "native": {
+                "description": "The harness option value selecting this mode; `None` for a mode viz\nprovides.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NativeAccess"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ]
+          },
+          "AccessKind": {
+            "description": "The broad behaviour of an access mode.",
+            "oneOf": [
+              {
+                "description": "Every permission request is approved without asking.",
+                "type": "string",
+                "const": "full"
+              },
+              {
+                "description": "The harness decides most actions itself and asks about the rest.",
+                "type": "string",
+                "const": "auto"
+              },
+              {
+                "description": "File edits are approved; other actions ask.",
+                "type": "string",
+                "const": "accept_edits"
+              },
+              {
+                "description": "Actions ask before they run.",
+                "type": "string",
+                "const": "ask"
+              },
+              {
+                "description": "Read only, or planning without changes.",
+                "type": "string",
+                "const": "read_only"
+              }
+            ]
+          },
+          "NativeAccess": {
+            "description": "A harness configuration option value.",
+            "type": "object",
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option",
+              "value"
             ]
           },
           "OptionValue": {
@@ -9470,12 +9555,26 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "SearchFiles",
-        "description": "Search a thread's working directory for files.",
+        "description": "Search a thread's working directory or a registered project for files.",
         "type": "object",
         "properties": {
           "thread": {
-            "description": "Thread whose working directory is searched.",
-            "$ref": "#/$defs/ThreadId"
+            "description": "Thread whose working directory is searched. Supply exactly one target.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project": {
+            "description": "Registered project directory searched for a draft.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "query": {
             "description": "Fuzzy path query.",
@@ -9493,7 +9592,6 @@
           }
         },
         "required": [
-          "thread",
           "query"
         ],
         "$defs": {
@@ -9634,6 +9732,17 @@
             "anyOf": [
               {
                 "$ref": "#/$defs/WorktreeTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "access": {
+            "description": "Access override applied before the first input runs.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/AccessMode"
               },
               {
                 "type": "null"
@@ -9783,6 +9892,80 @@
                   "path"
                 ]
               }
+            ]
+          },
+          "AccessMode": {
+            "description": "One access mode a thread can run in: a harness's own mode where it has\none, or viz answering permission requests itself.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/AccessKind"
+              },
+              "label": {
+                "description": "The harness's label, or viz's for its own modes.",
+                "type": "string"
+              },
+              "native": {
+                "description": "The harness option value selecting this mode; `None` for a mode viz\nprovides.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/NativeAccess"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "label"
+            ]
+          },
+          "AccessKind": {
+            "description": "The broad behaviour of an access mode.",
+            "oneOf": [
+              {
+                "description": "Every permission request is approved without asking.",
+                "type": "string",
+                "const": "full"
+              },
+              {
+                "description": "The harness decides most actions itself and asks about the rest.",
+                "type": "string",
+                "const": "auto"
+              },
+              {
+                "description": "File edits are approved; other actions ask.",
+                "type": "string",
+                "const": "accept_edits"
+              },
+              {
+                "description": "Actions ask before they run.",
+                "type": "string",
+                "const": "ask"
+              },
+              {
+                "description": "Read only, or planning without changes.",
+                "type": "string",
+                "const": "read_only"
+              }
+            ]
+          },
+          "NativeAccess": {
+            "description": "A harness configuration option value.",
+            "type": "object",
+            "properties": {
+              "option": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "option",
+              "value"
             ]
           },
           "OptionValue": {

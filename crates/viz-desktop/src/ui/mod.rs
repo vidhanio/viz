@@ -13,10 +13,7 @@ mod dialog;
 mod feedback;
 pub mod gallery;
 mod icon_button;
-#[expect(
-    dead_code,
-    reason = "tokens.md §7 icon catalog for Phase 1 feature tracks"
-)]
+
 mod icons;
 mod input;
 mod project_icon;
@@ -38,7 +35,7 @@ pub use self::{
         kbd_group, tooltip_text, with_tooltip,
     },
     button::{Button, button},
-    controls::{Segmented, SegmentedWidth, Switch, segmented, switch},
+    controls::{Segmented, Switch, segmented, switch},
     dialog::{
         Dialog, DialogForm, ToastCard, dialog, dialog_actions, dialog_body, sheet, toast_card,
     },
@@ -48,22 +45,19 @@ pub use self::{
     },
     icon_button::{IconButton, InlineButton, InlineStyle, icon_button, inline_button},
     icons::{
-        AGENT, ANTIGRAVITY, ARCHIVE, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT, ARROW_UP, ARROW_UP_RIGHT,
-        BOT, BRAIN, CHECK, CHEVRON, CHEVRON_LEFT, CHEVRON_OPEN, CHEVRON_UP, CHEVRONS_DOWN_UP,
-        CHEVRONS_UP_DOWN, CIRCLE, CIRCLE_ALERT, CIRCLE_CHECK, CIRCLE_DASHED, CIRCLE_DOT,
-        CIRCLE_SLASH, CIRCLE_STOP, CIRCLE_X, CLAUDE, CLOCK, CLOSE, CLOUD_UPLOAD, CODEX, COLUMNS2,
-        COMPOSE, COPY, CORNER_LEFT_UP, CORNER_UP_RIGHT, CPU, DOWNLOAD, EXTERNAL_LINK, EYE, EYE_OFF,
-        Effort, FILE, FILE_DIFF, FILE_EDIT, FILE_READ, FILE_SEARCH, FILE_WRITE, FLAME, FLASK_OFF,
-        FOLDER, FOLDER_CODE, FOLDER_GIT2, FOLDER_OPEN, FOLDER_PLUS, FOLDER_TREE, GIT_BRANCH,
-        GIT_BRANCH_PLUS, GIT_COMMIT, GIT_FORK, GIT_MERGE, GLOBE, HARNESS, INBOX, INFO, LAPTOP,
-        LAYERS, LINK, LINK2, LIST_FILTER, LIST_PLUS, LIST_TODO, LOCK, MAIL, MAIL_OPEN,
-        MESSAGE_SQUARE_DASHED, MINIMIZE2, MINUS, MONITOR, MORE, OCTAGON_X, OMP, PALETTE,
-        PANEL_RIGHT, PAPERCLIP, PENCIL, PI, PILCROW, PIN, PIN_OFF, PLAN, PLAY, PLUS, PR_CLOSED,
-        PR_DRAFT, PR_OPEN, REDO2, REFRESH_CW, REPLY, ROTATE_CCW, ROTATE_CW, ROWS3, SEARCH, SERVER,
-        SETTINGS, SHIELD, SHIELD_ALERT, SHIELD_CHECK, SIDEBAR, SLIDERS_HORIZONTAL, SPARKLES, STAR,
-        STAR_FILLED, STOP, TERMINAL, TEXT_SEARCH, TEXT_WRAP, THREAD, TIMER, TRASH, TRIANGLE_ALERT,
-        UNLINK2, UNLOCK, UPLOAD, USER_CHECK, USER_ROUND, USER_ROUND_X, WRENCH, ZAP, effort_glyph,
-        harness_glyph, harness_icon, harness_mark, kit_glyphs, swap_kit_icon,
+        AGENT, ANTIGRAVITY, ARCHIVE, ARROW_DOWN, ARROW_LEFT, ARROW_UP, ARROW_UP_RIGHT, BOT, BRAIN,
+        CHECK, CHEVRON, CHEVRON_OPEN, CHEVRON_UP, CHEVRONS_UP_DOWN, CIRCLE_ALERT, CIRCLE_CHECK,
+        CIRCLE_DASHED, CIRCLE_DOT, CIRCLE_STOP, CIRCLE_X, CLAUDE, CLOCK, CLOSE, CODEX, COLUMNS2,
+        COMPOSE, COPY, CORNER_UP_RIGHT, CPU, DOWNLOAD, EXTERNAL_LINK, EYE, EYE_OFF, Effort, FILE,
+        FILE_DIFF, FILE_EDIT, FILE_READ, FLAME, FOLDER, FOLDER_CODE, FOLDER_GIT2, FOLDER_OPEN,
+        FOLDER_PLUS, FOLDER_TREE, GIT_BRANCH, GIT_BRANCH_PLUS, GIT_COMMIT, GIT_FORK, GIT_MERGE,
+        GLOBE, HARNESS, INBOX, INFO, LAPTOP, LAYERS, LINK, LIST_FILTER, LIST_PLUS, LOCK, MAIL,
+        MAIL_OPEN, MESSAGE_SQUARE_DASHED, MINIMIZE2, MINUS, MONITOR, MORE, OMP, PANEL_RIGHT,
+        PAPERCLIP, PENCIL, PI, PIN, PIN_OFF, PLAN, PLUS, PR_CLOSED, PR_DRAFT, PR_OPEN, REDO2,
+        REFRESH_CW, REPLY, ROTATE_CCW, ROTATE_CW, SEARCH, SERVER, SETTINGS, SHIELD, SHIELD_CHECK,
+        SIDEBAR, SPARKLES, STAR, STAR_FILLED, STOP, TERMINAL, TEXT_WRAP, THREAD, TIMER, TRASH,
+        TRIANGLE_ALERT, UNLOCK, UPLOAD, WRENCH, ZAP, effort_glyph, harness_glyph, harness_icon,
+        harness_mark, kit_glyphs, swap_kit_icon,
     },
     input::{Field, SearchInput, SearchStyle, field, search_input, text_field},
     project_icon::{
@@ -72,9 +66,8 @@ pub use self::{
     },
     row::{ListRow, RowDensity, SectionHeader, list_row, section_header},
     surface::{
-        Card, ComboboxShell, MENU_WIDTH, MODEL_TRIGGER_MAX, PICKER_TRIGGER_MAX, ScrollMode,
-        anchored_popover, combobox_shell, marked_trigger, menu_items, picker, picker_menu,
-        popover_frame, scroll_viewport, select_trigger, tucked_deck, tucked_drawer,
+        Card, ComboboxShell, MENU_WIDTH, MODEL_TRIGGER_MAX, ScrollMode, anchored_popover,
+        combobox_shell, menu_items, popover_frame, scroll_viewport, tucked_deck, tucked_drawer,
     },
 };
 use crate::theme::{ICON, ICON_SMALL, READING_INSET, READING_WIDTH, Theme};

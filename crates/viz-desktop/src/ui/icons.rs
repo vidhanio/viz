@@ -30,11 +30,9 @@ lucide! {
     /// Navigate back.
     ARROW_LEFT = ArrowLeft;
     /// Navigate forward.
-    ARROW_RIGHT = ArrowRight;
     /// Steer or send immediately into an active turn.
     CORNER_UP_RIGHT = CornerUpRight;
     /// Return to parent directory or thread.
-    CORNER_LEFT_UP = CornerLeftUp;
     /// Open delegated task thread or external action.
     ARROW_UP_RIGHT = ArrowUpRight;
     /// Extra-high thinking tier.
@@ -48,7 +46,6 @@ lucide! {
     /// Collapsed disclosure chevron.
     CHEVRON = ChevronRight;
     /// Back disclosure chevron.
-    CHEVRON_LEFT = ChevronLeft;
     /// Open / dropdown chevron.
     CHEVRON_OPEN = ChevronDown;
     /// Upward disclosure chevron.
@@ -92,7 +89,6 @@ lucide! {
     /// Selector / switcher double chevron.
     CHEVRONS_UP_DOWN = ChevronsUpDown;
     /// Collapse all disclosure chevron pair.
-    CHEVRONS_DOWN_UP = ChevronsDownUp;
     /// Thread / conversation icon.
     THREAD = MessageSquare;
     /// No-project / unassigned conversation icon.
@@ -150,15 +146,12 @@ lucide! {
     /// File read operation.
     FILE_READ = FileText;
     /// File creation operation.
-    FILE_WRITE = FilePlus;
     /// File edit operation.
     FILE_EDIT = FilePenLine;
     /// Diff file summary.
     FILE_DIFF = FileDiff;
     /// File search operation.
-    FILE_SEARCH = FileSearch;
     /// Content grep search operation.
-    TEXT_SEARCH = TextSearch;
     /// Generic tool call.
     WRENCH = Wrench;
     /// Elapsed timer.
@@ -176,15 +169,12 @@ lucide! {
     /// Settings dialog.
     SETTINGS = Settings;
     /// Options / harness sliders.
-    SLIDERS_HORIZONTAL = SlidersHorizontal;
     /// Unified diff view.
-    ROWS3 = Rows3;
     /// Split diff view.
     COLUMNS2 = Columns2;
     /// Queue follow-up message.
     LIST_PLUS = ListPlus;
     /// Run / execute.
-    PLAY = Play;
     /// Retry / rerun clockwise.
     ROTATE_CW = RotateCw;
     /// Undo / revert counter-clockwise.
@@ -196,7 +186,6 @@ lucide! {
     /// Supervised / verified shield.
     SHIELD_CHECK = ShieldCheck;
     /// Full access / elevated shield.
-    SHIELD_ALERT = ShieldExclamationPoint;
     /// Skill / model highlight sparkles.
     SPARKLES = Sparkles;
     /// Favourite model star.
@@ -204,7 +193,6 @@ lucide! {
     /// Subagent / assistant bot.
     BOT = Bot;
     /// Task list / checklist.
-    LIST_TODO = ListTodo;
     /// Redo / retry step.
     REDO2 = Redo2;
     /// Reply / quote.
@@ -214,43 +202,31 @@ lucide! {
     /// Open external link.
     EXTERNAL_LINK = ExternalLink;
     /// Push branch to remote.
-    CLOUD_UPLOAD = CloudUpload;
     /// Upload / stage changes.
     UPLOAD = Upload;
     /// Soft wrap toggle.
     TEXT_WRAP = TextWrap;
     /// Whitespace / formatting markers.
-    PILCROW = Pilcrow;
     /// Empty / no tests mark.
-    FLASK_OFF = FlaskConicalOff;
     /// Plan step not started yet.
-    CIRCLE = Circle;
     /// Active plan step.
     CIRCLE_DOT = CircleDot;
     /// Skipped / cancelled step.
-    CIRCLE_SLASH = CircleSlash;
     /// Pending / draft circle.
     CIRCLE_DASHED = CircleDashed;
     /// Hard failure octagon.
-    OCTAGON_X = OctagonX;
     /// Approved by user.
-    USER_CHECK = UserCheck;
     /// User avatar / author.
-    USER_ROUND = UserRound;
     /// Rejected by user.
-    USER_ROUND_X = UserRoundX;
     /// Link / reference.
     LINK = Link;
     /// Linked worktree / issue.
-    LINK2 = Link2;
     /// Unlinked / detached.
-    UNLINK2 = Unlink2;
     /// Stacked layers / worktrees.
     LAYERS = Layers;
     /// Appearance / display monitor.
     MONITOR = Monitor;
     /// Theme palette.
-    PALETTE = Palette;
     /// Model / compute processor.
     CPU = Cpu;
     /// Multi-step plan list.

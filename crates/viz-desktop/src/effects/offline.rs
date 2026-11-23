@@ -40,7 +40,7 @@ pub(super) fn handle(
                 ui,
                 ServerMsg::LaunchFailed {
                     draft,
-                    params: Box::new(params),
+                    params,
                     title: "Offline".into(),
                     detail: None,
                 },

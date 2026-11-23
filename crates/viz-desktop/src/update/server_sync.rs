@@ -212,14 +212,7 @@ pub(super) fn apply_thread_created(
     {
         return;
     }
-    let access = model
-        .selection
-        .new_thread
-        .take()
-        .and_then(|draft| draft.access);
-    if access.is_some() {
-        effects.push(Effect::Server(ServerEffect::Access { thread, access }));
-    }
+    model.selection.new_thread = None;
     model.selection.selected = Some(thread);
     model.selection.switch = PaneSwitch::Cut;
     let open = model.cache_mut().open_thread_mut(thread);
@@ -429,17 +422,6 @@ pub(super) fn rollback_optimistic(model: &mut Model, undo: OptimisticUndo) {
                 *current = *prior;
             }
         }
-        OptimisticUndo::ProjectRename {
-            env,
-            path,
-            prior_name,
-        } => {
-            if let Some(cache) = model.caches.get_mut(&env)
-                && let Some(project) = cache.project_mut(&path)
-            {
-                project.name = prior_name;
-            }
-        }
         OptimisticUndo::ProjectPin {
             env,
             path,
@@ -449,15 +431,6 @@ pub(super) fn rollback_optimistic(model: &mut Model, undo: OptimisticUndo) {
                 && let Some(project) = cache.project_mut(&path)
             {
                 project.settings.pinned = prior_pinned;
-            }
-        }
-        OptimisticUndo::ProjectRemove {
-            env,
-            index,
-            project,
-        } => {
-            if let Some(cache) = model.caches.get_mut(&env) {
-                cache.restore_project(index, *project);
             }
         }
     }

@@ -19,24 +19,7 @@ pub(super) fn dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
     let Some(edit) = &m.sidebar.edit else {
         return;
     };
-    let field = Some((&s.widgets.sidebar_dialog, "Name"));
     let form = match edit {
-        SidebarEdit::RenameProject(_) => DialogForm {
-            title: "Rename project",
-            subject: None,
-            detail: None,
-            field,
-            action: "Save",
-            variant: ButtonVariant::Submit,
-        },
-        SidebarEdit::RemoveProject(id) => DialogForm {
-            title: "Remove project?",
-            subject: m.cache().project(id).map(|p| p.path.as_str()),
-            detail: None,
-            field: None,
-            action: "Remove project",
-            variant: ButtonVariant::Danger,
-        },
         SidebarEdit::DeleteThread(id) => DialogForm {
             title: "Delete thread?",
             subject: Some(m.title(*id)),

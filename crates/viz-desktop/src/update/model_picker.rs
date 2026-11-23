@@ -387,21 +387,7 @@ fn choose_access(model: &mut Model, index: usize, fx: &mut Vec<Effect>) {
         }
         return;
     }
-    let natives: Vec<_> = view
-        .modes
-        .iter()
-        .filter_map(|mode| mode.native.as_ref().map(|native| native.option.clone()))
-        .collect();
     if let Some(draft) = model.selection.new_thread.as_mut() {
-        for option in natives {
-            draft.options.remove(&option);
-        }
-        if let Some(native) = &mode.native {
-            draft.options.insert(
-                native.option.clone(),
-                OptionValue::Select(native.value.clone()),
-            );
-        }
         draft.access = Some(mode);
     }
 }

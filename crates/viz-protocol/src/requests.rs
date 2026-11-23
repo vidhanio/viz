@@ -237,11 +237,15 @@ pub struct HarnessOptionsResult {
     pub options: Vec<ConfigOption>,
 }
 
-/// Search a thread's working directory for files.
+/// Search a thread's working directory or a registered project for files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct SearchFiles<'a> {
-    /// Thread whose working directory is searched.
-    pub thread: ThreadId,
+    /// Thread whose working directory is searched. Supply exactly one target.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
+    /// Registered project directory searched for a draft.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<&'a str>,
     /// Fuzzy path query.
     pub query: &'a str,
     /// Limit from 1 to 200; omit to use the server default.

@@ -8,7 +8,7 @@ use super::{GalleryState, edit_gallery, gallery_card, with_gallery};
 use crate::{
     app::Desktop,
     theme::{S6, S8, Size, Theme},
-    ui::{self, BadgeSize, InlineStyle, SearchStyle, SegmentedWidth, Tone},
+    ui::{self, BadgeSize, InlineStyle, SearchStyle, Tone},
 };
 
 const DIFF_STEPS: [(u32, u32); 3] = [(42, 13), (128, 29), (7, 2)];
@@ -369,7 +369,6 @@ pub(super) fn controls_card(state: &GalleryState, t: &Theme) -> El {
     let seg_row = row().w_full().gap(S8).center_y().child(
         ui::segmented(&["Local", "Worktree", "Remote"], Some(state.segmented_mode))
             .label("Checkout mode")
-            .width(SegmentedWidth::Fit)
             .disable_segment(2)
             .on_pick(|s: &mut Desktop, idx, _tx| with_gallery(s, |g| g.segmented_mode = idx))
             .build(t)

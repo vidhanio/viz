@@ -44,7 +44,6 @@ pub struct SearchInput {
     style: SearchStyle,
     size: Size,
     disabled: bool,
-    invalid: bool,
     active: Option<String>,
     trailing: Option<El>,
     clear: Option<ElHook>,
@@ -61,7 +60,6 @@ pub fn search_input(edit: &TextEdit, placeholder: impl Into<String>) -> SearchIn
         style: SearchStyle::Bordered,
         size: Size::Compact,
         disabled: false,
-        invalid: false,
         active: None,
         trailing: None,
         clear: None,
@@ -99,13 +97,6 @@ impl SearchInput {
     /// Disables editing and dims the search field.
     pub const fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
-        self
-    }
-
-    /// Highlights the input border in `t.danger` for invalid filter syntax.
-    #[expect(dead_code, reason = "validation state hook for Phase 1 filter inputs")]
-    pub const fn invalid(mut self, invalid: bool) -> Self {
-        self.invalid = invalid;
         self
     }
 
@@ -147,13 +138,6 @@ impl SearchInput {
         self
     }
 
-    /// Fires when the user presses Enter.
-    #[expect(dead_code, reason = "submit hook for Phase 1 search inputs")]
-    pub fn on_submit<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.hooks.push(Box::new(move |input| input.on_submit(f)));
-        self
-    }
-
     /// Shows a trailing clear button whenever the query is non-empty and
     /// invokes `f` on press.
     pub fn on_clear<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
@@ -169,23 +153,13 @@ impl SearchInput {
             .as_deref()
             .filter(|s| !s.is_empty())
             .unwrap_or(&self.placeholder);
-        let ink = if self.invalid && !self.disabled {
-            t.danger
-        } else {
-            t.text
-        };
-        let hint = if self.invalid && !self.disabled {
-            t.danger
-        } else {
-            t.faint
-        };
         let mut editor = text_input(&self.edit, self.size.font(t))
             .single_line()
             .key(self.input_key.as_deref().unwrap_or("search-input"))
             .label(a11y_label)
-            .placeholder(self.placeholder, hint)
-            .color(ink)
-            .caret(ink, t.k.selection())
+            .placeholder(self.placeholder, t.faint)
+            .color(t.text)
+            .caret(t.text, t.k.selection())
             .disabled(self.disabled)
             .no_focus_ring()
             .grow(1.0)
@@ -232,20 +206,14 @@ impl SearchInput {
         }
 
         if self.style == SearchStyle::Bordered {
-            let border = if self.invalid && !self.disabled {
-                t.danger
-            } else {
-                t.border_control
-            };
-            let focus = if self.invalid { t.danger } else { t.accent };
             shell = shell
                 .radius(self.size.radius())
                 .fill(t.canvas)
-                .border(HAIRLINE, border);
+                .border(HAIRLINE, t.border_control);
             if !self.disabled {
                 shell = shell
                     .hover(t.hover_wash)
-                    .focus_within_ring(HAIRLINE, -HAIRLINE, focus);
+                    .focus_within_ring(HAIRLINE, -HAIRLINE, t.accent);
             }
         }
         if self.disabled {

@@ -21,7 +21,7 @@ use super::{
 };
 use crate::{
     effects::{AttachmentSource, Effect, ServerEffect},
-    model::{AttachmentStatus, DraftCursor, Model, NewThread},
+    model::{DraftCursor, Model, NewThread},
 };
 
 /// Guard interval in seconds preventing accidental double-click re-send right
@@ -49,7 +49,6 @@ pub enum ComposerMsg {
     /// Remove an attached file by index.
     RemoveAttachment(usize),
     /// Retry a failed attachment slot (clears its error status).
-    RetryAttachment(usize),
     /// File drag entered or left the composer card.
     SetDragOver(bool),
     /// Open or close the full-size attachment image lightbox.
@@ -207,11 +206,6 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
                 {
                     *open -= 1;
                 }
-            }
-        }
-        ComposerMsg::RetryAttachment(index) => {
-            if let Some(status) = model.composer.draft.attachment_statuses.get_mut(index) {
-                *status = AttachmentStatus::Ready;
             }
         }
         ComposerMsg::SetDragOver(over) => model.composer.drag_over = over,

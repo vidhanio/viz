@@ -142,28 +142,11 @@ impl Switch {
     }
 }
 
-/// Sizing behavior for [`Segmented`].
-#[expect(
-    dead_code,
-    reason = "Full width and fixed width variants are used by Phase 1 panels and dialogs"
-)]
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub enum SegmentedWidth {
-    /// Equal segments sized to the widest label.
-    #[default]
-    Fit,
-    /// Stretch equally across the parent's width.
-    Fill,
-    /// Fixed total width in points.
-    Fixed(f32),
-}
-
 /// Flat base16 segmented control wrapping `rune_kit::SegmentedControl` with
 /// `motion::QUICK` gliding indicator.
 pub struct Segmented {
     labels: Vec<String>,
     selected: Option<usize>,
-    width: SegmentedWidth,
     label: Option<String>,
     disabled: Vec<usize>,
     pick: Option<Box<dyn FnOnce(SegmentedControl) -> SegmentedControl>>,
@@ -174,7 +157,6 @@ pub fn segmented<S: AsRef<str>>(labels: &[S], selected: Option<usize>) -> Segmen
     Segmented {
         labels: labels.iter().map(|s| s.as_ref().to_owned()).collect(),
         selected,
-        width: SegmentedWidth::Fit,
         label: None,
         disabled: Vec::new(),
         pick: None,
@@ -185,12 +167,6 @@ impl Segmented {
     /// Sets the accessible radiogroup label.
     pub fn label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
-        self
-    }
-
-    /// Sets [`SegmentedWidth`] (`Fit`, `Fill`, or `Fixed`).
-    pub const fn width(mut self, width: SegmentedWidth) -> Self {
-        self.width = width;
         self
     }
 
@@ -215,11 +191,7 @@ impl Segmented {
         if let Some(label) = self.label {
             control = control.label(label);
         }
-        control = match self.width {
-            SegmentedWidth::Fit => control.fit(),
-            SegmentedWidth::Fill => control.width(None),
-            SegmentedWidth::Fixed(pts) => control.width(Some(pts)),
-        };
+        control = control.fit();
         for index in self.disabled {
             control = control.segment_state(index, State::Disabled);
         }

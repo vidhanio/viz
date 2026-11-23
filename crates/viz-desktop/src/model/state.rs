@@ -263,12 +263,6 @@ impl ContextMenu {
 /// Modal rename or confirmation edit initiated from the sidebar or palette.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SidebarEdit {
-    /// Rename a registered project.
-    #[expect(dead_code, reason = "project settings actions wired in Track P")]
-    RenameProject(String),
-    /// Confirm removing a project record.
-    #[expect(dead_code, reason = "project settings actions wired in Track P")]
-    RemoveProject(String),
     /// Confirm deleting a thread (keeping its worktree, if any).
     DeleteThread(ThreadId),
     /// Confirm deleting a thread together with its managed worktree.
@@ -395,15 +389,6 @@ pub enum OptimisticUndo {
         /// Snapshot of the summary prior to optimistic mutation.
         prior: Box<ThreadSummary>,
     },
-    /// Restores a project's prior display name after a failed rename.
-    ProjectRename {
-        /// Environment cache key.
-        env: String,
-        /// Project path.
-        path: String,
-        /// Display name before rename.
-        prior_name: String,
-    },
     /// Restores a project's prior pinned state after a failed pin toggle.
     ProjectPin {
         /// Environment cache key.
@@ -412,15 +397,6 @@ pub enum OptimisticUndo {
         path: String,
         /// Pinned flag before toggle.
         prior_pinned: bool,
-    },
-    /// Restores a removed project after a failed removal.
-    ProjectRemove {
-        /// Environment cache key.
-        env: String,
-        /// Original index in the project order.
-        index: usize,
-        /// Removed project record.
-        project: Box<Project>,
     },
 }
 

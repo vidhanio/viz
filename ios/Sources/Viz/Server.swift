@@ -259,6 +259,23 @@ enum VizProtocol {
     let threads: [ThreadSummary]
   }
 
+  struct AccessMode: Encodable {
+    enum Kind: String, Encodable {
+      case full, auto, ask
+      case acceptEdits = "accept_edits"
+      case readOnly = "read_only"
+    }
+
+    struct Native: Encodable {
+      let option: String
+      let value: String
+    }
+
+    let kind: Kind
+    let label: String
+    let native: Native?
+  }
+
   struct Launched: Decodable {
     let thread: Int
   }
@@ -370,12 +387,16 @@ final class Server {
   }
 
   func launch(
-    project: String? = nil, harness: String? = nil, text: String? = nil
+    project: String? = nil, harness: String? = nil, text: String? = nil,
+    access: VizProtocol.AccessMode? = nil
   ) async throws -> Int {
     var params: [String: Any] = ["requestId": UUID().uuidString]
     if let project { params["project"] = project }
     if let harness { params["harness"] = harness }
     if let text { params["text"] = text }
+    if let access {
+      params["access"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(access))
+    }
     let data = try await call("thread.launch", params: params)
     return try JSONDecoder().decode(VizProtocol.Launched.self, from: data).thread
   }

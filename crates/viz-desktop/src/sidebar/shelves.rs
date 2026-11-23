@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Maximum height of the expanded bottom-anchored Settled drawer (points).
-const SETTLED_MAX_HEIGHT: f32 = 180.0;
+const SETTLED_MAX_HEIGHT: f32 = 120.0;
 
 /// Primary scrollable shelves: Drafts, Pinned, Working, Active, Snoozed.
 #[expect(

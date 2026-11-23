@@ -117,10 +117,6 @@ pub enum AttachmentStatus {
     /// Upload or encoding progress (`0..=100`, `None` for indeterminate).
     Uploading(Option<u8>),
     /// Failed with a user-readable error message.
-    #[expect(
-        dead_code,
-        reason = "rendered by attachment tiles/rows when an upload or decode fails"
-    )]
     Error(String),
 }
 

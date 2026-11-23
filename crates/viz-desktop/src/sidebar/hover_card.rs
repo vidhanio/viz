@@ -3,7 +3,6 @@
 //! shadow).
 
 use rune::{El, Icon, col, icon, row, text};
-use rune_kit::Placement;
 use viz_client::protocol::{GitHubPull, GitHubPullState, ThreadSummary};
 
 use super::project_mark;
@@ -55,14 +54,16 @@ pub(super) fn mount(s: &Desktop, outline: &SidebarOutline<'_>, t: &Theme, layer:
         .child(meta);
 
     let anchor_key = format!("thread-{id}");
-    layer.push(ui::anchored_popover(
-        format!("hover-card-{id}"),
-        &anchor_key,
-        Placement::RightStart,
-        HOVER_CARD_WIDTH,
-        content,
-        t,
-    ));
+    layer.push(
+        ui::popover_frame(format!("hover-card-{id}"), HOVER_CARD_WIDTH, content, t)
+            .anchored_fit(
+                &anchor_key,
+                rune::Side::Right,
+                rune::Align::End,
+                crate::theme::S4,
+            )
+            .transition(crate::motion::popover(0.0)),
+    );
 }
 
 fn hover_metadata(

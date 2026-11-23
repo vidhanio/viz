@@ -150,6 +150,16 @@ pub fn decode_draft_images(s: &mut Desktop) {
     }
 }
 
+/// Drops a failed thumbnail handle and asks the decoder to try again.
+pub fn retry_draft_image(s: &mut Desktop, index: usize) {
+    if let Some(attachment) = s.model.composer.draft.attachments.get(index) {
+        s.widgets
+            .attachment_thumbs
+            .remove(&image_cache_key(attachment));
+        decode_draft_images(s);
+    }
+}
+
 /// Rebuilds a [`TextEdit`] with `text` and atomic `Mark::Pill` ranges from
 /// `pills`.
 #[must_use]

@@ -113,6 +113,8 @@ pub enum ServerMsg {
         environment: String,
         /// Harness id.
         harness: String,
+        /// Model whose options were requested.
+        model: String,
         /// Fresh config options or error string.
         result: Result<Vec<ConfigOption>, String>,
     },
@@ -161,8 +163,6 @@ pub enum ServerMsg {
     },
     /// `@file` completion search finished.
     FileSearchResult {
-        /// Thread id searched.
-        thread: ThreadId,
         /// Monotonic completion request id.
         request: u64,
         /// Matching ranked file results or error string.

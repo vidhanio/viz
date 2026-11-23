@@ -10,10 +10,10 @@ use super::{
     sidebar::{INLINE_RENAME_INPUT, close_project_filter},
 };
 use crate::{
-    effects::{EditSync, EditTarget, Effect, ProjectChange, ServerEffect, ThreadChange},
+    effects::{EditSync, EditTarget, Effect, ServerEffect, ThreadChange},
     model::{
-        DragShelf, InlineRename, Model, NewThread, OptimisticUndo, ProjectFilter, SidebarEdit,
-        SidebarOutline, UndoTriage, project_filter_options, thread_title,
+        DragShelf, InlineRename, Model, NewThread, ProjectFilter, SidebarEdit, SidebarOutline,
+        UndoTriage, project_filter_options, thread_title,
     },
 };
 
@@ -230,54 +230,8 @@ pub(super) fn submit_edit(model: &mut Model, effects: &mut Vec<Effect>) {
     let Some(edit) = model.sidebar.edit.clone() else {
         return;
     };
-    let value = model.sidebar.edit_value.trim().to_owned();
-    if value.is_empty()
-        && !matches!(
-            edit,
-            SidebarEdit::RemoveProject(_)
-                | SidebarEdit::DeleteThread(_)
-                | SidebarEdit::DeleteWithWorktree(_)
-        )
-    {
-        return;
-    }
     model.sidebar.edit = None;
-    let env = model.active_env_key().to_owned();
     match edit {
-        SidebarEdit::RenameProject(id) => {
-            let prior_name = model.cache_mut().project_mut(&id).map(|project| {
-                let prior = project.name.clone();
-                project.name.clone_from(&value);
-                prior
-            });
-            let op_id = prior_name.map(|prior_name| {
-                model.optimistic.record(OptimisticUndo::ProjectRename {
-                    env,
-                    path: id.clone(),
-                    prior_name,
-                })
-            });
-            effects.push(Effect::Server(ServerEffect::Project {
-                op_id,
-                change: ProjectChange::Rename { id, name: value },
-            }));
-        }
-        SidebarEdit::RemoveProject(id) => {
-            let op_id = model
-                .cache_mut()
-                .remove_project(&id)
-                .map(|(index, project)| {
-                    model.optimistic.record(OptimisticUndo::ProjectRemove {
-                        env,
-                        index,
-                        project: Box::new(project),
-                    })
-                });
-            effects.push(Effect::Server(ServerEffect::Project {
-                op_id,
-                change: ProjectChange::Remove(id),
-            }));
-        }
         SidebarEdit::DeleteThread(thread) => {
             effects.push(Effect::Server(ServerEffect::Delete {
                 thread,

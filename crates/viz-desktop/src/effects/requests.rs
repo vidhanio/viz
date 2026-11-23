@@ -8,8 +8,8 @@ use viz_client::{
     Client, Error, Result,
     protocol::{
         EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks, ListWorktrees,
-        ProjectIconResult, ProjectSettingsPatch, ReadProjectIcon, RemoveProject, RetitleThread,
-        SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
+        ProjectIconResult, ProjectSettingsPatch, ReadProjectIcon, RetitleThread, SearchThreads,
+        SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
@@ -40,7 +40,7 @@ impl Session<'_> {
             .map(drop)
     }
 
-    pub(super) async fn launch(&self, draft: u64, params: LaunchThread) -> Result<()> {
+    pub(super) async fn launch(&self, draft: u64, params: Box<LaunchThread>) -> Result<()> {
         match self.client.launch_thread(&params).await {
             Ok(thread) => self.dispatch(ServerMsg::ThreadCreated { draft, thread }),
             Err(error) => {
@@ -48,7 +48,7 @@ impl Session<'_> {
                 let closed = matches!(error, Error::Closed);
                 self.dispatch(ServerMsg::LaunchFailed {
                     draft,
-                    params: Box::new(params),
+                    params,
                     title: "Request failed".into(),
                     detail: Some(detail),
                 });
@@ -215,15 +215,6 @@ impl Session<'_> {
 
     pub(super) async fn project(&self, op_id: Option<u64>, change: ProjectChange) -> Result<()> {
         let result = match &change {
-            ProjectChange::Rename { id, name } => {
-                self.client
-                    .update_project(&UpdateProject {
-                        changes: None,
-                        project: id,
-                        name: Some(name),
-                    })
-                    .await
-            }
             ProjectChange::Pin { id, pinned } => {
                 self.client
                     .update_project(&UpdateProject {
@@ -234,11 +225,6 @@ impl Session<'_> {
                         project: id,
                         name: None,
                     })
-                    .await
-            }
-            ProjectChange::Remove(id) => {
-                self.client
-                    .remove_project(&RemoveProject { project: id })
                     .await
             }
         };
@@ -353,7 +339,7 @@ impl Session<'_> {
             let result = client
                 .harness_options(&HarnessOptions {
                     harness: harness.clone(),
-                    model,
+                    model: model.clone(),
                 })
                 .await
                 .map(|reply| reply.options)
@@ -363,6 +349,7 @@ impl Session<'_> {
                     Msg::Server(ServerMsg::HarnessOptionsLoaded {
                         environment,
                         harness,
+                        model,
                         result,
                     }),
                     tx,

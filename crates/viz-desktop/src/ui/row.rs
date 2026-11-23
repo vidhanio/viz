@@ -56,7 +56,6 @@ pub struct ListRow {
     highlighted: bool,
     disabled: bool,
     focus_for: Option<String>,
-    role: &'static str,
     press: Option<ElHook>,
 }
 
@@ -75,7 +74,6 @@ pub fn list_row(key: impl Into<String>, title: impl Into<String>) -> ListRow {
         highlighted: false,
         disabled: false,
         focus_for: None,
-        role: "option",
         press: None,
     }
 }
@@ -150,13 +148,6 @@ impl ListRow {
         self
     }
 
-    /// Overrides the accessibility role (defaults to `"option"`).
-    #[expect(dead_code, reason = "role override for Phase 1 sidebar and menu lists")]
-    pub const fn role(mut self, role: &'static str) -> Self {
-        self.role = role;
-        self
-    }
-
     /// Registers a click/activation callback.
     pub fn on_press<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
         self.press = Some(Box::new(move |el| el.on_press(f)));
@@ -222,7 +213,7 @@ impl ListRow {
 
         let mut item = row()
             .key(&self.key)
-            .role(self.role)
+            .role("option")
             .label(&self.title)
             .focus_selected(self.selected)
             .w_full()
@@ -323,17 +314,6 @@ impl SectionHeader {
     /// Registers a toggle callback when [`Self::collapsible`] is set.
     pub fn on_toggle<S: 'static>(mut self, f: impl Fn(&mut S) + 'static) -> Self {
         self.toggle = Some(Box::new(move |el| el.on_press(f)));
-        self
-    }
-
-    /// Registers a transaction-aware toggle callback (pair with
-    /// [`motion::toggle_anchored`]).
-    #[expect(
-        dead_code,
-        reason = "scroll-anchored toggle hook for Phase 1 collapsible sections"
-    )]
-    pub fn on_toggle_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
-        self.toggle = Some(Box::new(move |el| el.on_press_tx(f)));
         self
     }
 

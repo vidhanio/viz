@@ -98,6 +98,9 @@ pub struct LaunchThread {
     /// default checkout mode. Requires `project`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub worktree: Option<WorktreeTarget>,
+    /// Access override applied before the first input runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access: Option<crate::AccessMode>,
     /// Initial configuration by option id.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub options: std::collections::BTreeMap<String, OptionValue>,

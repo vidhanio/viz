@@ -13,15 +13,22 @@ use super::server::Session;
 use crate::update::{Msg, ServerMsg};
 
 impl Session<'_> {
-    /// Searches a thread's working directory for files and directories,
+    /// Searches a checkout or registered project for files and directories,
     /// returning ranked [`viz_client::protocol::FileSearchMatch`] entries.
-    pub(super) fn search_files(&self, thread: ThreadId, request: u64, query: String) {
+    pub(super) fn search_files(
+        &self,
+        thread: Option<ThreadId>,
+        project: Option<String>,
+        request: u64,
+        query: String,
+    ) {
         let ui = self.ui.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
             let result = client
                 .search_files(&SearchFiles {
                     thread,
+                    project: project.as_deref(),
                     query: &query,
                     limit: Some(24),
                 })
@@ -29,11 +36,7 @@ impl Session<'_> {
                 .map_err(|error| error.to_string());
             ui.update(move |s, tx| {
                 s.dispatch(
-                    Msg::Server(ServerMsg::FileSearchResult {
-                        thread,
-                        request,
-                        result,
-                    }),
+                    Msg::Server(ServerMsg::FileSearchResult { request, result }),
                     tx,
                 );
             });

@@ -49,9 +49,17 @@ handlers! {
             let hits = store::search(&mut *workspace.db.lock().await, &query, page_limit(limit, 50)?).await?;
             Ok(SearchHits { hits })
         }
-        SearchFiles<'static>, FileSearch, |workspace, FileSearch { thread, query, limit }| {
-            let cwd = row(&mut *workspace.db.lock().await, "SELECT cwd FROM threads WHERE id = ?1",
-                [thread.into()]).await?.ok_or_else(|| Error::NoThread(thread))?.str(0)?;
+        SearchFiles<'static>, FileSearch, |workspace, FileSearch { thread, project, query, limit }| {
+            let cwd = match (thread, project) {
+                (Some(thread), None) => row(&mut *workspace.db.lock().await,
+                    "SELECT cwd FROM threads WHERE id = ?1", [thread.into()]
+                ).await?.ok_or_else(|| Error::NoThread(thread))?.str(0)?,
+                (None, Some(project)) => {
+                    store::preferences(&mut *workspace.db.lock().await, &project).await?;
+                    project
+                }
+                _ => return Err(Error::invalid("choose one file search target")),
+            };
             let files = viz_git::find_files(
                 Path::new(&cwd), &query, page_limit(limit, 50)?, &workspace.closing
             ).await?.into_iter().map(|found| viz_protocol::FileSearchMatch {
@@ -294,7 +302,8 @@ pub(crate) struct Search {
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct FileSearch {
-    pub(crate) thread: ThreadId,
+    pub(crate) thread: Option<ThreadId>,
+    pub(crate) project: Option<String>,
     pub(crate) query: String,
     pub(crate) limit: Option<u16>,
 }

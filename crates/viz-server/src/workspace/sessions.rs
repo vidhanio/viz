@@ -158,7 +158,7 @@ impl Workspace {
     }
 
     /// Switches a newly opened session to the thread's or project's chosen
-    /// harness mode. A harness that refuses keeps its own mode.
+    /// harness mode. An explicit override must apply before the turn starts.
     async fn apply_access(
         &self,
         thread: ThreadId,
@@ -166,6 +166,7 @@ impl Workspace {
         desired: Desired,
     ) -> Result<Desired, Error> {
         let (chosen, project) = store::chosen_access(&mut *self.db.lock().await, thread).await?;
+        let required = chosen.is_some();
         let Some(native) = chosen.or(project).and_then(|mode| mode.native) else {
             return Ok(desired);
         };
@@ -179,6 +180,7 @@ impl Workspace {
         }
         match session.configure(&native.option, value, &desired).await {
             Ok(desired) => Ok(desired),
+            Err(error) if required => Err(error.into()),
             Err(error) => {
                 tracing::warn!(%thread, %error, "applying the chosen access mode");
                 Ok(desired)

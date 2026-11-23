@@ -4,7 +4,7 @@
 use std::{path::Path, sync::Arc, time::Duration};
 
 use viz_core::{
-    placement, runs as decisions,
+    placement, requests, runs as decisions,
     threads::{self, Patch},
     titles,
 };
@@ -84,7 +84,17 @@ impl Workspace {
             return Ok((found, false));
         }
         threads::validate_title(args.title.as_deref())?;
-        let (harness, _) = self.harness(args.harness.as_deref())?;
+        let (harness, config) = self.harness(args.harness.as_deref())?;
+        let access = if let Some(mode) = args.access {
+            let options = super::sessions::catalog(&mut tx, harness)
+                .await?
+                .map_or_else(Vec::new, |catalog| {
+                    catalog.options(config, args.model.as_deref())
+                });
+            Some(requests::choose(&options, &mode)?)
+        } else {
+            None
+        };
         let checkout = match placement {
             Some(placement) => placement.checkout.clone(),
             None => self.checkout_for(&mut tx, args.project.as_deref()).await?,
@@ -108,6 +118,9 @@ impl Workspace {
             },
         )
         .await?;
+        if let Some(access) = &access {
+            store::save_thread_access(&mut tx, thread, Some(access)).await?;
+        }
         let run = if args.text.is_some() || !attachments.is_empty() {
             let attachments = attachments::save(&mut tx, thread, attachments).await?;
             Some(

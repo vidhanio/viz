@@ -1,8 +1,3 @@
-#![expect(
-    dead_code,
-    reason = "tokens.md geometry constants are consumed by ui components and Phase 1 feature tracks"
-)]
-
 //! Spacing, radii, sizing, and layout geometry tokens from `tokens.md`.
 //!
 //! Views read these through `ui` components; bare layout constants in feature
@@ -36,8 +31,6 @@ pub const S32: f32 = 32.0;
 pub const S40: f32 = 40.0;
 /// Topbar height and provider rail width (44pt).
 pub const S44: f32 = 44.0;
-/// Minimum composer text area height (48pt).
-pub const S48: f32 = 48.0;
 
 /// Single-pixel hairline stroke width.
 pub const HAIRLINE: f32 = 1.0;
@@ -73,69 +66,36 @@ pub fn squircle_radius(side: f32) -> f32 {
     (side * 0.25).round()
 }
 
-/// Top bar height for the chat header (44pt).
-pub const TOPBAR_HEIGHT: f32 = S44;
 /// Shell title band height shared by `SplitView` and its sidebar toggle.
 pub const TOOLBAR_HEIGHT: f32 = rune_kit::shell::TOOLBAR_HEIGHT;
 /// Horizontal padding at the ends of the toolbar band.
 pub const TOOLBAR_PAD: f32 = S12;
 
-/// Default sidebar width (264pt).
-pub const SIDEBAR_DEFAULT_WIDTH: f32 = 264.0;
-/// Minimum resizable sidebar width (220pt).
-pub const SIDEBAR_MIN_WIDTH: f32 = 220.0;
-/// Maximum resizable sidebar width (440pt).
-pub const SIDEBAR_MAX_WIDTH: f32 = 440.0;
 /// Sidebar pane horizontal padding where row fills start and end.
 pub const SIDEBAR_PAD: f32 = S8;
 /// Leading inset for sidebar content, section titles, and footer.
 pub const SIDEBAR_INSET: f32 = S16;
-/// Row inner inset inside its fill.
-pub const ROW_INSET: f32 = SIDEBAR_INSET - SIDEBAR_PAD;
-/// Single-line sidebar row height (28pt).
-pub const TREE_ROW: f32 = S28;
-/// Two-line sidebar row height (40pt).
-pub const TREE_ROW_TALL: f32 = S40;
 /// Indented delegated child row height (26pt).
 pub const TREE_ROW_CHILD: f32 = 26.0;
 /// Indent step per delegated tree depth (20pt).
 pub const TREE_STEP: f32 = S20;
-/// Fixed trailing slot width on sidebar rows (28pt).
-pub const TRAILING: f32 = S28;
 
 /// Standard reading lane width for timeline and composer (736pt / `46rem`).
 pub const CHAT_CONTENT_MAX_WIDTH: f32 = 736.0;
-/// Wide reading lane width when wide layout is active (1152pt / `72rem`).
-pub const CHAT_WIDE_MAX_WIDTH: f32 = 1152.0;
 /// Horizontal padding around the reading lane (20pt).
 pub const CHAT_LANE_PADDING_X: f32 = S20;
-/// Compact horizontal padding for narrow viewports (12pt).
-pub const CHAT_LANE_PADDING_COMPACT_X: f32 = S12;
 /// Reading column width used by existing transcript and composer views.
 pub const READING_WIDTH: f32 = CHAT_CONTENT_MAX_WIDTH;
 /// Side inset around the reading column.
 pub const READING_INSET: f32 = CHAT_LANE_PADDING_X;
 
-/// Floating Thread Details card width (280pt).
-pub const DETAILS_CARD_WIDTH: f32 = 280.0;
-/// Gap between the reading lane and inline Thread Details card (12pt).
-pub const DETAILS_CARD_GAP: f32 = S12;
-/// Minimum docked Diff panel width (360pt).
-pub const DIFF_PANEL_MIN_WIDTH: f32 = 360.0;
-/// Maximum inline Diff panel width (560pt).
-pub const DIFF_PANEL_MAX_WIDTH: f32 = 560.0;
-
 /// Command palette maximum width (576pt).
 pub const PALETTE_MAX_WIDTH: f32 = 576.0;
-/// Command palette maximum body height (420pt).
-pub const PALETTE_MAX_HEIGHT: f32 = 420.0;
 /// Existing palette sheet width alias.
 pub const PALETTE_WIDTH: f32 = PALETTE_MAX_WIDTH;
 
 /// Standard modal dialog width (512pt).
 pub const DIALOG_MAX_WIDTH: f32 = 512.0;
-/// Wide modal dialog width (576pt).
-pub const DIALOG_WIDE_MAX_WIDTH: f32 = 576.0;
 /// Compact confirmation dialog width (400pt).
 pub const DIALOG_WIDTH: f32 = 400.0;
 /// Padding inside dialogs.
@@ -147,10 +107,6 @@ pub const MODEL_PICKER_BODY_HEIGHT: f32 = 346.0;
 pub const MODEL_PICKER_RAIL_WIDTH: f32 = S44;
 /// Model picker right reasoning/options column width (192pt).
 pub const MODEL_PICKER_OPTIONS_WIDTH: f32 = 192.0;
-/// Legacy model picker width kept for `composer/model.rs`.
-pub const MODEL_MENU_WIDTH: f32 = 420.0;
-/// Legacy model list height kept for `composer/model.rs`.
-pub const MODEL_LIST_HEIGHT: f32 = S32 * 9.0;
 
 /// Horizontal inset on each side of a tucked composer drawer (22pt).
 pub const COMPOSER_DRAWER_INSET: f32 = 22.0;

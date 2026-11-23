@@ -4,7 +4,7 @@
 
 use std::{mem, time::Duration};
 
-use viz_client::protocol::{LaunchThread, OptionValue, RunId, SendInput, SendMode};
+use viz_client::protocol::{LaunchThread, RunId, SendInput, SendMode};
 
 use super::{
     NavKey,
@@ -63,25 +63,19 @@ pub(super) fn send_input(
     model.composer.draft.attachment_statuses.clear();
     let command = if let Some(thread) = &mut model.selection.new_thread {
         thread.sending = true;
-        let mut options = thread.options.clone();
-        if let Some(native) = thread.access.as_ref().and_then(|mode| mode.native.as_ref()) {
-            options.insert(
-                native.option.clone(),
-                OptionValue::Select(native.value.clone()),
-            );
-        }
         ServerEffect::Create {
             draft: thread.id,
-            params: LaunchThread {
+            params: Box::new(LaunchThread {
                 project: thread.project.clone(),
                 worktree: thread.worktree.clone(),
                 harness: thread.harness.clone(),
-                options,
+                options: thread.options.clone(),
+                access: thread.access.clone(),
                 text: Some(text),
                 attachments,
                 context,
                 ..LaunchThread::default()
-            },
+            }),
         }
     } else if let Some(thread) = model.selection.selected {
         record_prompt_history(model, thread, &text);
@@ -157,7 +151,9 @@ pub(super) fn poll_completion(
         model.composer.completion.reset();
         model.composer.completion.token = Some(token);
         match kind {
-            CompletionKind::Mention if model.selection.selected.is_some() => {
+            CompletionKind::Mention
+                if model.selection.selected.is_some() || model.project_path().is_some() =>
+            {
                 model.composer.completion.due = Some(clock + FILE_DELAY.as_secs_f64());
                 effects.push(Effect::WakeAfter(FILE_DELAY));
             }
@@ -179,9 +175,12 @@ pub(super) fn poll_completion(
         let request = model.composer.completion.request;
         match token.kind {
             CompletionKind::Mention => {
-                if let Some(thread) = model.selection.selected {
+                let thread = model.selection.selected;
+                let project = thread.is_none().then(|| model.project_path()).flatten();
+                if thread.is_some() || project.is_some() {
                     effects.push(Effect::Server(ServerEffect::SearchFiles {
                         thread,
+                        project: project.map(str::to_owned),
                         request,
                         query: token.query,
                     }));

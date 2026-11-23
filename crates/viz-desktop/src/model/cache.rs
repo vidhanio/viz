@@ -131,15 +131,6 @@ impl EnvironmentCache {
         Some((index, project))
     }
 
-    /// Restores a previously removed project at `index`.
-    pub fn restore_project(&mut self, index: usize, project: Project) {
-        let path = project.path.clone();
-        if self.projects.insert(path.clone(), project).is_none() {
-            let at = index.min(self.project_order.len());
-            self.project_order.insert(at, path);
-        }
-    }
-
     /// Looks up a project by its absolute path.
     #[must_use]
     pub fn project(&self, path: &str) -> Option<&Project> {

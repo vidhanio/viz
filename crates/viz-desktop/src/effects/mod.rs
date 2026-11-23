@@ -274,7 +274,7 @@ pub enum ServerEffect {
         /// Local draft sequence id.
         draft: u64,
         /// Launch parameters.
-        params: LaunchThread,
+        params: Box<LaunchThread>,
     },
     /// Fetch thinking levels for a specific `(harness, model)` pair.
     HarnessOptions {
@@ -339,17 +339,19 @@ pub enum ServerEffect {
     },
     /// Stop an active run on a thread.
     Abort(ThreadId),
-    /// Add, rename, or remove a project.
+    /// Update a project pin.
     Project {
-        /// Optional optimistic mutation id (`Some` for rename/remove).
+        /// Optional optimistic mutation id.
         op_id: Option<u64>,
         /// Requested project mutation.
         change: ProjectChange,
     },
     /// Search project files for `@` completion.
     SearchFiles {
-        /// Active thread id.
-        thread: ThreadId,
+        /// Active thread whose checkout is searched.
+        thread: Option<ThreadId>,
+        /// Project directory searched when composing a new thread.
+        project: Option<String>,
         /// Monotonic completion request id.
         request: u64,
         /// File query string.
@@ -473,13 +475,6 @@ pub enum ThreadChange {
 /// Project record change sent over RPC.
 #[derive(Debug, Clone)]
 pub enum ProjectChange {
-    /// Rename a registered project.
-    Rename {
-        /// Project path id.
-        id: String,
-        /// New display name.
-        name: String,
-    },
     /// Pin or unpin a registered project.
     Pin {
         /// Project path id.
@@ -487,6 +482,4 @@ pub enum ProjectChange {
         /// New pinned flag.
         pinned: bool,
     },
-    /// Unregister a project without deleting files.
-    Remove(String),
 }

@@ -41,7 +41,7 @@ pub fn sidebar(s: &Desktop, titlebar_inset: f32, t: &Theme, layer: &mut Vec<El>)
     let body = ui::scroll_viewport(
         "sidebar-scroll",
         ScrollMode::Top,
-        shelves::primary_shelves(s, &outline, t, layer),
+        shelves::primary_shelves(s, &outline, t, layer).pb(crate::theme::S12),
         t,
     );
     let settled = shelves::settled_drawer(s, &outline, t, layer);

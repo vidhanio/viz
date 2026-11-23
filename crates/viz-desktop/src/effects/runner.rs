@@ -176,7 +176,7 @@ impl Desktop {
                 }
                 ServerEffect::Create { draft, params } => Some(ServerMsg::LaunchFailed {
                     draft,
-                    params: Box::new(params),
+                    params,
                     title: "Offline".into(),
                     detail: None,
                 }),

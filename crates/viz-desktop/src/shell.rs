@@ -165,9 +165,14 @@ fn toasts(s: &Desktop, t: &Theme) -> Option<El> {
             }
             region.toast(card.build(t))
         });
-    Some(
+    let region = region.build(&t.k);
+    let region = if entries[start..]
+        .iter()
+        .any(|entry| entry.options.undo.is_some())
+    {
+        region.pin(None, None, Some(32.0), Some(128.0))
+    } else {
         region
-            .build(&t.k)
-            .on_hover_change(|s: &mut Desktop, inside, tx| s.toast_hover(inside, tx)),
-    )
+    };
+    Some(region.on_hover_change(|s: &mut Desktop, inside, tx| s.toast_hover(inside, tx)))
 }
