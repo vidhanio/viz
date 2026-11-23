@@ -57,6 +57,27 @@ const fn error_code(error: &Error) -> i32 {
     }
 }
 
+const fn git_failure(error: &Error) -> Option<viz_protocol::GitFailure> {
+    use viz_git::Error as Git;
+    use viz_protocol::GitFailure as Failure;
+
+    let Error::Git(error) = error else {
+        return None;
+    };
+    Some(match error {
+        Git::Busy => Failure::Busy,
+        Git::Dirty => Failure::Dirty,
+        Git::Conflicted => Failure::Conflicted,
+        Git::Cancelled => Failure::Cancelled,
+        Git::Bare | Git::NotRepository => Failure::NotRepository,
+        Git::Invalid(_) => Failure::Invalid,
+        Git::StaleCheckpoint => Failure::StaleCheckpoint,
+        Git::CheckpointObstruction(_) => Failure::CheckpointObstruction,
+        Git::Command { .. } => Failure::Command,
+        _ => Failure::Unavailable,
+    })
+}
+
 pub(crate) fn decode<T: DeserializeOwned>(params: Value) -> Result<T, Error> {
     serde_json::from_value(params).map_err(|error| Error::invalid(error.to_string()))
 }
@@ -87,7 +108,7 @@ impl<'a, T: Clone> Response<'a, T> {
             Err(error) => ResponsePayload::error(ErrorObject::owned(
                 error_code(&error),
                 error.to_string(),
-                None::<()>,
+                git_failure(&error),
             )),
         };
         Self(JsonResponse::new(payload, id))

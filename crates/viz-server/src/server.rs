@@ -18,7 +18,9 @@ use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use viz_protocol::{Empty, EnvironmentList, ListEnvironments, Method, Unwatch, Watch};
+use viz_protocol::{
+    Empty, EnvironmentList, ListEnvironments, Method, Unwatch, UnwatchGit, Watch, WatchGit,
+};
 
 use crate::{
     config::Config,
@@ -229,7 +231,10 @@ async fn peer_rpc(
                 return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
             }
         }
-    } else if matches!(request.method_name(), Watch::NAME | Unwatch::NAME) {
+    } else if matches!(
+        request.method_name(),
+        Watch::NAME | Unwatch::NAME | WatchGit::NAME | UnwatchGit::NAME
+    ) {
         Err(RequestError::UnknownMethod("watch requires a WebSocket".into()).into())
     } else {
         tokio::select! {

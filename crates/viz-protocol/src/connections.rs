@@ -56,6 +56,11 @@ pub enum Notification {
         thread: ThreadId,
         state: ThreadState,
     },
+    #[serde(rename = "git.changed")]
+    GitChanged {
+        thread: ThreadId,
+        status: Option<crate::GitStatus>,
+    },
     #[serde(rename = "threads.changed")]
     ThreadsChanged(Empty),
     #[serde(rename = "tasks.changed")]

@@ -12,7 +12,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use tokio::{
     sync::{broadcast, mpsc},
-    task::JoinSet,
+    task::{AbortHandle, JoinSet},
     time::timeout,
 };
 use tokio_tungstenite::{
@@ -20,7 +20,9 @@ use tokio_tungstenite::{
     tungstenite::{Message as PeerMessage, client::IntoClientRequest},
 };
 use tokio_util::sync::CancellationToken;
-use viz_protocol::{Empty, ListEnvironments, Method, SendInput, Unwatch, Watch, Watching};
+use viz_protocol::{
+    Empty, ListEnvironments, Method, SendInput, Unwatch, UnwatchGit, Watch, WatchGit, Watching,
+};
 
 use super::{Server, parse_request, peer_rpc};
 use crate::{
@@ -215,6 +217,8 @@ async fn local_session(
     let mut tasks = server.tasks.subscribe();
     let mut calls = JoinSet::new();
     let mut watches = HashMap::new();
+    let mut git_watches = HashMap::new();
+    let mut git_jobs = JoinSet::new();
     let app = client.kind == ClientKind::App;
     let result = async {
         loop {
@@ -239,6 +243,7 @@ async fn local_session(
                     Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_note(&outgoing, Notification::TasksChanged(Empty {})).await?,
                     Err(broadcast::error::RecvError::Closed) => break,
                 },
+                _ = git_jobs.join_next(), if !git_jobs.is_empty() => {},
                 _ = calls.join_next(), if !calls.is_empty() => {},
                 frame = read.next() => {
                     let Some(frame) = frame else { break; };
@@ -256,6 +261,10 @@ async fn local_session(
                     match request.method_name() {
                         Watch::NAME | Unwatch::NAME => {
                             let result = update_watch(&server, &request, &mut watches, &outgoing, app).await;
+                            outgoing.send(json_message(&Response::new(request.id, result))?).await?;
+                        }
+                        WatchGit::NAME | UnwatchGit::NAME => {
+                            let result = update_git_watch(&server, &request, &mut git_watches, &mut git_jobs, &outgoing).await;
                             outgoing.send(json_message(&Response::new(request.id, result))?).await?;
                         }
                         HelloParams::NAME => {
@@ -296,6 +305,95 @@ async fn local_session(
         }
     }
     result
+}
+
+/// The WebSocket owns the jobs, so closing it releases every checkout watch.
+async fn update_git_watch(
+    server: &Arc<Server>,
+    request: &Request<'_>,
+    watches: &mut HashMap<ThreadId, AbortHandle>,
+    jobs: &mut JoinSet<()>,
+    outgoing: &mpsc::Sender<Message>,
+) -> Result<Value, Error> {
+    if request.method_name() == UnwatchGit::NAME {
+        let UnwatchGit { thread } = params(request)?;
+        if let Some(handle) = watches.remove(&thread) {
+            handle.abort();
+        }
+        return crate::wire::encode(Empty {});
+    }
+    let WatchGit { thread } = params(request)?;
+    if watches.len() >= MAX_IN_FLIGHT && !watches.contains_key(&thread) {
+        return Err(Error::unavailable("too many checkout subscriptions"));
+    }
+    let repo = server.workspace.git_repository(thread).await?;
+    let status = server.workspace.git_status(&repo).await?;
+    let handle = jobs.spawn(watch_checkout(
+        Arc::clone(server),
+        outgoing.clone(),
+        thread,
+        repo,
+        status.clone(),
+    ));
+    if let Some(previous) = watches.insert(thread, handle) {
+        previous.abort();
+    }
+    crate::wire::encode(status)
+}
+
+async fn watch_checkout(
+    server: Arc<Server>,
+    outgoing: mpsc::Sender<Message>,
+    thread: ThreadId,
+    mut repo: viz_git::Repository,
+    initial: viz_protocol::GitStatus,
+) {
+    let cancel = server.stop.child_token();
+    let mut changes = server.workspace.subscribe();
+    let mut watch = repo.watch(Duration::from_millis(200), &cancel).await.ok();
+    let mut timer = tokio::time::interval(Duration::from_secs(3));
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    let mut previous = Some(initial);
+    loop {
+        tokio::select! {
+            () = cancel.cancelled() => break,
+            _ = timer.tick() => {},
+            result = async { watch.as_mut().expect("watch present").changed(&cancel).await }, if watch.is_some() => {
+                if result.is_err() {
+                    watch = None;
+                }
+            },
+            event = changes.recv() => {
+                match event {
+                    Ok(Change::Thread(id) | Change::Settled(id)) if id == thread => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
+                    _ => continue,
+                }
+                match server.workspace.git_repository(thread).await {
+                    Ok(next) if next.identity() != repo.identity() => {
+                        repo = next;
+                        watch = repo.watch(Duration::from_millis(200), &cancel).await.ok();
+                    }
+                    Ok(_) => {}
+                    Err(_) => {
+                        let _ = send_note(&outgoing, Notification::GitChanged { thread, status: None }).await;
+                        break;
+                    }
+                }
+            }
+        }
+        let status = server.workspace.git_status(&repo).await.ok();
+        if status != previous {
+            previous.clone_from(&status);
+            if send_note(&outgoing, Notification::GitChanged { thread, status })
+                .await
+                .is_err()
+            {
+                break;
+            }
+        }
+    }
 }
 
 async fn write_frames(

@@ -90,6 +90,15 @@ pub struct Moved {
 pub struct ListBranches<'a> {
     /// Project path.
     pub project: &'a str,
+    /// Case-insensitive substring to match.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query: Option<&'a str>,
+    /// Offset within the filtered branch list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+    /// Maximum number of branches to return.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u16>,
 }
 
 /// `project.branches` result.
@@ -97,6 +106,7 @@ pub struct ListBranches<'a> {
 pub struct BranchList {
     /// Short names usable as a worktree base, local branches first.
     pub branches: Vec<GitBranch>,
+    pub next: Option<usize>,
 }
 
 /// A branch usable as a worktree base.

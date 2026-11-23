@@ -20,6 +20,8 @@ pub enum DiffTarget<'a> {
     WorkingTree,
     Staged,
     Against(&'a str),
+    Commit(&'a str),
+    Uncommitted,
 }
 
 /// Opaque fingerprint for a diff response.
@@ -103,30 +105,49 @@ impl Repository {
         target: DiffTarget<'_>,
         cancel: &CancellationToken,
     ) -> Result<Diff, Error> {
-        let base = match target {
-            DiffTarget::Against(base) => Some(base.to_owned()),
+        let revision = match target {
+            DiffTarget::Against(revision) | DiffTarget::Commit(revision) => {
+                Some(revision.to_owned())
+            }
             _ => None,
         };
         let staged = target == DiffTarget::Staged;
+        let committed = matches!(target, DiffTarget::Commit(_));
+        let combined = target == DiffTarget::Uncommitted;
         self.read(cancel, move |repo, cancel| {
             let mut opts = options();
-            opts.include_untracked(!staged)
-                .recurse_untracked_dirs(!staged)
-                .show_untracked_content(!staged);
-            let diff = if let Some(base) = base {
-                let tree = repo.revparse_single(&base)?.peel_to_tree()?;
-                repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))?
-            } else if staged {
+            let workdir = !staged && !committed;
+            opts.include_untracked(workdir)
+                .recurse_untracked_dirs(workdir)
+                .show_untracked_content(workdir);
+            let diff = if let Some(revision) = revision {
+                let commit = repo.revparse_single(&revision)?.peel_to_commit()?;
+                let tree = commit.tree()?;
+                if committed {
+                    let parent = if commit.parent_count() == 0 {
+                        None
+                    } else {
+                        Some(commit.parent(0)?.tree()?)
+                    };
+                    repo.diff_tree_to_tree(parent.as_ref(), Some(&tree), Some(&mut opts))?
+                } else {
+                    repo.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut opts))?
+                }
+            } else if staged || combined {
                 let head = if crate::repository::head_unborn(repo)? {
                     None
                 } else {
                     Some(repo.head()?.peel_to_tree()?)
                 };
-                repo.diff_tree_to_index(head.as_ref(), None, Some(&mut opts))?
+                if staged {
+                    repo.diff_tree_to_index(head.as_ref(), None, Some(&mut opts))?
+                } else {
+                    repo.diff_tree_to_workdir_with_index(head.as_ref(), Some(&mut opts))?
+                }
             } else {
                 repo.diff_index_to_workdir(None, Some(&mut opts))?
             };
-            collect(repo, diff, !staged, cancel)
+            collect(repo, diff, workdir, cancel)
         })
         .await
     }

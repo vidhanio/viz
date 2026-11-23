@@ -9,6 +9,7 @@ mod files;
 mod folders;
 mod follow_ups;
 mod fork;
+mod git;
 mod github;
 mod icons;
 mod notifications;
@@ -82,6 +83,7 @@ pub(crate) struct Workspace {
     files: Files,
     icons: icons::Icons,
     clones: clones::Clones,
+    git_actions: git::GitActions,
     github: Mutex<BTreeMap<String, viz_github::GitHub>>,
     mcp: Mcp,
     closing: CancellationToken,
@@ -147,6 +149,7 @@ impl Workspace {
             workers: Workers::default(),
             icons: icons::Icons::default(),
             clones: clones::Clones::default(),
+            git_actions: git::GitActions::default(),
             github: Mutex::default(),
             files: Files::default(),
             mcp,

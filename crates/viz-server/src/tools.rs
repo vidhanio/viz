@@ -108,7 +108,7 @@ rpc_tools! {
         "Rename a project, given by its absolute path.";
     "project_remove", RemoveProject<'static>, ProjectKey, no_link, identity,
         "Remove a project from the list. Its files and threads stay.";
-    "project_branches", ListBranches<'static>, ProjectKey, no_link, identity,
+    "project_branches", ListBranches<'static>, crate::workspace::rpc::BranchQuery, no_link, identity,
         "List a project's local and remote-tracking branches, usable as a worktree base.";
     "worktree_list", ListWorktrees<'static>, ProjectKey, no_link, identity,
         "List the checkouts of a project's repository, with their branches and the threads running in each.";

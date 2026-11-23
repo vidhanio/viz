@@ -6,8 +6,9 @@ use url::Url;
 
 use crate::{Error, Repository, branches::upstream, repository::head_unborn};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AheadBehind {
+    pub upstream: String,
     pub ahead: usize,
     pub behind: usize,
 }
@@ -76,7 +77,11 @@ impl Repository {
                 head.peel_to_commit()?.id(),
                 upstream.get().peel_to_commit()?.id(),
             )?;
-            Ok(Some(AheadBehind { ahead, behind }))
+            Ok(Some(AheadBehind {
+                upstream: upstream.get().shorthand()?.to_owned(),
+                ahead,
+                behind,
+            }))
         })
         .await
     }

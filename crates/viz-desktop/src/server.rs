@@ -596,7 +596,7 @@ impl Session<'_> {
                 }
                 Ok(())
             }
-            Notification::Reply { .. } => Ok(()),
+            Notification::Reply { .. } | Notification::GitChanged { .. } => Ok(()),
         }
     }
 
@@ -709,10 +709,26 @@ impl Session<'_> {
         let environment = Arc::clone(&self.environment);
         tokio::spawn(async move {
             let result = async {
-                let branches = client.request(&ListBranches { project: &project }).await?;
+                let mut branches = Vec::new();
+                let mut offset = None;
+                loop {
+                    let page = client
+                        .request(&ListBranches {
+                            project: &project,
+                            query: None,
+                            offset,
+                            limit: None,
+                        })
+                        .await?;
+                    branches.extend(page.branches);
+                    offset = page.next;
+                    if offset.is_none() {
+                        break;
+                    }
+                }
                 let worktrees = client.request(&ListWorktrees { project: &project }).await?;
                 Ok::<_, Error>(Checkouts {
-                    branches: branches.branches,
+                    branches,
                     worktrees: worktrees.worktrees,
                 })
             }

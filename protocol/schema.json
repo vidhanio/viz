@@ -4578,6 +4578,700 @@
         ]
       }
     },
+    "git.status": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitStatusRequest",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitStatus",
+        "type": "object",
+        "properties": {
+          "checkout": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upstream": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ahead": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "behind": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "staged": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unstaged": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "untracked": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "conflicted": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "stats": {
+            "$ref": "#/$defs/GitLineStats"
+          },
+          "operation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "checkout",
+          "ahead",
+          "behind",
+          "staged",
+          "unstaged",
+          "untracked",
+          "conflicted",
+          "stats"
+        ],
+        "$defs": {
+          "GitLineStats": {
+            "type": "object",
+            "properties": {
+              "added": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "removed": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "added",
+              "removed"
+            ]
+          }
+        }
+      }
+    },
+    "git.action": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitActionRequest",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "action": {
+            "$ref": "#/$defs/GitAction"
+          }
+        },
+        "required": [
+          "thread",
+          "action"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "GitAction": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "create_branch"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "start": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name",
+                  "start"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "switch_branch"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "commit"
+                  },
+                  "paths": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "paths",
+                  "message"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "push"
+                  },
+                  "remote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "remote"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "fetch"
+                  },
+                  "remote": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "remote"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "pull"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitActionResult",
+        "type": "object",
+        "properties": {
+          "commit": {
+            "description": "The new commit ID for a commit action.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      }
+    },
+    "git.diff": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitDiffRequest",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "target": {
+            "$ref": "#/$defs/GitDiffTarget"
+          }
+        },
+        "required": [
+          "thread",
+          "target"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "GitDiffTarget": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "working"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "staged"
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "base"
+                  },
+                  "revision": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "revision"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "commit"
+                  },
+                  "revision": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "revision"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitDiff",
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "string"
+          },
+          "stats": {
+            "$ref": "#/$defs/GitLineStats"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "files": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/GitDiffFile"
+            }
+          }
+        },
+        "required": [
+          "revision",
+          "stats",
+          "truncated",
+          "files"
+        ],
+        "$defs": {
+          "GitLineStats": {
+            "type": "object",
+            "properties": {
+              "added": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "removed": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "added",
+              "removed"
+            ]
+          },
+          "GitDiffFile": {
+            "type": "object",
+            "properties": {
+              "old_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "new_path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "kind": {
+                "$ref": "#/$defs/GitFileKind"
+              },
+              "binary": {
+                "type": "boolean"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "stats": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitLineStats"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hunks": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/GitHunk"
+                }
+              }
+            },
+            "required": [
+              "kind",
+              "binary",
+              "truncated",
+              "hunks"
+            ]
+          },
+          "GitFileKind": {
+            "type": "string",
+            "enum": [
+              "added",
+              "deleted",
+              "modified",
+              "renamed",
+              "copied",
+              "type_changed",
+              "conflicted",
+              "untracked",
+              "other"
+            ]
+          },
+          "GitHunk": {
+            "type": "object",
+            "properties": {
+              "old_start": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "old_lines": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "new_start": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "new_lines": {
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "header": {
+                "type": "string"
+              },
+              "lines": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/GitDiffLine"
+                }
+              }
+            },
+            "required": [
+              "old_start",
+              "old_lines",
+              "new_start",
+              "new_lines",
+              "header",
+              "lines"
+            ]
+          },
+          "GitDiffLine": {
+            "type": "object",
+            "properties": {
+              "origin": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1
+              },
+              "old_line": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "new_line": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "content": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "origin",
+              "content"
+            ]
+          }
+        }
+      }
+    },
+    "git.watch": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "WatchGit",
+        "description": "Subscribe to checkout status on the current WebSocket.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "GitStatus",
+        "type": "object",
+        "properties": {
+          "checkout": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upstream": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ahead": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "behind": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "staged": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unstaged": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "untracked": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "conflicted": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "stats": {
+            "$ref": "#/$defs/GitLineStats"
+          },
+          "operation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "checkout",
+          "ahead",
+          "behind",
+          "staged",
+          "unstaged",
+          "untracked",
+          "conflicted",
+          "stats"
+        ],
+        "$defs": {
+          "GitLineStats": {
+            "type": "object",
+            "properties": {
+              "added": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              },
+              "removed": {
+                "type": "integer",
+                "format": "uint",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "added",
+              "removed"
+            ]
+          }
+        }
+      }
+    },
+    "git.unwatch": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "UnwatchGit",
+        "description": "Release a checkout status subscription on the current WebSocket.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Empty",
+        "description": "Empty successful response or notification params.",
+        "type": "object"
+      }
+    },
     "git.init": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -7033,6 +7727,32 @@
           "project": {
             "description": "Project path.",
             "type": "string"
+          },
+          "query": {
+            "description": "Case-insensitive substring to match.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "offset": {
+            "description": "Offset within the filtered branch list.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
+          },
+          "limit": {
+            "description": "Maximum number of branches to return.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint16",
+            "minimum": 0,
+            "maximum": 65535
           }
         },
         "required": [
@@ -7051,6 +7771,14 @@
             "items": {
               "$ref": "#/$defs/GitBranch"
             }
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint",
+            "minimum": 0
           }
         },
         "required": [
@@ -7763,6 +8491,40 @@
             "required": [
               "thread",
               "state"
+            ]
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
+            "const": "git.changed"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "status": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/GitStatus"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "thread"
             ]
           }
         },
@@ -8794,6 +9556,100 @@
         "required": [
           "used",
           "size"
+        ]
+      },
+      "GitStatus": {
+        "type": "object",
+        "properties": {
+          "checkout": {
+            "type": "string"
+          },
+          "branch": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upstream": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ahead": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "behind": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "staged": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "unstaged": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "untracked": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "conflicted": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "stats": {
+            "$ref": "#/$defs/GitLineStats"
+          },
+          "operation": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "checkout",
+          "ahead",
+          "behind",
+          "staged",
+          "unstaged",
+          "untracked",
+          "conflicted",
+          "stats"
+        ]
+      },
+      "GitLineStats": {
+        "type": "object",
+        "properties": {
+          "added": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          },
+          "removed": {
+            "type": "integer",
+            "format": "uint",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "added",
+          "removed"
         ]
       },
       "Empty": {

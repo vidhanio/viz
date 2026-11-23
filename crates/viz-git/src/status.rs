@@ -28,6 +28,27 @@ impl Repository {
     pub async fn status(&self, cancel: &CancellationToken) -> Result<Vec<StatusEntry>, Error> {
         self.read(cancel, status_entries).await
     }
+
+    /// Report Git metadata for an in-progress operation.
+    ///
+    /// # Errors
+    /// Returns an error if the repository cannot be opened.
+    pub async fn operation(&self, cancel: &CancellationToken) -> Result<Option<String>, Error> {
+        self.read(cancel, |repo, _| {
+            use git2::RepositoryState as State;
+            let operation = match repo.state() {
+                State::Clean => return Ok(None),
+                State::Merge => "merge",
+                State::Revert | State::RevertSequence => "revert",
+                State::CherryPick | State::CherryPickSequence => "cherry_pick",
+                State::Bisect => "bisect",
+                State::Rebase | State::RebaseInteractive | State::RebaseMerge => "rebase",
+                State::ApplyMailbox | State::ApplyMailboxOrRebase => "apply",
+            };
+            Ok(Some(operation.to_owned()))
+        })
+        .await
+    }
 }
 
 pub fn guard_conflicts(repo: &git2::Repository) -> Result<(), Error> {

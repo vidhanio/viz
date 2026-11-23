@@ -7,6 +7,7 @@ mod catalog;
 mod connections;
 mod folders;
 mod fork;
+mod git;
 mod history;
 mod ids;
 mod lifecycle;
@@ -31,6 +32,11 @@ pub use folders::{
     GitHubRepositoryList, InitRepository, ReadClone, StartClone,
 };
 pub use fork::{ForkPoint, ForkSource, ForkThread, Forked, ForkedPrompt};
+pub use git::{
+    GitAction, GitActionRequest, GitActionResult, GitDiff, GitDiffFile, GitDiffLine,
+    GitDiffRequest, GitDiffTarget, GitFailure, GitFileKind, GitHunk, GitLineStats, GitStatus,
+    GitStatusRequest, UnwatchGit, WatchGit,
+};
 pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryData, EntryPage, ListEntries, PlanEntry,
     PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd, SearchHit,
@@ -126,6 +132,11 @@ methods! {
     ReadProjectIcon => "project.icon", ProjectIconResult;
     BrowseFolders => "folders.browse", FolderEntries;
     CreateFolder => "folder.create", FolderCreated;
+    GitStatusRequest => "git.status", GitStatus;
+    GitActionRequest => "git.action", GitActionResult;
+    GitDiffRequest => "git.diff", GitDiff;
+    WatchGit => "git.watch", GitStatus;
+    UnwatchGit => "git.unwatch", Empty;
     InitRepository => "git.init", FolderCreated;
     StartClone => "project.clone", CloneStatus;
     ReadClone => "project.cloneStatus", CloneStatus;

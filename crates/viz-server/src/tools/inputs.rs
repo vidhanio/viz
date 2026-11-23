@@ -13,8 +13,8 @@ use viz_protocol::{
 
 use super::{DEFAULT_WAIT, MAX_WAIT};
 use crate::workspace::rpc::{
-    ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search, UpdateMetadata,
-    WorktreeRemove,
+    BranchQuery, ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search,
+    UpdateMetadata, WorktreeRemove,
 };
 
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -54,6 +54,7 @@ macro_rules! tool_inputs {
 tool_inputs!(
     Empty,
     ThreadList,
+    BranchQuery,
     Search,
     LaunchThread,
     ProjectKey,

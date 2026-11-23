@@ -58,6 +58,16 @@ handlers! {
         }
         BrowseFolders, BrowseFolders, |workspace, args| { workspace.browse_folders(args).await }
         CreateFolder, CreateFolder, |workspace, args| { workspace.create_folder(args).await }
+        viz_protocol::GitStatusRequest, viz_protocol::GitStatusRequest, |workspace, args| {
+            let repo = workspace.git_repository(args.thread).await?;
+            workspace.git_status(&repo).await
+        }
+        viz_protocol::GitActionRequest, viz_protocol::GitActionRequest, |workspace, args| {
+            workspace.git_action(args).await
+        }
+        viz_protocol::GitDiffRequest, viz_protocol::GitDiffRequest, |workspace, args| {
+            workspace.git_diff(args).await
+        }
         InitRepository, InitRepository, |workspace, args| { workspace.init_repository(args).await }
         StartClone, StartClone, |workspace, args| { workspace.start_clone(args).await }
         ReadClone, ReadClone, |workspace, ReadClone { id }| { workspace.clone_status(id).await }
@@ -71,10 +81,17 @@ handlers! {
             workspace.remove_project(&project).await?;
             Ok(Empty {})
         }
-        ListBranches<'static>, ProjectKey, |workspace, ProjectKey { project }| {
+        ListBranches<'static>, BranchQuery, |workspace, BranchQuery { project, query, offset, limit }| {
             let project = store::project(&mut *workspace.db.lock().await, &project).await?;
-            let branches = worktree::branches(Path::new(&project.path)).await?;
-            Ok(BranchList { branches })
+            let query = query.unwrap_or_default().to_lowercase();
+            let offset = offset.unwrap_or_default();
+            let limit = page_limit(limit, 100)?;
+            let mut branches = worktree::branches(Path::new(&project.path)).await?
+                .into_iter().filter(|branch| branch.name.to_lowercase().contains(&query))
+                .skip(offset).take(limit + 1).collect::<Vec<_>>();
+            let next = (branches.len() > limit).then(|| offset.saturating_add(limit));
+            branches.truncate(limit);
+            Ok(BranchList { branches, next })
         }
         ListWorktrees<'static>, ProjectKey, |workspace, ProjectKey { project }| {
             workspace.list_worktrees(&project).await
@@ -232,6 +249,14 @@ pub(crate) struct Configure {
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]
 pub(crate) struct ProjectKey {
     pub(crate) project: String,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub(crate) struct BranchQuery {
+    project: String,
+    query: Option<String>,
+    offset: Option<usize>,
+    limit: Option<u16>,
 }
 
 #[derive(Debug, Deserialize, Serialize, JsonSchema)]

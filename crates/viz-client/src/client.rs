@@ -425,11 +425,17 @@ impl Client {
         let raw = rx.await.map_err(|_| Error::Closed)?;
         let response: Response<M::Response> = serde_json::from_str(raw.as_str())
             .map_err(|source| Error::Decode { method, source })?;
-        if let Some(ErrorObject { code, message }) = response.error {
+        if let Some(ErrorObject {
+            code,
+            message,
+            data,
+        }) = response.error
+        {
             return Err(Error::Rpc {
                 method,
                 code,
                 message,
+                git_failure: data.and_then(|data| serde_json::from_value(data).ok()),
             });
         }
         response.result.ok_or_else(|| Error::Decode {
@@ -465,6 +471,7 @@ struct ErrorObject {
     code: i64,
     #[serde(default)]
     message: String,
+    data: Option<serde_json::Value>,
 }
 
 /// Where a response goes: its call, or the decoding error in its place.
