@@ -2,22 +2,23 @@
 //! comes from the MCP grant.
 
 mod inputs;
+mod views;
 
-use std::{sync::Arc, time::Duration};
+use std::{convert::identity, sync::Arc, time::Duration};
 
 use futures_util::future::BoxFuture;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use viz_protocol::{
-    CreateProject, Empty, EnvironmentList, HarnessList, HarnessOptions, LaunchThread, Launched,
-    ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method,
-    MoveThread, ReadProject, ReadThreadState, RemoveProject, RemoveWorktree, SearchThreads,
-    SendInput, StopThread, TaskId, TaskList, TaskResult, ThreadId, ThreadStateResult, TriageThread,
-    UpdateProject, UpdateThread, WaitThread,
+    Cleared, CreateProject, Empty, EntryId, EnvironmentList, HarnessList, HarnessOptions,
+    LaunchThread, Launched, ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads,
+    ListWorktrees, Method, MoveThread, ReadThreadState, RemoveProject, RemoveWorktree,
+    RetitleThread, SearchThreads, SendInput, Shelf, StopThread, TaskId, TaskResult, ThreadId,
+    ThreadStateResult, TriageThread, UpdateProject, UpdateThread, WaitThread,
 };
 
-use self::inputs::{SendText, ThreadUpdate, ToolInput};
+use self::inputs::{SendText, ThreadUpdate, ToolInput, WaitRun};
 use crate::{
     acp::mcp::{Dispatch, ToolDefinition, ToolResult, ToolScope},
     environments::Peers,
@@ -35,6 +36,12 @@ use crate::{
 };
 
 const LISTED_MODELS: usize = 24;
+const LISTED_THREADS: u16 = 50;
+const READ_ENTRIES: u16 = 20;
+/// MCP clients give up on a call after about a minute, and viz answers without
+/// a stream, so it cannot report progress meanwhile.
+const MAX_WAIT: u64 = 45_000;
+const DEFAULT_WAIT: u64 = 30_000;
 
 #[derive(Clone)]
 pub(crate) struct Tools {
@@ -50,7 +57,7 @@ impl std::fmt::Debug for Tools {
 }
 
 macro_rules! rpc_tools {
-    ($($name:literal, $method:ty, $input:ty, $link:expr, $description:literal;)+) => {
+    ($($name:literal, $method:ty, $input:ty, $link:expr, $view:expr, $description:literal;)+) => {
         fn rpc_definitions() -> Vec<ToolDefinition> {
             vec![$(definition::<Target<$input>>($name, $description)),+]
         }
@@ -58,7 +65,7 @@ macro_rules! rpc_tools {
         impl Tools {
             async fn call_rpc(&self, name: &str, args: Value) -> Result<ToolResult, Error> {
                 match name {
-                    $($name => self.rpc::<$method, $input>(args, $link).await,)+
+                    $($name => self.rpc::<$method, $input, _>(args, $link, $view).await,)+
                     _ => Err(Error::not_found(format!("unknown tool {name}"))),
                 }
             }
@@ -66,37 +73,60 @@ macro_rules! rpc_tools {
     };
 }
 
+const fn no_link<T>(_: &T) -> Option<ThreadId> {
+    None
+}
+
 rpc_tools! {
-    "thread_list", ListThreads<'static>, ThreadList, |_| None, "List threads in the selected environment, optionally filtered by project.";
-    "thread_read", ListEntries, ListEntries, |_| None, "Read recent thread entries. Pass before for earlier entries.";
-    "thread_state", ReadThreadState, ReadThreadState, |_| None, "Read a thread's current state, ACP options, working directory, and queue.";
-    "thread_search", SearchThreads<'static>, Search, |_| None, "Search thread transcripts in the selected environment.";
-    "thread_launch", LaunchThread, LaunchThread, |response: &Launched| Some(response.thread), "Launch an independent ACP thread (use delegate_task for a result that returns here).";
-    "thread_send", SendInput, SendText, |_| None, "Send a new input to an existing thread. Its previous task result is not changed.";
-    "thread_wait", WaitThread, WaitThread, |_| None, "Wait for a thread run to settle; specify the run ID to wait for that exact input.";
-    "thread_stop", StopThread, StopThread, |_| None, "Stop a specific thread run, or the active run and queue if run is omitted.";
-    "thread_update", UpdateThread<'static>, ThreadUpdate, |_| None, "Rename a thread.";
-    "thread_triage", TriageThread, TriageThread, |_| None, "Settle a finished thread, reopen it, snooze it until a time, pin, archive or mark it. Returns its state before, which the restore action puts back.";
-    "project_list", ListProjects, Empty, |_| None, "List the configured projects in the selected environment.";
-    "project_read", ReadProject<'static>, ProjectKey, |_| None, "Read a project by its absolute path in the selected environment.";
-    "project_create", CreateProject<'static>, ProjectCreate, |_| None, "Register an existing directory as a project.";
-    "project_update", UpdateProject<'static>, ProjectUpdate, |_| None, "Rename a project by its absolute path.";
-    "project_remove", RemoveProject<'static>, ProjectKey, |_| None, "Remove a project record without deleting its files.";
-    "project_branches", ListBranches<'static>, ProjectKey, |_| None, "List a Git project's local and remote-tracking branches, usable as a worktree base.";
-    "worktree_list", ListWorktrees<'static>, ProjectKey, |_| None, "List the checkouts of a Git project's repository, with their branches and the threads running in each.";
-    "worktree_remove", RemoveWorktree<'static>, WorktreeRemove, |_| None, "Remove a worktree viz created once no thread runs in it. Refuses uncommitted changes unless force is set; the branch is kept.";
-    "thread_move", MoveThread, MoveThread, |_| None, "Move an idle project thread to a new worktree ({\"mode\":\"new\"}), an existing one, or back to the project checkout ({\"mode\":\"local\"}). Its conversation continues there.";
+    "thread_state", ReadThreadState, ReadThreadState, no_link, |result: ThreadStateResult| views::state(result.state),
+        "Read what a thread is doing now: status, directory, selected options, queued inputs, and the end of its live output.";
+    "thread_search", SearchThreads<'static>, Search, no_link, identity,
+        "Search all thread transcripts in an environment. Read a hit with thread_read.";
+    "thread_launch", LaunchThread, LaunchThread, |response: &Launched| Some(response.thread), identity,
+        "Start an independent thread for the user. Use delegate_task instead when you need its result.";
+    "thread_send", SendInput, SendText, no_link, identity,
+        "Send an input to an existing thread. mode \"steer\" ends its current turn for this input; otherwise it queues. Returns the run to wait for.";
+    "thread_wait", WaitThread, WaitRun, no_link, views::waited,
+        "Wait up to 45 seconds for a thread's run to end. Pass run to wait for one input, or omit it for the latest. When timedOut is set, call again.";
+    "thread_stop", StopThread, StopThread, no_link, identity,
+        "Stop one run of a thread, or its active run and everything queued if run is omitted.";
+    "thread_update", UpdateThread<'static>, ThreadUpdate, no_link, identity,
+        "Rename a thread.";
+    "thread_retitle", RetitleThread, RetitleThread, no_link, identity,
+        "Replace a thread's title by one from its harness or latest prompt.";
+    "thread_triage", TriageThread, TriageThread, no_link, identity,
+        "Change where a thread stands in the user's list: settle finished work, reopen it, snooze it until a time in Unix milliseconds, pin, arrange, archive, or mark it read. Returns the state before, which the restore action puts back.";
+    "thread_move", MoveThread, MoveThread, no_link, identity,
+        "Move an idle project thread to a new worktree ({\"mode\":\"new\"}), an existing one, or back to the project checkout ({\"mode\":\"local\"}). Its conversation continues there.";
+    "project_list", ListProjects, Empty, no_link, identity,
+        "List an environment's projects, with their paths and branches.";
+    "project_create", CreateProject<'static>, ProjectCreate, no_link, identity,
+        "Register an existing directory as a project.";
+    "project_update", UpdateProject<'static>, ProjectUpdate, no_link, identity,
+        "Rename a project, given by its absolute path.";
+    "project_remove", RemoveProject<'static>, ProjectKey, no_link, identity,
+        "Remove a project from the list. Its files and threads stay.";
+    "project_branches", ListBranches<'static>, ProjectKey, no_link, identity,
+        "List a project's local and remote-tracking branches, usable as a worktree base.";
+    "worktree_list", ListWorktrees<'static>, ProjectKey, no_link, identity,
+        "List the checkouts of a project's repository, with their branches and the threads running in each.";
+    "worktree_remove", RemoveWorktree<'static>, WorktreeRemove, no_link, identity,
+        "Remove a worktree viz created once no thread runs in it. Refuses uncommitted changes unless force is set; the branch is kept.";
 }
 
 pub(crate) fn definitions() -> Vec<ToolDefinition> {
     let mut definitions = rpc_definitions();
     definitions.extend([
-        definition::<Empty>("list_environments", "List the local and explicitly configured peer environments, with reachability."),
-        definition::<Target<SpawnOptions>>("list_spawn_options", "List ACP harness IDs and display names. Pass a harness ID and model for model-specific thinking options, or search to filter models."),
-        definition::<Delegate>("delegate_task", "Delegate a self-contained task from this thread. Pass a destination environment and project if needed, or reuse one of your existing child threads. The result arrives as a new input here."),
-        definition::<Empty>("list_tasks", "List the durable tasks delegated by this thread."),
-        definition::<TaskStatus>("task_status", "Read the status and result of one of this thread's tasks by task ID. Set wait to wait for completion."),
-        definition::<TaskKey>("task_cancel", "Cancel one of this thread's tasks by task ID, including its nested work. An unreachable task remains pending until cancellation succeeds."),
+        definition::<Empty>("environment_list", "List the local environment and the configured peers, with their reachability."),
+        definition::<Target<SpawnOptions>>("harness_list", "List the harnesses threads can run. Pass a harness and search to find its models, or a harness and model for its thinking levels."),
+        definition::<Target<FindThreads>>("thread_list", "List threads, the ones that matter most first. Filter by project or shelf."),
+        definition::<Target<ReadEntries>>("thread_read", "Read a thread's transcript, newest page first. Long texts and tool outputs are shortened; pass entry to read one whole, or before for earlier ones."),
+        definition::<Delegate>("delegate_task", "Delegate a self-contained task to a new child thread, which sees only what you write in text. Pass worktree {\"mode\":\"new\"} to isolate its changes, thread to give a child of yours another task, or environment to run it elsewhere. The result arrives as a new input here, so end your turn instead of polling unless you must wait."),
+        definition::<Empty>("task_list", "List the tasks this thread delegated, without their results."),
+        definition::<TaskStatus>("task_status", "Read one of this thread's tasks with its result. Set wait to wait up to 45 seconds for it to end; when timedOut is set, call again."),
+        definition::<TaskKey>("task_cancel", "Cancel one of this thread's tasks and everything delegated from it. An unreachable task stays until it can be told."),
+        definition::<TaskKey>("task_delete", "Remove one of this thread's finished tasks from its list. The child thread stays."),
+        definition::<Empty>("task_clear", "Remove all of this thread's finished tasks from its list."),
     ]);
     definitions
 }
@@ -124,7 +154,7 @@ impl Tools {
 
     async fn invoke(&self, scope: ToolScope, name: &str, args: Value) -> Result<ToolResult, Error> {
         match name {
-            "list_environments" => {
+            "environment_list" => {
                 let _: Empty = decode(args)?;
                 output(
                     &EnvironmentList {
@@ -133,15 +163,33 @@ impl Tools {
                     None,
                 )
             }
-            "list_spawn_options" => {
+            "harness_list" => {
                 let Target { environment, input } = decode(args)?;
                 self.spawn_options(scope.thread, environment.as_deref(), input)
                     .await
             }
-            "list_tasks" => {
+            "thread_list" => {
+                let Target { environment, input } = decode(args)?;
+                self.threads(environment.as_deref(), input).await
+            }
+            "thread_read" => {
+                let Target { environment, input } = decode(args)?;
+                self.read(environment.as_deref(), input).await
+            }
+            "task_list" => {
                 let _: Empty = decode(args)?;
                 let tasks = self.tasks.list(Some(scope.thread)).await?;
-                output(&TaskList { tasks }, None)
+                output(&views::tasks(tasks), None)
+            }
+            "task_delete" => {
+                let TaskKey { task } = decode(args)?;
+                self.tasks.delete(&task, Some(scope.thread)).await?;
+                output(&views::Deleted { deleted: task }, None)
+            }
+            "task_clear" => {
+                let _: Empty = decode(args)?;
+                let count = self.tasks.clear(scope.thread).await?;
+                output(&Cleared { count }, None)
             }
             "delegate_task" => {
                 let task = self
@@ -161,15 +209,17 @@ impl Tools {
                     wait,
                     timeout_ms,
                 } = decode(args)?;
+                let timeout = timeout_ms.unwrap_or(DEFAULT_WAIT).min(MAX_WAIT);
                 let result = self
                     .tasks
-                    .status(&task, Some(scope.thread), wait, timeout_ms)
+                    .status(&task, Some(scope.thread), wait, Some(timeout))
                     .await?;
+                let environment = result.task.environment.clone();
                 let link = result
                     .task
                     .thread
-                    .map(|thread| (thread, result.task.environment.as_str()));
-                output(&result, link)
+                    .map(|thread| (thread, environment.as_str()));
+                output(&views::task(result.task, result.timed_out), link)
             }
             "task_cancel" => {
                 let TaskKey { task } = decode(args)?;
@@ -205,14 +255,16 @@ impl Tools {
         })
     }
 
-    async fn rpc<M, T>(
+    async fn rpc<M, T, V>(
         &self,
         args: Value,
         child: fn(&M::Response) -> Option<ThreadId>,
+        view: fn(M::Response) -> V,
     ) -> Result<ToolResult, Error>
     where
         M: Method + 'static,
         T: ToolInput + Into<<Arc<Workspace> as Handler<M>>::Input>,
+        V: Serialize,
         Arc<Workspace>: Handler<M>,
     {
         let Target::<T> { environment, input } = decode(args)?;
@@ -222,7 +274,64 @@ impl Tools {
         let link = thread
             .or_else(|| child(&result))
             .map(|thread| (thread, environment));
-        output(&result, link)
+        output(&view(result), link)
+    }
+
+    async fn threads(
+        &self,
+        environment: Option<&str>,
+        input: FindThreads,
+    ) -> Result<ToolResult, Error> {
+        let request = ThreadList {
+            archived: None,
+            project: input.project,
+        };
+        let environment = environment.unwrap_or(&self.peers.local);
+        let mut found = self
+            .dispatch::<ListThreads<'static>, _>(environment, request, Duration::ZERO)
+            .await?
+            .threads;
+        found.retain(|thread| {
+            input
+                .shelf
+                .map_or(thread.shelf != Shelf::Archived, |shelf| {
+                    thread.shelf == shelf
+                })
+        });
+        let limit = input.limit.unwrap_or(LISTED_THREADS).clamp(1, 200);
+        output(&views::threads(found, limit.into()), None)
+    }
+
+    async fn read(
+        &self,
+        environment: Option<&str>,
+        input: ReadEntries,
+    ) -> Result<ToolResult, Error> {
+        let environment = environment.unwrap_or(&self.peers.local);
+        let link = Some((input.thread, environment));
+        let request = ListEntries {
+            thread: input.thread,
+            before: input.entry.map_or(input.before, |entry| {
+                Some(EntryId(entry.0.saturating_add(1)))
+            }),
+            limit: Some(match input.entry {
+                Some(_) => 1,
+                None => input.limit.unwrap_or(READ_ENTRIES).clamp(1, 100),
+            }),
+        };
+        let mut page = self
+            .dispatch::<ListEntries, _>(environment, request, Duration::ZERO)
+            .await?;
+        let Some(wanted) = input.entry else {
+            return output(&views::page(page), link);
+        };
+        match page.entries.pop() {
+            Some(entry) if entry.id == wanted => output(&views::whole(entry), link),
+            _ => Err(Error::not_found(format!(
+                "no entry {wanted} in thread {}",
+                input.thread
+            ))),
+        }
     }
 
     async fn spawn_options(
@@ -382,6 +491,28 @@ struct Target<T> {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct FindThreads {
+    project: Option<String>,
+    /// Only this shelf. By default every thread that is not archived.
+    shelf: Option<Shelf>,
+    /// At most this many, 50 by default.
+    #[schemars(range(min = 1, max = 200))]
+    limit: Option<u16>,
+}
+
+#[derive(Deserialize, JsonSchema)]
+struct ReadEntries {
+    thread: ThreadId,
+    /// Read entries before this one.
+    before: Option<EntryId>,
+    /// At most this many, 20 by default.
+    #[schemars(range(min = 1, max = 100))]
+    limit: Option<u16>,
+    /// Read only this entry, whole.
+    entry: Option<EntryId>,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct SpawnOptions {
     harness: Option<String>,
     model: Option<String>,
@@ -437,6 +568,6 @@ struct TaskStatus {
     task: TaskId,
     #[serde(default)]
     wait: bool,
-    #[schemars(range(max = 120_000))]
+    #[schemars(range(max = 45_000))]
     timeout_ms: Option<u64>,
 }

@@ -1692,7 +1692,7 @@ fn subagent_call(tool: &Tool) -> Option<Call> {
         "thread_launch" if tool.child.is_some() => Some(Call::Spawn),
         "thread_send" => Some(Call::Message),
         "task_status" | "thread_read" => Some(Call::Read),
-        "list_tasks" => Some(Call::List),
+        "task_list" => Some(Call::List),
         "task_cancel" | "thread_stop" => Some(Call::Cancel),
         _ => None,
     }

@@ -4,13 +4,14 @@
 use std::time::Duration;
 
 use schemars::JsonSchema;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
-    Empty, LaunchThread, ListEntries, MoveThread, ReadThreadState, SendInput, SendMode, StopThread,
-    ThreadId, TriageThread, WaitThread,
+    Empty, LaunchThread, ListEntries, MoveThread, ReadThreadState, RetitleThread, RunId, SendInput,
+    SendMode, StopThread, ThreadId, TriageThread, WaitThread,
 };
 
+use super::{DEFAULT_WAIT, MAX_WAIT};
 use crate::workspace::rpc::{
     ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search, UpdateMetadata,
     WorktreeRemove,
@@ -77,15 +78,48 @@ thread_inputs! {
     SendText => |input: &SendText| input.thread,
     ThreadUpdate => |input: &ThreadUpdate| input.thread,
     TriageThread => |input: &TriageThread| input.thread,
+    RetitleThread => |input: &RetitleThread| input.thread,
 }
 
-impl ToolInput for WaitThread {
+/// A wait short enough for an MCP client.
+#[derive(Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct WaitRun {
+    thread: ThreadId,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run: Option<RunId>,
+    /// 30 seconds by default; longer waits are cut to 45 seconds.
+    #[serde(default = "default_wait", deserialize_with = "capped_wait")]
+    #[schemars(range(max = 45_000))]
+    timeout_ms: u64,
+}
+
+const fn default_wait() -> u64 {
+    DEFAULT_WAIT
+}
+
+fn capped_wait<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let wait = Option::<u64>::deserialize(deserializer)?;
+    Ok(wait.unwrap_or(DEFAULT_WAIT).min(MAX_WAIT))
+}
+
+impl ToolInput for WaitRun {
     fn thread(&self) -> Option<ThreadId> {
         Some(self.thread)
     }
 
     fn extra_wait(&self) -> Duration {
-        Duration::from_millis(self.timeout_ms.unwrap_or(30_000).min(120_000))
+        Duration::from_millis(self.timeout_ms)
+    }
+}
+
+impl From<WaitRun> for WaitThread {
+    fn from(input: WaitRun) -> Self {
+        Self {
+            thread: input.thread,
+            run: input.run,
+            timeout_ms: Some(input.timeout_ms),
+        }
     }
 }
 

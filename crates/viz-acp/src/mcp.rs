@@ -70,7 +70,7 @@ pub struct ToolResult {
 }
 
 const PATH: &str = "/mcp";
-const INSTRUCTIONS: &str = "Manage threads, projects, and delegated tasks.";
+const INSTRUCTIONS: &str = "viz runs you in a thread. Delegate work to child threads with delegate_task, and read or drive other threads with the thread tools.";
 
 /// Runs viz's tools for an authenticated MCP call.
 pub trait Dispatch: Send + Sync + 'static {
