@@ -1,17 +1,17 @@
 //! Adapt Rune events to Ghostty's mode-aware encoders.
 
-use ghostty_vt::{Terminal, focus, key, mouse, paste, terminal::Mode};
+use libghostty_vt::{Terminal, focus, key, mode::Mode, mouse, paste};
 use rune::{Key, KeyEvent, Mods};
 
 use super::{CELL, PAD};
 
-type Result<T> = std::result::Result<T, ghostty_vt::Error>;
+type Result<T> = std::result::Result<T, libghostty_vt::Error>;
 
 pub(super) struct Encoder {
-    key: key::Encoder,
-    key_event: key::Event,
-    mouse: mouse::Encoder,
-    mouse_event: mouse::Event,
+    key: key::Encoder<'static>,
+    key_event: key::Event<'static>,
+    mouse: mouse::Encoder<'static>,
+    mouse_event: mouse::Event<'static>,
 }
 
 impl Encoder {
@@ -77,7 +77,7 @@ impl Encoder {
                 padding_bottom: 0,
                 padding_left: 0,
                 padding_right: 0,
-            });
+            })?;
         self.mouse_event
             .set_action(action)
             .set_button(Some(button))

@@ -8,12 +8,14 @@ mod search;
 
 use std::{cell::RefCell, rc::Rc};
 
-use ghostty_vt::{
+use libghostty_vt::{
     Terminal,
+    fmt::{Format, Formatter},
+    grid_ref::TrackedGridRef,
+    point::{Coordinate, Point},
     render::{CellIterator, RenderState, RowIterator},
-    screen::TrackedGridRef,
-    selection::{FormatOptions, Selection},
-    terminal::{Point, PointCoordinate, ScrollViewport},
+    selection::Selection,
+    terminal::ScrollViewport,
 };
 use rune::{Drag, El, Phase, el, text};
 use viz_terminal::{CellSize, Size, Viewer};
@@ -35,9 +37,9 @@ pub enum Action {
 
 pub struct TerminalView {
     viewer: Viewer,
-    render: RenderState,
-    rows: RowIterator,
-    cells: CellIterator,
+    render: RenderState<'static>,
+    rows: RowIterator<'static>,
+    cells: CellIterator<'static>,
     encoder: input::Encoder,
     cache: paint::Frame,
     anchor: Option<TrackedGridRef>,
@@ -47,7 +49,7 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
-    pub(super) fn new(viewer: Viewer) -> Result<Self, ghostty_vt::Error> {
+    pub(super) fn new(viewer: Viewer) -> Result<Self, libghostty_vt::Error> {
         Ok(Self {
             viewer,
             render: RenderState::new()?,
@@ -62,7 +64,7 @@ impl TerminalView {
         })
     }
 
-    fn refresh(&mut self) -> Result<(), ghostty_vt::Error> {
+    fn refresh(&mut self) -> Result<(), libghostty_vt::Error> {
         let snapshot = self.render.update(self.viewer.terminal())?;
         self.cache
             .update(&snapshot, &mut self.rows, &mut self.cells)
@@ -72,7 +74,7 @@ impl TerminalView {
         self.viewer.terminal_mut().scroll_viewport(scroll);
     }
 
-    fn select(&mut self, drag: &Drag) -> Result<(), ghostty_vt::Error> {
+    fn select(&mut self, drag: &Drag) -> Result<(), libghostty_vt::Error> {
         let terminal = self.viewer.terminal();
         let point = coordinate(terminal, drag.x, drag.y)?;
         if drag.phase == Phase::Down {
@@ -92,7 +94,7 @@ impl TerminalView {
         Ok(())
     }
 
-    fn link(&self, x: f32, y: f32) -> Result<Option<String>, ghostty_vt::Error> {
+    fn link(&self, x: f32, y: f32) -> Result<Option<String>, libghostty_vt::Error> {
         let terminal = self.viewer.terminal();
         let point = coordinate(terminal, x, y)?;
         let cell = terminal.grid_ref(Point::Viewport(point))?;
@@ -172,12 +174,8 @@ pub fn view<S: 'static>(
                 }
             }
             if (cfg!(target_os = "macos") || event.mods.shift) && event.is_command('c') {
-                if let Ok(Some(bytes)) = state
-                    .viewer
-                    .terminal()
-                    .format_selection_alloc(FormatOptions::default())
-                {
-                    tx.copy(String::from_utf8_lossy(&bytes).into_owned());
+                if let Ok(Some(text)) = copy_selection(state.viewer.terminal()) {
+                    tx.copy(text);
                 }
                 return true;
             }
@@ -228,15 +226,15 @@ pub fn view<S: 'static>(
             let TerminalView {
                 viewer, encoder, ..
             } = &mut *state;
-            if !event.mods.shift && viewer.terminal().is_mouse_tracking() == Ok(true) {
+            if !event.mods.shift && matches!(viewer.terminal().is_mouse_tracking(), Ok(true)) {
                 let button = if event.dy > 0.0 {
-                    ghostty_vt::mouse::Button::Four
+                    libghostty_vt::mouse::Button::Four
                 } else {
-                    ghostty_vt::mouse::Button::Five
+                    libghostty_vt::mouse::Button::Five
                 };
                 if let Ok(bytes) = encoder.mouse(
                     viewer.terminal(),
-                    ghostty_vt::mouse::Action::Press,
+                    libghostty_vt::mouse::Action::Press,
                     button,
                     [event.x, event.y],
                     event.mods,
@@ -257,7 +255,7 @@ pub fn view<S: 'static>(
             if drag.phase == Phase::Down && !state.ime_enabled {
                 state.ime_enabled = true;
                 if let Ok(Some(bytes)) =
-                    input::focus(state.viewer.terminal(), ghostty_vt::focus::Event::Gained)
+                    input::focus(state.viewer.terminal(), libghostty_vt::focus::Event::Gained)
                 {
                     drag_action(app, Action::Input(bytes), tx);
                 }
@@ -266,16 +264,16 @@ pub fn view<S: 'static>(
             let TerminalView {
                 viewer, encoder, ..
             } = &mut *state;
-            if !mods.shift && viewer.terminal().is_mouse_tracking() == Ok(true) {
+            if !mods.shift && matches!(viewer.terminal().is_mouse_tracking(), Ok(true)) {
                 let mouse = match drag.phase {
-                    Phase::Down => ghostty_vt::mouse::Action::Press,
-                    Phase::Move => ghostty_vt::mouse::Action::Motion,
-                    Phase::Up => ghostty_vt::mouse::Action::Release,
+                    Phase::Down => libghostty_vt::mouse::Action::Press,
+                    Phase::Move => libghostty_vt::mouse::Action::Motion,
+                    Phase::Up => libghostty_vt::mouse::Action::Release,
                 };
                 if let Ok(bytes) = encoder.mouse(
                     viewer.terminal(),
                     mouse,
-                    ghostty_vt::mouse::Button::Left,
+                    libghostty_vt::mouse::Button::Left,
                     [drag.x, drag.y],
                     mods,
                 ) {
@@ -301,8 +299,20 @@ pub fn view<S: 'static>(
         })
 }
 
-fn coordinate(terminal: &Terminal, x: f32, y: f32) -> Result<PointCoordinate, ghostty_vt::Error> {
-    Ok(PointCoordinate {
+fn copy_selection(terminal: &Terminal) -> Result<Option<String>, libghostty_vt::Error> {
+    let Some(mut formatter) = Formatter::new_selection(terminal)? else {
+        return Ok(None);
+    };
+    formatter
+        .set_format(Format::Plain)?
+        .set_unwrap(false)?
+        .set_trim(false)?;
+    let bytes = formatter.format_alloc(None)?;
+    Ok(Some(String::from_utf8_lossy(&bytes).into_owned()))
+}
+
+fn coordinate(terminal: &Terminal, x: f32, y: f32) -> Result<Coordinate, libghostty_vt::Error> {
+    Ok(Coordinate {
         x: cells(x - PAD, CELL.width).min(terminal.cols()?.saturating_sub(1)),
         y: u32::from(cells(y - PAD, CELL.height).min(terminal.rows()?.saturating_sub(1))),
     })

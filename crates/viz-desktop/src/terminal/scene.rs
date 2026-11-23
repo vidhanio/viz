@@ -3,9 +3,9 @@
 
 use std::{cell::RefCell, fmt::Write as _, rc::Rc};
 
-use ghostty_vt::{
+use libghostty_vt::{
+    point::{Coordinate, Point},
     selection::Selection,
-    terminal::{Point, PointCoordinate},
 };
 use rune::El;
 use viz_terminal::{Exit, LiveScreen, Size, Viewer};
@@ -108,9 +108,9 @@ pub fn focus(app: &mut Desktop, focused: bool, tx: &mut rune::Tx) {
                 return;
             }
             let event = if focused {
-                ghostty_vt::focus::Event::Gained
+                libghostty_vt::focus::Event::Gained
             } else {
-                ghostty_vt::focus::Event::Lost
+                libghostty_vt::focus::Event::Lost
             };
             if let Ok(Some(bytes)) = super::input::focus(view.viewer.terminal(), event) {
                 scene.actions.borrow_mut().push(Action::Input(bytes));
@@ -135,8 +135,8 @@ impl Scene {
         let viewer = Viewer::attach(&screen.snapshot()?)?;
         if matches!(preset, Preset::Selection) {
             let terminal = viewer.terminal();
-            let a = terminal.grid_ref(Point::Viewport(PointCoordinate { x: 0, y: 3 }))?;
-            let b = terminal.grid_ref(Point::Viewport(PointCoordinate { x: 36, y: 5 }))?;
+            let a = terminal.grid_ref(Point::Viewport(Coordinate { x: 0, y: 3 }))?;
+            let b = terminal.grid_ref(Point::Viewport(Coordinate { x: 36, y: 5 }))?;
             terminal.set_selection(Some(&Selection::new(a, b, false)))?;
         }
         Ok(Self {

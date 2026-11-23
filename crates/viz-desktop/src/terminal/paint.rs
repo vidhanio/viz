@@ -2,10 +2,11 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use ghostty_vt::{
+use libghostty_vt::{
+    color::Rgb,
     render::{CellIteration, CellIterator, Cursor, CursorVisualStyle, RowIterator, Snapshot},
     screen::CellWide,
-    style::{RgbColor, Style, StyleColor, Underline},
+    style::{Style, StyleColor, Underline},
 };
 use rune::{Color, El, col, el, memo, text};
 use viz_terminal::Exit;
@@ -17,7 +18,7 @@ pub(super) struct Frame {
     id: u64,
     rows: Vec<Line>,
     cursor: Option<Cursor>,
-    palette: Option<[RgbColor; 256]>,
+    palette: Option<[Rgb; 256]>,
 }
 
 impl Default for Frame {
@@ -51,17 +52,17 @@ impl Frame {
     pub(super) fn update(
         &mut self,
 
-        snapshot: &Snapshot<'_>,
-        rows: &mut RowIterator,
-        cells: &mut CellIterator,
-    ) -> Result<(), ghostty_vt::Error> {
+        snapshot: &Snapshot<'static, '_>,
+        rows: &mut RowIterator<'static>,
+        cells: &mut CellIterator<'static>,
+    ) -> Result<(), libghostty_vt::Error> {
         self.cursor = Some(snapshot.cursor()?);
         let palette = snapshot.colors()?.palette;
         let size = usize::from(snapshot.rows()?);
         if self.rows.len() != size || self.palette != Some(palette) {
             self.rows.resize_with(size, Line::default);
             self.palette = Some(palette);
-            snapshot.set_dirty(ghostty_vt::render::Dirty::Full)?;
+            snapshot.set_dirty(libghostty_vt::render::Dirty::Full)?;
         }
         let mut rows = rows.update(snapshot)?;
         while let Some((y, row)) = rows.next_dirty() {
@@ -142,10 +143,10 @@ impl Frame {
 impl Line {
     fn push(
         &mut self,
-        cell: &CellIteration<'_>,
+        cell: &CellIteration<'_, '_>,
         x: u16,
         value: &mut String,
-    ) -> Result<(), ghostty_vt::Error> {
+    ) -> Result<(), libghostty_vt::Error> {
         let width = match cell.raw_cell()?.wide()? {
             CellWide::SpacerTail => return Ok(()),
             CellWide::Wide => 2,
@@ -186,7 +187,7 @@ impl Line {
         Ok(())
     }
 
-    fn view(&self, theme: &Theme, palette: Option<&[RgbColor; 256]>) -> El {
+    fn view(&self, theme: &Theme, palette: Option<&[Rgb; 256]>) -> El {
         let mut line = el().h(f32::from(CELL.height)).w_full();
         for run in &self.runs {
             line = line.child(run.view(theme, palette));
@@ -196,7 +197,7 @@ impl Line {
 }
 
 impl Run {
-    fn view(&self, theme: &Theme, palette: Option<&[RgbColor; 256]>) -> El {
+    fn view(&self, theme: &Theme, palette: Option<&[Rgb; 256]>) -> El {
         let colors = ansi(theme);
         let mut fg = color(self.style.fg_color, theme.text, &colors, palette);
         let mut bg = color(self.style.bg_color, theme.k.c.bg_base, &colors, palette);
@@ -246,7 +247,7 @@ impl Run {
     }
 }
 
-fn cursor_el(cursor: Cursor, position: ghostty_vt::render::CursorViewport, theme: &Theme) -> El {
+fn cursor_el(cursor: Cursor, position: libghostty_vt::render::CursorViewport, theme: &Theme) -> El {
     let x = f32::from(position.x).mul_add(f32::from(CELL.width), PAD);
     let y = f32::from(position.y).mul_add(f32::from(CELL.height), PAD);
     let width = f32::from(CELL.width);
@@ -289,7 +290,7 @@ fn color(
     value: StyleColor,
     fallback: Color,
     ansi: &[Color; 16],
-    palette: Option<&[RgbColor; 256]>,
+    palette: Option<&[Rgb; 256]>,
 ) -> Color {
     match value {
         StyleColor::None => fallback,
@@ -304,7 +305,7 @@ fn color(
     }
 }
 
-fn rgb(value: RgbColor) -> Color {
+fn rgb(value: Rgb) -> Color {
     Color {
         r: f32::from(value.r) / 255.0,
         g: f32::from(value.g) / 255.0,

@@ -1,8 +1,9 @@
 //! Search retained terminal cells and reveal the selected match.
 
-use ghostty_vt::{
+use libghostty_vt::{
+    point::{Coordinate, Point},
     selection::Selection,
-    terminal::{Point, PointCoordinate, ScrollViewport},
+    terminal::ScrollViewport,
 };
 
 use super::TerminalView;
@@ -33,7 +34,7 @@ impl TerminalView {
             line.clear();
             offsets.clear();
             for x in 0..columns {
-                let Ok(cell) = terminal.grid_ref(Point::Screen(PointCoordinate { x, y })) else {
+                let Ok(cell) = terminal.grid_ref(Point::Screen(Coordinate { x, y })) else {
                     break;
                 };
                 offsets.push((line.len(), x));
@@ -70,8 +71,8 @@ impl TerminalView {
         let (y, start, end) = matches[search.index];
         terminal.scroll_viewport(ScrollViewport::Row((y as usize).saturating_sub(2)));
         if let (Ok(start), Ok(end)) = (
-            terminal.grid_ref(Point::Screen(PointCoordinate { x: start, y })),
-            terminal.grid_ref(Point::Screen(PointCoordinate { x: end, y })),
+            terminal.grid_ref(Point::Screen(Coordinate { x: start, y })),
+            terminal.grid_ref(Point::Screen(Coordinate { x: end, y })),
         ) {
             let _ = terminal.set_selection(Some(&Selection::new(start, end, false)));
         }

@@ -9,12 +9,12 @@ publish.workspace = true
 
 [features]
 default = ["emulator"]
-emulator = ["dep:ghostty-vt", "dep:thiserror"]
+emulator = ["dep:libghostty-vt", "dep:thiserror"]
 pty = ["emulator", "dep:pty-process", "dep:rustix", "dep:tokio", "uuid/v4"]
 
 [dependencies]
 viz-protocol.workspace = true
-ghostty-vt = { workspace = true, optional = true }
+libghostty-vt = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
 uuid.workspace = true
 

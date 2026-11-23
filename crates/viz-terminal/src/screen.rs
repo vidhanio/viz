@@ -1,9 +1,11 @@
 //! Ghostty integration for the live PTY owner and query-free viewers.
+//!
+//! Ghostty ignores clipboard writes and other effects unless a handler is
+//! registered, so only the live screen installs one: PTY replies.
 
-use ghostty_vt::{
-    Terminal, TerminalOptions, snapshot,
-    terminal::{ClipboardWritePolicy, Event},
-};
+use std::{cell::RefCell, rc::Rc};
+
+use libghostty_vt::{Terminal, snapshot};
 
 use crate::{CellSize, Change, Exit, Sequence, Size, Snapshot, Update};
 
@@ -22,7 +24,7 @@ const INPUT_CHUNK_BYTES: usize = 16 * 1024;
 pub enum EmulationError {
     /// The native terminal could not complete the operation.
     #[error("terminal emulation failed")]
-    Native(#[from] ghostty_vt::Error),
+    Native(#[from] libghostty_vt::Error),
     /// A missed or repeated update broke the viewer's sequence.
     #[error("terminal update sequence mismatch (expected {expected:?}, got {received:?})")]
     StreamGap {
@@ -33,11 +35,12 @@ pub enum EmulationError {
     },
 }
 
-/// The PTY owner's interpreter. Query responses are emitted synchronously to
-/// its writer.
+/// The PTY owner's interpreter. Query responses are collected while input is
+/// interpreted and delivered to the caller's writer before it returns.
 #[derive(Debug)]
 pub struct LiveScreen {
-    terminal: Terminal,
+    terminal: Terminal<'static, 'static>,
+    replies: Rc<RefCell<Vec<u8>>>,
     sequence: Sequence,
     exit: Option<Exit>,
 }
@@ -49,15 +52,16 @@ impl LiveScreen {
     /// Returns an error if Ghostty cannot allocate or configure the
     /// interpreter.
     pub fn new(size: Size, cell: CellSize) -> Result<Self, EmulationError> {
-        let mut terminal = Terminal::new(TerminalOptions {
-            cols: size.columns(),
-            rows: size.rows(),
-            max_scrollback: HISTORY_BYTES,
-        })?;
+        let mut terminal = Terminal::new(size.columns(), size.rows())?;
+        let replies = Rc::new(RefCell::new(Vec::new()));
+        let sink = Rc::clone(&replies);
+        terminal.on_pty_write(move |_, bytes| sink.borrow_mut().extend_from_slice(bytes))?;
         configure(&mut terminal)?;
         resize(&mut terminal, size, cell)?;
+        replies.borrow_mut().clear();
         Ok(Self {
             terminal,
+            replies,
             sequence: Sequence::default(),
             exit: None,
         })
@@ -68,11 +72,7 @@ impl LiveScreen {
     pub fn output(&mut self, bytes: Vec<u8>, mut reply: impl FnMut(&[u8])) -> Update {
         for chunk in bytes.chunks(INPUT_CHUNK_BYTES) {
             self.terminal.vt_write(chunk);
-            for event in self.terminal.events() {
-                if let Event::PtyWrite(bytes) = event {
-                    reply(&bytes);
-                }
-            }
+            self.deliver(&mut reply);
         }
         self.update(Change::Output { bytes })
     }
@@ -88,11 +88,7 @@ impl LiveScreen {
         mut reply: impl FnMut(&[u8]),
     ) -> Result<Update, EmulationError> {
         resize(&mut self.terminal, size, cell)?;
-        for event in self.terminal.events() {
-            if let Event::PtyWrite(bytes) = event {
-                reply(&bytes);
-            }
-        }
+        self.deliver(&mut reply);
         Ok(self.update(Change::Resized { size, cell }))
     }
 
@@ -103,7 +99,10 @@ impl LiveScreen {
     pub fn snapshot(&self) -> Result<Snapshot, EmulationError> {
         Ok(Snapshot {
             sequence: self.sequence,
-            state: snapshot::encode(&self.terminal)?.to_vec(),
+            state: self
+                .terminal
+                .encode_snapshot_alloc(None)?
+                .map_or_else(Vec::new, |state| state.to_vec()),
             exit: self.exit,
         })
     }
@@ -112,6 +111,13 @@ impl LiveScreen {
     pub const fn exit(&mut self, exit: Exit) -> Update {
         self.exit = Some(exit);
         self.update(Change::Exited { exit })
+    }
+
+    fn deliver(&self, reply: &mut impl FnMut(&[u8])) {
+        let replies = self.replies.take();
+        if !replies.is_empty() {
+            reply(&replies);
+        }
     }
 
     const fn update(&mut self, change: Change) -> Update {
@@ -126,10 +132,11 @@ impl LiveScreen {
 /// A viewer restores an attachment snapshot and consumes updates in order.
 ///
 /// Viewport, search, selection and input encoders can use the viewer's
-/// interpreter. Applying updates exposes no route for device replies.
+/// interpreter. It registers no effect handlers, so applying updates exposes
+/// no route for device replies.
 #[derive(Debug)]
 pub struct Viewer {
-    terminal: Terminal,
+    terminal: Terminal<'static, 'static>,
     sequence: Sequence,
     exit: Option<Exit>,
 }
@@ -140,11 +147,8 @@ impl Viewer {
     /// # Errors
     /// Returns an error if the snapshot is invalid or Ghostty cannot restore
     /// it.
-    ///
-    /// # Panics
-    /// Panics if Ghostty cannot allocate a snapshot decoder.
     pub fn attach(snapshot: &Snapshot) -> Result<Self, EmulationError> {
-        let mut decoder = snapshot::Decoder::from_slice(&snapshot.state);
+        let mut decoder = snapshot::Decoder::new_buf(&snapshot.state)?;
         decoder.set_max_continuation_bytes(ESCAPE_BYTES)?;
         let mut terminal = decoder.decode()?;
         configure(&mut terminal)?;
@@ -155,8 +159,7 @@ impl Viewer {
         })
     }
 
-    /// Applies an update after checking its sequence. Discards device replies
-    /// and other effects.
+    /// Applies an update after checking its sequence.
     ///
     /// # Errors
     /// Returns an error on a sequence gap or if Ghostty cannot resize the grid.
@@ -169,16 +172,8 @@ impl Viewer {
             });
         }
         match &update.change {
-            Change::Output { bytes } => {
-                for chunk in bytes.chunks(INPUT_CHUNK_BYTES) {
-                    self.terminal.vt_write(chunk);
-                    drop(self.terminal.events());
-                }
-            }
-            Change::Resized { size, cell } => {
-                resize(&mut self.terminal, *size, *cell)?;
-                drop(self.terminal.events());
-            }
+            Change::Output { bytes } => self.terminal.vt_write(bytes),
+            Change::Resized { size, cell } => resize(&mut self.terminal, *size, *cell)?,
             Change::Exited { exit } => self.exit = Some(*exit),
         }
         self.sequence = update.sequence;
@@ -187,12 +182,12 @@ impl Viewer {
 
     /// Provides state for rendering and input encoders.
     #[must_use]
-    pub const fn terminal(&self) -> &Terminal {
+    pub const fn terminal(&self) -> &Terminal<'static, 'static> {
         &self.terminal
     }
 
     /// Provides local state for viewport, palette and selection changes.
-    pub const fn terminal_mut(&mut self) -> &mut Terminal {
+    pub const fn terminal_mut(&mut self) -> &mut Terminal<'static, 'static> {
         &mut self.terminal
     }
 
@@ -203,8 +198,7 @@ impl Viewer {
     }
 }
 
-fn configure(terminal: &mut Terminal) -> Result<(), ghostty_vt::Error> {
-    terminal.set_clipboard_write_policy(ClipboardWritePolicy::Deny);
+fn configure(terminal: &mut Terminal) -> Result<(), libghostty_vt::Error> {
     terminal.set_scrollback_max_bytes(Some(HISTORY_BYTES))?;
     terminal.set_scrollback_max_lines(Some(HISTORY_LINES))?;
     terminal.set_apc_max_bytes(Some(ESCAPE_BYTES))?;
@@ -212,7 +206,7 @@ fn configure(terminal: &mut Terminal) -> Result<(), ghostty_vt::Error> {
     Ok(())
 }
 
-fn resize(terminal: &mut Terminal, size: Size, cell: CellSize) -> Result<(), ghostty_vt::Error> {
+fn resize(terminal: &mut Terminal, size: Size, cell: CellSize) -> Result<(), libghostty_vt::Error> {
     terminal.resize(
         size.columns(),
         size.rows(),

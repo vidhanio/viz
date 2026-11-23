@@ -46,7 +46,7 @@ fn tab(app: &Desktop, terminal: &TerminalSummary, t: &Theme) -> El {
             .title()
             .ok()
             .filter(|title| !title.is_empty())
-            .map(str::to_owned)
+            .map(|title| String::from_utf8_lossy(title).into_owned())
     });
     let title = live_title.as_deref().unwrap_or_else(|| {
         if terminal.title.is_empty() {

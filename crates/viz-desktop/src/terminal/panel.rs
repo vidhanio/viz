@@ -315,7 +315,7 @@ pub fn ime(app: &mut Desktop, event: &Ime, tx: &mut Tx) -> bool {
         Ime::Commit(text) => {
             let mut view = view.borrow_mut();
             view.preedit.clear();
-            view.scroll(ghostty_vt::terminal::ScrollViewport::Bottom);
+            view.scroll(libghostty_vt::terminal::ScrollViewport::Bottom);
             drop(view);
             route(app, id, Action::Input(text.as_bytes().to_vec()), tx);
         }

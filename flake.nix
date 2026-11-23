@@ -63,13 +63,8 @@
             }
           );
 
-          ghosttyVt = inputs'.ghostty.packages.libghostty-vt.dev;
-          ghosttyEnv = {
-            GHOSTTY_VT_LIB_DIR = "${ghosttyVt}/lib";
-            GHOSTTY_VT_INCLUDE_DIR = "${ghosttyVt}/include";
-          };
-
-          desktopBuildInputs = [
+          linkedLibs = [
+            inputs'.ghostty.packages.libghostty-vt
             pkgs.libxkbcommon
             pkgs.wayland
           ];
@@ -99,11 +94,11 @@
               ./crates/viz-server/migrations
             ];
           };
-          commonArgs = ghosttyEnv // {
+          commonArgs = {
             inherit src;
             strictDeps = true;
             nativeBuildInputs = [ pkgs.pkg-config ];
-            buildInputs = desktopBuildInputs ++ [ pkgs.dbus ];
+            buildInputs = linkedLibs ++ [ pkgs.dbus ];
             cargoExtraArgs = "--locked --workspace";
             cargoVendorDir = craneLib.vendorCargoDeps {
               inherit src;
@@ -182,34 +177,31 @@
             );
           };
 
-          devShells.default = craneLib.devShell (
-            ghosttyEnv
-            // {
-              packages = [
-                pkgs.cargo-edit
-                pkgs.cargo-deny
-                pkgs.pkg-config
-                swiftPkgs.swift
-                swiftPkgs.swiftpm
-                swiftPkgs.swift-format
-                swiftPkgs.sourcekit-lsp
-                swiftPkgs.xtool
-                pkgs.libimobiledevice
-                pkgs.nil
-                config.treefmt.build.wrapper
-              ]
-              ++ desktopBuildInputs;
+          devShells.default = craneLib.devShell {
+            packages = [
+              pkgs.cargo-edit
+              pkgs.cargo-deny
+              pkgs.pkg-config
+              swiftPkgs.swift
+              swiftPkgs.swiftpm
+              swiftPkgs.swift-format
+              swiftPkgs.sourcekit-lsp
+              swiftPkgs.xtool
+              pkgs.libimobiledevice
+              pkgs.nil
+              config.treefmt.build.wrapper
+            ]
+            ++ linkedLibs;
 
-              LD_LIBRARY_PATH = lib.makeLibraryPath desktopRuntimeLibs;
+            LD_LIBRARY_PATH = lib.makeLibraryPath desktopRuntimeLibs;
 
-              shellHook = ''
-                if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
-                  && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
-                  echo "viz: no Darwin SDK for iOS builds; run 'xtool setup'" >&2
-                fi
-              '';
-            }
-          );
+            shellHook = ''
+              if [ ! -e "''${XDG_CONFIG_HOME:-$HOME/.config}/swiftpm/swift-sdks/darwin.artifactbundle" ] \
+                && [ ! -e "$HOME/.swiftpm/swift-sdks/darwin.artifactbundle" ]; then
+                echo "viz: no Darwin SDK for iOS builds; run 'xtool setup'" >&2
+              fi
+            '';
+          };
 
           treefmt = {
             programs = {

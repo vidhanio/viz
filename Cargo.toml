@@ -44,7 +44,9 @@ octocrab = { version = "0.54", default-features = false, features = [
   "rustls",
   "rustls-ring",
 ] }
-ghostty-vt = { version = "0.9", default-features = false }
+libghostty-vt = { git = "https://github.com/uzaaft/libghostty-rs", rev = "483ea3d5247b214060da58ef6037a95f30ae89fb", default-features = false, features = [
+  "pkg-config",
+] }
 notify-rust = { version = "4", default-features = false }
 regex = "1"
 pty-process = "0.5"
