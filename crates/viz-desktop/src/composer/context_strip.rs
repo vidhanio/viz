@@ -4,8 +4,8 @@
 
 use std::path::Path;
 
-use rune::{Color, El, Icon, col, icon, row, text};
-use rune_kit::{Placement, scrim};
+use rune::{Color, El, Icon, icon, row, text};
+use rune_kit::{Menu, MenuItem, Placement};
 use viz_client::protocol::{EnvironmentStatus, Project, WorktreeTarget};
 
 use super::branch_picker;
@@ -14,8 +14,8 @@ use crate::{
     checkout::DRAFT_CHECKOUT,
     model::{Checkouts, NewThread},
     motion,
-    theme::{HAIRLINE, ICON_SMALL, RADIUS_SM, S2, S4, S6, S8, S24, S28, Theme},
-    ui::{self, RowDensity},
+    theme::{HAIRLINE, ICON_SMALL, RADIUS_SM, S4, S6, S8, S24, S28, Theme},
+    ui::{self},
     update::{ComposerMsg, HOME_ENV_PICKER, Msg, SelectionMsg},
 };
 
@@ -172,69 +172,45 @@ fn env_selector(s: &Desktop, compact: bool, t: &Theme, layer: &mut Vec<El>) -> E
             HOME_ENV_PICKER.to_owned(),
         )));
     });
-    if open {
-        let rows = m.connection.environments.iter().map(|env| {
-            let active = current == env.id;
-            let offline = env.status == EnvironmentStatus::Unreachable;
-            let name = if env.id == "local" {
-                "This device"
-            } else {
-                env.id.as_str()
-            };
-            let glyph = if env.status == EnvironmentStatus::Local {
-                &ui::LAPTOP
-            } else {
-                &ui::SERVER
-            };
-            let target = env.id.clone();
-            let mut item = ui::list_row(format!("home-env-{}", env.id), name)
-                .density(RowDensity::Compact)
-                .leading_icon(glyph)
-                .selected(active)
-                .disabled(offline)
-                .on_press_tx(move |s: &mut Desktop, tx| {
-                    s.dispatch(Msg::Composer(ComposerMsg::ClosePicker), tx);
-                    s.dispatch(
-                        Msg::Selection(SelectionMsg::OpenInEnvironment {
-                            environment: target.clone(),
-                            thread: None,
-                        }),
-                        tx,
-                    );
-                });
-            if offline {
-                item = item.detail("Offline");
-            } else if active {
-                item = item.trailing(
-                    icon(&ui::CHECK, ICON_SMALL)
-                        .color(t.accent_text)
-                        .a11y_hidden(),
+    let items = m.connection.environments.iter().map(|env| {
+        let offline = env.status == EnvironmentStatus::Unreachable;
+        let name = if env.id == "local" {
+            "This device"
+        } else {
+            env.id.as_str()
+        };
+        let glyph = if env.status == EnvironmentStatus::Local {
+            &ui::LAPTOP
+        } else {
+            &ui::SERVER
+        };
+        let target = env.id.clone();
+        let mut item = MenuItem::new(name)
+            .icon(glyph)
+            .checked(current == env.id)
+            .disabled(offline)
+            .on_select_tx(move |s: &mut Desktop, tx| {
+                s.dispatch(Msg::Composer(ComposerMsg::ClosePicker), tx);
+                s.dispatch(
+                    Msg::Selection(SelectionMsg::OpenInEnvironment {
+                        environment: target.clone(),
+                        thread: None,
+                    }),
+                    tx,
                 );
-            }
-            item.build(t)
-        });
-        let content = col()
-            .w_full()
-            .padding(ui::MENU_INSET)
-            .gap(S2)
-            .children(rows);
-        layer.push(scrim("home-env-scrim", close_picker));
-        layer.push(
-            ui::anchored_popover(
-                "home-env-menu",
-                TRIGGER,
-                Placement::TopStart,
-                ENV_POPOVER_WIDTH,
-                content,
-                t,
-            )
-            .role("dialog")
-            .label("Environment")
-            .focus_return(TRIGGER)
-            .modal(true, close_picker),
-        );
-    }
-    trigger
+            });
+        if offline {
+            item = item.badge("Offline");
+        }
+        item
+    });
+    ui::menu_items(Menu::new("home-env"), items)
+        .trigger(trigger)
+        .open(open)
+        .placement(Placement::TopStart)
+        .min_width(ENV_POPOVER_WIDTH)
+        .on_close(close_picker)
+        .build(&t.overlay, layer)
 }
 
 fn worktree_mode_selector(
@@ -279,62 +255,42 @@ fn worktree_mode_selector(
             tx,
         );
     });
-    if open {
-        let body = col()
-            .w_full()
-            .padding(ui::MENU_INSET)
-            .gap(S2)
-            .children(mode_rows(project, checkouts, current, t));
-        layer.push(scrim("draft-checkout-scrim", close_picker));
-        layer.push(
-            ui::anchored_popover(
-                "draft-checkout-menu",
-                TRIGGER,
-                Placement::TopStart,
-                MODE_POPOVER_WIDTH,
-                body,
-                t,
-            )
-            .role("dialog")
-            .label("Checkout mode")
-            .focus_return(TRIGGER)
-            .modal(true, close_picker),
-        );
-    }
-    trigger
+    ui::menu_items(
+        Menu::new("draft-checkout"),
+        mode_items(project, checkouts, current),
+    )
+    .trigger(trigger)
+    .open(open)
+    .placement(Placement::TopStart)
+    .min_width(MODE_POPOVER_WIDTH)
+    .on_close(close_picker)
+    .build(&t.overlay, layer)
 }
 
-/// The checkout menu's rows: current checkout, new worktree, then each
+/// The checkout menu's items: current checkout, new worktree, then each
 /// existing non-main worktree.
-fn mode_rows(
+fn mode_items(
     project: &Project,
     checkouts: Option<&Checkouts>,
     current: Option<&WorktreeTarget>,
-    t: &Theme,
-) -> Vec<El> {
-    let is_local = matches!(current, None | Some(WorktreeTarget::Local));
-    let is_new = matches!(current, Some(WorktreeTarget::New { .. }));
+) -> Vec<MenuItem> {
     let mut items = vec![
-        mode_row(
-            "mode-local",
+        mode_item(
             "Current checkout",
             "Work directly in the project folder",
             &ui::FOLDER,
-            is_local,
+            matches!(current, None | Some(WorktreeTarget::Local)),
             WorktreeTarget::Local,
-            t,
         ),
-        mode_row(
-            "mode-new",
+        mode_item(
             "New worktree",
             "Isolate changes on a new branch",
             &ui::GIT_BRANCH,
-            is_new,
+            matches!(current, Some(WorktreeTarget::New { .. })),
             WorktreeTarget::New {
                 base: project.branch.clone(),
                 branch: None,
             },
-            t,
         ),
     ];
     if let Some(checkouts) = checkouts {
@@ -344,8 +300,7 @@ fn mode_rows(
                 current,
                 Some(WorktreeTarget::Existing { path }) if path == &worktree.path
             );
-            items.push(mode_row(
-                &format!("mode-prev-{}", worktree.path),
+            items.push(mode_item(
                 &format!("Previous worktree ({name})"),
                 "Reuse existing worktree",
                 &ui::GIT_BRANCH,
@@ -353,40 +308,29 @@ fn mode_rows(
                 WorktreeTarget::Existing {
                     path: worktree.path.clone(),
                 },
-                t,
             ));
         }
     }
     items
 }
 
-fn mode_row(
-    key: &str,
+fn mode_item(
     title: &str,
-    subtitle: &str,
+    description: &str,
     glyph: &'static Icon,
     selected: bool,
     target: WorktreeTarget,
-    t: &Theme,
-) -> El {
-    let mut item = ui::list_row(key, title)
-        .subtitle(subtitle)
-        .leading_icon(glyph)
-        .selected(selected)
-        .on_press_tx(move |s: &mut Desktop, tx| {
+) -> MenuItem {
+    MenuItem::new(title)
+        .description(description)
+        .icon(glyph)
+        .checked(selected)
+        .on_select_tx(move |s: &mut Desktop, tx| {
             s.dispatch(
                 Msg::Selection(SelectionMsg::ChooseDraftWorktree(target.clone())),
                 tx,
             );
-        });
-    if selected {
-        item = item.trailing(
-            icon(&ui::CHECK, ICON_SMALL)
-                .color(t.accent_text)
-                .a11y_hidden(),
-        );
-    }
-    item.build(t)
+        })
 }
 
 /// Resolves the branch label for a worktree path from cached checkouts or the

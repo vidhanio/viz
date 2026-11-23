@@ -1,13 +1,13 @@
 //! Git quick actions and confirmation forms.
 
 use rune::{El, col, row, text};
-use rune_kit::{ButtonVariant, IconButtonVariant, Placement};
+use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement};
 use viz_client::protocol::{GitAction, GitDiffFile, GitStatus};
 
 use crate::{
     app::Desktop,
     effects::git::Request,
-    model::git::{self, CARD_WIDTH, Dialog, Popup},
+    model::git::{self, Dialog, Popup},
     theme::{Size, Theme},
     ui,
     update::GitMsg,
@@ -135,25 +135,21 @@ pub fn view(s: &Desktop, status: &GitStatus, t: &Theme, overlays: &mut Vec<El>) 
     let open = s.model.git.popup == Some(Popup::Actions);
     let primary = primary(s, status);
     let busy = s.model.git.busy || status.operation.is_some();
-    let action = ui::list_row(
-        "git-primary-action",
+    let action = ui::button(
         if busy {
             "Git action running…"
         } else {
             primary.label()
         },
+        ButtonVariant::Ghost,
+        Size::Small,
     )
-    .leading(if busy {
-        ui::spinner(t)
-    } else {
-        rune::icon(primary.glyph(), 16.0)
-            .color(t.muted)
-            .a11y_hidden()
-    })
+    .icon(primary.glyph())
+    .loading(busy)
     .disabled(!primary.enabled(s, status))
     .on_press_tx(move |s: &mut Desktop, tx| primary.activate(s, tx))
-    .build(t)
-    .grow(1.0);
+    .build(&t.overlay)
+    .key("git-primary-action");
     let trigger = ui::icon_button(
         &ui::CHEVRON_OPEN,
         "Git actions",
@@ -161,43 +157,34 @@ pub fn view(s: &Desktop, status: &GitStatus, t: &Theme, overlays: &mut Vec<El>) 
         Size::Small,
     )
     .on_press_tx(|s: &mut Desktop, tx| super::toggle_popup(s, Popup::Actions, tx))
-    .build(&t.overlay)
-    .key(ANCHOR);
-    if open {
-        let menu = col().padding(ui::MENU_INSET).children(
-            [
-                Action::Commit,
-                Action::Push,
-                Action::Pull,
-                Action::Fetch,
-                Action::CreatePull,
-            ]
-            .into_iter()
-            .map(|action| {
-                ui::list_row(action.label(), action.label())
-                    .disabled(!action.enabled(s, status))
-                    .on_press_tx(move |s: &mut Desktop, tx| action.activate(s, tx))
-                    .build(t)
-            }),
-        );
-        overlays.push(
-            ui::anchored_popover(
-                "git-actions",
-                ANCHOR,
-                Placement::BottomEnd,
-                CARD_WIDTH,
-                menu,
-                t,
-            )
-            .modal(true, super::close_popup),
-        );
-    }
+    .build(&t.overlay);
+    let items = [
+        Action::Commit,
+        Action::Push,
+        Action::Pull,
+        Action::Fetch,
+        Action::CreatePull,
+    ]
+    .into_iter()
+    .map(|action| {
+        MenuItem::new(action.label())
+            .icon(action.glyph())
+            .disabled(!action.enabled(s, status))
+            .on_select_tx(move |s: &mut Desktop, tx| action.activate(s, tx))
+    });
+    let trigger = ui::menu_items(Menu::new(ANCHOR), items)
+        .trigger(trigger)
+        .open(open)
+        .placement(Placement::BottomEnd)
+        .on_close(super::close_popup)
+        .build(&t.overlay, overlays);
     row()
         .key("git-action-split")
         .w_full()
         .center_y()
         .hover_group()
         .child(action)
+        .child(rune::spacer())
         .child(
             rune::hairline(t.hairline)
                 .group_opacity(if open { 1.0 } else { 0.0 }, 1.0)
