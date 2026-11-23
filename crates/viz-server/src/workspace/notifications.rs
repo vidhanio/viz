@@ -83,6 +83,10 @@ impl Workspace {
             .send(thread.map_or(Change::Directory, Change::Thread));
     }
 
+    pub(crate) fn directory_changed(&self) {
+        self.changed(None);
+    }
+
     pub(super) fn relist(&self, thread: ThreadId) {
         self.changed(Some(thread));
         self.changed(None);
@@ -130,9 +134,8 @@ impl Workspace {
         Ok(())
     }
 
-    pub(super) fn unread(&self, thread: ThreadId) -> bool {
-        !self
-            .updates
+    pub(super) fn is_watched(&self, thread: ThreadId) -> bool {
+        self.updates
             .views
             .lock()
             .expect("thread views poisoned")

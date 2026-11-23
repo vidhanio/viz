@@ -17,7 +17,8 @@ use tokio::{
     time::{Instant, sleep_until},
 };
 use tokio_util::sync::CancellationToken;
-use viz_protocol::{OptionValue, RunId, ThreadId};
+use viz_core::lifecycle::on_run_end;
+use viz_protocol::{OptionValue, RunId, RunStatus, ThreadId};
 
 use super::{
     Workspace, runs, runtime::turn_end, sessions::SessionSlot, sql::exec, store,
@@ -440,12 +441,19 @@ impl Workspace {
             && !driver.lifetime.is_cancelled()
         {
             tracing::warn!(%thread, %error, "ACP thread setup failed");
+            let mut db = self.db.lock().await;
+            let mut tx = db.transaction().await?;
             exec(
-                &mut *self.db.lock().await,
+                &mut tx,
                 "UPDATE threads SET setup_failed = 1 WHERE id = ?1",
                 [thread.into()],
             )
             .await?;
+            let (current, _) = store::lifecycle(&mut tx, thread).await?;
+            let next = on_run_end(&current, RunStatus::Failed, self.is_watched(thread));
+            store::save_lifecycle(&mut tx, thread, &next).await?;
+            tx.commit().await?;
+            drop(db);
             self.relist(thread);
         }
         Ok(true)

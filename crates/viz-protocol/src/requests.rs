@@ -12,7 +12,7 @@ use super::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Empty {}
 
-/// Change a thread's metadata.
+/// Rename a thread, or file it under another project.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct UpdateThread<'a> {
     /// The thread to change.
@@ -20,15 +20,6 @@ pub struct UpdateThread<'a> {
     /// A new title, if changing it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<&'a str>,
-    /// A new archive status, if changing it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub archived: Option<bool>,
-    /// A new pinned status, if changing it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pinned: Option<bool>,
-    /// A new unread status, if changing it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unread: Option<bool>,
     /// `None` leaves the project alone; `Some(None)` clears it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project: Option<Option<&'a str>>,

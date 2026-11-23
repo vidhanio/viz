@@ -266,7 +266,7 @@ pub(super) fn thread_menu(
         return menu.build(&t.overlay, layer);
     };
     let id = thread.id;
-    let pinned = thread.pinned;
+    let pinned = thread.lifecycle.pin.is_some();
     menu = menu.item(
         MenuItem::new(if pinned { "Unpin" } else { "Pin" }).on_select_tx(
             move |s: &mut Desktop, tx| {
@@ -277,7 +277,7 @@ pub(super) fn thread_menu(
             },
         ),
     );
-    let archived = thread.archived;
+    let archived = thread.lifecycle.archived;
     menu = menu
         .item(
             MenuItem::new("Rename").on_select_tx(move |s: &mut Desktop, tx| {

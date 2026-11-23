@@ -145,7 +145,7 @@ impl Client {
         Ok(self.request(params).await?.thread)
     }
 
-    /// Changes a thread's title, archive status, or project.
+    /// Changes a thread's title or project.
     ///
     /// # Errors
     ///

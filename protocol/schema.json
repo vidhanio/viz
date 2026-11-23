@@ -1889,7 +1889,7 @@
         "type": "object",
         "properties": {
           "threads": {
-            "description": "Every thread.",
+            "description": "Every thread, in the order of [`Shelf`] and of each shelf.",
             "type": "array",
             "items": {
               "$ref": "#/$defs/ThreadSummary"
@@ -1959,22 +1959,43 @@
                 "description": "What this thread is doing.",
                 "$ref": "#/$defs/ThreadStatus"
               },
-              "archived": {
-                "description": "Whether the thread is archived.",
-                "type": "boolean"
+              "lifecycle": {
+                "description": "Where it stands in the user's triage.",
+                "$ref": "#/$defs/Lifecycle"
+              },
+              "shelf": {
+                "description": "The part of the list it belongs in.",
+                "$ref": "#/$defs/Shelf"
+              },
+              "attention": {
+                "description": "Why it wants the user, if it does.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Attention"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "waitingOn": {
+                "description": "Delegated tasks still under way.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "lastInputAt": {
+                "description": "The user's latest input, in Unix milliseconds.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
               },
               "updatedAt": {
                 "description": "Time of the last input or turn end in Unix milliseconds; zero if\nunknown.",
                 "type": "integer",
                 "format": "int64"
-              },
-              "unread": {
-                "description": "A turn settled while no app was watching, or this chat was manually\nmarked unread.",
-                "type": "boolean"
-              },
-              "pinned": {
-                "description": "Show the thread in the pinned section.",
-                "type": "boolean"
               },
               "model": {
                 "description": "Display name of the selected model, once reported.",
@@ -1997,10 +2018,10 @@
               "harness",
               "harnessName",
               "status",
-              "archived",
-              "updatedAt",
-              "unread",
-              "pinned"
+              "lifecycle",
+              "shelf",
+              "waitingOn",
+              "updatedAt"
             ]
           },
           "ThreadId": {
@@ -2048,6 +2069,188 @@
                 "const": "failed"
               }
             ]
+          },
+          "Lifecycle": {
+            "description": "A thread's place in triage. Every change returns the lifecycle before it,\nwhich [`TriageAction::Restore`] puts back.",
+            "type": "object",
+            "properties": {
+              "standing": {
+                "$ref": "#/$defs/Standing"
+              },
+              "snoozedUntil": {
+                "description": "Put off until this time, in Unix milliseconds.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "pin": {
+                "description": "Position among pinned threads, if pinned; lower is higher up.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "order": {
+                "description": "Position among active threads, if the user arranged it. Threads without\none come first, the latest input on top.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "autoSettle": {
+                "description": "Whether it settles by itself.",
+                "$ref": "#/$defs/AutoSettle",
+                "default": "follow"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "unread": {
+                "description": "A turn settled while no app was watching, or the user marked it.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "standing",
+              "archived",
+              "unread"
+            ]
+          },
+          "Standing": {
+            "description": "Whether the user is done with a thread.",
+            "oneOf": [
+              {
+                "description": "Open, and settled by the usual rules.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "open"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "description": "Brought back by the user or a due snooze: it does not settle by itself\nuntil it gets new input.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "kept"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "description": "Done. New input or agent activity opens it again.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "settled"
+                  },
+                  "at": {
+                    "description": "Unix milliseconds.",
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "by": {
+                    "$ref": "#/$defs/SettledBy"
+                  }
+                },
+                "required": [
+                  "state",
+                  "at",
+                  "by"
+                ]
+              }
+            ]
+          },
+          "SettledBy": {
+            "description": "What settled a thread.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "inactivity"
+                ]
+              },
+              {
+                "description": "Its pull request was merged or closed.",
+                "type": "string",
+                "const": "pullRequest"
+              }
+            ]
+          },
+          "AutoSettle": {
+            "description": "A thread's say in automatic settlement.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "never"
+                ]
+              },
+              {
+                "description": "By the usual rules.",
+                "type": "string",
+                "const": "follow"
+              }
+            ]
+          },
+          "Shelf": {
+            "description": "The part of the thread list a thread belongs in.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "pinned",
+                  "active",
+                  "snoozed",
+                  "settled",
+                  "archived"
+                ]
+              },
+              {
+                "description": "Running, queued, or waiting for work it delegated.",
+                "type": "string",
+                "const": "working"
+              }
+            ]
+          },
+          "Attention": {
+            "description": "Why a thread wants the user.",
+            "oneOf": [
+              {
+                "description": "The agent awaits a permission.",
+                "type": "string",
+                "const": "approval"
+              },
+              {
+                "description": "The agent awaits an answer.",
+                "type": "string",
+                "const": "question"
+              },
+              {
+                "description": "Its last run failed, unseen.",
+                "type": "string",
+                "const": "failure"
+              },
+              {
+                "description": "Something finished, unseen.",
+                "type": "string",
+                "const": "unread"
+              }
+            ]
           }
         }
       }
@@ -2056,7 +2259,7 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "UpdateThread",
-        "description": "Change a thread's metadata.",
+        "description": "Rename a thread, or file it under another project.",
         "type": "object",
         "properties": {
           "thread": {
@@ -2067,27 +2270,6 @@
             "description": "A new title, if changing it.",
             "type": [
               "string",
-              "null"
-            ]
-          },
-          "archived": {
-            "description": "A new archive status, if changing it.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "pinned": {
-            "description": "A new pinned status, if changing it.",
-            "type": [
-              "boolean",
-              "null"
-            ]
-          },
-          "unread": {
-            "description": "A new unread status, if changing it.",
-            "type": [
-              "boolean",
               "null"
             ]
           },
@@ -2113,9 +2295,644 @@
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Empty",
-        "description": "Empty successful response or notification params.",
-        "type": "object"
+        "title": "ThreadUpdated",
+        "description": "Result of renaming, refiling or retitling a thread.",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priorTitle": {
+            "description": "The title before, for undoing.",
+            "type": "string"
+          },
+          "priorProject": {
+            "description": "The project before, for undoing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "priorTitle"
+        ]
+      }
+    },
+    "thread.retitle": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "RetitleThread",
+        "description": "Give up a user-chosen title for one from the harness or the conversation.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ThreadUpdated",
+        "description": "Result of renaming, refiling or retitling a thread.",
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "project": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priorTitle": {
+            "description": "The title before, for undoing.",
+            "type": "string"
+          },
+          "priorProject": {
+            "description": "The project before, for undoing.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "priorTitle"
+        ]
+      }
+    },
+    "thread.triage": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "TriageThread",
+        "description": "Triage a thread.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "oneOf": [
+          {
+            "description": "Done with it: clears its pin, position and snooze. Refused while it\nworks.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "settle"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "description": "Not done after all.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "reopen"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "description": "Put it off.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "snooze"
+              },
+              "until": {
+                "description": "Unix milliseconds, in the future.",
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "action",
+              "until"
+            ]
+          },
+          {
+            "description": "End a snooze.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "wake"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "description": "Pin it, or move it among the pinned threads.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "pin"
+              },
+              "position": {
+                "$ref": "#/$defs/Position",
+                "default": {
+                  "at": "top"
+                }
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "unpin"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "description": "Place it among the active threads, bringing it back from wherever it\nwas.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "arrange"
+              },
+              "position": {
+                "$ref": "#/$defs/Position"
+              }
+            },
+            "required": [
+              "action",
+              "position"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "archive"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "unarchive"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "markUnread"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "markRead"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "autoSettle"
+              },
+              "mode": {
+                "$ref": "#/$defs/AutoSettle"
+              }
+            },
+            "required": [
+              "action",
+              "mode"
+            ]
+          },
+          {
+            "description": "Undo: put back a lifecycle an earlier change returned.",
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "const": "restore"
+              },
+              "lifecycle": {
+                "$ref": "#/$defs/Lifecycle"
+              }
+            },
+            "required": [
+              "action",
+              "lifecycle"
+            ]
+          }
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "Position": {
+            "description": "Where to put a thread in its list.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "const": "top"
+                  }
+                },
+                "required": [
+                  "at"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "const": "before"
+                  },
+                  "thread": {
+                    "$ref": "#/$defs/ThreadId"
+                  }
+                },
+                "required": [
+                  "at",
+                  "thread"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "const": "bottom"
+                  }
+                },
+                "required": [
+                  "at"
+                ]
+              }
+            ]
+          },
+          "AutoSettle": {
+            "description": "A thread's say in automatic settlement.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "never"
+                ]
+              },
+              {
+                "description": "By the usual rules.",
+                "type": "string",
+                "const": "follow"
+              }
+            ]
+          },
+          "Lifecycle": {
+            "description": "A thread's place in triage. Every change returns the lifecycle before it,\nwhich [`TriageAction::Restore`] puts back.",
+            "type": "object",
+            "properties": {
+              "standing": {
+                "$ref": "#/$defs/Standing"
+              },
+              "snoozedUntil": {
+                "description": "Put off until this time, in Unix milliseconds.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "pin": {
+                "description": "Position among pinned threads, if pinned; lower is higher up.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "order": {
+                "description": "Position among active threads, if the user arranged it. Threads without\none come first, the latest input on top.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "autoSettle": {
+                "description": "Whether it settles by itself.",
+                "$ref": "#/$defs/AutoSettle",
+                "default": "follow"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "unread": {
+                "description": "A turn settled while no app was watching, or the user marked it.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "standing",
+              "archived",
+              "unread"
+            ]
+          },
+          "Standing": {
+            "description": "Whether the user is done with a thread.",
+            "oneOf": [
+              {
+                "description": "Open, and settled by the usual rules.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "open"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "description": "Brought back by the user or a due snooze: it does not settle by itself\nuntil it gets new input.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "kept"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "description": "Done. New input or agent activity opens it again.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "settled"
+                  },
+                  "at": {
+                    "description": "Unix milliseconds.",
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "by": {
+                    "$ref": "#/$defs/SettledBy"
+                  }
+                },
+                "required": [
+                  "state",
+                  "at",
+                  "by"
+                ]
+              }
+            ]
+          },
+          "SettledBy": {
+            "description": "What settled a thread.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "inactivity"
+                ]
+              },
+              {
+                "description": "Its pull request was merged or closed.",
+                "type": "string",
+                "const": "pullRequest"
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Triaged",
+        "description": "`thread.triage` result.",
+        "type": "object",
+        "properties": {
+          "prior": {
+            "description": "The lifecycle before, for undoing.",
+            "$ref": "#/$defs/Lifecycle"
+          },
+          "lifecycle": {
+            "$ref": "#/$defs/Lifecycle"
+          }
+        },
+        "required": [
+          "prior",
+          "lifecycle"
+        ],
+        "$defs": {
+          "Lifecycle": {
+            "description": "A thread's place in triage. Every change returns the lifecycle before it,\nwhich [`TriageAction::Restore`] puts back.",
+            "type": "object",
+            "properties": {
+              "standing": {
+                "$ref": "#/$defs/Standing"
+              },
+              "snoozedUntil": {
+                "description": "Put off until this time, in Unix milliseconds.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "pin": {
+                "description": "Position among pinned threads, if pinned; lower is higher up.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "order": {
+                "description": "Position among active threads, if the user arranged it. Threads without\none come first, the latest input on top.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "autoSettle": {
+                "description": "Whether it settles by itself.",
+                "$ref": "#/$defs/AutoSettle",
+                "default": "follow"
+              },
+              "archived": {
+                "type": "boolean"
+              },
+              "unread": {
+                "description": "A turn settled while no app was watching, or the user marked it.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "standing",
+              "archived",
+              "unread"
+            ]
+          },
+          "Standing": {
+            "description": "Whether the user is done with a thread.",
+            "oneOf": [
+              {
+                "description": "Open, and settled by the usual rules.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "open"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "description": "Brought back by the user or a due snooze: it does not settle by itself\nuntil it gets new input.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "kept"
+                  }
+                },
+                "required": [
+                  "state"
+                ]
+              },
+              {
+                "description": "Done. New input or agent activity opens it again.",
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "const": "settled"
+                  },
+                  "at": {
+                    "description": "Unix milliseconds.",
+                    "type": "integer",
+                    "format": "int64"
+                  },
+                  "by": {
+                    "$ref": "#/$defs/SettledBy"
+                  }
+                },
+                "required": [
+                  "state",
+                  "at",
+                  "by"
+                ]
+              }
+            ]
+          },
+          "SettledBy": {
+            "description": "What settled a thread.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "inactivity"
+                ]
+              },
+              {
+                "description": "Its pull request was merged or closed.",
+                "type": "string",
+                "const": "pullRequest"
+              }
+            ]
+          },
+          "AutoSettle": {
+            "description": "A thread's say in automatic settlement.",
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "never"
+                ]
+              },
+              {
+                "description": "By the usual rules.",
+                "type": "string",
+                "const": "follow"
+              }
+            ]
+          }
+        }
       }
     },
     "thread.configure": {

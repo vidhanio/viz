@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
     Empty, LaunchThread, ListEntries, MoveThread, ReadThreadState, SendInput, SendMode, StopThread,
-    ThreadId, WaitThread,
+    ThreadId, TriageThread, WaitThread,
 };
 
 use crate::workspace::rpc::{
@@ -33,12 +33,6 @@ pub(super) struct ThreadUpdate {
     thread: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     title: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    archived: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pinned: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    unread: Option<bool>,
 }
 
 /// Tool inputs can project thread context and timeouts without inspecting JSON.
@@ -82,6 +76,7 @@ thread_inputs! {
     MoveThread => |input: &MoveThread| input.thread,
     SendText => |input: &SendText| input.thread,
     ThreadUpdate => |input: &ThreadUpdate| input.thread,
+    TriageThread => |input: &TriageThread| input.thread,
 }
 
 impl ToolInput for WaitThread {
@@ -113,9 +108,6 @@ impl From<ThreadUpdate> for UpdateMetadata {
             thread: input.thread,
             changes: Changes {
                 title: input.title,
-                archived: input.archived,
-                pinned: input.pinned,
-                unread: input.unread,
                 project: Patch::Keep,
             },
         }

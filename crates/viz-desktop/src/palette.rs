@@ -180,9 +180,13 @@ impl Local {
             Self::NewThread => "New thread",
             Self::AddProject => "Add project",
             Self::Sidebar => "Toggle sidebar",
-            Self::Pin if thread.is_some_and(|thread| thread.pinned) => "Unpin thread",
+            Self::Pin if thread.is_some_and(|thread| thread.lifecycle.pin.is_some()) => {
+                "Unpin thread"
+            }
             Self::Pin => "Pin thread",
-            Self::Archive if thread.is_some_and(|thread| thread.archived) => "Unarchive thread",
+            Self::Archive if thread.is_some_and(|thread| thread.lifecycle.archived) => {
+                "Unarchive thread"
+            }
             Self::Archive => "Archive thread",
             Self::Delete => "Delete thread",
             Self::Stop => "Stop response",
@@ -227,10 +231,13 @@ impl Local {
     }
 
     fn run(self, s: &mut Desktop, tx: &mut Tx) {
-        let thread = s
-            .selected
-            .and_then(|id| s.summary(id))
-            .map(|thread| (thread.id, thread.pinned, thread.archived));
+        let thread = s.selected.and_then(|id| s.summary(id)).map(|thread| {
+            (
+                thread.id,
+                thread.lifecycle.pin.is_some(),
+                thread.lifecycle.archived,
+            )
+        });
         match self {
             Self::NewThread => s.create_here(tx),
             Self::AddProject => sidebar::open_add_project(s, tx),
@@ -346,7 +353,7 @@ fn rows(s: &Desktop, recent: bool) -> impl Iterator<Item = ResultRow<'_>> {
     let threads = if connected { s.threads.as_slice() } else { &[] }
         .iter()
         .filter(move |thread| {
-            (!recent || !thread.archived) && matches_filter(thread_title(thread), filter)
+            (!recent || !thread.lifecycle.archived) && matches_filter(thread_title(thread), filter)
         })
         .take(if recent { RECENT_LIMIT } else { CHAT_LIMIT })
         .map(ResultRow::Thread);

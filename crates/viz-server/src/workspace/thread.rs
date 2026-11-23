@@ -8,7 +8,9 @@ use viz_core::{
     threads::{self, Patch},
     titles,
 };
-use viz_protocol::{LaunchThread, Launched, RunId, SendInput, SendMode, Sent, ThreadId};
+use viz_protocol::{
+    LaunchThread, Launched, RunId, SendInput, SendMode, Sent, ThreadId, ThreadUpdated,
+};
 
 use super::{
     Workspace,
@@ -217,7 +219,7 @@ impl Workspace {
         Ok(())
     }
 
-    pub(super) async fn update(&self, args: UpdateMetadata) -> Result<(), Error> {
+    pub(super) async fn update(&self, args: UpdateMetadata) -> Result<ThreadUpdated, Error> {
         let UpdateMetadata { thread, changes } = args;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
@@ -225,12 +227,12 @@ impl Workspace {
         if let Patch::Set(project) = &changes.project {
             store::project(&mut tx, project).await?;
         }
-        let updated = threads::update(current, in_worktree, changes)?;
+        let updated = threads::update(current.clone(), in_worktree, changes)?;
         store::save_metadata(&mut tx, thread, &updated).await?;
         tx.commit().await?;
         drop(db);
         self.relist(thread);
-        Ok(())
+        Ok(store::updated(&current, &updated))
     }
 
     /// Deletes a thread, and with `remove_worktree` the clean worktree viz

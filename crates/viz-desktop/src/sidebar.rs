@@ -224,7 +224,7 @@ impl<'a> Outline<'a> {
             .collect();
         let mut child_ids = HashSet::new();
         for thread in &state.threads {
-            if thread.archived {
+            if thread.lifecycle.archived {
                 continue;
             }
             if let Some(parent) = thread.parent.filter(|&parent| {
@@ -248,7 +248,7 @@ impl<'a> Outline<'a> {
             });
         }
         for thread in &state.threads {
-            if child_ids.contains(&thread.id) || thread.archived {
+            if child_ids.contains(&thread.id) || thread.lifecycle.archived {
                 continue;
             }
             let project = thread
@@ -266,7 +266,7 @@ impl<'a> Outline<'a> {
             {
                 continue;
             }
-            if thread.pinned {
+            if thread.lifecycle.pin.is_some() {
                 outline.pinned.push(thread);
             } else {
                 outline.recent.push(thread);
@@ -356,7 +356,7 @@ impl<'a> Outline<'a> {
         };
         let mark = {
             let harness = &thread.harness;
-            let ink = if thread.archived {
+            let ink = if thread.lifecycle.archived {
                 t.faint
             } else if selected {
                 t.text
@@ -365,7 +365,11 @@ impl<'a> Outline<'a> {
             };
             icon(ui::harness_icon(harness), ICON)
                 .color(ink)
-                .group_color(if thread.archived { t.muted } else { t.text })
+                .group_color(if thread.lifecycle.archived {
+                    t.muted
+                } else {
+                    t.text
+                })
                 .a11y_hidden()
         };
         let mut node = TreeLine {
@@ -373,14 +377,14 @@ impl<'a> Outline<'a> {
             label: thread_title(thread),
             detail: place.as_deref(),
             depth: 0,
-            strong: thread.unread && !thread.archived,
-            dim: thread.archived,
+            strong: thread.lifecycle.unread && !thread.lifecycle.archived,
+            dim: thread.lifecycle.archived,
             selected,
             ink,
         }
         .build(Some(mark), ui::trailing(rest, Some(menu), menu_open), t)
         .on_press_tx(move |s: &mut Desktop, tx| s.select(id, tx));
-        if thread.unread {
+        if thread.lifecycle.unread {
             node = node.description("Unread");
         }
         if s.connected() {
@@ -413,7 +417,7 @@ impl<'a> Outline<'a> {
         let id = thread.id;
         ui::status(thread.status, selected, t)
             .or_else(|| {
-                thread.unread.then(|| {
+                thread.lifecycle.unread.then(|| {
                     ui::dot(t.accent)
                         .role("status")
                         .label("Unread")

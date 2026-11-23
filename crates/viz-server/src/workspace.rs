@@ -15,6 +15,7 @@ mod sessions;
 pub(crate) mod sql;
 mod store;
 mod thread;
+mod triage;
 mod worker;
 mod worktree;
 
@@ -26,13 +27,16 @@ use std::{
 };
 
 use anyhow::Context as _;
-use tokio::{sync::Mutex, time};
+use tokio::{
+    sync::{Mutex, Notify},
+    time,
+};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use viz_core::{
     placement::Checkout,
     tasks::{self, Wake, WakeMode, WakeSource},
 };
-use viz_protocol::{EntryId, RunId, TaskId, ThreadId};
+use viz_protocol::{EntryId, Lifecycle, RunId, TaskId, ThreadId};
 
 use self::{
     files::Files,
@@ -66,6 +70,8 @@ pub(crate) struct Workspace {
     default_harness: Option<String>,
     harnesses: BTreeMap<String, HarnessConfig>,
     updates: Updates,
+    /// Asks [`Self::keep_time`] for a new look at the clock.
+    due: Notify,
     workers: Workers,
     files: Files,
     mcp: Mcp,
@@ -128,6 +134,7 @@ impl Workspace {
             default_harness: config.default_harness.clone(),
             harnesses: config.harnesses.clone(),
             updates: Updates::default(),
+            due: Notify::new(),
             workers: Workers::default(),
             files: Files::default(),
             mcp,
@@ -146,6 +153,7 @@ impl Workspace {
         {
             self.kick(row.id(0)?, false);
         }
+        self.jobs.spawn(Arc::clone(self).keep_time());
         Ok(())
     }
 
@@ -316,8 +324,12 @@ impl Workspace {
             };
             Some(runs::enqueue(db, thread, run).await?)
         } else {
-            exec(db, "UPDATE threads SET updated_at = ?2, unread = CASE WHEN ?3 THEN 1 ELSE unread END WHERE id = ?1",
-                [thread.into(), store::now().into(), self.unread(thread).into()]).await?;
+            let watched = self.is_watched(thread);
+            store::touch(db, thread, |current| Lifecycle {
+                unread: current.unread || !watched,
+                ..current.clone()
+            })
+            .await?;
             None
         };
         exec(

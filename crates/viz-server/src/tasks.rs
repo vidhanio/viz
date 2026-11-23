@@ -456,7 +456,10 @@ impl Tasks {
         }
     }
 
+    /// Tasks count in their parents' summaries, so the thread list changes
+    /// too.
     fn signal(&self) {
         let _ = self.changed.send(());
+        self.workspace.directory_changed();
     }
 }

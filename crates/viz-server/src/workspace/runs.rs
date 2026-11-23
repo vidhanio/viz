@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 
 use viz_core::{
+    lifecycle,
     runs::{self as decisions, Claim, Move, Place, Settlement},
     threads::Patch,
     titles,
@@ -23,6 +24,8 @@ pub(super) struct NewRun<'a> {
     pub(super) origin: Option<&'a Origin>,
     pub(super) attachments: &'a [PromptAttachment],
     pub(super) request_id: Option<&'a str>,
+    /// The entry of a task's result that stands in for a prompt: the input is
+    /// the agent's, not the user's.
     pub(super) existing_entry: Option<EntryId>,
     pub(super) place: Place,
 }
@@ -65,10 +68,21 @@ pub(super) async fn enqueue(
     let title = titles::enqueue(thread_row.str(0)?, new.text);
     exec(
         db,
-        "UPDATE threads SET updated_at = ?2, title = ?3 WHERE id = ?1",
-        [thread.into(), store::now().into(), title.into()],
+        "UPDATE threads SET title = ?2 WHERE id = ?1",
+        [thread.into(), title.into()],
     )
     .await?;
+    if new.existing_entry.is_some() {
+        store::touch(db, thread, lifecycle::on_agent_activity).await?;
+    } else {
+        store::touch(db, thread, lifecycle::on_input).await?;
+        exec(
+            db,
+            "UPDATE threads SET last_input_at = updated_at WHERE id = ?1",
+            [thread.into()],
+        )
+        .await?;
+    }
     Ok(run)
 }
 
@@ -258,7 +272,7 @@ pub(super) async fn claim(db: &mut Connection, thread: ThreadId) -> Result<Found
         Claim::Nothing => (None, false),
         Claim::Start(id) => (Some(id), false),
         Claim::Orphan(run) => {
-            settle(db, thread, run, Settlement::orphaned(), true).await?;
+            settle(db, thread, run, Settlement::orphaned(), false).await?;
             (next, true)
         }
     };
@@ -342,12 +356,7 @@ pub(super) async fn begin_unprompted(
     .await?
     .expect("run INSERT RETURNING yielded one row")
     .id(0)?;
-    exec(
-        db,
-        "UPDATE threads SET updated_at = ?2 WHERE id = ?1",
-        [thread.into(), store::now().into()],
-    )
-    .await?;
+    store::touch(db, thread, lifecycle::on_agent_activity).await?;
     Ok((run, entry))
 }
 
@@ -367,9 +376,10 @@ pub(super) async fn settle(
     thread: ThreadId,
     run: RunId,
     settlement: Settlement,
-    unread: bool,
+    watched: bool,
 ) -> Result<(), Error> {
-    let status = status_name(settlement.status.into());
+    let ended = settlement.status.into();
+    let status = status_name(ended);
     let data = NewEntry::Run(settlement.end);
     let entry = store::append(db, thread, &data).await?;
     let NewEntry::Run(end) = data else {
@@ -387,8 +397,16 @@ pub(super) async fn settle(
         ],
     )
     .await?;
-    exec(db, "UPDATE threads SET updated_at = ?2, unread = CASE WHEN ?3 THEN 1 ELSE unread END, setup_failed = 0 WHERE id = ?1",
-        [thread.into(), store::now().into(), unread.into()]).await?;
+    store::touch(db, thread, |current| {
+        lifecycle::on_run_end(current, ended, watched)
+    })
+    .await?;
+    exec(
+        db,
+        "UPDATE threads SET setup_failed = 0 WHERE id = ?1",
+        [thread.into()],
+    )
+    .await?;
     super::follow_ups::record(db, thread, run).await
 }
 
@@ -400,7 +418,7 @@ pub(super) async fn recover(db: &mut Connection) -> Result<(), Error> {
     )
     .await?
     {
-        settle(db, row.id(1)?, row.id(0)?, Settlement::interrupted(), true).await?;
+        settle(db, row.id(1)?, row.id(0)?, Settlement::interrupted(), false).await?;
     }
     Ok(())
 }

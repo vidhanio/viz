@@ -302,9 +302,10 @@ impl Desktop {
         self.focused = focused;
         if focused
             && self.connected()
-            && let Some(id) = self
-                .selected
-                .filter(|&id| self.summary(id).is_some_and(|thread| thread.unread))
+            && let Some(id) = self.selected.filter(|&id| {
+                self.summary(id)
+                    .is_some_and(|thread| thread.lifecycle.unread)
+            })
         {
             self.send(Command::Update(id, ThreadChange::Unread(false)), tx);
         }
@@ -516,7 +517,11 @@ impl Desktop {
         self.update_title(tx);
         tx.focus("draft", false);
         self.send(Command::Select(thread), tx);
-        if self.connected() && self.summary(thread).is_some_and(|thread| thread.unread) {
+        if self.connected()
+            && self
+                .summary(thread)
+                .is_some_and(|thread| thread.lifecycle.unread)
+        {
             self.send(Command::Update(thread, ThreadChange::Unread(false)), tx);
         }
     }

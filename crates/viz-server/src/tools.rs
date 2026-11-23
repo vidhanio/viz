@@ -13,7 +13,7 @@ use viz_protocol::{
     CreateProject, Empty, EnvironmentList, HarnessList, HarnessOptions, LaunchThread, Launched,
     ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method,
     MoveThread, ReadProject, ReadThreadState, RemoveProject, RemoveWorktree, SearchThreads,
-    SendInput, StopThread, TaskId, TaskList, TaskResult, ThreadId, ThreadStateResult,
+    SendInput, StopThread, TaskId, TaskList, TaskResult, ThreadId, ThreadStateResult, TriageThread,
     UpdateProject, UpdateThread, WaitThread,
 };
 
@@ -75,7 +75,8 @@ rpc_tools! {
     "thread_send", SendInput, SendText, |_| None, "Send a new input to an existing thread. Its previous task result is not changed.";
     "thread_wait", WaitThread, WaitThread, |_| None, "Wait for a thread run to settle; specify the run ID to wait for that exact input.";
     "thread_stop", StopThread, StopThread, |_| None, "Stop a specific thread run, or the active run and queue if run is omitted.";
-    "thread_update", UpdateThread<'static>, ThreadUpdate, |_| None, "Change a thread's title, archive or pin state.";
+    "thread_update", UpdateThread<'static>, ThreadUpdate, |_| None, "Rename a thread.";
+    "thread_triage", TriageThread, TriageThread, |_| None, "Settle a finished thread, reopen it, snooze it until a time, pin, archive or mark it. Returns its state before, which the restore action puts back.";
     "project_list", ListProjects, Empty, |_| None, "List the configured projects in the selected environment.";
     "project_read", ReadProject<'static>, ProjectKey, |_| None, "Read a project by its absolute path in the selected environment.";
     "project_create", CreateProject<'static>, ProjectCreate, |_| None, "Register an existing directory as a project.";

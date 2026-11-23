@@ -13,8 +13,9 @@ use viz_client::{
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, CreateProject, DeleteThread, Entry,
         EntryId, HarnessOptions, LaunchThread, ListBranches, ListEnvironments, ListTasks,
-        ListWorktrees, MoveThread, Notification, OptionValue, RemoveProject, SearchFiles,
-        SendInput, ThreadId, UpdateProject, UpdateThread, WorktreeTarget,
+        ListWorktrees, MoveThread, Notification, OptionValue, Position, RemoveProject, SearchFiles,
+        SendInput, ThreadId, TriageAction, TriageThread, UpdateProject, UpdateThread,
+        WorktreeTarget,
     },
 };
 
@@ -547,16 +548,23 @@ impl Session<'_> {
         let mut params = UpdateThread {
             thread,
             title: None,
-            archived: None,
-            pinned: None,
-            unread: None,
             project: None,
+        };
+        let triage = async |action| {
+            let request = TriageThread { thread, action };
+            self.client.request(&request).await.map(drop)
         };
         match change {
             ThreadChange::Title(title) => params.title = Some(title),
-            ThreadChange::Archive(archived) => params.archived = Some(*archived),
-            ThreadChange::Pin(pinned) => params.pinned = Some(*pinned),
-            ThreadChange::Unread(unread) => params.unread = Some(*unread),
+            ThreadChange::Archive(true) => return triage(TriageAction::Archive).await,
+            ThreadChange::Archive(false) => return triage(TriageAction::Unarchive).await,
+            ThreadChange::Pin(true) => {
+                let position = Position::Top;
+                return triage(TriageAction::Pin { position }).await;
+            }
+            ThreadChange::Pin(false) => return triage(TriageAction::Unpin).await,
+            ThreadChange::Unread(true) => return triage(TriageAction::MarkUnread).await,
+            ThreadChange::Unread(false) => return triage(TriageAction::MarkRead).await,
             ThreadChange::Project(project) => params.project = Some(project.as_deref()),
         }
         self.client.update_thread(&params).await

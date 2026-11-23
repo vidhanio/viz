@@ -16,6 +16,7 @@ use rusqlite::{
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0001_baseline.sql"),
     include_str!("../../../migrations/0002_dismissed_tasks.sql"),
+    include_str!("../../../migrations/0003_lifecycle.sql"),
 ];
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

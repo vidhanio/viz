@@ -9,9 +9,9 @@ use viz_protocol::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, HarnessList,
     HarnessOptions, HarnessOptionsResult, ListBranches, ListEntries, ListProjects, ListWorktrees,
     MoveThread, ProjectList, ProjectResult, ReadProject, ReadThreadState, RemoveProject,
-    RemoveQueuedInput, RemoveWorktree, RunId, SearchFiles, SearchHits, SearchThreads, SendInput,
-    SteerQueuedInput, StopThread, ThreadId, ThreadList, ThreadStateResult, UpdateProject,
-    UpdateQueuedInput, UpdateThread, WaitThread,
+    RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId, SearchFiles, SearchHits,
+    SearchThreads, SendInput, SteerQueuedInput, StopThread, ThreadId, ThreadList,
+    ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
 };
 
 use super::{
@@ -108,8 +108,13 @@ handlers! {
             Ok(Empty {})
         }
         UpdateThread<'static>, UpdateMetadata, |workspace, input| {
-            workspace.update(input).await?;
-            Ok(Empty {})
+            workspace.update(input).await
+        }
+        RetitleThread, RetitleThread, |workspace, input| {
+            workspace.retitle(input).await
+        }
+        TriageThread, TriageThread, |workspace, input| {
+            workspace.triage(input).await
         }
         ConfigureThread<'static>, Configure, |workspace, Configure { thread, option, value }| {
             workspace.configure(thread, option, value).await?;
@@ -250,9 +255,6 @@ pub(crate) struct UpdateMetadata {
 struct RawUpdate {
     thread: ThreadId,
     title: Option<String>,
-    archived: Option<bool>,
-    pinned: Option<bool>,
-    unread: Option<bool>,
     #[serde(default, deserialize_with = "nullable")]
     project: Patch<String>,
 }
@@ -264,9 +266,6 @@ impl From<RawUpdate> for UpdateMetadata {
             changes: Changes {
                 title: raw.title,
                 project: raw.project,
-                archived: raw.archived,
-                pinned: raw.pinned,
-                unread: raw.unread,
             },
         }
     }

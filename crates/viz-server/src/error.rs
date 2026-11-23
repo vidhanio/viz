@@ -4,7 +4,7 @@
 //! JSON-RPC codes.
 
 use viz_core::{
-    placement,
+    lifecycle, placement,
     runs::{Busy, QueueRejection},
     tasks, threads,
 };
@@ -30,6 +30,8 @@ pub(crate) enum Error {
     Thread(#[from] threads::Rejection),
     #[error(transparent)]
     Placement(#[from] placement::Rejection),
+    #[error(transparent)]
+    Triage(#[from] lifecycle::Rejection),
     #[error(transparent)]
     Task(#[from] tasks::Rejection),
     /// Input that violates a documented constraint.
@@ -113,6 +115,7 @@ impl Error {
             | Self::Busy(_)
             | Self::Thread(_)
             | Self::Task(_)
+            | Self::Triage(_)
             | Self::Placement(_)
             | Self::Invalid(_)
             | Self::Request(_) => Kind::Invalid,

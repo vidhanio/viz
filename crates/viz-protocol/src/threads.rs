@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Attachment, AttachmentCapabilities, ContextUsage, QueuedInput, RunId, ThreadId, ThreadWorktree,
-    ToolRecord, WorktreeTarget,
+    Attachment, AttachmentCapabilities, Attention, ContextUsage, Lifecycle, QueuedInput, RunId,
+    Shelf, ThreadId, ThreadWorktree, ToolRecord, WorktreeTarget,
 };
 
 /// `threads.list` params.
@@ -20,7 +20,7 @@ pub struct ListThreads<'a> {
 /// `threads.list` result.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ThreadList {
-    /// Every thread.
+    /// Every thread, in the order of [`Shelf`] and of each shelf.
     pub threads: Vec<ThreadSummary>,
 }
 
@@ -46,16 +46,19 @@ pub struct ThreadSummary {
     pub harness_name: String,
     /// What this thread is doing.
     pub status: ThreadStatus,
-    /// Whether the thread is archived.
-    pub archived: bool,
+    /// Where it stands in the user's triage.
+    pub lifecycle: Lifecycle,
+    /// The part of the list it belongs in.
+    pub shelf: Shelf,
+    /// Why it wants the user, if it does.
+    pub attention: Option<Attention>,
+    /// Delegated tasks still under way.
+    pub waiting_on: u32,
+    /// The user's latest input, in Unix milliseconds.
+    pub last_input_at: Option<i64>,
     /// Time of the last input or turn end in Unix milliseconds; zero if
     /// unknown.
     pub updated_at: i64,
-    /// A turn settled while no app was watching, or this chat was manually
-    /// marked unread.
-    pub unread: bool,
-    /// Show the thread in the pinned section.
-    pub pinned: bool,
     /// Display name of the selected model, once reported.
     pub model: Option<String>,
     /// Display name of the selected thinking level, when the model has one.

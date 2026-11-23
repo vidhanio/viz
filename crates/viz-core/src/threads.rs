@@ -2,6 +2,8 @@
 
 use viz_protocol::{RunStatus, ThreadStatus};
 
+use crate::titles;
+
 /// A patch can omit a value, clear it, or set it explicitly.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub enum Patch<T> {
@@ -94,9 +96,16 @@ pub struct Metadata {
     /// Where the thread is filed. Filing a thread does not move it: its
     /// directory changes only through a move (see [`crate::placement`]).
     pub project: Option<String>,
-    pub archived: bool,
-    pub pinned: bool,
-    pub unread: bool,
+}
+
+impl Metadata {
+    /// The title as shown.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        match &self.title {
+            Title::Derived(title) | Title::User(title) => title,
+        }
+    }
 }
 
 /// Changes to [`Metadata`].
@@ -104,9 +113,6 @@ pub struct Metadata {
 pub struct Changes {
     pub title: Option<String>,
     pub project: Patch<String>,
-    pub archived: Option<bool>,
-    pub pinned: Option<bool>,
-    pub unread: Option<bool>,
 }
 
 /// Apply `changes` to a thread that may run in a linked worktree.
@@ -126,10 +132,23 @@ pub fn update(
     Ok(Metadata {
         title: changes.title.map_or(current.title, Title::User),
         project: changes.project.apply(current.project),
-        archived: changes.archived.unwrap_or(current.archived),
-        pinned: changes.pinned.unwrap_or(current.pinned),
-        unread: changes.unread.unwrap_or(current.unread),
     })
+}
+
+/// Replace a title by the harness's latest, or else one from the latest
+/// prompt.
+#[must_use]
+pub fn retitle(current: Metadata, harness: Option<&str>, prompt: Option<&str>) -> Metadata {
+    let title = [harness, prompt]
+        .into_iter()
+        .flatten()
+        .map(titles::from_prompt)
+        .find(|title| !title.is_empty())
+        .unwrap_or_else(|| current.title().to_owned());
+    Metadata {
+        title: Title::Derived(title),
+        ..current
+    }
 }
 
 /// Keep the original directory through repeated moves until a prompt uses the

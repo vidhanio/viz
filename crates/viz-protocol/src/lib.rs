@@ -7,6 +7,7 @@ mod catalog;
 mod connections;
 mod history;
 mod ids;
+mod lifecycle;
 pub mod peer;
 mod requests;
 mod threads;
@@ -27,6 +28,10 @@ pub use history::{
     SearchHits, SearchThreads, SteerQueuedInput, UpdateQueuedInput,
 };
 pub use ids::{EntryId, RunId, TaskId, ThreadId};
+pub use lifecycle::{
+    Attention, AutoSettle, Lifecycle, Position, RetitleThread, SettledBy, Shelf, Standing,
+    ThreadUpdated, TriageAction, TriageThread, Triaged,
+};
 pub use requests::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, GitBranch,
     HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches, ListHarnesses, ListProjects,
@@ -96,7 +101,9 @@ methods! {
     SteerQueuedInput => "queue.steer", Empty;
     UpdateQueuedInput<'_> => "queue.update", Empty;
     ListThreads<'_> => "threads.list", ThreadList;
-    UpdateThread<'_> => "thread.update", Empty;
+    UpdateThread<'_> => "thread.update", ThreadUpdated;
+    RetitleThread => "thread.retitle", ThreadUpdated;
+    TriageThread => "thread.triage", Triaged;
     ConfigureThread<'_> => "thread.configure", Empty;
     StopThread => "thread.stop", Empty;
     DeleteThread => "thread.delete", Empty;

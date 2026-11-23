@@ -10,8 +10,7 @@ pub(crate) use viz_protocol::{
     HelloParams, LiveText, LiveTextKind, LiveTurn, Notification, OptionValue, Origin,
     PROTOCOL_VERSION, PlanEntry, PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput,
     Run, RunId, RunKind, RunStatus, SearchHit, SlashCommand as Command, Task, TaskStatus, ThreadId,
-    ThreadState, ThreadStatus, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord,
-    WaitResult,
+    ThreadState, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord, WaitResult,
 };
 
 use crate::error::{Error, Kind, RequestError};

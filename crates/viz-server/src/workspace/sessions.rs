@@ -251,11 +251,13 @@ pub(super) async fn persist_snapshot(
         || prior.opt_str(3)?.as_deref() != thinking
         || prior.flag(4)?;
     exec(db, "UPDATE threads SET
-          session = json_set(session, '$.session_id', ?2, '$.options', json(?3), '$.commands', json(?4), '$.images', json(?5), '$.usage', json(?6)),
+          session = json_set(session, '$.session_id', ?2, '$.options', json(?3), '$.commands', json(?4), '$.images', json(?5), '$.usage', json(?6),
+            '$.title', coalesce(?10, json_extract(session, '$.title'))),
           title = ?7,
           model = ?8, thinking = ?9, setup_failed = 0 WHERE id = ?1", [
         thread.into(), snapshot.session_id.into(), store::json(&snapshot.options)?.into(), store::json(&commands)?.into(),
         if snapshot.images { "true" } else { "false" }.into(), store::json(&usage)?.into(), title.into(), model.into(), thinking.into(),
+        snapshot.title.into(),
     ]).await?;
     if let Some(desired) = desired {
         exec(db, "UPDATE threads SET session = json_set(session, '$.desired', json(?2), '$.selection', NULL) WHERE id = ?1",

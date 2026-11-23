@@ -2,12 +2,12 @@
 //! server.
 
 use viz_client::protocol::{
-    Attachment, AttachmentCapabilities, ConfigOption, DependentChoice, DependentOption, Entry,
-    EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, Harness, LiveText, LiveTextKind,
-    LiveTurn, OptionChoice, OptionKind, OptionValue, PlanEntry, PlanPriority, PlanStatus, Project,
-    PromptAttachment, RunEnd, SearchHit, SlashCommand, Task, TaskStatus, ThreadId, ThreadState,
-    ThreadStatus, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord, Worktree,
-    WorktreeTarget,
+    Attachment, AttachmentCapabilities, Attention, ConfigOption, DependentChoice, DependentOption,
+    Entry, EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, Harness, Lifecycle,
+    LiveText, LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue, PlanEntry,
+    PlanPriority, PlanStatus, Project, PromptAttachment, RunEnd, SearchHit, Shelf, SlashCommand,
+    Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary, ThreadWorktree,
+    ToolCallStatus, ToolDiff, ToolRecord, Worktree, WorktreeTarget,
 };
 
 use crate::{
@@ -167,10 +167,20 @@ fn list() -> Vec<ThreadSummary> {
         },
         thinking: parent.is_some().then(|| "high".into()),
         status,
-        archived: false,
         updated_at: now_ms() - i64::try_from(30 - id).unwrap_or_default() * 60_000,
-        unread: id == 9,
-        pinned: id == 4,
+        lifecycle: Lifecycle {
+            unread: id == 9,
+            pin: (id == 4).then_some(0),
+            ..Lifecycle::default()
+        },
+        shelf: if id == 4 {
+            Shelf::Pinned
+        } else {
+            Shelf::Active
+        },
+        attention: (id == 9).then_some(Attention::Unread),
+        waiting_on: 0,
+        last_input_at: None,
     })
     .into()
 }

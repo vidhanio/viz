@@ -151,7 +151,7 @@ impl Workspace {
         };
         let settlement = decisions::settle(signals, end);
         let mut tx = db.transaction().await?;
-        runs::settle(&mut tx, thread, run, settlement, self.unread(thread)).await?;
+        runs::settle(&mut tx, thread, run, settlement, self.is_watched(thread)).await?;
         tx.commit().await?;
         self.updates.live(thread, None);
         drop(db);

@@ -2,23 +2,25 @@
 
 use serde::{Deserialize, Serialize};
 use viz_core::{
+    lifecycle as triage,
     placement::Checkout,
-    threads::{self, Metadata, Title},
+    threads::{Metadata, Title},
 };
+use viz_protocol::ThreadUpdated;
 
 use super::{
     super::{
-        Workspace, runs,
-        sql::{Connection, Row, exec, row, rows},
+        Workspace,
+        sql::{Connection, exec, row, rows},
     },
-    from_json, json, now, thread_worktree,
+    from_json, json, lifecycle, now, thread_worktree,
 };
 use crate::{
     acp::{Desired, Selection},
     error::Error,
     wire::{
         AttachmentCapabilities, Command, ConfigOption, QueuedInput, ThreadId, ThreadState,
-        ThreadStatus, ThreadSummary, Usage,
+        ThreadSummary, Usage,
     },
 };
 
@@ -30,6 +32,8 @@ pub(in crate::workspace) struct SavedSession {
     pub(in crate::workspace) desired: Desired,
     pub(in crate::workspace) images: bool,
     pub(in crate::workspace) usage: Option<Usage>,
+    /// The harness's latest title for the session.
+    pub(in crate::workspace) title: Option<String>,
     pub(in crate::workspace) selection: Option<Selection>,
     /// Set when the thread moved away from this working directory since
     /// its last prompt. Harnesses differ in whether a restored session
@@ -67,6 +71,16 @@ pub(in crate::workspace) async fn binding(
     })
 }
 
+/// A change of metadata as reported to the client.
+pub(in crate::workspace) fn updated(prior: &Metadata, next: &Metadata) -> ThreadUpdated {
+    ThreadUpdated {
+        title: next.title().to_owned(),
+        project: next.project.clone(),
+        prior_title: prior.title().to_owned(),
+        prior_project: prior.project.clone(),
+    }
+}
+
 /// A thread's user metadata, and whether it runs in a linked worktree.
 pub(in crate::workspace) async fn metadata(
     db: &mut Connection,
@@ -74,7 +88,7 @@ pub(in crate::workspace) async fn metadata(
 ) -> Result<(Metadata, bool), Error> {
     let mut row = row(
         db,
-        "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
+        "SELECT title, user_title, worktree, project FROM threads WHERE id = ?1",
         [thread.into()],
     )
     .await?
@@ -88,9 +102,6 @@ pub(in crate::workspace) async fn metadata(
                 Title::Derived(title)
             },
             project: row.opt_str(3)?,
-            archived: row.flag(4)?,
-            pinned: row.flag(5)?,
-            unread: row.flag(6)?,
         },
         row.opt_str(2)?.is_some(),
     ))
@@ -107,16 +118,12 @@ pub(in crate::workspace) async fn save_metadata(
     };
     exec(
         db,
-        "UPDATE threads SET title = ?2, user_title = ?3, project = ?4,
-            archived = ?5, pinned = ?6, unread = ?7 WHERE id = ?1",
+        "UPDATE threads SET title = ?2, user_title = ?3, project = ?4 WHERE id = ?1",
         [
             thread.into(),
             title.as_str().into(),
             user.into(),
             metadata.project.as_deref().into(),
-            metadata.archived.into(),
-            metadata.pinned.into(),
-            metadata.unread.into(),
         ],
     )
     .await?;
@@ -155,9 +162,6 @@ pub(in crate::workspace) async fn create_thread(
     row.id(0)
 }
 
-const STATUS_COLUMNS: &str = "EXISTS (SELECT 1 FROM runs WHERE thread = t.id AND status IN ('queued','running')),
-    t.setup_failed, (SELECT status FROM runs WHERE thread = t.id AND end_entry IS NOT NULL ORDER BY end_entry DESC LIMIT 1)";
-
 pub(in crate::workspace) async fn list_threads(
     db: &mut Connection,
     archived: Option<bool>,
@@ -166,33 +170,44 @@ pub(in crate::workspace) async fn list_threads(
 ) -> Result<Vec<ThreadSummary>, Error> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
-            t.archived, t.updated_at, t.unread, t.pinned, t.model, t.thinking, t.worktree, {STATUS_COLUMNS}
-        FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)
-        ORDER BY t.pinned DESC, t.updated_at DESC, t.id DESC"
+            t.model, t.thinking, t.worktree, {}
+        FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)",
+        lifecycle::COLUMNS
     );
-    rows(db, &query, [archived.into(), project.into()])
+    let now = now();
+    let mut threads = rows(db, &query, [archived.into(), project.into()])
         .await?
         .map(|mut row| {
             let harness = row.str(5)?;
-            Ok(ThreadSummary {
-                id: row.id(0)?,
+            let (lifecycle, activity, status) = lifecycle::decode(&mut row, 9)?;
+            let id = row.id(0)?;
+            let shelf = triage::shelf(&lifecycle, &activity, now);
+            let summary = ThreadSummary {
+                id,
                 title: row.str(1)?,
                 parent: row.opt_id(2)?,
                 parent_environment: row.opt_str(3)?,
                 project: row.opt_str(4)?,
-                worktree: row.opt_str(12)?.map(thread_worktree),
+                worktree: row.opt_str(8)?.map(thread_worktree),
                 harness_name: workspace.harness_name(&harness).to_owned(),
                 harness,
-                status: status(&mut row, 13)?,
-                archived: row.flag(6)?,
-                updated_at: row.i64(7)?,
-                unread: row.flag(8)?,
-                pinned: row.flag(9)?,
-                model: row.opt_str(10)?,
-                thinking: row.opt_str(11)?,
-            })
+                status,
+                shelf,
+                attention: triage::attention(&lifecycle, &activity),
+                waiting_on: activity.waiting_on,
+                last_input_at: activity.last_input_at,
+                updated_at: activity.updated_at,
+                model: row.opt_str(6)?,
+                thinking: row.opt_str(7)?,
+                lifecycle,
+            };
+            Ok((summary, activity))
         })
-        .collect()
+        .collect::<Result<Vec<_>, Error>>()?;
+    threads.sort_by_cached_key(|(thread, activity)| {
+        triage::sort_key(thread.shelf, &thread.lifecycle, activity, thread.id)
+    });
+    Ok(threads.into_iter().map(|(thread, _)| thread).collect())
 }
 
 pub(in crate::workspace) async fn state(
@@ -200,7 +215,8 @@ pub(in crate::workspace) async fn state(
     thread: ThreadId,
 ) -> Result<ThreadState, Error> {
     let query = format!(
-        "SELECT t.harness, t.project, t.cwd, t.session, t.worktree, {STATUS_COLUMNS} FROM threads AS t WHERE t.id = ?1"
+        "SELECT t.harness, t.project, t.cwd, t.session, t.worktree, {} FROM threads AS t WHERE t.id = ?1",
+        lifecycle::COLUMNS
     );
     let mut row = row(db, &query, [thread.into()])
         .await?
@@ -221,12 +237,13 @@ pub(in crate::workspace) async fn state(
         })
     })
     .collect::<Result<_, Error>>()?;
+    let (_, _, status) = lifecycle::decode(&mut row, 5)?;
     Ok(ThreadState {
         harness: row.str(0)?,
         project: row.opt_str(1)?,
         worktree: row.opt_str(4)?.map(thread_worktree),
         cwd: row.str(2)?,
-        status: status(&mut row, 5)?,
+        status,
         options: session.options,
         commands: session.commands,
         attachments: AttachmentCapabilities {
@@ -236,14 +253,4 @@ pub(in crate::workspace) async fn state(
         queue,
         live: None,
     })
-}
-
-fn status(row: &mut Row, first: usize) -> Result<ThreadStatus, Error> {
-    let last = row.opt_str(first + 2)?;
-    let last = last.as_deref().map(runs::decode_status).transpose()?;
-    Ok(threads::status(
-        row.flag(first)?,
-        row.flag(first + 1)?,
-        last,
-    ))
 }

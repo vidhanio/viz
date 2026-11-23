@@ -1,5 +1,6 @@
 //! Shared persistence helpers and aggregate-specific stores.
 
+mod lifecycle;
 mod projects;
 mod threads;
 mod transcript;
@@ -9,10 +10,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) use self::{
+    lifecycle::{lifecycle, save_lifecycle, standings, touch},
     projects::{directory, path_text, project, project_at, projects, thread_worktree},
     threads::{
         Binding, NewThread, SavedSession, binding, create_thread, list_threads, metadata, require,
-        save_metadata, state,
+        save_metadata, state, updated,
     },
     transcript::{append, entries, entries_after, publish, search},
 };

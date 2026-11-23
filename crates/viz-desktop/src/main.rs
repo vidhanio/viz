@@ -122,7 +122,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
                 .unread(
                     s.threads
                         .iter()
-                        .any(|thread| thread.unread && !thread.archived),
+                        .any(|thread| thread.lifecycle.unread && !thread.lifecycle.archived),
                 ),
         )
         .pane_motion(motion::pane_motion())
