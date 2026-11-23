@@ -289,7 +289,7 @@ pub(super) fn seed_thread_details_subagents(m: &mut Model) {
             size: 200_000,
         });
     }
-    m.panels.details_open = true;
+    m.panels.details_open = Some(true);
 }
 
 pub(super) fn seed_agents(m: &mut Model) {

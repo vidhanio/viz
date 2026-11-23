@@ -62,7 +62,7 @@ pub use self::{
     input::{Field, SearchInput, SearchStyle, field, search_input, text_field},
     project_icon::{
         no_project_mark, project_color, project_color_index, project_icon, project_initials,
-        project_monogram,
+        project_mark, project_monogram,
     },
     row::{ListRow, RowDensity, SectionHeader, list_row, section_header},
     surface::{

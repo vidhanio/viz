@@ -3,7 +3,6 @@
 use rune::{Align, El, col, icon, row, text};
 use rune_kit::IconButtonVariant;
 
-use super::project_mark;
 use crate::{
     app::Desktop,
     model::{DraftPreview, ProjectFilter, Status},
@@ -34,7 +33,7 @@ pub(super) fn draft_card(s: &Desktop, draft: &DraftPreview<'_>, t: &Theme) -> El
                 .h(18.0)
                 .gap(S6)
                 .center_y()
-                .child(project_mark::mark(s, draft.project, ICON_MD, t))
+                .child(ui::project_mark(s, draft.project, ICON_MD, t))
                 .child(
                     text(project_name)
                         .font(t.small)
@@ -181,6 +180,7 @@ fn clear_filter_button(t: &Theme) -> El {
     ui::inline_button("Clear filter")
         .tone(ui::Tone::Accent)
         .on_press_tx(|s: &mut Desktop, tx| {
+            tx.instant();
             s.dispatch(
                 Msg::Sidebar(SidebarMsg::SetProjectFilter(ProjectFilter::All)),
                 tx,

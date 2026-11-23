@@ -1,16 +1,15 @@
 //! Typed messages pushed from the background server runtime or blocking
 //! platform tasks into [`super::server::update`].
 
-use std::sync::Arc;
-
 use viz_client::protocol::{
-    ConfigOption, Entry, EntryId, EntrySource, Environment, FileSearchMatch, Forked, GitHubItem,
-    Harness, Lifecycle, LiveDelta, Project, SearchHit, Task, ThreadId, ThreadState, ThreadSummary,
+    ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileSearchMatch, Forked,
+    GitHubItem, Harness, Lifecycle, LiveDelta, Project, SearchHit, Task, ThreadId, ThreadState,
+    ThreadSummary,
 };
 
 use crate::{
     effects::LoadedAttachments,
-    model::{AttachmentTarget, Checkouts, LoadedEntry, Status, Transcript},
+    model::{AttachmentTarget, Checkouts, LoadedEntry, Status},
 };
 
 /// Events pushed from the background server runtime or blocking platform tasks.
@@ -53,11 +52,9 @@ pub enum ServerMsg {
     },
     /// Harness catalog refreshed after a server `harnesses.changed` push.
     HarnessesSynced(Vec<Harness>),
-    /// Live state update for a watched thread.
+    /// Latest authoritative state of a watched thread.
     ThreadState {
-        /// Watched thread id.
         thread: ThreadId,
-        /// Latest thread state.
         state: Box<ThreadState>,
     },
     /// Incremental ACP live turn delta for a watched thread.
@@ -72,7 +69,7 @@ pub enum ServerMsg {
         /// Watched thread id.
         thread: ThreadId,
         /// Entries in ascending id order.
-        entries: Arc<Vec<Entry>>,
+        entries: Vec<Entry>,
         /// Whether this replaces the viewport or appends.
         reset: bool,
         /// Exclusive cursor for loading older entries.
@@ -82,8 +79,10 @@ pub enum ServerMsg {
     EarlierLoaded {
         /// Thread id.
         thread: ThreadId,
-        /// Rebuilt transcript including older entries, or `None` on failure.
-        transcript: Option<Transcript>,
+        /// Cursor that was requested.
+        before: EntryId,
+        /// Older entries, or `None` on failure.
+        page: Option<EntryPage>,
     },
     /// Watching a newly selected thread failed; restore the prior watched
     /// thread.
@@ -92,10 +91,6 @@ pub enum ServerMsg {
         failed: ThreadId,
         /// Previously watched thread, if any.
         previous: Option<ThreadId>,
-        /// Cached entries of the previous thread.
-        entries: Vec<Entry>,
-        /// Cached pagination cursor of the previous thread.
-        before: Option<EntryId>,
         /// Error detail for toast.
         error: String,
     },

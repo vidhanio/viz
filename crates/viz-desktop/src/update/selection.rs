@@ -299,11 +299,9 @@ pub(super) fn show_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec
     let pills = restored.pills.clone();
     model.composer.draft = restored;
     reset_active_view(model);
-    let open = model.cache_mut().open_thread_mut(thread);
-    open.transcript = crate::model::Transcript::default();
-    open.state = None;
-    open.loading = true;
-    open.history_loading = false;
+    if model.cache().open_thread(thread).is_none() {
+        model.cache_mut().open_thread_mut(thread).loading = true;
+    }
     effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
         text,
         pills,

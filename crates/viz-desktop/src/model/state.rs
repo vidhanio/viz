@@ -183,7 +183,7 @@ pub struct PanelsState {
     /// Leading workspace sidebar slot.
     pub sidebar: PaneLayout,
     /// Trailing thread details card slot (populated in Phase 1 Track G).
-    pub details_open: bool,
+    pub details_open: Option<bool>,
     /// Trailing docked diff inspector slot (populated in Phase 1 Track G).
     pub diff: PaneLayout,
     /// Last drawn window width in points, used for responsive layout choices.
@@ -200,7 +200,7 @@ impl Default for PanelsState {
                 min: SIDEBAR_MIN_WIDTH,
                 max: SIDEBAR_MAX_WIDTH,
             },
-            details_open: false,
+            details_open: None,
             diff: PaneLayout {
                 open: false,
                 width: DIFF_DEFAULT_WIDTH,

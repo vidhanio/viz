@@ -90,12 +90,13 @@ pub(super) fn handle(
                 },
             );
         }
-        ServerEffect::LoadEarlier { thread, .. } => {
+        ServerEffect::LoadEarlier { thread, before } => {
             dispatch_ui(
                 ui,
                 ServerMsg::EarlierLoaded {
                     thread,
-                    transcript: None,
+                    before,
+                    page: None,
                 },
             );
         }

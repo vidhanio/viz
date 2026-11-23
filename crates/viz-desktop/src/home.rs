@@ -258,7 +258,7 @@ fn state_b_inline_heading(s: &Desktop, project: &Project, open: bool, t: &Theme)
                     row()
                         .center_y()
                         .gap(S8)
-                        .child(project_picker::project_tile(s, project, 22.0, t))
+                        .child(ui::project_mark(s, Some(project), 22.0, t))
                         .child(text(&project.name).font(project_font).color(t.text_strong)),
                 )
                 .child(hover_underline(open, t.text_strong, t.muted)),
@@ -313,7 +313,7 @@ fn state_b_stacked_heading(
                     row()
                         .center_y()
                         .gap(S6)
-                        .child(project_picker::project_tile(s, project, 16.0, t))
+                        .child(ui::project_mark(s, Some(project), 16.0, t))
                         .child(
                             text(&project.name)
                                 .font(trigger_font)

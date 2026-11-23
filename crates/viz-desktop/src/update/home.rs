@@ -163,17 +163,20 @@ pub(super) fn handle_draft_branch_key(model: &mut Model, key: NavKey, effects: &
             )));
             effects.push(focus_draft());
         }
-        NavKey::Down if !branches.is_empty() => {
-            model.composer.draft_branch.highlighted =
-                (model.composer.draft_branch.highlighted + 1) % branches.len();
-        }
-        NavKey::Up if !branches.is_empty() => {
-            model.composer.draft_branch.highlighted = model
-                .composer
-                .draft_branch
-                .highlighted
-                .checked_sub(1)
-                .unwrap_or(branches.len() - 1);
+        NavKey::Down | NavKey::Up if !branches.is_empty() => {
+            let count = branches.len();
+            let current = model.composer.draft_branch.highlighted.min(count - 1);
+            let next = if key == NavKey::Up {
+                (current + count - 1) % count
+            } else {
+                (current + 1) % count
+            };
+            let item = format!("draft-branch-{}", branches[next].name);
+            model.composer.draft_branch.highlighted = next;
+            effects.push(Effect::ScrollIntoView {
+                list: "draft-branch-combobox-scroll",
+                item,
+            });
         }
         NavKey::Enter => {
             let idx = model

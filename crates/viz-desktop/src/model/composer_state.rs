@@ -124,12 +124,15 @@ pub enum AttachmentStatus {
 /// or draft.
 #[derive(Debug, Clone, Default)]
 pub struct DraftData {
+    /// Submission key and payload fingerprint retained after an uncertain
+    /// reply.
+    pub retry_submission: Option<(String, [u8; 32])>,
     /// Plain prompt text (including pill label spans).
     pub text: String,
     /// Atomic inline chips synced with `ShellWidgets::draft`.
     pub pills: Vec<DraftPill>,
     /// Prepared attachments queued for the next send.
-    pub attachments: Vec<Attachment>,
+    pub attachments: std::sync::Arc<Vec<Attachment>>,
     /// Per-attachment transient status (defaults to `Ready` when shorter than
     /// `attachments`).
     pub attachment_statuses: Vec<AttachmentStatus>,
@@ -138,7 +141,7 @@ pub struct DraftData {
 impl DraftData {
     /// Whether neither text nor attachments are present.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.text.is_empty() && self.attachments.is_empty()
     }
 

@@ -10,8 +10,8 @@ mod draft;
 mod filter;
 mod footer;
 mod hover_card;
+pub use hover_card::thread_preview;
 mod menu;
-mod project_mark;
 mod shelves;
 
 use rune::{Color, El, TextStyle, col, icon, row, text};
@@ -19,7 +19,7 @@ use rune_kit::IconButtonVariant;
 
 use crate::{
     app::Desktop,
-    model::{ProjectFilter, SidebarOutline},
+    model::{DropZone, ProjectFilter, SidebarOutline},
     motion,
     theme::{
         self, HAIRLINE, ICON_MD, RADIUS_CONTROL, S2, S4, S6, S8, S12, SIDEBAR_PAD, Size,
@@ -44,6 +44,7 @@ pub fn sidebar(s: &Desktop, titlebar_inset: f32, t: &Theme, layer: &mut Vec<El>)
         shelves::primary_shelves(s, &outline, t, layer).pb(crate::theme::S12),
         t,
     );
+    let body = shelves::measure(body, s.model.sidebar.drag.is_some(), DropZone::Viewport);
     let settled = shelves::settled_drawer(s, &outline, t, layer);
     let bottom = footer::footer(s, t, layer);
     hover_card::mount(s, &outline, t, layer);
@@ -209,7 +210,7 @@ fn filter_trigger(s: &Desktop, t: &Theme) -> El {
             format!("Filtered: {name}")
         }
     };
-    let mut btn = row()
+    row()
         .key(filter::FILTER_TRIGGER_KEY)
         .role("button")
         .label(&filter_tip)
@@ -245,11 +246,7 @@ fn filter_trigger(s: &Desktop, t: &Theme) -> El {
                 })
                 .group_color(if filter_active { t.accent_text } else { t.text })
                 .a11y_hidden(),
-        );
-    if filter_active {
-        btn = btn.border(HAIRLINE, t.accent.alpha(0.45));
-    }
-    btn
+        )
 }
 
 fn active_filter_chip(s: &Desktop, t: &Theme) -> Option<El> {
@@ -266,7 +263,6 @@ fn active_filter_chip(s: &Desktop, t: &Theme) -> Option<El> {
             .radius(RADIUS_CONTROL)
             .fill(t.surface_recessed)
             .border(HAIRLINE, t.hairline)
-            .transition(motion::chip_enter())
             .child(mark)
             .child(
                 text(name)
@@ -285,6 +281,7 @@ fn active_filter_chip(s: &Desktop, t: &Theme) -> Option<El> {
                     Size::Tiny,
                 )
                 .on_press_tx(|s: &mut Desktop, tx| {
+                    tx.instant();
                     s.dispatch(
                         Msg::Sidebar(SidebarMsg::SetProjectFilter(ProjectFilter::All)),
                         tx,

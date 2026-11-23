@@ -228,7 +228,8 @@ fn on_branch_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let key = match ev.key {
         Key::Down => NavKey::Down,
         Key::Up => NavKey::Up,
-        Key::Enter => NavKey::Enter,
+        Key::Enter if !tx.key_repeat() => NavKey::Enter,
+        Key::Enter => return true,
         Key::Escape => NavKey::Escape,
         _ => return false,
     };

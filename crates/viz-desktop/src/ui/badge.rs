@@ -12,7 +12,7 @@ use crate::{
 /// Semantic accent role for badges, banners, and inline status elements.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Tone {
-    /// Quiet neutral chip fill and hairline.
+    /// Quiet neutral chip fill.
     #[default]
     Neutral,
     /// Primary interactive accent (`base0D`).
@@ -31,25 +31,22 @@ pub enum Tone {
     Delegated,
 }
 
-/// Resolved flat surface, ink, and `1px` hairline colors for a [`Tone`].
+/// Resolved flat fill and ink for a [`Tone`].
 #[derive(Debug, Clone, Copy)]
 pub struct ToneColors {
     /// Primary text and icon ink (`>= 4.5:1`).
     pub fg: Color,
     /// Subtle tinted background fill.
     pub bg: Color,
-    /// Crisp `1px` border framing the tinted surface.
-    pub border: Color,
 }
 
 impl Tone {
-    /// Resolves foreground, subtle tinted fill, and hairline border from `t`.
+    /// Resolves foreground and subtle tinted fill from `t`.
     pub fn colors(self, t: &Theme) -> ToneColors {
         match self {
             Self::Neutral => ToneColors {
                 fg: t.muted,
                 bg: t.chip_fill,
-                border: t.hairline,
             },
             Self::Accent => tinted(t.accent_text, t.accent),
             Self::Success => tinted(t.success, t.success),
@@ -66,7 +63,6 @@ fn tinted(fg: Color, tint: Color) -> ToneColors {
     ToneColors {
         fg,
         bg: tint.alpha(0.12),
-        border: tint.alpha(0.28),
     }
 }
 
@@ -142,7 +138,7 @@ impl Badge {
         self
     }
 
-    /// Builds the flat hairline badge element.
+    /// Builds the flat badge element.
     pub fn build(self, t: &Theme) -> El {
         let colors = self.tone.colors(t);
         let (height, px, icon_size, font) = match self.size {
@@ -170,8 +166,7 @@ impl Badge {
             .gap(S4)
             .center_y()
             .radius(radius)
-            .fill(colors.bg)
-            .border(HAIRLINE, colors.border);
+            .fill(colors.bg);
         if self.dot {
             el = el.child(
                 rune::el()

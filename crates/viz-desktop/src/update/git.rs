@@ -23,7 +23,7 @@ pub enum GitMsg {
     Popup(Option<Popup>),
     Search(String),
     MoreBranches,
-    HighlightBranch(usize),
+    HighlightBranch(String),
     NewWorktree,
     RemoteBase,
     ChooseBranch {
@@ -76,7 +76,6 @@ pub(super) fn reconcile(model: &mut Model, effects: &mut Vec<Effect>) {
         serial,
         ..GitState::default()
     };
-    model.panels.details_open = false;
     if let Some(thread) = thread.filter(|_| model.connected()) {
         effects.push(Effect::Server(ServerEffect::Git {
             thread,
@@ -313,16 +312,15 @@ pub(super) fn update(model: &mut Model, msg: GitMsg) -> Vec<Effect> {
     match msg {
         GitMsg::RefreshDiff => refresh_diff(model, &mut effects),
         GitMsg::ToggleDetails => {
-            model.panels.details_open = !model.panels.details_open;
+            model.panels.details_open = Some(!crate::model::git::details_visible(model));
             model.git.popup = None;
         }
         GitMsg::CloseDetails => {
-            model.panels.details_open = false;
+            model.panels.details_open = Some(false);
             model.git.popup = None;
         }
         GitMsg::ToggleDiff => {
             model.panels.diff.open = !model.panels.diff.open;
-            model.panels.details_open = false;
             model.git.popup = None;
             effects.push(Effect::SyncDiffPane {
                 open: Some(model.panels.diff.open),
@@ -348,7 +346,7 @@ pub(super) fn update(model: &mut Model, msg: GitMsg) -> Vec<Effect> {
                 model.git.new_worktree = false;
             }
         }
-        GitMsg::HighlightBranch(index) => model.git.branch_highlight = Some(index),
+        GitMsg::HighlightBranch(key) => model.git.branch_highlight = Some(key),
         GitMsg::Search(query) => {
             model.git.branch_highlight = None;
             model.git.query = query;

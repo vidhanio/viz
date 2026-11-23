@@ -13,9 +13,7 @@ use super::{
 /// One projected conversation turn ready for the timeline renderer.
 #[derive(Debug)]
 pub struct TurnView<'a> {
-    /// Zero-based turn index in the displayed transcript.
-    pub index: usize,
-    /// Stable element key for the turn container (used by the minimap).
+    /// Stable element key for the turn container.
     pub key: String,
     /// User messages that initiated (or stacked into) this turn.
     pub users: Vec<&'a User>,
@@ -87,39 +85,6 @@ impl TurnView<'_> {
             .any(|notice| notice.status == CompactionStatus::InProgress)
     }
 
-    /// First user prompt text for the minimap hover preview.
-    #[must_use]
-    pub fn prompt_preview(&self) -> &str {
-        self.users
-            .first()
-            .map(|user| user.text.trim())
-            .filter(|text| !text.is_empty())
-            .or_else(|| self.task_result.map(|r| r.title.as_str()))
-            .unwrap_or(if self.continued {
-                "Continued turn"
-            } else {
-                "Agent turn"
-            })
-    }
-
-    /// First non-empty assistant prose snippet for the minimap hover preview.
-    #[must_use]
-    pub fn reply_preview(&self) -> &str {
-        self.prose
-            .iter()
-            .rev()
-            .find_map(|(item, _)| match item {
-                Item::Text { text, .. } if !text.trim().is_empty() => Some(text.trim()),
-                _ => None,
-            })
-            .or_else(|| {
-                self.end
-                    .map(|end| end.answer.trim())
-                    .filter(|s| !s.is_empty())
-            })
-            .unwrap_or("")
-    }
-
     /// Total additions and deletions across all changed files in this turn.
     #[must_use]
     pub fn total_diff_stats(&self) -> (u32, u32) {
@@ -173,25 +138,22 @@ pub fn project_turns<'a>(
                         turn.users.push(user);
                     }
                 } else {
-                    let index = turns.len();
-                    turns.push(new_turn(index, format!("turn-{}", user.key), Some(user)));
+                    turns.push(new_turn(format!("turn-{}", user.key), Some(user)));
                 }
             }
             Item::Continued { key } => {
-                let index = turns.len();
-                let mut turn = new_turn(index, format!("turn-{key}"), None);
+                let mut turn = new_turn(format!("turn-{key}"), None);
                 turn.continued = true;
                 turns.push(turn);
             }
             Item::TaskResult(result) => {
-                let index = turns.len();
-                let mut turn = new_turn(index, format!("turn-{}", result.key), None);
+                let mut turn = new_turn(format!("turn-{}", result.key), None);
                 turn.task_result = Some(result);
                 turns.push(turn);
             }
             other => {
                 if turns.is_empty() {
-                    turns.push(new_turn(0, format!("turn-{}", other.key()), None));
+                    turns.push(new_turn(format!("turn-{}", other.key()), None));
                 }
                 let turn = turns
                     .last_mut()
@@ -252,9 +214,8 @@ pub fn project_turns<'a>(
     turns
 }
 
-fn new_turn(index: usize, key: String, user: Option<&User>) -> TurnView<'_> {
+fn new_turn(key: String, user: Option<&User>) -> TurnView<'_> {
     TurnView {
-        index,
         key,
         users: user.into_iter().collect(),
         continued: false,

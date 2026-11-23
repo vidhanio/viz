@@ -1,5 +1,5 @@
-//! Headless preview scenes verifying Track L's rich timeline cards, dividers,
-//! subagent groups, proposed plan cards, error banners, and minimap overlays.
+//! Headless preview scenes for rich timeline cards, dividers,
+//! subagent groups, proposed plan cards, and error banners.
 
 use std::path::PathBuf;
 
@@ -14,7 +14,7 @@ use super::{
         preview_tool_entry, prompt,
     },
     fixtures::seed_workspace,
-    timeline::{BASE_TS, run_end, timed_text, usage},
+    timeline::{BASE_TS, run_end},
 };
 use crate::{app::Desktop, model::Model};
 
@@ -24,13 +24,6 @@ use crate::{app::Desktop, model::Model};
 /// and `UsageLimit` / `General` inline error banners.
 pub(super) fn cards(s: &mut Desktop) {
     seed_cards(&mut s.model);
-    s.sync_widgets_from_model();
-}
-
-/// Multi-turn thread on a wide viewport with left-gutter `TimelineMinimap`,
-/// flat `320pt` hover preview popover, and floating `ScrollToEndButton` pill.
-pub(super) fn minimap(s: &mut Desktop) {
-    seed_minimap(&mut s.model);
     s.sync_widgets_from_model();
 }
 
@@ -129,10 +122,9 @@ fn cards_entries() -> Vec<EntryData> {
         - Right-aligned user bubbles with `176pt` auto-collapse and hover actions.\n\
         - Borderless horizontal-rule Markdown tables and framed code blocks.\n\
         - Command output with ANSI SGR spans and lazy `thread.entry_chunk` loading.\n\n\
-        ## Phase 3 — Cards, Dividers & Minimap\n\
+        ## Phase 3 — Cards and Dividers\n\
         - `ChangedFilesTree` with compacted folders and `+N -M` stats.\n\
         - Overlapping-avatar `SubagentGroup` with live status dots.\n\
-        - Left-gutter `TimelineMinimap` with flat `320pt` hover preview.\n\n\
         ## Phase 4 — Theme & Accessibility Verification\n\
         - Snap every timeline scene in `github-dark`, `github`, and `rose-pine-dawn`.\n\
         - Verify zero layout warnings in `--tree` JSON output.\n\
@@ -195,58 +187,4 @@ fn cards_entries() -> Vec<EntryData> {
             Some("Harness connection dropped unexpectedly while reading tool output."),
         ),
     ]
-}
-
-fn seed_minimap(m: &mut Model) {
-    seed_workspace(m);
-    m.disclosure.expanded.clear();
-    m.panels.window_width = 1440.0;
-    m.panels.sidebar.open = true;
-    m.panels.sidebar.width = 240.0;
-
-    let entries = [
-        prompt("1. Summarize the current SQLite schema for threads and entries."),
-        timed_text(
-            "1:0",
-            "Threads store lifecycle, shelf, harness, and fork lineage; entries hold prompt, transcript, and run-end records.",
-            false,
-            BASE_TS,
-            BASE_TS + 2_000,
-        ),
-        run_end(Some("end_turn"), Some(usage(2_100, 320, 0.02)), None),
-        prompt("2. How should `TimelineMinimap` jump to earlier turns cleanly?"),
-        timed_text(
-            "2:0",
-            "Click each static-width turn tick to call `Tx::scroll_key_center_at(turn.key, 180.0)`, and highlight visible turns via `El::on_visible`.",
-            false,
-            BASE_TS + 60_000,
-            BASE_TS + 64_000,
-        ),
-        run_end(Some("end_turn"), Some(usage(3_400, 480, 0.03)), None),
-        prompt("3. Add the floating `ScrollToEndButton` pill when scrolled up."),
-        timed_text(
-            "3:0",
-            "Mounted a flat `t.surface_raised` pill with a `1px` `t.border_overlay` hairline and an accent unseen-activity dot.",
-            false,
-            BASE_TS + 120_000,
-            BASE_TS + 125_000,
-        ),
-        run_end(Some("end_turn"), Some(usage(4_050, 510, 0.04)), None),
-        prompt("4. Confirm zero drop shadows remain on floating surfaces."),
-        timed_text(
-            "4:0",
-            "Verified: every popover, menu, card, and floating pill uses strictly flat base16 fills and crisp `1px` hairlines.",
-            false,
-            BASE_TS + 180_000,
-            BASE_TS + 183_000,
-        ),
-        run_end(Some("end_turn"), Some(usage(4_600, 410, 0.04)), None),
-    ];
-
-    m.cache_mut().open_thread_mut(THREAD).transcript = preview_thread(entries, None);
-    m.timeline.visible_turns.insert(1);
-    m.timeline.visible_turns.insert(2);
-    m.timeline.hovered_minimap = Some(1);
-    m.timeline.far_from_bottom = true;
-    m.timeline.unseen_activity = true;
 }

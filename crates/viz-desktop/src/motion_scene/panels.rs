@@ -1,4 +1,4 @@
-//! Live shimmer, tucked drawer, popover, inspector, and toast cards.
+//! Live status, tucked drawer, popover, inspector, and toast cards.
 
 use rune::{El, col, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, Placement, SegmentedControl};
@@ -27,7 +27,7 @@ const DRAWER_FILES: [(&str, &str); 4] = [
     ("crates/viz-desktop/src/header.rs", "title switch"),
 ];
 
-pub(super) fn shimmer_presence_card(demo: &WorkbenchDemo, t: &Theme, overlays: &mut Vec<El>) -> El {
+pub(super) fn presence_card(demo: &WorkbenchDemo, t: &Theme, overlays: &mut Vec<El>) -> El {
     let mut drawer_host = col().key("presence-host").w_full().gap(S6);
     if demo.overlays.drawer {
         drawer_host = drawer_host.child(tucked_files_drawer(t));
@@ -77,24 +77,24 @@ pub(super) fn shimmer_presence_card(demo: &WorkbenchDemo, t: &Theme, overlays: &
         .w_full()
         .grow(1.0)
         .gap(S8)
-        .child(live_shimmer_row(demo.live.shimmer, t))
+        .child(live_status_row(demo.live.active, t))
         .child(drawer_host)
         .child(rune::spacer())
         .child(controls);
 
     card(
-        "card-shimmer",
-        "Live shimmer & tucked presence",
-        "Linear GPU sweep + staggered @files drawer + flat popover",
+        "card-presence",
+        "Live status & tucked presence",
+        "Status change, staggered @files drawer and popover",
         None,
         body,
         t,
     )
 }
 
-fn live_shimmer_row(active: bool, t: &Theme) -> El {
+fn live_status_row(active: bool, t: &Theme) -> El {
     row()
-        .key("live-shimmer-row")
+        .key("live-status-row")
         .w_full()
         .px(S12)
         .py(S8)
@@ -102,13 +102,6 @@ fn live_shimmer_row(active: bool, t: &Theme) -> El {
         .center_y()
         .radius(RADIUS_CONTROL)
         .fill(t.k.c.page)
-        .border(HAIRLINE, if active { t.accent } else { t.hairline })
-        .children(motion::shimmer_band(
-            "demo-shimmer",
-            active,
-            t.accent,
-            RADIUS_CONTROL,
-        ))
         .child(if active {
             ui::radar(ICON_SMALL, t.accent, t)
         } else {

@@ -89,7 +89,7 @@ pub fn essential(s: &mut Desktop) {
 pub fn popover(s: &mut Desktop) {
     full(s);
     s.model.panels.sidebar.width = 320.0;
-    s.model.panels.details_open = true;
+    s.model.panels.details_open = Some(true);
     s.sync_widgets_from_model();
 }
 

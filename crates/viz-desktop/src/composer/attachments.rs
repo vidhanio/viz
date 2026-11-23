@@ -74,7 +74,7 @@ pub fn strip(s: &Desktop, t: &Theme) -> Option<El> {
 }
 
 fn media_tile(s: &Desktop, index: usize, attachment: &Attachment, t: &Theme) -> El {
-    let decode_error = image_decode_error(s, attachment);
+    let decode_error = image_decode_error(s, index);
     let status = decode_error
         .as_ref()
         .unwrap_or_else(|| s.model.composer.draft.attachment_status(index));
@@ -84,7 +84,7 @@ fn media_tile(s: &Desktop, index: usize, attachment: &Attachment, t: &Theme) -> 
         t.hairline
     };
     let preview = s
-        .attachment_image(attachment)
+        .attachment_image(index)
         .filter(|img| img.is_ready() && img.error().is_none())
         .map_or_else(
             || {
@@ -260,7 +260,7 @@ pub fn lightbox(s: &Desktop, reduced: bool, t: &Theme, layer: &mut Vec<El>) {
         return;
     };
     let (natural, picture) = s
-        .attachment_image(attachment)
+        .attachment_image(index)
         .filter(|img| img.is_ready() && img.error().is_none())
         .map_or_else(
             || {
@@ -312,11 +312,8 @@ fn image_dims(size: Option<[u32; 2]>) -> [f32; 2] {
     size.map_or([320.0, 240.0], |[w, h]| [w as f32, h as f32])
 }
 
-fn image_decode_error(
-    s: &Desktop,
-    attachment: &Attachment,
-) -> Option<crate::model::AttachmentStatus> {
-    let error = s.attachment_image(attachment)?.error()?;
+fn image_decode_error(s: &Desktop, index: usize) -> Option<crate::model::AttachmentStatus> {
+    let error = s.attachment_image(index)?.error()?;
     Some(crate::model::AttachmentStatus::Error(error.to_string()))
 }
 

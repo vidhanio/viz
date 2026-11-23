@@ -118,7 +118,21 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
         .reduced_motion(reduced)
         .build(&t.shell);
     overlays.extend(toasts(s, t));
-    rune_kit::root(split, overlays).hover_motion_within(motion::INSTANT, motion::HOVER_OUT)
+    rune_kit::root(split, overlays)
+        .hover_motion_within(motion::INSTANT, motion::HOVER_OUT)
+        .on_layout_tx(|s: &mut Desktop, [_, _, width, height], tx| {
+            let panels = &s.model.panels;
+            if (panels.window_width - width).abs() >= 1.0
+                || (panels.window_height - height).abs() >= 1.0
+            {
+                s.dispatch(
+                    crate::update::Msg::Shell(crate::update::ShellMsg::WindowResized(
+                        width, height,
+                    )),
+                    tx,
+                );
+            }
+        })
 }
 
 /// The floating toast stack, including triage undo toasts, when non-empty.

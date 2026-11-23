@@ -1,7 +1,7 @@
 //! Expanded tool detail inspectors (command ANSI terminal output, file diffs,
 //! search matches, MCP structured I/O, and reasoning traces).
 
-use rune::{El, ScrollSpec, Tx, col, el, rich, row, text};
+use rune::{Color, El, ScrollSpec, TextStyle, Tx, col, el, rich, row, text};
 use rune_kit::{IconButtonVariant, Markdown, ScrollBar, ScrollBarStyle};
 use viz_client::protocol::EntrySource;
 
@@ -56,15 +56,6 @@ pub fn tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
 
 /// Renders an expanded reasoning trace beside a `2pt` hairline rule.
 pub fn thought_inspector(key: &str, body: &str, streaming: bool, t: &Theme) -> El {
-    let md = Markdown::new(body.to_owned())
-        .style(t.markdown().body_font(t.ui).text(t.muted).link(t.text))
-        .streaming(streaming)
-        .selectable(true)
-        .on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
-            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
-        })
-        .build(&t.k)
-        .w_full();
     let scrolled = col()
         .key(format!("{key}-thought-scroll"))
         .w_full()
@@ -73,7 +64,7 @@ pub fn thought_inspector(key: &str, body: &str, streaming: bool, t: &Theme) -> E
         .scroll(ScrollSpec {
             stick_bottom: streaming,
         })
-        .child(md)
+        .child(activity_markdown(body, t.ui, t.muted, streaming, true, t))
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k));
     row()
         .key(format!("{key}-thought-detail"))
@@ -85,6 +76,37 @@ pub fn thought_inspector(key: &str, body: &str, streaming: bool, t: &Theme) -> E
         .items_stretch()
         .child(el().w(S2).radius(HAIRLINE).fill(t.hairline).a11y_hidden())
         .child(scrolled.grow(1.0).shrink().min_w(0.0))
+}
+
+/// Shows a compact preview of the leading portion of a streaming thought.
+pub(super) fn thought_preview(body: &str, t: &Theme) -> El {
+    col()
+        .w_full()
+        .max_h(4.0 * t.small.line_height)
+        .clip_rounded(0.0)
+        .child(activity_markdown(body, t.small, t.muted, true, false, t))
+}
+
+fn activity_markdown(
+    body: &str,
+    font: TextStyle,
+    color: Color,
+    streaming: bool,
+    interactive: bool,
+    t: &Theme,
+) -> El {
+    let mut markdown = Markdown::new(body)
+        .style(t.markdown().body_font(font).text(color))
+        .streaming(streaming)
+        .selectable(interactive)
+        .scroll_wide(interactive)
+        .copy_source(interactive);
+    if interactive {
+        markdown = markdown.on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
+            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
+        });
+    }
+    markdown.build(&t.k).w_full()
 }
 
 fn command_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
@@ -205,7 +227,13 @@ fn dynamic_tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         card = card
             .child(section_head("Arguments", t))
             .child(ui::rule(t))
-            .child(text_scroll("mcp-args", args, t.mono_small, 180.0, false, t));
+            .child(output_scroll(
+                "mcp-args",
+                literal_output(args, t),
+                180.0,
+                false,
+                t,
+            ));
     }
 
     let trimmed = tool.output.trim_end();
@@ -213,15 +241,15 @@ fn dynamic_tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         if tool.raw_input_pretty.is_some() {
             card = card.child(ui::rule(t));
         }
+        let streaming = tool.status == ToolStatus::Running;
         card = card
             .child(section_head("Output", t))
             .child(ui::rule(t))
-            .child(text_scroll(
+            .child(output_scroll(
                 "mcp-out",
-                trimmed,
-                t.mono_small,
+                tool_output(trimmed, false, streaming, t),
                 240.0,
-                false,
+                streaming,
                 t,
             ));
     }
@@ -278,15 +306,15 @@ fn plain_output_inspector(s: &Desktop, tool: &Tool, mono: bool, t: &Theme) -> El
             .build(&t.k)
             .key("copy"),
         );
+    let streaming = tool.status == ToolStatus::Running;
     let mut card = inspector_frame("plain-card", t)
         .child(head)
         .child(ui::rule(t))
-        .child(text_scroll(
+        .child(output_scroll(
             "plain-scroll",
-            tool.output.trim_end(),
-            if mono { t.mono_small } else { t.ui },
+            tool_output(tool.output.trim_end(), mono, streaming, t),
             CMD_OUTPUT_MAX_H,
-            tool.status == ToolStatus::Running,
+            streaming,
             t,
         ));
     if let Some(chunk_bar) = load_more_bar(s, tool, t) {
@@ -304,29 +332,36 @@ fn section_head(label: &str, t: &Theme) -> El {
         .child(text(label).font(t.micro_medium).color(t.muted))
 }
 
-fn text_scroll(
-    key: &str,
-    body: &str,
-    font: rune::TextStyle,
-    max_h: f32,
-    stick_bottom: bool,
-    t: &Theme,
-) -> El {
+/// Keep source reads and structured JSON literal. Text results from other
+/// tools use the same Markdown renderer as reasoning.
+fn tool_output(body: &str, literal: bool, streaming: bool, t: &Theme) -> El {
+    if literal
+        || (body.trim_start().starts_with(['{', '['])
+            && serde_json::from_str::<serde_json::Value>(body).is_ok())
+    {
+        literal_output(body, t)
+    } else {
+        activity_markdown(body, t.ui, t.text, streaming, true, t)
+    }
+}
+
+fn literal_output(body: &str, t: &Theme) -> El {
+    text(body)
+        .font(t.mono_small)
+        .color(t.text)
+        .wrap_anywhere()
+        .selectable(true)
+        .selection_color(t.k.selection())
+}
+
+fn output_scroll(key: &str, output: El, max_h: f32, stick_bottom: bool, t: &Theme) -> El {
     col()
         .key(key)
         .w_full()
         .max_h(max_h)
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom })
-        .child(
-            text(body)
-                .font(font)
-                .color(t.text)
-                .wrap_anywhere()
-                .padding(S10)
-                .selectable(true)
-                .selection_color(t.k.selection()),
-        )
+        .child(col().w_full().padding(S10).child(output))
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
 }
 

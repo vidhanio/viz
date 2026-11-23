@@ -1,8 +1,8 @@
 //! Pure timeline derivations and client-side timeline UI state: tool action
 //! classification, activity burst folding, per-thread fold memory,
-//! scroll/minimap state, and path formatting.
+//! scroll state, and path formatting.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use viz_client::protocol::ThreadId;
 
@@ -25,10 +25,6 @@ pub struct TimelineState {
     pub far_from_bottom: bool,
     /// True when new streaming content arrived while scrolled away from bottom.
     pub unseen_activity: bool,
-    /// Turn indices currently intersecting the timeline viewport (for minimap).
-    pub visible_turns: BTreeSet<usize>,
-    /// Turn index currently hovered in the left-gutter minimap.
-    pub hovered_minimap: Option<usize>,
     /// Key of the most recently copied item (for transient Copy -> Check
     /// morph).
     pub copied_key: Option<String>,
@@ -38,7 +34,7 @@ pub struct TimelineState {
     pub open_plan_menu: Option<String>,
     /// Dismissed inline error banner keys.
     pub dismissed_errors: HashSet<String>,
-    /// Currently requested diff file path (seam for Track G's Diff panel).
+    /// File selected in the diff inspector.
     pub selected_diff_file: Option<String>,
 }
 
@@ -93,8 +89,6 @@ impl TimelineState {
     pub fn reset_viewport(&mut self) {
         self.far_from_bottom = false;
         self.unseen_activity = false;
-        self.visible_turns.clear();
-        self.hovered_minimap = None;
         self.open_plan_menu = None;
         self.copied_key = None;
     }

@@ -1,9 +1,10 @@
 //! Asynchronous RPC request helpers dispatched by [`super::server::Session`].
 
-use std::sync::Arc;
+use std::{io, sync::Arc};
 
 use base64::Engine as _;
 use rune::AppHandle;
+use sha2::{Digest, Sha256};
 use viz_client::{
     Client, Error, Result,
     protocol::{
@@ -16,7 +17,7 @@ use viz_client::{
 use super::{ProjectChange, ThreadChange, server::Session};
 use crate::{
     app::Desktop,
-    model::{Checkouts, Transcript},
+    model::Checkouts,
     update::{Msg, ServerMsg},
 };
 
@@ -43,14 +44,19 @@ impl Session<'_> {
     pub(super) async fn launch(
         &self,
         draft: u64,
-        params: &LaunchThread,
-        recovery: Box<crate::model::DraftData>,
+        mut params: LaunchThread,
+        mut recovery: Box<crate::model::DraftData>,
     ) -> Result<()> {
-        match self.client.launch_thread(params).await {
+        let fingerprint = submission_fingerprint(&self.environment, &params);
+        params.request_id = Some(submission_id(&mut recovery, fingerprint));
+        match self.client.launch_thread(&params).await {
             Ok(thread) => self.dispatch(ServerMsg::ThreadCreated { draft, thread }),
             Err(error) => {
                 let detail = error.to_string();
                 let closed = matches!(error, Error::Closed);
+                if !closed {
+                    recovery.retry_submission = None;
+                }
                 self.dispatch(ServerMsg::LaunchFailed {
                     draft,
                     recovery,
@@ -67,14 +73,23 @@ impl Session<'_> {
 
     pub(super) async fn send_input(
         &self,
-        input: &SendInput,
-        recovery: Option<Box<super::DraftRecovery>>,
+        mut input: SendInput,
+        mut recovery: Option<Box<super::DraftRecovery>>,
     ) -> Result<()> {
-        match self.client.send(input).await {
+        if let Some(recovery) = &mut recovery {
+            let mode = input.mode.take();
+            let fingerprint = submission_fingerprint(&self.environment, &input);
+            input.mode = mode;
+            input.request_id = Some(submission_id(&mut recovery.draft, fingerprint));
+        }
+        match self.client.send(&input).await {
             Ok(_) => Ok(()),
             Err(error) => {
                 let detail = error.to_string();
                 let closed = matches!(error, Error::Closed);
+                if !closed && let Some(recovery) = &mut recovery {
+                    recovery.draft.retry_submission = None;
+                }
                 self.dispatch(ServerMsg::SendFailed {
                     thread: input.thread,
                     recovery,
@@ -257,44 +272,29 @@ impl Session<'_> {
         }
     }
 
-    pub(super) async fn load_earlier(&mut self, thread: ThreadId, before: EntryId) -> Result<()> {
-        if self.watched != Some(thread) || self.before != Some(before) {
-            self.dispatch(ServerMsg::EarlierLoaded {
-                thread,
-                transcript: None,
-            });
-            return Ok(());
-        }
-        match self
-            .client
-            .list_entries(&ListEntries {
-                thread,
-                before: Some(before),
-                limit: None,
-            })
-            .await
-        {
-            Ok(page) => {
-                self.before = page.before;
-                self.entries.insert(0, Arc::new(page.entries));
-                let transcript = Transcript::from_entries(
-                    self.entries.iter().flat_map(|batch| batch.iter()),
-                    self.before,
-                );
-                self.dispatch(ServerMsg::EarlierLoaded {
+    pub(super) async fn load_earlier(&self, thread: ThreadId, before: EntryId) -> Result<()> {
+        let result = if self.watched == Some(thread) {
+            self.client
+                .list_entries(&ListEntries {
                     thread,
-                    transcript: Some(transcript),
-                });
-                Ok(())
-            }
-            Err(error) => {
-                self.dispatch(ServerMsg::EarlierLoaded {
-                    thread,
-                    transcript: None,
-                });
-                Err(error)
-            }
-        }
+                    before: Some(before),
+                    limit: None,
+                })
+                .await
+                .map(Some)
+        } else {
+            Ok(None)
+        };
+        let (page, error) = match result {
+            Ok(page) => (page, None),
+            Err(error) => (None, Some(error)),
+        };
+        self.dispatch(ServerMsg::EarlierLoaded {
+            thread,
+            before,
+            page,
+        });
+        error.map_or(Ok(()), Err)
     }
 
     pub(super) fn load_checkouts(&self, project: String) {
@@ -444,4 +444,35 @@ impl Session<'_> {
         });
         Ok(())
     }
+}
+
+/// Writes serialized parameters straight into a digest so large attachments
+/// need no additional JSON allocation for retry identity.
+struct SubmissionHash(Sha256);
+
+impl io::Write for SubmissionHash {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.update(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn submission_fingerprint(environment: &str, payload: &impl serde::Serialize) -> Option<[u8; 32]> {
+    let mut writer = SubmissionHash(Sha256::new());
+    serde_json::to_writer(&mut writer, &(environment, payload)).ok()?;
+    Some(writer.0.finalize().into())
+}
+
+fn submission_id(draft: &mut crate::model::DraftData, fingerprint: Option<[u8; 32]>) -> String {
+    let id = draft
+        .retry_submission
+        .take()
+        .filter(|(_, previous)| Some(*previous) == fingerprint)
+        .map_or_else(|| uuid::Uuid::new_v4().to_string(), |(id, _)| id);
+    draft.retry_submission = fingerprint.map(|fingerprint| (id.clone(), fingerprint));
+    id
 }

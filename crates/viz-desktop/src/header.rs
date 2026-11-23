@@ -81,12 +81,12 @@ pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
             ));
         toolbar = toolbar.trailing(diff);
     }
-    if !crate::model::git::inline(m) {
+    if m.selection.selected.is_some() {
         toolbar = toolbar.trailing(
             header_button(
                 &ui::PANEL_RIGHT,
                 "Thread Details",
-                m.panels.details_open,
+                crate::model::git::details_visible(m),
                 crate::update::GitMsg::ToggleDetails,
                 t,
             )
@@ -114,11 +114,11 @@ fn header_button(
     .a11y_value(if selected { "Open" } else { "Closed" })
 }
 
-fn project_mark(project: &viz_client::protocol::Project, t: &Theme) -> El {
+fn project_mark(s: &Desktop, project: &viz_client::protocol::Project, t: &Theme) -> El {
     row()
         .center_y()
         .gap(S8)
-        .child(ui::project_monogram(&project.name, 18.0, None, t))
+        .child(ui::project_mark(s, Some(project), 18.0, t))
         .child(
             text(&project.name)
                 .font(t.ui_medium)
@@ -162,7 +162,12 @@ fn title(s: &Desktop, t: &Theme) -> El {
         );
     };
     let thread = m.summary(id);
-    let mark = m.project().map(|project| project_mark(project, t));
+    let mark = m.project().map(|project| project_mark(s, project, t));
+    let harness = ui::harness_mark(
+        thread.map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
+        false,
+        t,
+    );
     let title = title_text(m.title(id), t);
     let Some((parent, environment)) = thread
         .and_then(|thread| {
@@ -174,12 +179,13 @@ fn title(s: &Desktop, t: &Theme) -> El {
             *parent != id || env.is_some_and(|env| Some(env) != m.connection.environment.as_deref())
         })
     else {
-        return group.children(mark).child(title);
+        return group.children(mark).child(harness).child(title);
     };
     group
         .child(breadcrumb(s, parent, environment, t))
         .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint).a11y_hidden())
         .children(mark)
+        .child(harness)
         .child(title)
 }
 

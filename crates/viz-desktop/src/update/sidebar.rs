@@ -2,6 +2,8 @@
 //! combobox, hover cards, inline rename, drag-and-drop, and routing into
 //! [`super::sidebar_triage`].
 
+use std::collections::BTreeMap;
+
 use viz_client::protocol::{ThreadId, TriageAction, WorktreeTarget};
 
 pub(super) use super::sidebar_triage::open_edit;
@@ -144,15 +146,13 @@ pub enum SidebarMsg {
         thread: ThreadId,
         /// Source shelf (`Pinned` or `Active`).
         shelf: DragShelf,
-        /// Card index within `shelf`.
-        index: usize,
     },
     /// Pointer moved during a card drag gesture.
     DragMove {
         /// Vertical displacement from press point in points.
         dy: f32,
-        /// Height of the dragged card in points.
-        height: f32,
+        /// Current pointer in window points.
+        point: [f32; 2],
         /// Current timestamp in Unix ms.
         now: i64,
     },
@@ -269,7 +269,7 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
                 || model.sidebar.snooze_popover.is_some()
                 || model.sidebar.filter_open
                 || model.sidebar.inline_rename.is_some()
-                || model.sidebar.drag.is_some_and(|d| d.active);
+                || model.sidebar.drag.as_ref().is_some_and(|d| d.active);
             model.sidebar.hover_card = if blocked { None } else { target };
         }
         SidebarMsg::ToggleSnoozePopover(thread) => {
@@ -382,36 +382,28 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
         }
         SidebarMsg::CommitInlineRename => commit_inline_rename(model, &mut effects),
         SidebarMsg::CancelInlineRename => model.sidebar.inline_rename = None,
-        SidebarMsg::DragStart {
-            thread,
-            shelf,
-            index,
-        } => {
+        SidebarMsg::DragStart { thread, shelf } => {
             if model.connected() {
                 model.sidebar.hover_card = None;
                 model.sidebar.drag = Some(SidebarDrag {
                     thread,
                     source_shelf: shelf,
-                    source_index: index,
-                    target_shelf: shelf,
-                    target_index: index,
+                    target: None,
                     dy: 0.0,
-                    pitch: 64.0,
                     active: false,
+                    rects: BTreeMap::new(),
                 });
             }
         }
-        SidebarMsg::DragMove { dy, height, now } => {
-            let (pinned_len, active_len) = {
+        SidebarMsg::DragMove { dy, point, now } => {
+            if let Some(mut drag) = model.sidebar.drag.take() {
                 let outline = SidebarOutline::derive(model, now);
-                (outline.pinned.len(), outline.active.len())
-            };
-            if let Some(drag) = &mut model.sidebar.drag {
-                drag.move_to(dy, height, pinned_len, active_len);
+                drag.move_to(dy, point, &outline);
                 if drag.active {
                     model.sidebar.hover_card = None;
                     model.sidebar.snooze_popover = None;
                 }
+                model.sidebar.drag = Some(drag);
             }
         }
         SidebarMsg::DragEnd { cancelled, now } => finish_drag(model, cancelled, now, &mut effects),

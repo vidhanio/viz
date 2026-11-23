@@ -21,10 +21,12 @@ rune-kit = { workspace = true, features = ["markdown"] }
 serde = { workspace = true, features = ["derive"] }
 serde-saphyr.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+uuid = { workspace = true, features = ["v4"] }
 viz-client.workspace = true
 viz-config.workspace = true
 

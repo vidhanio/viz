@@ -42,12 +42,6 @@ pub fn live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
         .gap(S6)
         .center_y()
         .radius(RADIUS_SM)
-        .children(motion::shimmer_band(
-            format!("{}-working-shimmer", turn.key),
-            true,
-            t.muted,
-            RADIUS_SM,
-        ))
         .child(ui::radar(ICON_SMALL, t.accent, t))
         .child(text(prefix).font(t.ui).color(t.muted));
 

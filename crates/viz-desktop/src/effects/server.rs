@@ -5,16 +5,16 @@
 use std::{sync::Arc, time::Duration};
 
 use rune::AppHandle;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinSet};
 use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
-        CancelTask, ClientInfo, ClientKind, ConfigureThread, DeleteThread, Entry, EntryId,
-        ListEnvironments, MoveThread, Notification, ThreadId,
+        CancelTask, ClientInfo, ClientKind, ConfigureThread, DeleteThread, ListEnvironments,
+        MoveThread, Notification, ThreadId,
     },
 };
 
-use super::{ServerEffect, offline, platform, requests};
+use super::{ServerEffect, git, offline, platform, requests};
 use crate::{
     app::Desktop,
     model::Status,
@@ -171,49 +171,74 @@ async fn session(
         environment: Arc::from(hello.environment.as_str()),
         watched: None,
         git_watched: None,
-        entries: Vec::new(),
-        before: None,
     };
-    let started = async {
-        let ((), harnesses, environments) = tokio::try_join!(
-            session.refresh_list(),
-            session.client.list_harnesses(),
-            session.client.request(&ListEnvironments {}),
-        )?;
-        if let Some(thread) = *selected {
-            match session.switch(Some(thread)).await {
-                Err(Error::Rpc {
-                    code: NOT_FOUND, ..
-                }) => *selected = None,
-                result => result?,
-            }
-        }
-        let watched = *selected;
-        session.dispatch(ServerMsg::Connected {
-            version: hello.version,
-            environment: hello.environment,
-            environments: environments.environments,
-            harnesses,
-            watched,
-        });
-        Ok(())
-    };
-    if let Err(error) = started.await {
+    if let Err(error) = session.start(hello, selected).await {
         return Ended::Lost(error);
     }
     signal(first);
+    let mut jobs = JoinSet::new();
+    let mut configs: std::collections::VecDeque<(
+        ThreadId,
+        String,
+        viz_client::protocol::OptionValue,
+    )> = std::collections::VecDeque::new();
+    let mut configuring = false;
     loop {
+        if !configuring && let Some((thread, option, value)) = configs.pop_front() {
+            configuring = true;
+            let client = session.client.clone();
+            jobs.spawn(async move {
+                let result = client
+                    .configure_thread(&ConfigureThread {
+                        thread,
+                        option: &option,
+                        value: &value,
+                    })
+                    .await;
+                BackgroundReply::Configured(result)
+            });
+        }
         let result = tokio::select! {
             notification = notifications.recv() => match notification {
                 Some(notification) => session.on_notification(notification).await,
                 None => Err(Error::Closed),
+            },
+            done = jobs.join_next(), if !jobs.is_empty() => match done {
+                Some(Ok(BackgroundReply::Configured(result))) => {
+                    configuring = false;
+                    result
+                }
+                Some(Ok(BackgroundReply::Git { reply, refresh })) => {
+                    session.dispatch(reply);
+                    if refresh { session.refresh_list().await } else { Ok(()) }
+                }
+                Some(Err(error)) => {
+                    tracing::error!(%error, "desktop request task ended unexpectedly");
+                    return Ended::Lost(Error::Closed);
+                }
+                None => Ok(()),
             },
             command = commands.recv() => match command {
                 Some(ServerEffect::Environment { environment, thread }) => {
                     session.client.close();
                     return Ended::Environment { target: environment, thread };
                 }
-                Some(ServerEffect::Git { thread, serial, request }) => session.git(thread, serial, request).await,
+                Some(ServerEffect::Git { request: git::Request::Watch(next), .. }) => session.watch_git(next).await,
+                Some(ServerEffect::Git { thread, serial, request }) => {
+                    if session.watched == Some(thread) {
+                        let client = session.client.clone();
+                        let refresh = matches!(&request, git::Request::Init(_) | git::Request::CreatePull { .. });
+                        jobs.spawn(async move {
+                            let reply = git::execute(client, thread, serial, request).await;
+                            BackgroundReply::Git { reply, refresh }
+                        });
+                    }
+                    Ok(())
+                }
+                Some(ServerEffect::Configure { thread, option, value }) => {
+                    configs.push_back((thread, option, value));
+                    Ok(())
+                }
                 Some(command) => session.on_command(command, selected).await,
                 None => return Ended::Quit,
             },
@@ -226,6 +251,11 @@ async fn session(
     }
 }
 
+enum BackgroundReply {
+    Configured(viz_client::Result<()>),
+    Git { reply: ServerMsg, refresh: bool },
+}
+
 /// Active WebSocket session state owned by the connection task.
 pub(super) struct Session<'a> {
     pub(super) ui: &'a AppHandle<Desktop>,
@@ -233,11 +263,37 @@ pub(super) struct Session<'a> {
     pub(super) environment: Arc<str>,
     pub(super) watched: Option<ThreadId>,
     pub(super) git_watched: Option<ThreadId>,
-    pub(super) entries: Vec<Arc<Vec<Entry>>>,
-    pub(super) before: Option<EntryId>,
 }
 
 impl Session<'_> {
+    async fn start(
+        &mut self,
+        hello: viz_client::protocol::Hello,
+        selected: &mut Option<ThreadId>,
+    ) -> viz_client::Result<()> {
+        let ((), harnesses, environments) = tokio::try_join!(
+            self.refresh_list(),
+            self.client.list_harnesses(),
+            self.client.request(&ListEnvironments {}),
+        )?;
+        if let Some(thread) = *selected {
+            match self.switch(Some(thread)).await {
+                Err(Error::Rpc {
+                    code: NOT_FOUND, ..
+                }) => *selected = None,
+                result => result?,
+            }
+        }
+        self.dispatch(ServerMsg::Connected {
+            version: hello.version,
+            environment: hello.environment,
+            environments: environments.environments,
+            harnesses,
+            watched: *selected,
+        });
+        Ok(())
+    }
+
     #[expect(
         clippy::too_many_lines,
         reason = "single exhaustive server effect dispatcher"
@@ -251,7 +307,7 @@ impl Session<'_> {
             ServerEffect::Answer(answer) => self.answer(answer).await,
             ServerEffect::Select(thread) => {
                 self.select(thread).await?;
-                *selected = Some(thread);
+                *selected = self.watched;
                 Ok(())
             }
             ServerEffect::ClearSelection => {
@@ -263,7 +319,7 @@ impl Session<'_> {
                 draft,
                 params,
                 recovery,
-            } => self.launch(draft, &params, recovery).await,
+            } => self.launch(draft, *params, recovery).await,
             ServerEffect::CancelTask(task) => {
                 self.client.request(&CancelTask { task: &task }).await?;
                 self.refresh_tasks().await
@@ -311,19 +367,6 @@ impl Session<'_> {
                 .request(&MoveThread { thread, worktree })
                 .await
                 .map(drop),
-            ServerEffect::Configure {
-                thread,
-                option,
-                value,
-            } => {
-                self.client
-                    .configure_thread(&ConfigureThread {
-                        thread,
-                        option: &option,
-                        value: &value,
-                    })
-                    .await
-            }
             ServerEffect::Abort(id) => self.client.stop_thread(id).await,
             ServerEffect::Project { op_id, change } => self.project(op_id, change).await,
             ServerEffect::SearchFiles {
@@ -369,7 +412,7 @@ impl Session<'_> {
                 platform::spawn_attach(self.ui, scope, target, source);
                 Ok(())
             }
-            ServerEffect::SendInput { input, recovery } => self.send_input(&input, recovery).await,
+            ServerEffect::SendInput { input, recovery } => self.send_input(input, recovery).await,
             ServerEffect::Fork {
                 params,
                 load_prompt,
@@ -382,25 +425,19 @@ impl Session<'_> {
                 self.read_entry_chunk(thread, key, source);
                 Ok(())
             }
-            ServerEffect::Reconnect | ServerEffect::Git { .. } => Ok(()),
+            ServerEffect::Reconnect | ServerEffect::Git { .. } | ServerEffect::Configure { .. } => {
+                Ok(())
+            }
         }
     }
 
     async fn select(&mut self, thread: ThreadId) -> viz_client::Result<()> {
         if let Err(error) = self.switch(Some(thread)).await {
             let previous = self.watched;
-            let entries: Vec<Entry> = self
-                .entries
-                .iter()
-                .flat_map(|page| page.iter().cloned())
-                .collect();
-            let before = self.before;
             let closed = matches!(error, Error::Closed);
             self.dispatch(ServerMsg::SelectFailed {
                 failed: thread,
                 previous,
-                entries,
-                before,
                 error: error.to_string(),
             });
             if closed {
@@ -411,20 +448,24 @@ impl Session<'_> {
         Ok(())
     }
 
-    async fn on_notification(&mut self, notification: Notification) -> viz_client::Result<()> {
+    async fn on_notification(&self, notification: Notification) -> viz_client::Result<()> {
         match notification {
             Notification::ThreadsChanged(_) => self.refresh_list().await,
             Notification::TasksChanged(_) => self.refresh_tasks().await,
             Notification::HarnessesChanged(_) => self.refresh_harnesses().await,
             Notification::ThreadState { thread, state } => {
-                self.dispatch(ServerMsg::ThreadState { thread, state });
+                if self.watched == Some(thread) {
+                    self.dispatch(ServerMsg::ThreadState { thread, state });
+                }
                 Ok(())
             }
             Notification::ThreadLive { thread, delta } => {
-                self.dispatch(ServerMsg::ThreadLive {
-                    thread,
-                    delta: Box::new(delta),
-                });
+                if self.watched == Some(thread) {
+                    self.dispatch(ServerMsg::ThreadLive {
+                        thread,
+                        delta: Box::new(delta),
+                    });
+                }
                 Ok(())
             }
             Notification::ThreadView {
@@ -434,12 +475,6 @@ impl Session<'_> {
                 before,
             } => {
                 if self.watched == Some(thread) {
-                    if reset {
-                        self.entries.clear();
-                        self.before = before;
-                    }
-                    let entries = Arc::new(entries);
-                    self.entries.push(Arc::clone(&entries));
                     self.dispatch(ServerMsg::ThreadView {
                         thread,
                         entries,
@@ -470,8 +505,6 @@ impl Session<'_> {
         }
         let previous = self.watched;
         self.watched = thread;
-        self.entries.clear();
-        self.before = None;
         if let Some(previous) = previous
             && let Err(error) = self.client.unwatch(previous).await
         {

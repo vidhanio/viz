@@ -4,10 +4,9 @@
 //! remaining registered projects, and `"No project"`, with search filtering,
 //! thread counts, project monograms/icons, and keyboard navigation.
 
-use rune::{El, Key, KeyEvent, Tx, icon, text};
-use rune_kit::{Placement, scrim};
+use rune::{Align, El, Key, KeyEvent, Side, Tx, icon, text};
+use rune_kit::scrim;
 
-use super::project_mark;
 use crate::{
     app::Desktop,
     model::{ProjectFilter, ProjectFilterOption, project_filter_options},
@@ -79,12 +78,11 @@ pub(super) fn combobox(s: &Desktop, now: i64, t: &Theme, layer: &mut Vec<El>) {
         .modal(true, close);
 
     layer.push(scrim("project-filter-scrim", close));
-    layer.push(motion::anchored_popover(
-        shell,
-        FILTER_TRIGGER_KEY,
-        Placement::BottomStart,
-        S6,
-    ));
+    layer.push(
+        shell
+            .anchored_fit(FILTER_TRIGGER_KEY, Side::Bottom, Align::Start, S6)
+            .transition(motion::fade(motion::QUICK_PAIR)),
+    );
 }
 
 fn close(s: &mut Desktop) {
@@ -105,6 +103,9 @@ fn on_filter_key(s: &mut Desktop, ev: &KeyEvent, now: i64, tx: &mut Tx) -> bool 
         Key::Escape => NavKey::Escape,
         _ => return false,
     };
+    if key == NavKey::Enter {
+        tx.instant();
+    }
     s.dispatch(Msg::Sidebar(SidebarMsg::ProjectFilterKey { key, now }), tx);
     true
 }
@@ -124,7 +125,7 @@ fn filter_row(s: &Desktop, option: ProjectFilterOption<'_>, highlighted: bool, t
         ProjectFilterOption::Project { project, count } => (
             project.name.as_str(),
             count,
-            project_mark::mark(s, Some(project), 16.0, t),
+            ui::project_mark(s, Some(project), 16.0, t),
         ),
         ProjectFilterOption::NoProject { count } => (
             "No project",
@@ -142,6 +143,7 @@ fn filter_row(s: &Desktop, option: ProjectFilterOption<'_>, highlighted: bool, t
         .highlighted(highlighted)
         .focus_ring_for(PROJECT_FILTER_INPUT)
         .on_press_tx(move |s: &mut Desktop, tx| {
+            tx.instant();
             s.dispatch(
                 Msg::Sidebar(SidebarMsg::SetProjectFilter(target.clone())),
                 tx,
@@ -165,11 +167,11 @@ fn filter_row(s: &Desktop, option: ProjectFilterOption<'_>, highlighted: bool, t
 pub(super) fn active_chip_parts<'a>(s: &'a Desktop, t: &Theme) -> Option<(El, &'a str)> {
     match &s.model.sidebar.project_filter {
         ProjectFilter::All => None,
-        ProjectFilter::NoProject => Some((project_mark::mark(s, None, ICON_MD, t), "No project")),
+        ProjectFilter::NoProject => Some((ui::project_mark(s, None, ICON_MD, t), "No project")),
         ProjectFilter::Project(path) => {
             let project = s.model.cache().project(path);
             let name = project.map_or(path.as_str(), |p| p.name.as_str());
-            Some((project_mark::mark(s, project, ICON_MD, t), name))
+            Some((ui::project_mark(s, project, ICON_MD, t), name))
         }
     }
 }

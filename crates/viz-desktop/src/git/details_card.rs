@@ -1,10 +1,10 @@
 //! Adaptive, flat thread details shared by the inline lane and header popover.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
-use rune::{El, col, el, text};
+use rune::{Align, El, Side, col, el, text};
 use rune_kit::Placement;
-use viz_client::protocol::{TaskStatus, ThreadId, ThreadStatus};
+use viz_client::protocol::{TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use crate::{
     app::Desktop,
@@ -14,7 +14,7 @@ use crate::{
         git::{self, CARD_INSET, CARD_WIDTH, Density},
         local_child, spawned_subagent, subagent_title, thread_title,
     },
-    theme::{HAIRLINE, RADIUS_CARD, Theme},
+    theme::{HAIRLINE, RADIUS_CARD, S4, Theme},
     ui,
     update::{GitMsg, Msg, TimelineMsg},
 };
@@ -24,7 +24,7 @@ pub const ANCHOR: &str = "thread-details-trigger";
 pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let id = s.model.selection.selected?;
     let inline = git::inline(&s.model);
-    if !inline && !s.model.panels.details_open {
+    if !git::details_visible(&s.model) {
         return None;
     }
     let height = (s.model.panels.window_height - 100.0).max(100.0);
@@ -32,7 +32,7 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let overlay_start = layer.len();
     let sections = [
         workspace(s, density, t),
-        subagents(s, id, t),
+        subagents(s, id, t, layer),
         usage(s, t),
         version_control(s, id, density, t, layer),
     ];
@@ -165,7 +165,11 @@ fn version_control(
     Some(section("Version Control", rows, t))
 }
 
-fn subagents(s: &Desktop, id: ThreadId, t: &Theme) -> Option<El> {
+#[expect(
+    clippy::too_many_lines,
+    reason = "merges tool calls, task records, and local child threads in one ordered section"
+)]
+fn subagents(s: &Desktop, id: ThreadId, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let m = &s.model;
     let transcript = m.transcript();
     let tools = transcript
@@ -205,14 +209,16 @@ fn subagents(s: &Desktop, id: ThreadId, t: &Theme) -> Option<El> {
         let target = child_link(tool, task)
             .filter(|_| task.is_none_or(|task| task.reachable))
             .map(|(thread, env)| (thread, env.map(str::to_owned)));
-        let item = subagent_link(
-            tool.key.clone(),
+        let item = SubagentRow {
+            key: format!("details-{id}-{}", tool.key),
             title,
             standing,
-            task_preview(task),
+            subtitle: task_preview(task),
             target,
-            t,
-        );
+            child,
+            environment: child_link(tool, task).and_then(|(_, env)| env),
+        }
+        .build(s, t, layer);
         rows.push(task_controls(s, item, task, t));
     }
     for task in m.tasks().iter().filter(|task| task.parent == id) {
@@ -229,14 +235,19 @@ fn subagents(s: &Desktop, id: ThreadId, t: &Theme) -> Option<El> {
             .thread
             .filter(|_| task.reachable)
             .map(|thread| (thread, Some(task.environment.clone())));
-        let row = subagent_link(
-            format!("linked-task-{}", task.id),
-            &task.title,
-            AgentStanding::from_task(task),
-            task_preview(Some(task)),
+        let row = SubagentRow {
+            key: format!("details-{id}-task-{}", task.id),
+            title: &task.title,
+            standing: AgentStanding::from_task(task),
+            subtitle: task_preview(Some(task)),
             target,
-            t,
-        );
+            child: task
+                .thread
+                .filter(|_| is_local(Some(&task.environment)))
+                .and_then(|thread| m.summary(thread)),
+            environment: Some(&task.environment),
+        }
+        .build(s, t, layer);
         rows.push(task_controls(s, row, Some(task), t));
     }
     for child in m.cache().threads().filter(|child| {
@@ -250,50 +261,119 @@ fn subagents(s: &Desktop, id: ThreadId, t: &Theme) -> Option<El> {
             ThreadStatus::Failed => AgentStanding::Failed,
             ThreadStatus::Idle => AgentStanding::Done,
         };
-        rows.push(subagent_link(
-            format!("linked-thread-{}", child.id),
-            thread_title(child),
-            standing,
-            None,
-            Some((child.id, None)),
-            t,
-        ));
+        rows.push(
+            SubagentRow {
+                key: format!("details-{id}-thread-{}", child.id),
+                title: thread_title(child),
+                standing,
+                subtitle: None,
+                target: Some((child.id, None)),
+                child: Some(child),
+                environment: None,
+            }
+            .build(s, t, layer),
+        );
     }
     (!rows.is_empty()).then(|| section("Subagents", rows, t))
 }
 
-fn subagent_link(
+struct SubagentRow<'a> {
     key: String,
-    title: &str,
+    title: &'a str,
     standing: AgentStanding,
-    subtitle: Option<&str>,
+    subtitle: Option<&'a str>,
     target: Option<(ThreadId, Option<String>)>,
-    t: &Theme,
-) -> El {
-    let ink = match standing {
-        AgentStanding::Working => t.accent,
-        AgentStanding::Failed => t.danger,
-        AgentStanding::Done => t.success,
-        AgentStanding::Queued | AgentStanding::Stopped | AgentStanding::Unreachable => t.muted,
-    };
-    let mut row = ui::list_row(key, title)
-        .leading(ui::dot(ink))
-        .trailing(text(standing.word()).font(t.micro).color(ink));
-    if let Some(subtitle) = subtitle {
-        row = row.subtitle(subtitle);
-    }
-    if let Some((thread, environment)) = target {
-        row = row.on_press_tx(move |s: &mut Desktop, tx| {
-            s.dispatch(
-                Msg::Timeline(TimelineMsg::OpenThreadLink {
-                    thread,
-                    environment: environment.clone(),
-                }),
-                tx,
-            );
+    child: Option<&'a ThreadSummary>,
+    environment: Option<&'a str>,
+}
+
+impl SubagentRow<'_> {
+    fn build(self, s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
+        let ink = match self.standing {
+            AgentStanding::Working => t.accent,
+            AgentStanding::Failed => t.danger,
+            AgentStanding::Done => t.success,
+            AgentStanding::Queued | AgentStanding::Stopped | AgentStanding::Unreachable => t.muted,
+        };
+        let mark = self
+            .child
+            .map_or(&ui::BOT, |child| ui::harness_icon(&child.harness));
+        let mut row = ui::list_row(&self.key, self.title)
+            .leading_icon(mark)
+            .trailing(text(self.standing.word()).font(t.micro).color(ink));
+        let branch = self.child.and_then(|child| {
+            child
+                .worktree
+                .as_ref()
+                .and_then(|worktree| worktree.branch.as_deref())
+                .or_else(|| {
+                    s.model
+                        .cache()
+                        .project(child.project.as_deref()?)?
+                        .branch
+                        .as_deref()
+                })
         });
+        if let Some(subtitle) = branch.or(self.subtitle) {
+            row = row.subtitle(subtitle);
+        }
+        if let Some((thread, environment)) = self.target {
+            row = row.on_press_tx(move |s: &mut Desktop, tx| {
+                s.widgets.subagent_hover = None;
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::OpenThreadLink {
+                        thread,
+                        environment: environment.clone(),
+                    }),
+                    tx,
+                );
+            });
+        }
+        if s.widgets.subagent_hover.as_deref() == Some(self.key.as_str()) {
+            let body = self.child.map_or_else(
+                || {
+                    col()
+                        .w_full()
+                        .padding(12.0)
+                        .gap(6.0)
+                        .child(
+                            text(self.title)
+                                .font(t.panel_row)
+                                .color(t.text_strong)
+                                .wrap(),
+                        )
+                        .child(text(self.standing.word()).font(t.small).color(ink))
+                        .children(
+                            self.environment
+                                .map(|env| text(env).font(t.small).color(t.muted)),
+                        )
+                        .children(self.subtitle.map(|summary| {
+                            text(summary)
+                                .font(t.small)
+                                .color(t.muted)
+                                .wrap()
+                                .max_lines(3)
+                        }))
+                },
+                |child| crate::sidebar::thread_preview(s, child, crate::theme::now_ms(), t),
+            );
+            layer.push(
+                ui::popover_frame(format!("{}-preview", self.key), 248.0, body, t)
+                    .anchored_fit(&self.key, Side::Left, Align::Start, S4)
+                    .a11y_hidden(),
+            );
+        }
+        let key = self.key;
+        row.build(t)
+            .hover_delays(Duration::from_millis(450), Duration::ZERO)
+            .on_hover_change(move |s: &mut Desktop, inside, _| {
+                if inside {
+                    s.widgets.subagent_hover = Some(key.clone());
+                } else if s.widgets.subagent_hover.as_deref() == Some(key.as_str()) {
+                    s.widgets.subagent_hover = None;
+                }
+            })
     }
-    row.build(t)
 }
 
 fn task_preview(task: Option<&viz_client::protocol::Task>) -> Option<&str> {

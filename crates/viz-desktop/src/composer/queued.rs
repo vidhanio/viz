@@ -80,7 +80,7 @@ fn queued_card(s: &Desktop, item: &QueuedInput, t: &Theme) -> El {
         .radius(RADIUS_SURFACE)
         .fill(Color::TRANSPARENT);
     if editing {
-        bubble = bubble.border(HAIRLINE, t.accent.alpha(0.60));
+        bubble = bubble.fill(t.hover_wash);
     } else {
         bubble = bubble
             .border(HAIRLINE, t.border_dashed)

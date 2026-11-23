@@ -2,7 +2,7 @@
 //! prose with horizontal-rule Markdown tables and framed code blocks, live
 //! Working header and Completed Turn Fold, grouped `WorkLog` with tool
 //! inspectors, `ChangedFilesTree`, subagent cards, `ProposedPlanCard`, system
-//! dividers, left-gutter `TimelineMinimap`, and floating `ScrollToEndButton`.
+//! dividers, and a floating jump-to-latest button.
 
 mod ansi;
 mod assistant_row;
@@ -12,7 +12,6 @@ mod dividers;
 mod empty;
 mod fold;
 mod inspector;
-mod minimap;
 mod plan_card;
 mod search_card;
 mod subagents;
@@ -48,8 +47,8 @@ pub struct TimelineSlots {
     pub pending_requests: Option<El>,
 }
 
-/// The scrolling timeline, floating jump-to-latest pill, left-gutter minimap,
-/// or empty/loading/offline state in its place.
+/// The scrolling timeline with a floating jump-to-latest pill and
+/// empty, loading, or offline content when applicable.
 pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El>) -> El {
     let m = &s.model;
     let thread = m.transcript();
@@ -58,12 +57,6 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         && !m.busy()
         && slots.pending_requests.is_none()
         && crate::model::requests::pending(m).next().is_none();
-
-    let turns = if is_empty || (m.is_loading() && m.connected()) {
-        Vec::new()
-    } else {
-        project_turns(m, thread, m.busy())
-    };
 
     let body = if m.is_loading() && m.connected() {
         empty::loading(t)
@@ -81,9 +74,9 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         {
             list = list.child(dividers::forked_from_divider(s, source, t));
         }
-        let total = turns.len();
-        for turn in &turns {
-            let is_latest = turn.index + 1 == total;
+        let turns = project_turns(m, thread, m.busy());
+        for (index, turn) in turns.iter().enumerate() {
+            let is_latest = index + 1 == turns.len();
             list = list.child(render_turn(s, turn, is_latest, t, layer));
         }
         if turns.is_empty() && m.busy() {
@@ -127,7 +120,6 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         .child(body)
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k));
 
-    let map = minimap::minimap(s, &turns, t, layer);
     let jump_pill = (m.timeline.far_from_bottom && !is_empty && !(m.is_loading() && m.connected()))
         .then(|| scroll_to_end_button(m.timeline.unseen_activity, t));
 
@@ -139,7 +131,6 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         .clip_rounded(0.0)
         .child_exit(switch.exit(motion::TRAVEL_PANE))
         .child(scroll)
-        .children(map)
         .children(jump_pill)
 }
 
@@ -150,23 +141,7 @@ fn render_turn(
     t: &Theme,
     layer: &mut Vec<El>,
 ) -> El {
-    let idx = turn.index;
-    let mut section = col()
-        .key(turn.key.clone())
-        .w_full()
-        .pb(S16)
-        .hover_group()
-        .on_visible(move |s: &mut Desktop, visible: bool, tx: &mut Tx| {
-            if s.model.timeline.visible_turns.contains(&idx) != visible {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::SetTurnVisible {
-                        index: idx,
-                        visible,
-                    }),
-                    tx,
-                );
-            }
-        });
+    let mut section = col().key(turn.key.clone()).w_full().pb(S16).hover_group();
 
     if !turn.users.is_empty() {
         let len = turn.users.len();

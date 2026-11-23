@@ -1,11 +1,9 @@
 //! Pure helper transitions for workspace sync, thread view updates, failed
 //! send recovery, attachment ingestion, and optimistic rollback.
 
-use std::sync::Arc;
-
 use viz_client::protocol::{
-    Entry, EntryId, Lifecycle, Project, ProjectIcon, ThreadId, ThreadState, ThreadStatus,
-    ThreadSummary,
+    Entry, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, ThreadId, ThreadState,
+    ThreadStatus, ThreadSummary,
 };
 
 use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
@@ -99,47 +97,53 @@ pub(super) fn apply_thread_state(
     state: ThreadState,
     effects: &mut Vec<Effect>,
 ) {
-    if model.selection.selected != Some(thread) {
-        return;
-    }
-    let status_changed = model.thread_state().map(|prev| prev.status) != Some(state.status);
     let open = model.cache_mut().open_thread_mut(thread);
+    let status_changed = open.state.as_ref().map(|prev| prev.status) != Some(state.status);
     open.transcript.sync_acp(state.live.as_ref());
     open.state = Some(state);
-    model.composer.model_menu.loading_levels = None;
-    if status_changed {
-        effects.push(Effect::SetWindowTitle(model.window_title()));
+    if model.selection.selected == Some(thread) {
+        model.composer.model_menu.loading_levels = None;
+        if status_changed {
+            effects.push(Effect::SetWindowTitle(model.window_title()));
+        }
     }
 }
 
 pub(super) fn apply_thread_view(
     model: &mut Model,
     thread: ThreadId,
-    entries: &Arc<Vec<Entry>>,
+    entries: Vec<Entry>,
     reset: bool,
     before: Option<EntryId>,
     effects: &mut Vec<Effect>,
 ) {
-    if model.selection.selected != Some(thread) {
-        return;
+    if reset {
+        model.cache_mut().retain_open_thread(thread);
     }
     let open = model.cache_mut().open_thread_mut(thread);
     if reset {
+        open.entries.clear();
         open.transcript = Transcript::from_entries(entries.iter(), before);
         open.loading = false;
         open.history_loading = false;
     } else {
         open.transcript.append(entries.iter());
     }
+    if !entries.is_empty() {
+        open.entries.push_back(entries);
+    }
     let live = open.state.as_ref().and_then(|state| state.live.as_ref());
     open.transcript.sync_acp(live);
-    super::palette::continue_message_jump(model, effects);
+    if model.selection.selected == Some(thread) {
+        super::palette::continue_message_jump(model, effects);
+    }
 }
 
 pub(super) fn apply_earlier_loaded(
     model: &mut Model,
     thread: ThreadId,
-    transcript: Option<Transcript>,
+    before: EntryId,
+    page: Option<EntryPage>,
     effects: &mut Vec<Effect>,
 ) {
     if model.selection.selected != Some(thread) {
@@ -151,12 +155,16 @@ pub(super) fn apply_earlier_loaded(
         .first()
         .map(|item| item.key().to_owned());
     let open = model.cache_mut().open_thread_mut(thread);
+    if open.transcript.before != Some(before) {
+        return;
+    }
     open.history_loading = false;
-    if let Some(transcript) = transcript {
+    if let Some(page) = page {
         if let Some(first_key) = first_key {
             effects.push(Effect::KeepOnScreen(first_key));
         }
-        open.transcript = transcript;
+        open.entries.push_front(page.entries);
+        open.transcript = Transcript::from_entries(open.entries.iter().flatten(), page.before);
         let live = open.state.as_ref().and_then(|state| state.live.as_ref());
         open.transcript.sync_acp(live);
         super::palette::continue_message_jump(model, effects);
@@ -173,20 +181,13 @@ pub(super) fn apply_select_failed(
     model: &mut Model,
     failed: ThreadId,
     previous: Option<ThreadId>,
-    entries: &[Entry],
-    before: Option<EntryId>,
     error: String,
     effects: &mut Vec<Effect>,
 ) {
     if model.selection.selected == Some(failed) {
         if let Some(previous) = previous {
             show_thread(model, previous, effects);
-            let open = model.cache_mut().open_thread_mut(previous);
-            open.transcript = Transcript::from_entries(entries, before);
-            open.loading = false;
-            open.history_loading = false;
-            let live = open.state.as_ref().and_then(|state| state.live.as_ref());
-            open.transcript.sync_acp(live);
+            model.cache_mut().open_thread_mut(previous).history_loading = false;
         } else {
             clear_selection(model, effects);
         }
@@ -377,6 +378,7 @@ pub(super) fn apply_attachments_loaded(
                     .attachments
             }
         };
+        let existing = std::sync::Arc::make_mut(existing);
         let mut size: usize = existing.iter().map(|file| file.data.len()).sum();
         for file in loaded.attachments {
             if size + file.data.len() > ATTACHMENT_ENCODED_LIMIT {
@@ -447,6 +449,9 @@ fn prepend_draft(draft: &mut DraftData, mut recovery: DraftData) {
     recovery
         .attachment_statuses
         .append(&mut draft.attachment_statuses);
-    recovery.attachments.append(&mut draft.attachments);
+    if !draft.attachments.is_empty() {
+        let appended = std::sync::Arc::unwrap_or_clone(std::mem::take(&mut draft.attachments));
+        std::sync::Arc::make_mut(&mut recovery.attachments).extend(appended);
+    }
     *draft = recovery;
 }

@@ -193,7 +193,7 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
         }
         ComposerMsg::RemoveAttachment(index) => {
             if index < model.composer.draft.attachments.len() {
-                model.composer.draft.attachments.remove(index);
+                std::sync::Arc::make_mut(&mut model.composer.draft.attachments).remove(index);
                 if index < model.composer.draft.attachment_statuses.len() {
                     model.composer.draft.attachment_statuses.remove(index);
                 }

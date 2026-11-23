@@ -137,7 +137,8 @@ pub(super) fn attachments(s: &mut Desktop) {
             mime: "text/plain".into(),
             data: "bGluZSAxCmxpbmUgMgo=".into(),
         },
-    ];
+    ]
+    .into();
     s.sync_widgets_from_model();
 }
 

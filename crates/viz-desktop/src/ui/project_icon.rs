@@ -1,10 +1,14 @@
 //! Deterministic project colour hashing, squircle monograms, and custom project
 //! icon tiles.
 
-use rune::{Color, El, Icon, TextStyle, icon, row, text};
+use rune::{Color, El, Icon, SurfaceFit, TextStyle, el, icon, row, text};
+use viz_client::protocol::{Project, ProjectIcon};
 
 use super::icons::MESSAGE_SQUARE_DASHED;
-use crate::theme::{HAIRLINE, Theme, squircle_radius};
+use crate::{
+    app::Desktop,
+    theme::{Theme, squircle_radius},
+};
 
 /// Stable hash mapping a project name onto one of the nine `project_palette`
 /// slots (`(h * 31 + cp) % 9`).
@@ -40,7 +44,7 @@ pub fn project_initials(name: &str) -> String {
 }
 
 /// Renders a flat `size × size` squircle monogram (`25%` radius, `14%` colour
-/// tint, `24%` colour hairline, contrast-verified initials).
+/// tint and contrast-verified initials).
 pub fn project_monogram(name: &str, size: f32, custom_index: Option<usize>, t: &Theme) -> El {
     let color = project_color(name, custom_index, t);
     let initials = project_initials(name);
@@ -56,7 +60,6 @@ pub fn project_monogram(name: &str, size: f32, custom_index: Option<usize>, t: &
         .center()
         .radius(squircle_radius(size))
         .fill(color.alpha(0.14))
-        .border(HAIRLINE, color.alpha(0.24))
         .a11y_hidden()
         .child(text(initials).font(font).color(color))
 }
@@ -80,7 +83,6 @@ pub fn project_icon(
         .center()
         .radius(squircle_radius(size))
         .fill(color.alpha(0.14))
-        .border(HAIRLINE, color.alpha(0.24))
         .a11y_hidden()
         .child(icon(glyph, glyph_size).color(color))
 }
@@ -94,7 +96,90 @@ pub fn no_project_mark(size: f32, t: &Theme) -> El {
         .center()
         .radius(squircle_radius(size))
         .fill(t.chip_fill)
-        .border(HAIRLINE, t.hairline)
         .a11y_hidden()
         .child(icon(&MESSAGE_SQUARE_DASHED, glyph_size).color(t.muted))
+}
+
+/// Renders a project's `size × size` squircle icon tile, or
+/// [`no_project_mark`] when `project` is `None`.
+pub fn project_mark(s: &Desktop, project: Option<&Project>, size: f32, t: &Theme) -> El {
+    let Some(project) = project else {
+        return no_project_mark(size, t);
+    };
+    match &project.settings.icon {
+        ProjectIcon::Automatic | ProjectIcon::OwnerAvatar | ProjectIcon::Uploaded { .. } => {
+            if let Some(image) = s
+                .project_icon_image(&project.path)
+                .filter(|image| image.is_ready() && image.error().is_none())
+            {
+                return el()
+                    .size(size, size)
+                    .radius(squircle_radius(size))
+                    .clip_rounded(squircle_radius(size))
+                    .pixels_fit(image.pixels(), SurfaceFit::Fill)
+                    .a11y_hidden();
+            }
+            project_monogram(&project.name, size, None, t)
+        }
+        ProjectIcon::Lucide { name, color } => {
+            let glyph = lucide_by_name(name);
+            let color_idx = palette_index(color);
+            project_icon(&project.name, glyph, size, color_idx, t)
+        }
+        ProjectIcon::Emoji { emoji } => {
+            let font_size = (size * 0.65).clamp(9.0, 16.0);
+            let style = TextStyle {
+                size: font_size,
+                line_height: font_size,
+                ..t.small
+            };
+            row()
+                .size(size, size)
+                .center()
+                .radius(squircle_radius(size))
+                .fill(t.chip_fill)
+                .a11y_hidden()
+                .child(text(emoji).font(style).color(t.text))
+        }
+    }
+}
+
+fn lucide_by_name(name: &str) -> Option<&'static Icon> {
+    match name.to_ascii_lowercase().as_str() {
+        "folder" => Some(&super::icons::FOLDER),
+        "folder-code" | "foldercode" => Some(&super::icons::FOLDER_CODE),
+        "folder-git-2" | "foldergit2" | "git" => Some(&super::icons::FOLDER_GIT2),
+        "folder-tree" | "foldertree" => Some(&super::icons::FOLDER_TREE),
+        "terminal" => Some(&super::icons::TERMINAL),
+        "globe" => Some(&super::icons::GLOBE),
+        "cpu" => Some(&super::icons::CPU),
+        "layers" => Some(&super::icons::LAYERS),
+        "sparkles" => Some(&super::icons::SPARKLES),
+        "wrench" => Some(&super::icons::WRENCH),
+        "bot" => Some(&super::icons::BOT),
+        "shield" => Some(&super::icons::SHIELD),
+        "star" => Some(&super::icons::STAR),
+        "flame" => Some(&super::icons::FLAME),
+        "zap" => Some(&super::icons::ZAP),
+        "git-branch" | "gitbranch" => Some(&super::icons::GIT_BRANCH),
+        _ => None,
+    }
+}
+
+fn palette_index(color: &str) -> Option<usize> {
+    if let Ok(index) = color.parse::<usize>() {
+        return Some(index % 9);
+    }
+    match color.to_ascii_lowercase().as_str() {
+        "blue" | "accent" => Some(0),
+        "green" | "success" => Some(1),
+        "purple" | "violet" | "delegated" => Some(2),
+        "orange" | "amber" | "steer" => Some(3),
+        "cyan" | "teal" | "info" => Some(4),
+        "red" | "rose" | "danger" => Some(5),
+        "yellow" | "warning" => Some(6),
+        "brown" | "copper" => Some(7),
+        "gray" | "grey" | "neutral" | "muted" => Some(8),
+        _ => None,
+    }
 }

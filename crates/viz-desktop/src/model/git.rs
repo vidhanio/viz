@@ -40,7 +40,7 @@ pub struct GitState {
     pub popup: Option<Popup>,
     pub dialog: Option<Dialog>,
     pub query: String,
-    pub branch_highlight: Option<usize>,
+    pub branch_highlight: Option<String>,
     pub branches: Option<BranchList>,
     pub default_branch: Option<String>,
     pub new_worktree: bool,
@@ -90,6 +90,10 @@ impl Default for GitState {
             mutation_request: 0,
         }
     }
+}
+
+pub fn details_visible(model: &Model) -> bool {
+    model.panels.details_open.unwrap_or_else(|| inline(model))
 }
 
 pub fn inline(model: &Model) -> bool {

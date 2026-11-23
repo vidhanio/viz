@@ -7,10 +7,10 @@ use rune::{Anim, Color, Drag, El, Key, KeyEvent, Phase, Tx, col, el, icon, row, 
 use rune_kit::IconButtonVariant;
 use viz_client::protocol::{Attention, Shelf, ThreadStatus, ThreadSummary, TriageAction};
 
-use super::{actions, card_meta, menu, project_mark};
+use super::{actions, card_meta, menu};
 use crate::{
     app::Desktop,
-    model::{DragShelf, SidebarOutline, format_wake_label, thread_title},
+    model::{DragShelf, DropZone, SidebarOutline, format_wake_label, thread_title},
     motion,
     theme::{self, HAIRLINE, ICON_MD, RADIUS_SM, RADIUS_XS, S2, S4, S6, S10, Size, Theme},
     ui,
@@ -20,16 +20,6 @@ use crate::{
 /// Pointer rest delay before opening the right-anchored thread hover preview
 /// card (`sidebar.md` §5, `motion.md` `OV-03`).
 const HOVER_CARD_DELAY: Duration = Duration::from_millis(450);
-
-/// Drag slot metadata when a card lives in a reorderable shelf (`Pinned` or
-/// `Active`).
-#[derive(Debug, Clone, Copy)]
-pub(super) struct DragSlot {
-    /// Shelf the card lives in.
-    pub shelf: DragShelf,
-    /// Zero-based index inside `shelf`.
-    pub index: usize,
-}
 
 /// Renders one flat triage row.
 #[expect(
@@ -41,7 +31,7 @@ pub(super) fn thread_card(
     outline: &SidebarOutline<'_>,
     thread: &ThreadSummary,
     shelf: Shelf,
-    drag_slot: Option<DragSlot>,
+    drag_shelf: Option<DragShelf>,
     t: &Theme,
     layer: &mut Vec<El>,
 ) -> El {
@@ -62,6 +52,7 @@ pub(super) fn thread_card(
     let lifted = m
         .sidebar
         .drag
+        .as_ref()
         .filter(|drag| drag.active && drag.thread == id);
 
     menu::thread_context_menu(s, thread, &key, shelf, outline.now, t, layer);
@@ -72,7 +63,7 @@ pub(super) fn thread_card(
         .w_full()
         .gap(S6)
         .center_y()
-        .child(project_mark::mark(s, project, ICON_MD, t))
+        .child(ui::project_mark(s, project, ICON_MD, t))
         .child(title.grow(1.0).shrink().min_w(0.0))
         .child(status);
     let row3 = card_meta::metadata_row(thread, project, selected, t);
@@ -135,48 +126,66 @@ pub(super) fn thread_card(
                 }
             });
     }
-    if let Some(slot) = drag_slot
+    if let Some(shelf) = drag_shelf
         && m.connected()
         && !renaming
     {
         let now = outline.now;
-        card = card.motion(motion::REFLOW).on_drag(
-            move |s: &mut Desktop, drag: &mut Drag, tx: &mut Tx| match drag.phase {
-                Phase::Down => s.dispatch(
-                    Msg::Sidebar(SidebarMsg::DragStart {
-                        thread: id,
-                        shelf: slot.shelf,
-                        index: slot.index,
-                    }),
-                    tx,
-                ),
-                Phase::Move => {
-                    tx.instant();
-                    s.dispatch(
-                        Msg::Sidebar(SidebarMsg::DragMove {
-                            dy: drag.dy,
-                            height: drag.h,
-                            now,
-                        }),
+        card = super::shelves::measure(card, m.sidebar.drag.is_some(), DropZone::Row(shelf, id))
+            .motion(motion::REFLOW)
+            .on_drag(
+                move |s: &mut Desktop, drag: &mut Drag, tx: &mut Tx| match drag.phase {
+                    Phase::Down => s.dispatch(
+                        Msg::Sidebar(SidebarMsg::DragStart { thread: id, shelf }),
                         tx,
-                    );
-                }
-                Phase::Up => s.dispatch(
-                    Msg::Sidebar(SidebarMsg::DragEnd {
-                        cancelled: drag.cancelled(),
-                        now,
-                    }),
-                    tx,
-                ),
-            },
-        );
+                    ),
+                    Phase::Move => {
+                        tx.animated();
+                        s.dispatch(
+                            Msg::Sidebar(SidebarMsg::DragMove {
+                                dy: drag.dy,
+                                point: drag.window_point(),
+                                now,
+                            }),
+                            tx,
+                        );
+                    }
+                    Phase::Up => {
+                        let cancelled = drag.cancelled();
+                        if !cancelled {
+                            s.dispatch(
+                                Msg::Sidebar(SidebarMsg::DragMove {
+                                    dy: drag.dy,
+                                    point: drag.window_point(),
+                                    now,
+                                }),
+                                tx,
+                            );
+                        }
+                        s.dispatch(Msg::Sidebar(SidebarMsg::DragEnd { cancelled, now }), tx);
+                    }
+                },
+            );
     }
     if let Some(drag) = lifted {
         card = card
             .offset(0.0, drag.dy)
             .offset_motion(Anim::INSTANT)
-            .raise()
-            .border(HAIRLINE, t.accent);
+            .raise();
+    }
+
+    if let Some(shelf) = drag_shelf
+        && m.sidebar
+            .drag
+            .as_ref()
+            .is_some_and(|drag| drag.target == Some((shelf, Some(id))))
+    {
+        card = card.child(card_meta::drop_indicator("drop-before", t).pin(
+            Some(0.0),
+            Some(-3.0),
+            Some(0.0),
+            None,
+        ));
     }
 
     card
@@ -198,13 +207,15 @@ fn row_status(
         .then(|| hover_actions(s, thread, shelf, outline.now, t, layer));
     let has_hover = hover.is_some();
 
-    let mut right = el().key("row1-right").h(18.0).shrink();
+    let mut right = el().key("row1-right").h(18.0).equal_columns(1);
     if let Some(rest) = resting {
         let rest_opacity = if force_actions && has_hover { 0.0 } else { 1.0 };
         let hover_opacity = if has_hover { 0.0 } else { 1.0 };
         right = right.child(
             row()
+                .grid_cell(0)
                 .h(18.0)
+                .justify_end()
                 .center_y()
                 .group_opacity(rest_opacity, hover_opacity)
                 .child(rest),
@@ -213,7 +224,9 @@ fn row_status(
     if let Some(actions_el) = hover {
         right = right.child(
             row()
-                .pin(None, Some(0.0), Some(0.0), Some(0.0))
+                .grid_cell(0)
+                .h(18.0)
+                .justify_end()
                 .center_y()
                 .group_opacity(if force_actions { 1.0 } else { 0.0 }, 1.0)
                 .child(actions_el),

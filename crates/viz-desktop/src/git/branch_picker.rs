@@ -48,10 +48,12 @@ pub fn view(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) -> El {
 
 fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
     let git = &s.model.git;
+    let choices = choices(s, current);
     let active = git
         .branch_highlight
-        .and_then(|index| git.branches.as_ref()?.branches.get(index))
-        .map(|branch| format!("branch-{}", branch.name));
+        .as_ref()
+        .filter(|key| choices.iter().any(|choice| choice.key == **key))
+        .cloned();
     let search = ui::search_input(&s.widgets.git_query, "Search refs…")
         .input_key("git-branch-search")
         .style(ui::SearchStyle::Plain)
@@ -62,7 +64,24 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
             super::dispatch(s, GitMsg::Search(s.widgets.git_query.text.clone()), tx);
         })
         .build(t);
-    let rows = results(s, current, t);
+    let rows: Vec<_> = choices
+        .into_iter()
+        .map(|choice| {
+            let mut row = ui::list_row(&choice.key, &choice.title)
+                .density(ui::RowDensity::Compact)
+                .detail(choice.tag)
+                .highlighted(git.branch_highlight.as_ref() == Some(&choice.key))
+                .selected(choice.tag == "current")
+                .disabled(choice.disabled);
+            if choice.key == "create-git-branch" {
+                row = row.leading_icon(&ui::GIT_BRANCH_PLUS);
+            }
+            row.on_press_tx(move |s: &mut Desktop, tx| {
+                super::dispatch(s, choice.message.clone(), tx);
+            })
+            .build(t)
+        })
+        .collect();
     let list = if rows.is_empty() {
         let label = if git.branches.is_some() {
             "No refs found"
@@ -119,11 +138,23 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
         }))
 }
 
-fn results(s: &Desktop, current: Option<&str>, t: &Theme) -> Vec<El> {
+struct BranchChoice {
+    key: String,
+    title: String,
+    tag: &'static str,
+    disabled: bool,
+    message: GitMsg,
+}
+
+fn choices(s: &Desktop, current: Option<&str>) -> Vec<BranchChoice> {
     let git = &s.model.git;
-    let mut rows = Vec::new();
-    if let Some(page) = &git.branches {
-        rows.extend(page.branches.iter().enumerate().map(|(index, branch)| {
+    let Some(page) = &git.branches else {
+        return Vec::new();
+    };
+    let mut rows: Vec<_> = page
+        .branches
+        .iter()
+        .map(|branch| {
             let tag = if current == Some(&branch.name) {
                 "current"
             } else if branch.checked_out_elsewhere {
@@ -135,53 +166,41 @@ fn results(s: &Desktop, current: Option<&str>, t: &Theme) -> Vec<El> {
             } else {
                 ""
             };
-            let name = branch.name.clone();
-            let upstream = branch.upstream.clone();
-            ui::list_row(format!("branch-{name}"), &name)
-                .density(ui::RowDensity::Compact)
-                .detail(tag)
-                .highlighted(git.branch_highlight == Some(index))
-                .selected(tag == "current")
-                .disabled(tag == "current" && !git.new_worktree)
-                .on_press_tx(move |s: &mut Desktop, tx| {
-                    super::dispatch(
-                        s,
-                        GitMsg::ChooseBranch {
-                            name: name.clone(),
-                            upstream: upstream.clone(),
-                            create: false,
-                        },
-                        tx,
-                    );
-                })
-                .build(t)
-        }));
-        let name = git.query.split_whitespace().collect::<Vec<_>>().join("-");
-        if !name.is_empty() && !page.branches.iter().any(|branch| branch.name == name) {
-            rows.push(
-                ui::list_row("create-git-branch", format!("Create branch {name}"))
-                    .leading_icon(&ui::GIT_BRANCH_PLUS)
-                    .on_press_tx(move |s: &mut Desktop, tx| {
-                        super::dispatch(
-                            s,
-                            GitMsg::ChooseBranch {
-                                name: name.clone(),
-                                upstream: None,
-                                create: true,
-                            },
-                            tx,
-                        );
-                    })
-                    .build(t),
-            );
-        }
-        if page.next.is_some() {
-            rows.push(
-                ui::list_row("git-branch-next", "Load more branches")
-                    .on_press_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::MoreBranches, tx))
-                    .build(t),
-            );
-        }
+            BranchChoice {
+                key: format!("branch-{}", branch.name),
+                title: branch.name.clone(),
+                tag,
+                disabled: tag == "current" && !git.new_worktree,
+                message: GitMsg::ChooseBranch {
+                    name: branch.name.clone(),
+                    upstream: branch.upstream.clone(),
+                    create: false,
+                },
+            }
+        })
+        .collect();
+    let name = git.query.split_whitespace().collect::<Vec<_>>().join("-");
+    if !name.is_empty() && !page.branches.iter().any(|branch| branch.name == name) {
+        rows.push(BranchChoice {
+            key: "create-git-branch".into(),
+            title: format!("Create branch {name}"),
+            tag: "",
+            disabled: false,
+            message: GitMsg::ChooseBranch {
+                name,
+                upstream: None,
+                create: true,
+            },
+        });
+    }
+    if page.next.is_some() {
+        rows.push(BranchChoice {
+            key: "git-branch-next".into(),
+            title: "Load more branches".into(),
+            tag: "",
+            disabled: false,
+            message: GitMsg::MoreBranches,
+        });
     }
     rows
 }
@@ -197,11 +216,19 @@ fn on_key(s: &mut Desktop, event: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
     {
         return false;
     }
-    let Some(page) = &s.model.git.branches else {
-        return false;
-    };
-    let active = s.model.git.branch_highlight;
-    let count = page.branches.len();
+    let git = &s.model.git;
+    let current = git
+        .status
+        .as_ref()
+        .and_then(|status| status.branch.as_deref());
+    let choices: Vec<_> = choices(s, current)
+        .into_iter()
+        .filter(|choice| !choice.disabled)
+        .collect();
+    let active = choices
+        .iter()
+        .position(|choice| git.branch_highlight.as_ref() == Some(&choice.key));
+    let count = choices.len();
     if count == 0 {
         return false;
     }
@@ -209,29 +236,16 @@ fn on_key(s: &mut Desktop, event: &rune::KeyEvent, tx: &mut rune::Tx) -> bool {
         Key::Down => active.map_or(0, |i| (i + 1).min(count - 1)),
         Key::Up => active.map_or(count - 1, |i| i.saturating_sub(1)),
         Key::Enter if !tx.key_repeat() => {
-            let Some(branch) = active.and_then(|index| page.branches.get(index)) else {
+            let Some(index) = active else {
                 return false;
             };
-            let current = s
-                .model
-                .git
-                .status
-                .as_ref()
-                .and_then(|status| status.branch.as_deref());
-            if s.model.git.new_worktree || current != Some(&branch.name) {
-                let msg = GitMsg::ChooseBranch {
-                    name: branch.name.clone(),
-                    upstream: branch.upstream.clone(),
-                    create: false,
-                };
-                super::dispatch(s, msg, tx);
-            }
+            super::dispatch(s, choices[index].message.clone(), tx);
             return true;
         }
         _ => return false,
     };
-    let key = format!("branch-{}", page.branches[index].name);
-    super::dispatch(s, GitMsg::HighlightBranch(index), tx);
+    let key = choices[index].key.clone();
+    super::dispatch(s, GitMsg::HighlightBranch(key.clone()), tx);
     tx.scroll_into_view(key);
     true
 }

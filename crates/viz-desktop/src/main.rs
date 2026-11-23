@@ -130,7 +130,8 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if ev.key == rune::Key::Escape
         && !s.model.palette.open
-        && s.model.panels.details_open
+        && !crate::model::git::inline(&s.model)
+        && crate::model::git::details_visible(&s.model)
         && s.model.git.popup.is_none()
         && s.model.git.dialog.is_none()
     {
@@ -282,6 +283,21 @@ fn poll_completion(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     let before_due = s.model.composer.completion.due;
     let before_focused = s.model.composer.draft_focused;
     let cursor = s.draft_cursor();
+    let token = (s.model.connected() && s.model.composer.open_picker.is_none())
+        .then(|| {
+            model::completion_token_at(
+                &s.widgets.draft.text,
+                &cursor,
+                &s.model.composer.draft.pills,
+            )
+        })
+        .flatten();
+    if token == before_token
+        && cursor.focused == before_focused
+        && before_due.is_none_or(|due| clock < due)
+    {
+        return false;
+    }
     s.dispatch(
         Msg::Composer(ComposerMsg::PollCompletion { clock, cursor }),
         tx,
@@ -424,19 +440,6 @@ fn main() {
             );
         });
     }
-    let ui = app.handle();
-    let app = app.on_frame_drawn(move |rt| {
-        let (width, height) = rt.window_viewport();
-        let (width, height) = (width / rt.zoom(), height / rt.zoom());
-        let panels = &rt.state.model.panels;
-        if (panels.window_width - width).abs() >= 1.0
-            || (panels.window_height - height).abs() >= 1.0
-        {
-            ui.update(move |s, tx| {
-                s.dispatch(Msg::Shell(ShellMsg::WindowResized(width, height)), tx);
-            });
-        }
-    });
     if !preview {
         let (first, connected) = std::sync::mpsc::channel();
         effects::server::spawn(app.handle(), receiver, first, endpoint);

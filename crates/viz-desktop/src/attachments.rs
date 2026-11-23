@@ -116,47 +116,48 @@ pub fn compact_bytes(bytes: usize) -> String {
     }
 }
 
-/// Stable cache key for a decoded attachment image handle.
-#[must_use]
-pub fn image_cache_key(attachment: &Attachment) -> String {
-    let prefix = &attachment.data[..attachment.data.len().min(32)];
-    format!(
-        "{}\0{}\0{}\0{prefix}",
-        attachment.name,
-        attachment.mime,
-        attachment.data.len()
-    )
+/// Image handles follow the active draft. Rune deduplicates and releases
+/// decoded content as the handles are acquired and dropped.
+#[derive(Default)]
+pub struct DraftImages {
+    source: std::sync::Weak<Vec<Attachment>>,
+    handles: Vec<Option<Image>>,
 }
 
-/// Decodes any uncached image attachments in `s.model.composer.draft` into
-/// `s.widgets.attachment_thumbs`.
-pub fn decode_draft_images(s: &mut Desktop) {
-    for attachment in &s.model.composer.draft.attachments {
-        if !attachment.mime.starts_with("image/") || attachment.data.is_empty() {
-            continue;
+impl DraftImages {
+    pub fn sync(&mut self, attachments: &Arc<Vec<Attachment>>, decoder: &mut Option<ImageCache>) {
+        let source = Arc::downgrade(attachments);
+        if source.ptr_eq(&self.source) {
+            return;
         }
-        let key = image_cache_key(attachment);
-        if s.widgets.attachment_thumbs.contains_key(&key) {
-            continue;
-        }
-        if let Ok(bytes) = STANDARD.decode(&attachment.data) {
-            let cache = s
-                .widgets
-                .images
-                .get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
-            let image = cache.load_mime(bytes, &attachment.mime, 256.0, 2.0);
-            s.widgets.attachment_thumbs.insert(key, image);
-        }
+        self.handles = attachments
+            .iter()
+            .map(|attachment| decode(attachment, decoder))
+            .collect();
+        self.source = source;
+    }
+
+    pub fn get(&self, index: usize) -> Option<&Image> {
+        self.handles.get(index)?.as_ref()
     }
 }
 
-/// Drops a failed thumbnail handle and asks the decoder to try again.
+fn decode(attachment: &Attachment, decoder: &mut Option<ImageCache>) -> Option<Image> {
+    if !attachment.mime.starts_with("image/") || attachment.data.is_empty() {
+        return None;
+    }
+    let bytes = STANDARD.decode(&attachment.data).ok()?;
+    let decoder = decoder.get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
+    Some(decoder.load_mime(bytes, &attachment.mime, 256.0, 2.0))
+}
+
+/// Drops a failed thumbnail and asks the decoder to try again.
 pub fn retry_draft_image(s: &mut Desktop, index: usize) {
-    if let Some(attachment) = s.model.composer.draft.attachments.get(index) {
-        s.widgets
-            .attachment_thumbs
-            .remove(&image_cache_key(attachment));
-        decode_draft_images(s);
+    if let Some(attachment) = s.model.composer.draft.attachments.get(index)
+        && let Some(handle) = s.widgets.attachment_images.handles.get_mut(index)
+    {
+        *handle = None;
+        *handle = decode(attachment, &mut s.widgets.images);
     }
 }
 
@@ -190,14 +191,6 @@ pub fn build_draft_edit(text: &str, pills: &[DraftPill]) -> TextEdit {
         edit.insert(&text[pos..]);
     }
     edit
-}
-
-/// Returns the decoded thumbnail image handle for an attachment, if loaded.
-#[must_use]
-pub fn cached_image<'a>(s: &'a Desktop, attachment: &Attachment) -> Option<&'a Image> {
-    s.widgets
-        .attachment_thumbs
-        .get(&image_cache_key(attachment))
 }
 
 /// Synchronizes the composer [`TextEdit`] text, atomic `Mark::Pill` ranges,

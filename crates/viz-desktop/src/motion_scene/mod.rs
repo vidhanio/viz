@@ -14,7 +14,7 @@ use rune_kit::{
 
 use self::{
     cards::{disclosure_card, reorder_card},
-    panels::{diff_inspector, shimmer_presence_card, undo_toast},
+    panels::{diff_inspector, presence_card, undo_toast},
     shared::shared_morph_roll_card,
 };
 use crate::{
@@ -83,12 +83,12 @@ struct SharedState {
 
 #[derive(Debug)]
 struct LiveState {
-    shimmer: bool,
+    active: bool,
 }
 
 impl Default for LiveState {
     fn default() -> Self {
-        Self { shimmer: true }
+        Self { active: true }
     }
 }
 
@@ -204,7 +204,7 @@ fn workbench_view(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> El {
         .min_h(0.0)
         .gap(S12)
         .child(shared_morph_roll_card(demo, t))
-        .child(shimmer_presence_card(demo, t, &mut overlays));
+        .child(presence_card(demo, t, &mut overlays));
 
     let content = col()
         .key("workbench-grid")
@@ -272,7 +272,7 @@ fn workbench_toolbar(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> Toolbar 
         .center_y()
         .child(
             ui::button(
-                if demo.live.shimmer {
+                if demo.live.active {
                     "Live: on"
                 } else {
                     "Live: off"
@@ -281,10 +281,10 @@ fn workbench_toolbar(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> Toolbar 
                 Size::Small,
             )
             .on_press(|s: &mut Desktop| {
-                with_demo(s, |d| d.live.shimmer = !d.live.shimmer);
+                with_demo(s, |d| d.live.active = !d.live.active);
             })
             .build(&t.k)
-            .key("btn-shimmer"),
+            .key("btn-live-status"),
         )
         .child(
             ui::button("Toast", ButtonVariant::Outline, Size::Small)

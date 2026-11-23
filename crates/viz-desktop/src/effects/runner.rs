@@ -110,11 +110,6 @@ impl Desktop {
                         tx.scroll_center_in_instant(list, item);
                     }
                 }
-                Effect::ScrollKeyCenterAt { key, center_y } => {
-                    if let Some(tx) = tx.as_deref_mut() {
-                        tx.scroll_key_center_at(key, center_y);
-                    }
-                }
                 Effect::RevealMessage { thread, item } => {
                     if let Some(tx) = tx.as_deref_mut() {
                         tx.scroll_center_in_instant(format!("page-{thread}"), item);

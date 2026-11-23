@@ -121,14 +121,6 @@ pub enum Effect {
         /// Target item key.
         item: String,
     },
-    /// Scroll the enclosing viewport so `key`'s vertical midpoint sits at
-    /// `center_y` points below the viewport's top.
-    ScrollKeyCenterAt {
-        /// Target element key.
-        key: String,
-        /// Vertical center position in viewport points.
-        center_y: f32,
-    },
     /// Center a matched transcript row in the active thread.
     RevealMessage { thread: ThreadId, item: String },
     /// Anchor element `key` in place across the next layout update.

@@ -75,15 +75,13 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             apply_thread_state(model, thread, *state, &mut effects);
         }
         ServerMsg::ThreadLive { thread, delta } => {
-            if model.selection.selected == Some(thread) {
-                let open = model.cache_mut().open_thread_mut(thread);
-                if let Some(state) = &mut open.state {
-                    delta.apply(&mut state.live);
-                    open.transcript.sync_acp(state.live.as_ref());
-                }
-                if model.timeline.far_from_bottom {
-                    model.timeline.unseen_activity = true;
-                }
+            let open = model.cache_mut().open_thread_mut(thread);
+            if let Some(state) = &mut open.state {
+                delta.apply(&mut state.live);
+                open.transcript.sync_acp(state.live.as_ref());
+            }
+            if model.selection.selected == Some(thread) && model.timeline.far_from_bottom {
+                model.timeline.unseen_activity = true;
             }
         }
         ServerMsg::ThreadView {
@@ -96,26 +94,20 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             {
                 model.timeline.unseen_activity = true;
             }
-            apply_thread_view(model, thread, &entries, reset, before, &mut effects);
+            apply_thread_view(model, thread, entries, reset, before, &mut effects);
         }
-        ServerMsg::EarlierLoaded { thread, transcript } => {
-            apply_earlier_loaded(model, thread, transcript, &mut effects);
+        ServerMsg::EarlierLoaded {
+            thread,
+            before,
+            page,
+        } => {
+            apply_earlier_loaded(model, thread, before, page, &mut effects);
         }
         ServerMsg::SelectFailed {
             failed,
             previous,
-            entries,
-            before,
             error,
-        } => apply_select_failed(
-            model,
-            failed,
-            previous,
-            &entries,
-            before,
-            error,
-            &mut effects,
-        ),
+        } => apply_select_failed(model, failed, previous, error, &mut effects),
         ServerMsg::DraftHarnessesLoaded { draft, result } => {
             if model
                 .selection

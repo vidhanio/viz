@@ -246,7 +246,6 @@ impl Banner {
             .items_start()
             .radius(RADIUS_CONTROL)
             .fill(colors.bg)
-            .border(HAIRLINE, colors.border)
             .transition(motion::row_enter(motion::TRAVEL_MICRO))
             .child(
                 icon(glyph, ICON_SMALL)

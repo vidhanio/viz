@@ -64,8 +64,8 @@ pub use self::{
     },
     prefs::Prefs,
     sidebar::{
-        ContextSubmenu, DragShelf, InlineRename, ProjectFilter, SETTLED_PAGE_SIZE, SHELF_SETTLED,
-        SHELF_SNOOZED, SHELF_WORKING, SidebarDrag, SnoozePreset, UndoTriage,
+        ContextSubmenu, DragShelf, DropZone, InlineRename, ProjectFilter, SETTLED_PAGE_SIZE,
+        SHELF_SETTLED, SHELF_SNOOZED, SHELF_WORKING, SidebarDrag, SnoozePreset, UndoTriage,
         apply_optimistic_triage, format_wake_label, sync_summary_derived,
     },
     sidebar_outline::{
@@ -122,7 +122,7 @@ pub struct Model {
     pub palette: PaletteState,
     /// Timeline disclosure toggles, tool clock, and window focus.
     pub disclosure: DisclosureState,
-    /// Per-thread timeline fold memory, scroll/minimap tracking, and chunk
+    /// Per-thread timeline fold memory, scroll tracking, and chunk
     /// loads.
     pub timeline: TimelineState,
     /// In-flight optimistic updates carrying undo snapshots for rollback.

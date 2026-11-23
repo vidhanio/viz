@@ -1,9 +1,9 @@
 //! Normalised per-environment server state cache.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 
 use viz_client::protocol::{
-    GitBranch, Harness, Project, Task, ThreadId, ThreadState, ThreadSummary, Worktree,
+    Entry, GitBranch, Harness, Project, Task, ThreadId, ThreadState, ThreadSummary, Worktree,
 };
 
 use super::transcript::Transcript;
@@ -20,6 +20,9 @@ pub struct Checkouts {
 /// Cached transcript and live state for an open/watched thread.
 #[derive(Debug, Clone, Default)]
 pub struct OpenThread {
+    /// Authoritative loaded entries used to fold the transcript across page
+    /// boundaries.
+    pub entries: VecDeque<Vec<Entry>>,
     /// Committed transcript items and live uncommitted ACP tail.
     pub transcript: Transcript,
     /// Latest watched thread state, once received from the server.
@@ -204,6 +207,11 @@ impl EnvironmentCache {
     #[must_use]
     pub const fn thread_count(&self) -> usize {
         self.threads.len()
+    }
+
+    /// Drops superseded watches once a new transcript snapshot arrives.
+    pub fn retain_open_thread(&mut self, id: ThreadId) {
+        self.open_threads.retain(|thread, _| *thread == id);
     }
 
     /// Returns the open-thread cache entry for `id`, if loaded.

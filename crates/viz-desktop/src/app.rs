@@ -10,7 +10,6 @@ use std::{
 use rune::{ImageCache, TextEdit, Tx, image::Image};
 use rune_kit::{ImageZoom, ToastStack, shell::PaneState};
 use tokio::sync::mpsc;
-use viz_client::protocol::Attachment;
 
 use crate::{
     effects::{self, ServerEffect},
@@ -42,6 +41,7 @@ pub struct ShellWidgets {
     pub git_diff_tree: rune_kit::TreeModel<rune_kit::FileNode<(usize, u32, u32)>>,
     pub git_diff_source: Option<std::sync::Arc<viz_client::protocol::GitDiff>>,
     pub git_tree_open: bool,
+    pub subagent_hover: Option<String>,
     /// Main composer text editor.
     pub draft: TextEdit,
     /// Project filter combobox search input.
@@ -70,9 +70,8 @@ pub struct ShellWidgets {
     pub images: Option<ImageCache>,
     /// Decoded project icon images keyed by `"{env}\0{project_path}"`.
     pub project_icons: HashMap<String, Image>,
-    /// Decoded composer attachment thumbnails keyed by name, mime, and payload
-    /// prefix.
-    pub attachment_thumbs: HashMap<String, Image>,
+    /// Decoded images for the active draft, in attachment order.
+    pub attachment_images: crate::attachments::DraftImages,
 }
 
 impl std::fmt::Debug for ShellWidgets {
@@ -102,6 +101,7 @@ impl Default for ShellWidgets {
             git_diff_tree: rune_kit::TreeModel::new(),
             git_diff_source: None,
             git_tree_open: false,
+            subagent_hover: None,
             draft,
             project_filter_query: TextEdit::new(""),
             inline_rename: TextEdit::new(""),
@@ -119,7 +119,7 @@ impl Default for ShellWidgets {
             toasts: ToastStack::default(),
             images: None,
             project_icons: HashMap::new(),
-            attachment_thumbs: HashMap::new(),
+            attachment_images: crate::attachments::DraftImages::default(),
         }
     }
 }
@@ -302,12 +302,15 @@ impl Desktop {
     /// Returns the decoded thumbnail image handle for an image attachment, if
     /// available.
     #[must_use]
-    pub fn attachment_image(&self, attachment: &Attachment) -> Option<&Image> {
-        crate::attachments::cached_image(self, attachment)
+    pub fn attachment_image(&self, index: usize) -> Option<&Image> {
+        self.widgets.attachment_images.get(index)
     }
 
     pub(crate) fn decode_draft_attachments(&mut self) {
-        crate::attachments::decode_draft_images(self);
+        self.widgets.attachment_images.sync(
+            &self.model.composer.draft.attachments,
+            &mut self.widgets.images,
+        );
     }
 
     pub(crate) fn replace_draft_with_pills(&mut self, text: &str, pills: &[DraftPill]) {

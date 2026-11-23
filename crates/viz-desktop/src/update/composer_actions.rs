@@ -60,7 +60,7 @@ pub(super) fn send_input(
     let submitted = mem::take(&mut model.composer.draft);
     let context = submitted.prompt_context();
     let text = submitted.text.clone();
-    let attachments = submitted.attachments.clone();
+    let attachments = (*submitted.attachments).clone();
     let command = if let Some(thread) = &mut model.selection.new_thread {
         thread.sending = true;
         ServerEffect::Create {

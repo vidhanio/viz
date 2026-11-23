@@ -215,6 +215,7 @@ pub(super) fn thread_context_menu(
             MenuItem::new(filter_label)
                 .icon(&ui::LIST_FILTER)
                 .on_select_tx(move |s: &mut Desktop, tx| {
+                    tx.instant();
                     s.dispatch(
                         Msg::Sidebar(SidebarMsg::SetProjectFilter(target_filter.clone())),
                         tx,

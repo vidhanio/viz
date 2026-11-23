@@ -6491,10 +6491,12 @@ dependencies = [
  "serde",
  "serde-saphyr",
  "serde_json",
+ "sha2 0.11.1",
  "tokio",
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "viz-client",
  "viz-config",
 ]

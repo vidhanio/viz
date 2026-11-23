@@ -2,7 +2,7 @@
 //! configured) or connection status popover, quick project access, offline
 //! retry button, and read-only shortcuts/config info popover.
 
-use rune::{El, col, icon, row, text};
+use rune::{Align, El, Side, col, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement, scrim};
 use viz_client::protocol::EnvironmentStatus;
 
@@ -274,7 +274,7 @@ fn info_button(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         Size::Compact,
     )
     .active(open)
-    .on_press(|s: &mut Desktop| s.dispatch_local(Msg::Sidebar(SidebarMsg::ToggleInfoMenu)))
+    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::ToggleInfoMenu), tx))
     .build(&t.k)
     .key(INFO_TRIGGER_KEY);
 
@@ -313,12 +313,11 @@ fn info_button(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             .focus_return(INFO_TRIGGER_KEY)
             .modal(true, close);
         layer.push(scrim("sidebar-info-scrim", close));
-        layer.push(motion::anchored_popover(
-            frame,
-            INFO_TRIGGER_KEY,
-            Placement::TopEnd,
-            S6,
-        ));
+        layer.push(
+            frame
+                .anchored(INFO_TRIGGER_KEY, Side::Top, Align::End, S6)
+                .transition(motion::fade(motion::QUICK_PAIR)),
+        );
     }
     trigger
 }

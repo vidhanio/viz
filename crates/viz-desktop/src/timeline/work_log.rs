@@ -1,5 +1,5 @@
 //! Grouped `WorkLog` summary header and compact `24pt` `WorkLogRow` entries
-//! with Lucide icons, bounded scroll, shimmer on active tools, and expandable
+//! with Lucide icons, bounded scroll, and expandable
 //! inspectors.
 
 use std::f32::consts::FRAC_PI_2;
@@ -161,13 +161,7 @@ fn thinking_row(
                 .w_full()
                 .pl(crate::theme::S28)
                 .pb(S4)
-                .child(
-                    text(trimmed)
-                        .font(t.small)
-                        .color(t.muted)
-                        .wrap()
-                        .max_lines(4),
-                ),
+                .child(inspector::thought_preview(trimmed, t)),
         );
     }
     stack
@@ -209,12 +203,6 @@ fn thinking_header(
         .gap(S6)
         .center_y()
         .radius(RADIUS_SM)
-        .children(motion::shimmer_band(
-            format!("{key}-shimmer"),
-            streaming,
-            t.muted,
-            RADIUS_SM,
-        ))
         .child(icon_slot(
             icon(&ui::BRAIN, ICON)
                 .color(if streaming { t.accent } else { t.faint })
@@ -303,12 +291,6 @@ fn tool_header(
         .gap(S6)
         .center_y()
         .radius(RADIUS_SM)
-        .children(motion::shimmer_band(
-            format!("{}-shimmer", tool.key),
-            running,
-            t.muted,
-            RADIUS_SM,
-        ))
         .child(icon_slot(
             icon(tool_icon(tool, action), ICON)
                 .color(icon_color)

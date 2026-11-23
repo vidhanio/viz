@@ -212,7 +212,8 @@ pub(super) fn composer_chips(s: &mut Desktop) {
             mime: "application/json".into(),
             data: STANDARD.encode("{\"version\":2,\"methods\":[]}\n".repeat(45)),
         },
-    ];
+    ]
+    .into();
     s.model.composer.draft.attachment_statuses = vec![
         AttachmentStatus::Ready,
         AttachmentStatus::Uploading(Some(68)),

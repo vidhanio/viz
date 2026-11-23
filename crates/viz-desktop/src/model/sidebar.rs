@@ -1,7 +1,7 @@
 //! Pure unified triage sidebar state types, snooze presets, optimistic
 //! lifecycle transitions, and drag-drop target computation.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 
 use viz_client::protocol::{
     Attention, Lifecycle, SettledBy, Shelf, Standing, ThreadId, ThreadStatus, ThreadSummary,
@@ -71,7 +71,7 @@ pub struct InlineRename {
 }
 
 /// Triage shelf participating in drag-and-drop pinning and reordering.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum DragShelf {
     /// Pinned shelf (`TriageAction::Pin`).
     Pinned,
@@ -79,78 +79,70 @@ pub enum DragShelf {
     Active,
 }
 
+/// A rendered drop zone in window points, tracked only during a gesture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum DropZone {
+    Viewport,
+    Shelf(DragShelf),
+    Row(DragShelf, ThreadId),
+}
+
+/// One insertion slot, shared by the preview marker and the committed move.
+pub type DropTarget = (DragShelf, Option<ThreadId>);
+
 /// Active pointer drag state for pinning and reordering sidebar thread cards.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct SidebarDrag {
-    /// Thread card being pressed or dragged.
     pub thread: ThreadId,
-    /// Shelf the drag started from.
     pub source_shelf: DragShelf,
-    /// Index in `source_shelf` at drag start.
-    pub source_index: usize,
-    /// Currently targeted destination shelf.
-    pub target_shelf: DragShelf,
-    /// Insertion index within `target_shelf` (0..=len).
-    pub target_index: usize,
-    /// Vertical pointer displacement from press origin in points.
+    pub target: Option<DropTarget>,
     pub dy: f32,
-    /// Card pitch (`height + gap`) measured when the drag activated.
-    pub pitch: f32,
-    /// True once vertical pointer travel crossed [`DRAG_THRESHOLD`].
     pub active: bool,
+    pub rects: BTreeMap<DropZone, [f32; 4]>,
 }
 
 impl SidebarDrag {
-    /// Updates target shelf and insertion slot from vertical displacement `dy`.
-    pub fn move_to(&mut self, dy: f32, height: f32, pinned_len: usize, active_len: usize) {
+    /// Resolves the insertion slot from the pointer and measured shelf bounds.
+    pub fn move_to(&mut self, dy: f32, point: [f32; 2], outline: &super::SidebarOutline<'_>) {
         self.dy = dy;
-        if !self.active {
-            if dy.abs() < DRAG_THRESHOLD {
-                return;
-            }
-            self.active = true;
-            self.pitch = (height + 2.0).max(40.0);
-        }
-        #[expect(
-            clippy::cast_possible_truncation,
-            reason = "sidebar card count fits well within isize"
-        )]
-        let steps = (dy / self.pitch).round().clamp(-10_000.0, 10_000.0) as isize;
-        let combined_source = match self.source_shelf {
-            DragShelf::Pinned => self.source_index,
-            DragShelf::Active => pinned_len + self.source_index,
+        self.active |= dy.abs() >= DRAG_THRESHOLD;
+        self.target = self
+            .active
+            .then(|| self.target_at(point, outline))
+            .flatten();
+    }
+
+    fn target_at(
+        &self,
+        [x, y]: [f32; 2],
+        outline: &super::SidebarOutline<'_>,
+    ) -> Option<DropTarget> {
+        let contains = |zone| {
+            self.rects
+                .get(&zone)
+                .is_some_and(|&[left, top, width, height]| {
+                    x >= left && x <= left + width && y >= top && y <= top + height
+                })
         };
-        let total = pinned_len + active_len;
-        let raw_target = combined_source.cast_signed().saturating_add(steps);
-        if raw_target < 0 {
-            self.target_shelf = DragShelf::Pinned;
-            self.target_index = 0;
-            return;
+        if !contains(DropZone::Viewport) {
+            return None;
         }
-        let target = usize::try_from(raw_target).unwrap_or_default().min(total);
-        match self.source_shelf {
-            DragShelf::Pinned => {
-                if target <= pinned_len {
-                    self.target_shelf = DragShelf::Pinned;
-                    self.target_index = target.min(pinned_len);
-                } else {
-                    self.target_shelf = DragShelf::Active;
-                    self.target_index = (target - pinned_len).min(active_len);
-                }
-            }
-            DragShelf::Active => {
-                if pinned_len == 0 && steps < 0 && combined_source.cast_signed() + steps < 0 {
-                    self.target_shelf = DragShelf::Pinned;
-                    self.target_index = 0;
-                } else if pinned_len > 0 && target < pinned_len {
-                    self.target_shelf = DragShelf::Pinned;
-                    self.target_index = target;
-                } else {
-                    self.target_shelf = DragShelf::Active;
-                    self.target_index = target.saturating_sub(pinned_len).min(active_len);
-                }
-            }
-        }
+        let (destination, rows) = [
+            (DragShelf::Pinned, &outline.pinned),
+            (DragShelf::Active, &outline.active),
+        ]
+        .into_iter()
+        .find(|(shelf, _)| contains(DropZone::Shelf(*shelf)))?;
+        let before = rows
+            .iter()
+            .map(|row| row.id)
+            .filter(|&thread| thread != self.thread)
+            .find(|&thread| {
+                self.rects
+                    .get(&DropZone::Row(destination, thread))
+                    .is_some_and(|&[_, top, _, height]| y < height.mul_add(0.5, top))
+            });
+        Some((destination, before))
     }
 }
 

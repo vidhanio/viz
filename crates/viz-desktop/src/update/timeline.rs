@@ -1,5 +1,5 @@
 //! Pure transitions for timeline disclosure, history pagination, subagent
-//! links, fork/edit/reply actions, chunk loading, scroll/minimap state, and
+//! links, fork/edit/reply actions, chunk loading, scroll state, and
 //! running tool timers.
 
 use viz_client::protocol::{
@@ -12,7 +12,7 @@ use crate::{
     model::{Item, LoadedEntry, Model},
 };
 
-/// Messages emitted by timeline rows, folds, inspectors, cards, and minimap.
+/// Messages emitted by timeline rows, folds, inspectors, and cards.
 #[derive(Debug)]
 pub enum TimelineMsg {
     /// Cancel a running or queued delegated task.
@@ -46,23 +46,6 @@ pub enum TimelineMsg {
     SetFarFromBottom(bool),
     /// Glide the timeline viewport to its bottom edge.
     ScrollToEnd,
-    /// A turn entered or left the viewport (for minimap active highlight).
-    SetTurnVisible {
-        /// Zero-based turn index.
-        index: usize,
-        /// True when visible in the viewport.
-        visible: bool,
-    },
-    /// Pointer entered or left a minimap tick.
-    HoverMinimap(Option<usize>),
-    /// Jump the timeline viewport to center on `key` via
-    /// `scroll_key_center_at`.
-    JumpToTurn {
-        /// Turn element key.
-        key: String,
-        /// Target vertical midpoint in viewport points.
-        center_y: f32,
-    },
     /// Fetch the previous page of older transcript entries.
     LoadEarlier,
     /// Lazily load a truncated or omitted entry via `thread.entry_chunk`.
@@ -179,20 +162,6 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             model.timeline.unseen_activity = false;
             effects.push(Effect::ScrollToBottom("timeline"));
         }
-        TimelineMsg::SetTurnVisible { index, visible } => {
-            if visible {
-                model.timeline.visible_turns.insert(index);
-            } else {
-                model.timeline.visible_turns.remove(&index);
-            }
-        }
-        TimelineMsg::HoverMinimap(index) => {
-            model.timeline.hovered_minimap = index;
-        }
-        TimelineMsg::JumpToTurn { key, center_y } => {
-            model.timeline.hovered_minimap = None;
-            effects.push(Effect::ScrollKeyCenterAt { key, center_y });
-        }
         TimelineMsg::LoadEarlier => {
             if !model.is_history_loading()
                 && model.connected()
@@ -282,7 +251,7 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         TimelineMsg::OpenDiff { path } => {
             model.timeline.selected_diff_file.clone_from(&path);
             model.panels.diff.open = true;
-            model.panels.details_open = false;
+            model.panels.details_open = Some(false);
             model.git.popup = None;
             effects.push(Effect::SyncDiffPane {
                 open: Some(true),

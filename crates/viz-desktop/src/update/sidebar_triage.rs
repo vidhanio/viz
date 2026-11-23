@@ -39,15 +39,20 @@ pub(super) fn handle_filter_key(
     let options = project_filter_options(model, now);
     match key {
         NavKey::Escape => close_project_filter(model, effects),
-        NavKey::Down if !options.is_empty() => {
-            model.sidebar.filter_active = (model.sidebar.filter_active + 1) % options.len();
-        }
-        NavKey::Up if !options.is_empty() => {
-            model.sidebar.filter_active = model
-                .sidebar
-                .filter_active
-                .checked_sub(1)
-                .unwrap_or(options.len() - 1);
+        NavKey::Down | NavKey::Up if !options.is_empty() => {
+            let count = options.len();
+            let current = model.sidebar.filter_active.min(count - 1);
+            let next = if key == NavKey::Up {
+                (current + count - 1) % count
+            } else {
+                (current + 1) % count
+            };
+            let item = options[next].key();
+            model.sidebar.filter_active = next;
+            effects.push(Effect::ScrollIntoView {
+                list: "project-filter-combobox-scroll",
+                item,
+            });
         }
         NavKey::Enter => {
             let idx = model
@@ -153,42 +158,39 @@ pub(super) fn finish_drag(model: &mut Model, cancelled: bool, now: i64, effects:
     if cancelled || !drag.active || !model.connected() {
         return;
     }
-    if drag.source_shelf == drag.target_shelf && drag.source_index == drag.target_index {
+    let Some((target_shelf, before)) = drag.target else {
+        return;
+    };
+    let outline = SidebarOutline::derive(model, now);
+    let rows = |shelf| match shelf {
+        DragShelf::Pinned => &outline.pinned,
+        DragShelf::Active => &outline.active,
+    };
+    let Some(source_index) = rows(drag.source_shelf)
+        .iter()
+        .position(|thread| thread.id == drag.thread)
+    else {
+        return;
+    };
+    if drag.source_shelf == target_shelf
+        && rows(target_shelf)
+            .get(source_index + 1)
+            .map(|thread| thread.id)
+            == before
+    {
         return;
     }
-    let outline = SidebarOutline::derive(model, now);
-    let target_list: Vec<ThreadId> = match drag.target_shelf {
-        DragShelf::Pinned => outline
-            .pinned
-            .iter()
-            .filter(|t| t.id != drag.thread)
-            .map(|t| t.id)
-            .collect(),
-        DragShelf::Active => outline
-            .active
-            .iter()
-            .filter(|t| t.id != drag.thread)
-            .map(|t| t.id)
-            .collect(),
-    };
-    let adjusted_index =
-        if drag.source_shelf == drag.target_shelf && drag.target_index > drag.source_index {
-            drag.target_index.saturating_sub(1)
-        } else {
-            drag.target_index
-        };
-    let position = if adjusted_index == 0 {
-        Position::Top
-    } else if let Some(&before) = target_list.get(adjusted_index) {
-        Position::Before { thread: before }
+    let target_rows = rows(target_shelf);
+    let position = if let Some(thread) = before {
+        if !target_rows.iter().any(|row| row.id == thread) {
+            return;
+        }
+        Position::Before { thread }
     } else {
         Position::Bottom
     };
-    let (action, undo_title) = match (drag.source_shelf, drag.target_shelf) {
+    let (action, undo_title) = match (drag.source_shelf, target_shelf) {
         (_, DragShelf::Pinned) => (TriageAction::Pin { position }, None),
-        (DragShelf::Pinned, DragShelf::Active) if adjusted_index == 0 => {
-            (TriageAction::Unpin, Some("Thread unpinned"))
-        }
         (DragShelf::Pinned, DragShelf::Active) => {
             (TriageAction::Arrange { position }, Some("Thread unpinned"))
         }

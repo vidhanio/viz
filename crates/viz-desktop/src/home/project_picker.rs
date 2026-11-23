@@ -1,21 +1,16 @@
 //! Searchable Home hero Project Picker combobox popover (`288px` flat
 //! `combobox_shell` with pinned projects, hover/pinned pin toggles, remote
-//! environment badge, `"No project"`, and `"Add project"` footer) plus project
-//! icon tile renderer.
+//! environment badge, `"No project"`, and `"Add project"` footer).
 
-use rune::{El, Icon, Key, KeyEvent, SurfaceFit, TextStyle, Tx, el, icon, row, text};
+use rune::{El, Key, KeyEvent, Tx, icon, row, text};
 use rune_kit::{Placement, scrim};
-use viz_client::protocol::{Project, ProjectIcon};
 
 use super::PROJECT_TRIGGER_KEY;
 use crate::{
     app::Desktop,
     model::{HomeProjectOption, home_project_options},
     motion,
-    theme::{
-        HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_CONTROL, RADIUS_SM, S4, S6, S8, Size, Theme,
-        squircle_radius,
-    },
+    theme::{HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_SM, S4, S6, S8, Size, Theme},
     ui::{self, BadgeSize, RowDensity, SearchStyle, Tone},
     update::{ComposerMsg, HOME_PROJECT_SEARCH, Msg, NavKey, SelectionMsg},
 };
@@ -223,7 +218,7 @@ fn picker_row(
 
             ui::list_row(option.key(), &project.name)
                 .density(RowDensity::Compact)
-                .leading(project_tile(s, project, 16.0, t))
+                .leading(ui::project_mark(s, Some(project), 16.0, t))
                 .selected(selected)
                 .highlighted(highlighted)
                 .focus_ring_for(HOME_PROJECT_SEARCH)
@@ -259,67 +254,4 @@ fn on_project_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     };
     s.dispatch(Msg::Composer(ComposerMsg::HomeProjectKey(key)), tx);
     true
-}
-
-/// Renders a project's `size × size` squircle mark (decoded image icon, custom
-/// Lucide glyph, emoji, or base16 monogram).
-pub(super) fn project_tile(s: &Desktop, project: &Project, size: f32, t: &Theme) -> El {
-    match &project.settings.icon {
-        ProjectIcon::Automatic | ProjectIcon::OwnerAvatar | ProjectIcon::Uploaded { .. } => {
-            if let Some(image) = s
-                .project_icon_image(&project.path)
-                .filter(|image| image.is_ready() && image.error().is_none())
-            {
-                return el()
-                    .size(size, size)
-                    .radius(squircle_radius(size))
-                    .clip_rounded(squircle_radius(size))
-                    .pixels_fit(image.pixels(), SurfaceFit::Fill)
-                    .a11y_hidden();
-            }
-            ui::project_monogram(&project.name, size, None, t)
-        }
-        ProjectIcon::Lucide { name, color } => {
-            let glyph = lucide_project_icon(name);
-            let idx = color.parse::<usize>().ok().map(|i| i % 9);
-            ui::project_icon(&project.name, glyph, size, idx, t)
-        }
-        ProjectIcon::Emoji { emoji } => {
-            let font_size = (size * 0.65).clamp(9.0, 16.0);
-            let style = TextStyle {
-                size: font_size,
-                line_height: font_size,
-                ..t.small
-            };
-            row()
-                .size(size, size)
-                .center()
-                .radius(RADIUS_CONTROL.min(squircle_radius(size)))
-                .fill(t.chip_fill)
-                .border(HAIRLINE, t.hairline)
-                .a11y_hidden()
-                .child(text(emoji).font(style).color(t.text))
-        }
-    }
-}
-
-fn lucide_project_icon(name: &str) -> Option<&'static Icon> {
-    match name.to_ascii_lowercase().as_str() {
-        "folder" => Some(&ui::FOLDER),
-        "folder-code" | "foldercode" => Some(&ui::FOLDER_CODE),
-        "folder-git-2" | "foldergit2" | "git" => Some(&ui::FOLDER_GIT2),
-        "folder-tree" | "foldertree" => Some(&ui::FOLDER_TREE),
-        "terminal" => Some(&ui::TERMINAL),
-        "globe" => Some(&ui::GLOBE),
-        "cpu" => Some(&ui::CPU),
-        "layers" => Some(&ui::LAYERS),
-        "sparkles" => Some(&ui::SPARKLES),
-        "wrench" => Some(&ui::WRENCH),
-        "bot" => Some(&ui::BOT),
-        "shield" => Some(&ui::SHIELD),
-        "star" => Some(&ui::STAR),
-        "flame" => Some(&ui::FLAME),
-        "zap" => Some(&ui::ZAP),
-        _ => None,
-    }
 }

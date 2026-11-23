@@ -5,7 +5,6 @@
 use rune::{El, Icon, col, icon, row, text};
 use viz_client::protocol::{GitHubPull, GitHubPullState, ThreadSummary};
 
-use super::project_mark;
 use crate::{
     app::Desktop,
     model::{SidebarOutline, format_wake_label, thread_title},
@@ -27,19 +26,33 @@ pub(super) fn mount(s: &Desktop, outline: &SidebarOutline<'_>, t: &Theme, layer:
         || m.sidebar.snooze_popover.is_some()
         || m.sidebar.filter_open
         || m.sidebar.inline_rename.is_some()
-        || m.sidebar.drag.is_some_and(|drag| drag.active)
+        || m.sidebar.drag.as_ref().is_some_and(|drag| drag.active)
     {
         return;
     }
     let Some(thread) = m.summary(id) else {
         return;
     };
+    let anchor_key = format!("thread-{id}");
+    layer.push(
+        ui::popover_frame(
+            format!("hover-card-{id}"),
+            HOVER_CARD_WIDTH,
+            thread_preview(s, thread, outline.now, t),
+            t,
+        )
+        .anchored_fit(anchor_key, rune::Side::Right, rune::Align::Start, S4)
+        .transition(crate::motion::popover(0.0)),
+    );
+}
+
+/// Shared title and metadata for a hovered thread row.
+pub fn thread_preview(s: &Desktop, thread: &ThreadSummary, now: i64, t: &Theme) -> El {
     let project = thread
         .project
         .as_deref()
-        .and_then(|path| m.cache().project(path));
-    let meta = hover_metadata(s, outline, thread, project, t);
-    let content = col()
+        .and_then(|path| s.model.cache().project(path));
+    col()
         .w_full()
         .padding(S12)
         .gap(S8)
@@ -51,24 +64,12 @@ pub(super) fn mount(s: &Desktop, outline: &SidebarOutline<'_>, t: &Theme, layer:
                 .max_lines(3)
                 .w_full(),
         )
-        .child(meta);
-
-    let anchor_key = format!("thread-{id}");
-    layer.push(
-        ui::popover_frame(format!("hover-card-{id}"), HOVER_CARD_WIDTH, content, t)
-            .anchored_fit(
-                &anchor_key,
-                rune::Side::Right,
-                rune::Align::End,
-                crate::theme::S4,
-            )
-            .transition(crate::motion::popover(0.0)),
-    );
+        .child(hover_metadata(s, now, thread, project, t))
 }
 
 fn hover_metadata(
     s: &Desktop,
-    outline: &SidebarOutline<'_>,
+    now: i64,
     thread: &ThreadSummary,
     project: Option<&viz_client::protocol::Project>,
     t: &Theme,
@@ -99,7 +100,7 @@ fn hover_metadata(
             .w_full()
             .gap(S6)
             .center_y()
-            .child(project_mark::mark(s, project, ICON_MD, t))
+            .child(ui::project_mark(s, project, ICON_MD, t))
             .child(
                 text(project.map_or("No project", |p| p.name.as_str()))
                     .font(t.small)
@@ -144,9 +145,9 @@ fn hover_metadata(
     if let Some(until) = thread
         .lifecycle
         .snoozed_until
-        .filter(|&until| outline.now == 0 || until > outline.now)
+        .filter(|&until| now == 0 || until > now)
     {
-        let label = format!("Snoozed · wakes {}", format_wake_label(until, outline.now));
+        let label = format!("Snoozed · wakes {}", format_wake_label(until, now));
         meta = meta.child(meta_row(&ui::CLOCK, t.faint, &label, t));
     }
     meta
