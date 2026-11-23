@@ -182,7 +182,7 @@ pub struct Theme {
     pub mono: TextStyle,
     /// Tool inspector output and diff stat counts (`11/16`, tabular numerals).
     pub mono_small: TextStyle,
-    /// Compact tabular counts, keycaps, and monograms (`10/14`, weight `450`).
+    /// Compact tabular counts and keycaps (`10/14`, weight `450`).
     pub mono_micro: TextStyle,
 }
 

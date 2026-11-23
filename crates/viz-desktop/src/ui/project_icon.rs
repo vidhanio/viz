@@ -25,35 +25,35 @@ pub fn project_color(name: &str, custom_index: Option<usize>, t: &Theme) -> Colo
     t.project_palette[idx]
 }
 
-/// Extracts one or two uppercase monogram initials from a project name.
+/// Extracts one or two lowercase monogram initials from a project name.
 pub fn project_initials(name: &str) -> String {
     let words: Vec<&str> = name
         .split(|c: char| c.is_whitespace() || matches!(c, '-' | '_' | '/' | '.'))
         .filter(|part| !part.is_empty())
         .collect();
     match words.as_slice() {
-        [] => "P".to_owned(),
-        [only] => only.chars().take(2).flat_map(char::to_uppercase).collect(),
+        [] => "p".to_owned(),
+        [only] => only.chars().take(2).flat_map(char::to_lowercase).collect(),
         [first, second, ..] => first
             .chars()
             .take(1)
             .chain(second.chars().take(1))
-            .flat_map(char::to_uppercase)
+            .flat_map(char::to_lowercase)
             .collect(),
     }
 }
 
 /// Renders a flat `size × size` squircle monogram (`25%` radius, `14%` colour
-/// tint and contrast-verified initials).
+/// tint and contrast-verified lowercase sans-serif initials).
 pub fn project_monogram(name: &str, size: f32, custom_index: Option<usize>, t: &Theme) -> El {
     let color = project_color(name, custom_index, t);
     let initials = project_initials(name);
-    let font_size = (size * 0.48).clamp(8.5, 16.0);
+    let font_size = (size * 0.56).clamp(9.5, 18.0);
     let font = TextStyle {
         size: font_size,
         weight: 600.0,
         line_height: font_size,
-        ..t.mono_micro
+        ..t.small
     };
     row()
         .size(size, size)
