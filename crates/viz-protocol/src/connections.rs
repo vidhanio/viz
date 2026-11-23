@@ -61,6 +61,11 @@ pub enum Notification {
         thread: ThreadId,
         status: Option<crate::GitStatus>,
     },
+    #[serde(rename = "thread.live")]
+    ThreadLive {
+        thread: ThreadId,
+        delta: crate::LiveDelta,
+    },
     #[serde(rename = "threads.changed")]
     ThreadsChanged(Empty),
     #[serde(rename = "tasks.changed")]
@@ -116,6 +121,8 @@ pub struct Run {
     pub status: RunStatus,
     pub answer: Option<String>,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<crate::TurnUsage>,
 }
 
 /// What started a run.

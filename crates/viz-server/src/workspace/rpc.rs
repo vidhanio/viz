@@ -9,11 +9,11 @@ use viz_protocol::{
     BranchList, BrowseFolders, CancelClone, ConfigureThread, CreateFolder, CreateProject,
     DeleteThread, Empty, FileList, ForkThread, GitHubRepositories, HarnessList, HarnessOptions,
     HarnessOptionsResult, InitRepository, ListBranches, ListEntries, ListProjects, ListWorktrees,
-    MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone, ReadProject, ReadProjectIcon,
-    ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId,
-    SearchFiles, SearchHits, SearchThreads, SendInput, StartClone, SteerQueuedInput, StopThread,
-    ThreadId, ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput,
-    UpdateThread, WaitThread,
+    MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone, ReadEntryChunk, ReadProject,
+    ReadProjectIcon, ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree,
+    RetitleThread, RunId, SearchFiles, SearchHits, SearchThreads, SendInput, StartClone,
+    SteerQueuedInput, StopThread, ThreadId, ThreadList, ThreadStateResult, TriageThread,
+    UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
 };
 
 use super::{Workspace, runs, sql::row, store};
@@ -27,6 +27,9 @@ handlers! {
         }
         ListEntries, ListEntries, |workspace, ListEntries { thread, before, limit }| {
             workspace.entries(thread, before, page_limit(limit, 100)?).await
+        }
+        ReadEntryChunk, ReadEntryChunk, |workspace, request| {
+            store::chunk(workspace, request).await
         }
         ReadThreadState, ReadThreadState, |workspace, ReadThreadState { thread }| {
             Ok(ThreadStateResult { state: workspace.state(thread).await? })

@@ -1,69 +1,42 @@
 //! codex-acp's automatic approval reviews.
 
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
-
-use super::{ToolCall, ToolStatus, truncate};
+use viz_protocol::{Review, ToolCall};
 
 const PREFIX: &str = "guardian_assessment:";
 const TITLE_LIMIT: usize = 200;
 
-/// The verdict of a harness's own reviewer on another call.
-///
-/// codex-acp reports one `think` call titled `Guardian Review` next to every
-/// command it assesses. The fold gives it the reviewed action as its title,
-/// and a client can fold the record into the call it reviews or hide it unless
-/// it failed.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Review {
-    /// The reviewed call, when the harness names it.
-    pub target: Option<String>,
-    /// What was reviewed, such as the command.
-    pub action: Option<String>,
-    /// The harness's word for the verdict, such as `approved` or `denied`.
-    pub verdict: Option<String>,
-    pub risk: Option<String>,
-    pub authorization: Option<String>,
-    pub rationale: Option<String>,
-}
-
-impl ToolCall {
-    /// Whether this is a review with nothing to tell: pending or approved.
-    #[must_use]
-    pub fn is_routine_review(&self) -> bool {
-        self.review.is_some() && self.status != ToolStatus::Failed
+/// Reads the review out of the raw event codex-acp attaches.
+pub(super) fn read(call: &mut ToolCall) {
+    if !call.id.starts_with(PREFIX) {
+        return;
     }
-
-    /// Reads the review out of the raw event codex-acp attaches.
-    pub(super) fn read_review(&mut self) {
-        if !self.id.starts_with(PREFIX) {
-            return;
-        }
-        let event = self.raw_output.as_ref().or(self.raw_input.as_ref());
-        let text = |value: Option<&Value>| {
-            value
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|text| !text.is_empty())
-                .map(str::to_owned)
-        };
-        let verdict = event.and_then(|event| event.get("review"));
-        let review = Review {
-            target: text(event.and_then(|event| event.get("targetItemId"))),
-            action: event
-                .and_then(|event| event.get("action"))
-                .and_then(action_text),
-            verdict: text(verdict.and_then(|review| review.get("status"))),
-            risk: text(verdict.and_then(|review| review.get("riskLevel"))),
-            authorization: text(verdict.and_then(|review| review.get("userAuthorization"))),
-            rationale: text(verdict.and_then(|review| review.get("rationale"))),
-        };
-        if let Some(action) = &review.action {
-            self.title = format!("Review: {}", truncate(action, TITLE_LIMIT));
-        }
-        self.review = Some(review);
+    let event = call.raw_output.as_ref().or(call.raw_input.as_ref());
+    let text = |value: Option<&Value>| {
+        value
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+            .map(str::to_owned)
+    };
+    let verdict = event.and_then(|event| event.get("review"));
+    let review = Review {
+        target: text(event.and_then(|event| event.get("targetItemId"))),
+        action: event
+            .and_then(|event| event.get("action"))
+            .and_then(action_text),
+        verdict: text(verdict.and_then(|review| review.get("status"))),
+        risk: text(verdict.and_then(|review| review.get("riskLevel"))),
+        authorization: text(verdict.and_then(|review| review.get("userAuthorization"))),
+        rationale: text(verdict.and_then(|review| review.get("rationale"))),
+    };
+    if let Some(action) = &review.action {
+        call.title = format!(
+            "Review: {}",
+            action.chars().take(TITLE_LIMIT).collect::<String>()
+        );
     }
+    call.review = Some(review);
 }
 
 fn action_text(action: &Value) -> Option<String> {

@@ -115,8 +115,8 @@ pub(in crate::workspace) async fn copy_history(
         let target = |entry: Option<EntryId>| entry.and_then(|entry| copies.get(&entry).copied());
         exec(
             db,
-            "INSERT INTO runs (thread, kind, status, position, text, origin, attachments, prompt_entry, end_entry, answer, error)
-             SELECT ?1, kind, status, 0, text, origin, attachments, ?3, ?4, answer, error FROM runs WHERE id = ?2",
+            "INSERT INTO runs (thread, kind, status, position, text, origin, attachments, prompt_entry, end_entry, answer, error, usage)
+             SELECT ?1, kind, status, 0, text, origin, attachments, ?3, ?4, answer, error, usage FROM runs WHERE id = ?2",
             [
                 fork.into(),
                 run.into(),

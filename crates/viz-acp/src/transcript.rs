@@ -10,7 +10,7 @@ use crate::{
         ContentBlock, PlanEntryPriority, PlanEntryStatus, PlanUpdateContent, SessionUpdate,
         ToolCallStatus as AcpStatus,
     },
-    tool::ToolFields,
+    tool::{ToolFields, ToolReport, block},
 };
 
 /// Commit streamed text at a chunk boundary once this many bytes accumulate.
@@ -39,7 +39,7 @@ pub struct Transcript {
     patched_tools: HashSet<String>,
     answer: String,
     prior_prose: String,
-    next_order: u32,
+    next_order: u64,
     text: Option<Entry>,
     message: Option<(TextKind, String)>,
 }
@@ -117,8 +117,12 @@ impl Transcript {
                             }
                             _ => {}
                         }
+                        let order = self.next_order;
+                        self.next_order += 1;
                         output.push(Output::ToolPatch(Box::new(ToolPatch {
                             id,
+                            key: format!("{}:{order}", self.turn),
+                            order,
                             fields,
                             observed_at,
                             receipts: Arc::clone(&self.receipts),
@@ -129,6 +133,7 @@ impl Transcript {
                     self.plan(
                         Plan {
                             id: None,
+                            at: Some(observed_at),
                             content: plan_items(plan.entries),
                         },
                         &mut output,
@@ -149,6 +154,7 @@ impl Transcript {
                     self.plan(
                         Plan {
                             id: Some(id.0.to_string()),
+                            at: Some(observed_at),
                             content,
                         },
                         &mut output,
@@ -193,6 +199,7 @@ impl Transcript {
             key: format!("{}:{order}", self.turn),
             order,
             body,
+            more: false,
         }
     }
 
@@ -215,7 +222,7 @@ impl Transcript {
             self.commit_text(output);
             output.push(
                 self.allocate(Body::Media(Box::new(Media {
-                    block: content,
+                    block: block(content),
                     source: kind,
                     at: observed_at,
                 })))
@@ -233,8 +240,8 @@ impl Transcript {
             let segment = Segment {
                 text: String::new(),
                 message: String::new(),
-                started_at: observed_at,
-                ended_at: observed_at,
+                started_at: Some(observed_at),
+                ended_at: Some(observed_at),
             };
             let mut entry = self.allocate(match kind {
                 TextKind::Text => Body::Text(segment),
@@ -252,7 +259,7 @@ impl Transcript {
             && let Body::Text(segment) | Body::Thought(segment) = &mut entry.body
         {
             segment.text.push_str(&content.text);
-            segment.ended_at = observed_at;
+            segment.ended_at = Some(observed_at);
             if segment.text.len() >= TEXT_RUN {
                 self.commit_text(output);
             }

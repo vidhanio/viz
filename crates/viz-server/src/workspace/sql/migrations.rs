@@ -21,6 +21,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0005_project_settings.sql"),
     include_str!("../../../migrations/0006_checkpoints.sql"),
     include_str!("../../../migrations/0007_checkpoint_releases.sql"),
+    include_str!("../../../migrations/0008_rich_transcript.sql"),
 ];
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

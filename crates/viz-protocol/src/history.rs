@@ -5,7 +5,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{EntryId, Origin, RunId, ThreadId, ToolRecord};
+use super::{EntryId, Origin, RunId, ThreadId, ToolCall, TranscriptEntry};
 
 /// A file attached to an input.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -98,6 +98,34 @@ pub struct EntryPage {
     pub before: Option<EntryId>,
 }
 
+/// Identifies a stored transcript row or an in-progress segment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EntrySource {
+    Stored { entry: EntryId },
+    Live { key: String },
+}
+
+/// Load an omitted or truncated entry in bounded chunks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReadEntryChunk {
+    pub thread: ThreadId,
+    pub source: EntrySource,
+    /// UTF-8 byte offset, initially zero.
+    pub offset: u64,
+    /// Use the first chunk's revision for subsequent reads.
+    pub revision: Option<String>,
+}
+
+/// Concatenate chunks as UTF-8 JSON, then decode as `EntryData` (stored) or
+/// `TranscriptEntry` (live).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct EntryChunk {
+    pub revision: String,
+    pub data: String,
+    pub next: Option<u64>,
+}
+
 /// Reorder a queued run or change its text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
 pub struct UpdateQueuedInput<'a> {
@@ -125,22 +153,13 @@ pub enum EntryData {
         attachments: Vec<PromptAttachment>,
         origin: Option<Origin>,
     },
-    Text {
-        text: String,
-        key: String,
-    },
-    Thought {
-        text: String,
-        key: String,
-    },
-    Tool(ToolRecord),
+    Transcript(TranscriptEntry),
+    /// The full row is available through `thread.entry_chunk`.
+    Omitted,
     /// Replaces a tool record at its original transcript position.
     ToolUpdate {
         entry: EntryId,
-        record: ToolRecord,
-    },
-    Plan {
-        entries: Vec<PlanEntry>,
+        record: Box<ToolCall>,
     },
     Run(RunEnd),
     /// The agent continued on its own after its turn ended: the start of an
@@ -188,4 +207,35 @@ pub struct RunEnd {
     pub stop_reason: Option<String>,
     pub error: Option<String>,
     pub answer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<TurnUsage>,
+}
+
+/// The last usage update inside a turn and the tokens reported at its end.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnUsage {
+    pub context: Option<crate::ContextUsage>,
+    pub cost: Option<UsageCost>,
+    pub tokens: Option<TurnTokens>,
+}
+
+/// The harness's cumulative session cost at the time of the usage update.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UsageCost {
+    pub currency: String,
+    pub amount: serde_json::Number,
+}
+
+/// The harness's prompt response token account. Some harnesses report session
+/// totals here, so the fields retain the values exactly as reported.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnTokens {
+    pub total_tokens: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub thought_tokens: Option<u64>,
+    pub cached_read_tokens: Option<u64>,
+    pub cached_write_tokens: Option<u64>,
 }

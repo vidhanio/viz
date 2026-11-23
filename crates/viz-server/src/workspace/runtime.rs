@@ -118,6 +118,7 @@ impl Workspace {
                     answer: transcript.answer().to_owned(),
                     stop: Stop::Finished,
                     reason: None,
+                    usage: None,
                 })
             })
             .await;
@@ -276,7 +277,7 @@ impl Workspace {
             }
             tx.commit().await?;
         }
-        self.updates.live(thread, live.map(crate::acp::live_turn));
+        self.updates.live(thread, live);
         drop(db);
         if relist {
             self.relist(thread);
@@ -292,7 +293,7 @@ pub(super) fn turn_end(outcome: Result<Outcome, Error>) -> Result<TurnEnd, Strin
     let Outcome {
         answer,
         stop_reason,
-        ..
+        usage,
     } = outcome.map_err(|error| error.to_string())?;
     Ok(TurnEnd {
         answer,
@@ -302,6 +303,7 @@ pub(super) fn turn_end(outcome: Result<Outcome, Error>) -> Result<TurnEnd, Strin
             _ => Stop::Finished,
         },
         reason: Some(stop_reason_name(stop_reason)),
+        usage,
     })
 }
 

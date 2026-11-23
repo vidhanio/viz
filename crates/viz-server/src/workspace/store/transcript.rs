@@ -1,7 +1,10 @@
 //! Transcript entries, tool patches, and the full-text search index.
 
+use viz_protocol::{Body, ToolCall, TranscriptEntry};
+
 use super::{
     super::sql::{Connection, Row, exec, row, rows},
+    entry_wire::preview,
     from_json, json, require,
 };
 use crate::{
@@ -16,59 +19,75 @@ pub(in crate::workspace) async fn publish(
     session: &str,
     output: Output,
 ) -> Result<Option<(String, ToolCallStatus)>, Error> {
-    let (entry, tool_session, patch) = match output {
-        Output::Entry(entry) => {
-            let Some(entry) = crate::acp::entry(*entry) else {
-                return Ok(None);
-            };
-            (entry, Some(session), None)
-        }
+    let (entry, patch) = match output {
+        Output::Entry(entry) => (NewEntry::Transcript(*entry), None),
         Output::ToolPatch(report) => {
-            let id = &report.id;
+            let report_key = report.key.clone();
+            let report_order = report.order;
             let previous = row(
                 db,
                 "SELECT id, data FROM entries WHERE thread = ?1 AND tool_session = ?2
-                 AND json_extract(data, '$.data.id') = ?3 ORDER BY id DESC LIMIT 1",
-                [thread.into(), session.into(), id.as_str().into()],
+                 AND json_extract(data, '$.data.body.data.id') = ?3 ORDER BY id DESC LIMIT 1",
+                [thread.into(), session.into(), report.id.as_str().into()],
             )
             .await?
             .map(decode_entry)
             .transpose()?;
             if let Some(Entry {
                 id,
-                data: NewEntry::Tool(record),
+                data: NewEntry::Transcript(mut original),
             }) = previous
+                && let Body::Tool(record) = &mut original.body
             {
-                let updated =
-                    crate::acp::tool(&report.apply(crate::acp::tool_input(record.clone())));
+                let updated = report.apply((**record).clone());
                 let patch = Some((updated.id.clone(), updated.status));
-                if updated == record {
+                if updated == **record {
                     return Ok(patch);
                 }
+                let title_changed = updated.title != record.title;
+                **record = updated.clone();
                 exec(
                     db,
                     "UPDATE entries SET data = ?2 WHERE id = ?1",
-                    [id.into(), json(&NewEntry::Tool(updated.clone()))?.into()],
+                    [id.into(), json(&NewEntry::Transcript(original))?.into()],
                 )
                 .await?;
+                if title_changed {
+                    exec(
+                        db,
+                        "DELETE FROM search_entries WHERE rowid = ?1",
+                        [id.into()],
+                    )
+                    .await?;
+                    index(db, thread, id, &updated.title).await?;
+                }
                 (
                     NewEntry::ToolUpdate {
                         entry: id,
-                        record: updated,
+                        record: Box::new(updated),
                     },
-                    None,
                     patch,
                 )
             } else {
-                let call = viz_acp::ToolCall::new(id.clone());
-                let record = crate::acp::tool(&report.apply(call));
+                let call = ToolCall::new(report.id.clone());
+                let record = report.apply(call);
                 let patch = Some((record.id.clone(), record.status));
-                (NewEntry::Tool(record), Some(session), patch)
+                let entry = TranscriptEntry {
+                    key: report_key,
+                    order: report_order,
+                    body: Body::Tool(Box::new(record)),
+                    more: false,
+                };
+                (NewEntry::Transcript(entry), patch)
             }
         }
     };
     let id = append(db, thread, &entry).await?;
-    if let (NewEntry::Tool(_), Some(session)) = (entry, tool_session) {
+    if let NewEntry::Transcript(TranscriptEntry {
+        body: Body::Tool(_),
+        ..
+    }) = entry
+    {
         exec(
             db,
             "UPDATE entries SET tool_session = ?2 WHERE id = ?1",
@@ -93,16 +112,24 @@ pub(in crate::workspace) async fn append(
     .expect("entry INSERT RETURNING yielded one row")
     .id(0)?;
     let text = match data {
-        NewEntry::Prompt { text, .. }
-        | NewEntry::Text { text, .. }
-        | NewEntry::Thought { text, .. }
-        | NewEntry::TaskResult { text, .. } => text.as_str(),
-        NewEntry::Tool(tool) => &tool.title,
-        NewEntry::Run(_)
-        | NewEntry::Plan { .. }
-        | NewEntry::Continued
-        | NewEntry::ToolUpdate { .. } => return Ok(id),
+        NewEntry::Prompt { text, .. } | NewEntry::TaskResult { text, .. } => text,
+        NewEntry::Transcript(entry) => match &entry.body {
+            Body::Text(segment) | Body::Thought(segment) => &segment.text,
+            Body::Tool(tool) => &tool.title,
+            Body::Plan(_) | Body::Media(_) | Body::Omitted => return Ok(id),
+        },
+        _ => return Ok(id),
     };
+    index(db, thread, id, text).await?;
+    Ok(id)
+}
+
+async fn index(
+    db: &mut Connection,
+    thread: ThreadId,
+    id: EntryId,
+    text: &str,
+) -> Result<(), Error> {
     if !text.trim().is_empty() {
         let text = if text.contains(['\0', '\u{1}', '\u{2}']) {
             text.replace(['\0', '\u{1}', '\u{2}'], " ").into()
@@ -116,7 +143,7 @@ pub(in crate::workspace) async fn append(
         )
         .await?;
     }
-    Ok(id)
+    Ok(())
 }
 
 pub(in crate::workspace) async fn entries(
@@ -152,6 +179,9 @@ pub(in crate::workspace) async fn entries(
         None
     };
     entries.reverse();
+    for entry in &mut entries {
+        preview(entry)?;
+    }
     Ok(EntryPage { entries, before })
 }
 
@@ -168,7 +198,11 @@ pub(in crate::workspace) async fn entries_after(
         [thread.into(), after.into(), limit.into()],
     )
     .await?
-    .map(decode_entry)
+    .map(|row| {
+        let mut entry = decode_entry(row)?;
+        preview(&mut entry)?;
+        Ok(entry)
+    })
     .collect()
 }
 

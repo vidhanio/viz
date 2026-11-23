@@ -57,6 +57,10 @@ impl Updates {
     }
 
     pub(super) fn latest(&self, thread: ThreadId) -> Option<LiveTurn> {
+        self.raw_live(thread).map(store::live_preview)
+    }
+
+    pub(super) fn raw_live(&self, thread: ThreadId) -> Option<LiveTurn> {
         self.views
             .lock()
             .expect("thread views poisoned")

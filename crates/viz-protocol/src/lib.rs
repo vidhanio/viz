@@ -16,11 +16,10 @@ pub mod peer;
 mod project_settings;
 mod requests;
 mod threads;
+mod tool;
+mod transcript;
 
-pub use catalog::{
-    ContextUsage, Harness, Project, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord,
-    WorktreeTarget,
-};
+pub use catalog::{ContextUsage, Harness, Project, ThreadWorktree, WorktreeTarget};
 pub use connections::{
     CancelTask, ClearTasks, Cleared, DelegateTask, DeleteTask, Environment, EnvironmentList,
     EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject, ReadThreadState,
@@ -44,9 +43,10 @@ pub use github::{
     GitHubSearch, GitHubSearchResult,
 };
 pub use history::{
-    Attachment, AttachmentCapabilities, Entry, EntryData, EntryPage, ListEntries, PlanEntry,
-    PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd, SearchHit,
-    SearchHits, SearchThreads, SteerQueuedInput, UpdateQueuedInput,
+    Attachment, AttachmentCapabilities, Entry, EntryChunk, EntryData, EntryPage, EntrySource,
+    ListEntries, PlanEntry, PlanPriority, PlanStatus, PromptAttachment, QueuedInput,
+    ReadEntryChunk, RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads,
+    SteerQueuedInput, TurnTokens, TurnUsage, UpdateQueuedInput, UsageCost,
 };
 pub use ids::{EntryId, RunId, TaskId, ThreadId};
 pub use lifecycle::{
@@ -67,9 +67,16 @@ pub use requests::{
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 pub use threads::{
-    ConfigOption, DependentChoice, DependentOption, LaunchThread, Launched, ListThreads, LiveText,
-    LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue, SlashCommand, ThreadList,
-    ThreadState, ThreadStatus, ThreadSummary,
+    ConfigOption, DependentChoice, DependentOption, LaunchThread, Launched, ListThreads,
+    OptionChoice, OptionKind, OptionValue, SlashCommand, ThreadList, ThreadState, ThreadStatus,
+    ThreadSummary,
+};
+pub use tool::{
+    Exit, Location, Review, Terminal, ToolCall, ToolCallStatus, ToolContent, ToolDiff, VizLink,
+};
+pub use transcript::{
+    Body, ContentBlock, ContentKind, LiveDelta, LiveTurn, Media, Plan, PlanContent, Segment,
+    TextKind, TranscriptEntry,
 };
 
 /// The protocol version this crate speaks.
@@ -166,6 +173,7 @@ methods! {
     Unwatch => "thread.unwatch", Watching;
     SearchThreads<'_> => "threads.search", SearchHits;
     ListEntries => "thread.entries", EntryPage;
+    ReadEntryChunk => "thread.entry_chunk", EntryChunk;
     RemoveQueuedInput => "queue.remove", Empty;
     ListBranches<'_> => "project.branches", BranchList;
     ListWorktrees<'_> => "worktrees.list", WorktreeList;

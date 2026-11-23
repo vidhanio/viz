@@ -540,6 +540,7 @@ impl Family {
                 self.outcome
                     .filter(|outcome| is_open(outcome.status))
                     .unwrap_or(Run {
+                        usage: None,
                         id: run,
                         thread,
                         kind: RunKind::Prompt,

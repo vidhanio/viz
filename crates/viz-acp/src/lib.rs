@@ -80,7 +80,6 @@ mod probe;
 mod process;
 mod prompt;
 mod receipts;
-mod record;
 mod session;
 mod settings;
 mod steering;
@@ -104,18 +103,15 @@ pub use probe::catalog;
 pub use process::drain_processes;
 pub use prompt::{StoredAttachment, build_prompt};
 pub use receipts::Receipts;
-pub use record::{
-    Body, Entry, LiveTurn, Media, Plan, PlanContent, PlanEntry, PlanPriority, PlanStatus, Segment,
-    TextKind,
-};
 pub use session::{Outcome, Prompt, Session, SessionSnapshot, stop_reason_name};
 pub use settings::{Command, Skill};
 pub use steering::{SteerOutcome, Steering};
-pub use tool::{
-    Exit, FileDiff, Location, Review, Terminal, ToolCall, ToolContent, ToolPatch, ToolStatus,
-    VizLink,
-};
+pub use tool::ToolPatch;
 pub use transcript::{Output, Transcript};
+pub use viz_protocol::{
+    Body, LiveTurn, Media, Plan, PlanContent, PlanEntry, PlanPriority, PlanStatus, Segment,
+    TextKind, ToolCall, TranscriptEntry as Entry, VizLink,
+};
 
 /// An unsolicited harness notification or a local terminal completion.
 #[derive(Debug, Clone)]

@@ -5,9 +5,9 @@ use std::fmt::Write as _;
 
 use serde::Serialize;
 use viz_protocol::{
-    Attention, Entry, EntryData, EntryId, EntryPage, OptionValue, Run, RunId, Shelf, Task, TaskId,
-    TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary, ToolCallStatus, ToolRecord,
-    WaitResult,
+    Attention, Body, Entry, EntryData, EntryId, EntryPage, OptionValue, PlanContent, Run, RunId,
+    Shelf, Task, TaskId, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary, ToolCall,
+    ToolCallStatus, WaitResult,
 };
 
 /// Characters of a message, and of a tool's output, shown in a page.
@@ -116,13 +116,19 @@ struct Queued {
 
 pub(super) fn state(state: ThreadState) -> State {
     let (live, running_tools) = state.live.map_or((None, Vec::new()), |live| {
-        (
-            live.text.map(|live| {
-                let skip = live.text.chars().count().saturating_sub(OUTPUT);
-                live.text.chars().skip(skip).collect()
-            }),
-            live.tools.into_iter().map(|tool| tool.title).collect(),
-        )
+        let mut prose = None;
+        let mut tools = Vec::new();
+        for entry in live.entries {
+            match entry.body {
+                Body::Text(segment) | Body::Thought(segment) => {
+                    let skip = segment.text.chars().count().saturating_sub(OUTPUT);
+                    prose = Some(segment.text.chars().skip(skip).collect());
+                }
+                Body::Tool(tool) => tools.push(bounded(&tool.title, PREVIEW)),
+                _ => {}
+            }
+        }
+        (prose, tools)
     });
     State {
         status: state.status,
@@ -199,23 +205,31 @@ fn line(entry: Entry, text: usize, output: usize) -> Line {
             }
             ("prompt", shown)
         }
-        EntryData::Text { text: said, .. } => ("text", bounded(&said, text)),
-        EntryData::Thought { text: thought, .. } => ("thought", bounded(&thought, output)),
-        EntryData::Tool(record) => ("tool", tool(&record, output)),
+        EntryData::Transcript(entry) => match entry.body {
+            Body::Text(said) => ("text", bounded(&said.text, text)),
+            Body::Thought(thought) => ("thought", bounded(&thought.text, output)),
+            Body::Tool(record) => ("tool", tool(&record, output)),
+            Body::Plan(plan) => {
+                let text = match plan.content {
+                    PlanContent::Items { entries } => entries
+                        .iter()
+                        .map(|entry| entry.content.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                    PlanContent::Markdown { text, .. } => text,
+                };
+                ("plan", bounded(&text, output))
+            }
+            Body::Media(media) => ("media", format!("{:?}", media.block.kind)),
+            Body::Omitted => ("transcript", "[body omitted]".to_owned()),
+        },
+        EntryData::Omitted => ("entry", "[body omitted]".to_owned()),
         EntryData::ToolUpdate {
             entry: updated,
             record,
         } => (
             "tool_update",
             format!("[updates {updated}] {}", tool(&record, output)),
-        ),
-        EntryData::Plan { entries } => (
-            "plan",
-            entries
-                .iter()
-                .map(|entry| entry.content.as_str())
-                .collect::<Vec<_>>()
-                .join("\n"),
         ),
         EntryData::Run(end) => (
             "run_end",
@@ -238,7 +252,7 @@ fn line(entry: Entry, text: usize, output: usize) -> Line {
     }
 }
 
-fn tool(record: &ToolRecord, output: usize) -> String {
+fn tool(record: &ToolCall, output: usize) -> String {
     let status = match record.status {
         ToolCallStatus::Pending => "pending",
         ToolCallStatus::InProgress => "running",
@@ -246,12 +260,15 @@ fn tool(record: &ToolRecord, output: usize) -> String {
         ToolCallStatus::Failed => "failed",
     };
     let mut text = format!("{} ({status})", bounded(&record.title, PREVIEW));
-    for diff in &record.diffs {
+    for diff in record.diffs().take(12) {
         let _ = write!(text, "\nchanged {}", diff.path);
     }
-    if let Some(shown) = &record.output {
+    if let Some(shown) = record.output_text() {
         text.push('\n');
-        text.push_str(&bounded(shown, output));
+        text.push_str(&bounded(&shown, output));
+    }
+    if record.more {
+        text.push_str("\n[tool output shortened]");
     }
     text
 }

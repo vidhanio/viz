@@ -4,9 +4,7 @@ use std::{collections::HashMap, sync::Mutex};
 
 use serde_json::Value;
 use uuid::Uuid;
-use viz_protocol::ThreadId;
-
-use crate::tool::VizLink;
+use viz_protocol::{ThreadId, VizLink};
 
 const RECEIPT_PREFIX: &str = "[viz-tool:";
 /// A hyphenated UUID's length.

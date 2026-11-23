@@ -225,6 +225,7 @@ pub struct TurnEnd {
     pub stop: Stop,
     /// The harness's name for the reason; a continuation has none.
     pub reason: Option<String>,
+    pub usage: Option<viz_protocol::TurnUsage>,
 }
 
 /// What the harness's stop reason means for the run.
@@ -261,6 +262,7 @@ pub fn settle(signals: Signals, turn: Result<TurnEnd, String>) -> Settlement {
         answer,
         stop,
         reason,
+        usage,
     } = match turn {
         Ok(end) => end,
         Err(error) => return Settlement::failed(error),
@@ -268,6 +270,7 @@ pub fn settle(signals: Signals, turn: Result<TurnEnd, String>) -> Settlement {
     let (status, error) = match stop {
         Stop::Cancelled if signals.steered => {
             let mut settlement = Settlement::stopped(EndStatus::Cancelled, "steered", None);
+            settlement.end.usage = usage;
             settlement.end.answer = Some(answer).filter(|answer| !answer.is_empty());
             return settlement;
         }
@@ -284,6 +287,7 @@ pub fn settle(signals: Signals, turn: Result<TurnEnd, String>) -> Settlement {
             stop_reason: reason,
             answer: Some(answer),
             error,
+            usage,
         },
     }
 }
@@ -319,6 +323,7 @@ impl Settlement {
                 stop_reason: Some("error".into()),
                 error: Some(error),
                 answer: None,
+                usage: None,
             },
         }
     }
@@ -330,6 +335,7 @@ impl Settlement {
                 stop_reason: Some(reason.into()),
                 error: error.map(str::to_owned),
                 answer: None,
+                usage: None,
             },
         }
     }

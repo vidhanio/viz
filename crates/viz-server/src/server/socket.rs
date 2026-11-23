@@ -162,7 +162,7 @@ async fn refresh_watch(
     let Some(watch) = watches.get_mut(&thread) else {
         return Ok(());
     };
-    let state = match server.workspace.state(thread).await {
+    let mut state = match server.workspace.state(thread).await {
         Ok(state) => state,
         Err(Error::NoThread(_)) => return Ok(()),
         Err(error) => return Err(error.into()),
@@ -191,7 +191,17 @@ async fn refresh_watch(
             break;
         }
     }
-    if watch.state != state {
+    let next_live = state.live.take();
+    let previous_live = watch.state.live.take();
+    if watch.state == state {
+        if previous_live != next_live {
+            let delta =
+                viz_protocol::LiveDelta::between(previous_live.as_ref(), next_live.as_ref());
+            send_note(outgoing, Notification::ThreadLive { thread, delta }).await?;
+        }
+        state.live = next_live;
+    } else {
+        state.live = next_live;
         send_note(
             outgoing,
             Notification::ThreadState {
@@ -200,8 +210,8 @@ async fn refresh_watch(
             },
         )
         .await?;
-        watch.state = state;
     }
+    watch.state = state;
     Ok(())
 }
 

@@ -125,7 +125,7 @@ pub(crate) async fn run_from(
 ) -> Result<Option<Run>, Error> {
     row(
         db,
-        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1 AND id = ?2",
+        "SELECT id, status, answer, error, kind, usage FROM runs WHERE thread = ?1 AND id = ?2",
         [thread.into(), run.into()],
     )
     .await?
@@ -143,7 +143,7 @@ pub(crate) async fn by_ids(
     }
     rows(
         db,
-        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1
+        "SELECT id, status, answer, error, kind, usage FROM runs WHERE thread = ?1
          AND id IN (SELECT value FROM json_each(?2))",
         [thread.into(), store::json(runs)?.into()],
     )
@@ -156,7 +156,7 @@ pub(super) async fn latest(db: &mut Connection, thread: ThreadId) -> Result<Opti
     store::require(db, thread).await?;
     row(
         db,
-        "SELECT id, status, answer, error, kind FROM runs WHERE thread = ?1 ORDER BY id DESC LIMIT 1",
+        "SELECT id, status, answer, error, kind, usage FROM runs WHERE thread = ?1 ORDER BY id DESC LIMIT 1",
         [thread.into()],
     )
     .await?
@@ -195,6 +195,11 @@ fn decode_run(thread: ThreadId, mut row: Row) -> Result<Run, Error> {
         status: decode_status(&row.str(1)?)?,
         answer: row.opt_str(2)?,
         error: row.opt_str(3)?,
+        usage: row
+            .opt_str(5)?
+            .as_deref()
+            .map(store::from_json)
+            .transpose()?,
     })
 }
 
@@ -387,13 +392,14 @@ pub(super) async fn settle(
     };
     exec(
         db,
-        "UPDATE runs SET status = ?2, answer = ?3, error = ?4, end_entry = ?5 WHERE id = ?1",
+        "UPDATE runs SET status = ?2, answer = ?3, error = ?4, end_entry = ?5, usage = ?6 WHERE id = ?1",
         [
             run.into(),
             status.into(),
             end.answer.into(),
             end.error.into(),
             entry.into(),
+            end.usage.as_ref().map(store::json).transpose()?.into(),
         ],
     )
     .await?;

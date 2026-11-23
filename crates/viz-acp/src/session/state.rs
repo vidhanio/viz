@@ -65,6 +65,7 @@ pub(super) struct State {
     suggestions: Option<crate::schema::PromptSuggestionsUpdate>,
     commands: Vec<Command>,
     usage: Option<UsageUpdate>,
+    pub(super) turn_usage: Option<UsageUpdate>,
     pub(super) title: Option<String>,
     /// Session-level state changed since the running turn last published.
     pub(super) dirty: bool,
@@ -238,6 +239,9 @@ impl State {
             }
             SessionUpdate::PromptSuggestionsUpdate(update) => self.suggestions = Some(update),
             SessionUpdate::UsageUpdate(update) => {
+                if self.turn.is_some() {
+                    self.turn_usage = Some(update.clone());
+                }
                 self.usage = Some(update);
             }
             SessionUpdate::PlanUpdate(update) => {

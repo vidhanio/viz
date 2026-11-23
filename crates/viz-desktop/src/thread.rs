@@ -4,8 +4,8 @@ use std::borrow::Cow;
 
 use serde_json::Value;
 use viz_client::protocol::{
-    Entry, EntryData, EntryId, LiveTextKind, LiveTurn, PlanStatus, RunEnd, ThreadId,
-    ToolCallStatus, ToolDiff, ToolRecord,
+    Body, Entry, EntryData, EntryId, LiveTurn, PlanContent, PlanStatus, RunEnd, ThreadId, ToolCall,
+    ToolCallStatus, ToolDiff,
 };
 
 /// Longest tool-call summary, in characters.
@@ -209,38 +209,41 @@ impl Thread {
         }) else {
             return;
         };
-        if let Some(text) = &live.text
-            && self.acp_text_index.is_none_or(|committed| {
-                text_index(&text.key).is_some_and(|index| index > committed)
-            })
-        {
-            let settled = self
-                .items
-                .last()
-                .filter(|_| self.items.len() > self.acp_start);
-            let preceding = match (text.kind, settled) {
-                (LiveTextKind::Text, Some(Item::Text { key, text }))
-                | (LiveTextKind::Thought, Some(Item::Thinking { key, text, .. })) => {
-                    Some((key, text))
+        for entry in &live.entries {
+            match &entry.body {
+                Body::Text(text) | Body::Thought(text)
+                    if self.acp_text_index.is_none_or(|committed| {
+                        text_index(&entry.key).is_some_and(|index| index > committed)
+                    }) =>
+                {
+                    let settled = self
+                        .items
+                        .last()
+                        .filter(|_| self.items.len() > self.acp_start);
+                    let thinking = matches!(&entry.body, Body::Thought(_));
+                    let preceding = match (thinking, settled) {
+                        (false, Some(Item::Text { key, text }))
+                        | (true, Some(Item::Thinking { key, text, .. })) => Some((key, text)),
+                        _ => None,
+                    };
+                    let (key, text) = preceding.map_or_else(
+                        || (entry.key.clone(), text.text.clone()),
+                        |(key, earlier)| (key.clone(), format!("{earlier}{}", text.text)),
+                    );
+                    self.acp_partial.push(acp_text(key, text, thinking));
                 }
-                _ => None,
-            };
-            let thinking = text.kind == LiveTextKind::Thought;
-            let (key, text) = preceding.map_or_else(
-                || (text.key.clone(), text.text.clone()),
-                |(key, earlier)| (key.clone(), format!("{earlier}{}", text.text)),
-            );
-            self.acp_partial.push(acp_text(key, text, thinking));
-        }
-        for record in &live.tools {
-            let committed = self.items[self.acp_start..]
-                .iter()
-                .any(|item| matches!(item, Item::Tool(tool) if tool.call_id == record.id));
-            if !committed {
-                self.acp_partial.push(Item::Tool(Box::new(Tool::from_acp(
-                    Some(&live.turn),
-                    record,
-                ))));
+                Body::Tool(record) => {
+                    let committed = self.items[self.acp_start..]
+                        .iter()
+                        .any(|item| matches!(item, Item::Tool(tool) if tool.call_id == record.id));
+                    if !committed {
+                        self.acp_partial.push(Item::Tool(Box::new(Tool::from_acp(
+                            Some(&live.turn),
+                            record,
+                        ))));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -304,39 +307,46 @@ impl Thread {
                 )));
                 self.start(*id);
             }
-            EntryData::Text { text, key } => self.commit_text(key, text, false),
-            EntryData::Thought { text, key } => self.commit_text(key, text, true),
-            EntryData::Tool(record) => {
-                let mut tool = Tool::from_acp(self.acp_turn.as_deref(), record);
-                tool.entry = Some(*id);
-                self.items.push(Item::Tool(Box::new(tool)));
-            }
             EntryData::ToolUpdate { entry, record } => self.update_tool(*entry, record),
-            EntryData::Plan { entries } => {
-                let steps = entries
-                    .iter()
-                    .map(|step| PlanStep {
-                        text: step.content.clone(),
-                        status: match step.status {
-                            PlanStatus::Completed => ToolStatus::Done,
-                            PlanStatus::InProgress => ToolStatus::Running,
-                            PlanStatus::Pending => ToolStatus::Pending,
-                        },
-                    })
-                    .collect();
-                if let Some(Item::Plan {
-                    steps: previous, ..
-                }) = self.plan.and_then(|i| self.items.get_mut(i))
-                {
-                    *previous = steps;
-                } else {
-                    self.plan = Some(self.items.len());
-                    self.items.push(Item::Plan {
-                        key: format!("e{id}"),
-                        steps,
-                    });
+            EntryData::Transcript(entry) => match &entry.body {
+                Body::Text(segment) => self.commit_text(&entry.key, &segment.text, false),
+                Body::Thought(segment) => self.commit_text(&entry.key, &segment.text, true),
+                Body::Tool(record) => {
+                    let mut tool = Tool::from_acp(self.acp_turn.as_deref(), record);
+                    tool.entry = Some(*id);
+                    self.items.push(Item::Tool(Box::new(tool)));
                 }
-            }
+                Body::Plan(plan) => {
+                    let PlanContent::Items { entries } = &plan.content else {
+                        return;
+                    };
+                    let steps = entries
+                        .iter()
+                        .map(|step| PlanStep {
+                            text: step.content.clone(),
+                            status: match step.status {
+                                PlanStatus::Completed => ToolStatus::Done,
+                                PlanStatus::InProgress => ToolStatus::Running,
+                                PlanStatus::Pending => ToolStatus::Pending,
+                            },
+                        })
+                        .collect();
+                    if let Some(Item::Plan {
+                        steps: previous, ..
+                    }) = self.plan.and_then(|i| self.items.get_mut(i))
+                    {
+                        *previous = steps;
+                    } else {
+                        self.plan = Some(self.items.len());
+                        self.items.push(Item::Plan {
+                            key: format!("e{id}"),
+                            steps,
+                        });
+                    }
+                }
+                Body::Media(_) | Body::Omitted => {}
+            },
+            EntryData::Omitted => {}
             EntryData::Run(end) => self.finish_run(*id, end),
         }
     }
@@ -394,7 +404,7 @@ impl Thread {
         }
     }
 
-    fn update_tool(&mut self, entry: EntryId, record: &ToolRecord) {
+    fn update_tool(&mut self, entry: EntryId, record: &ToolCall) {
         if let Some(tool) = self.items.iter_mut().find_map(|item| match item {
             Item::Tool(tool) if tool.entry == Some(entry) => Some(tool),
             _ => None,
@@ -444,7 +454,7 @@ const fn acp_text(key: String, text: String, thinking: bool) -> Item {
 }
 
 impl Tool {
-    fn from_acp(turn: Option<&str>, record: &ToolRecord) -> Self {
+    fn from_acp(turn: Option<&str>, record: &ToolCall) -> Self {
         let name = match record.name.as_deref() {
             Some(
                 "bash" | "read" | "read_file" | "write" | "write_file" | "edit" | "edit_file"
@@ -458,27 +468,38 @@ impl Tool {
         }
         .unwrap_or("tool");
         let command = is_command(name);
-        let arguments = record
-            .input
-            .as_deref()
-            .and_then(|input| serde_json::from_str(input).ok());
-        let (summary, mut input, timeout_ms) = tool_input(name, arguments.as_ref());
+        let plain_input = record
+            .raw_input
+            .as_ref()
+            .and_then(serde_json::Value::as_str);
+        let parsed = plain_input.and_then(|input| serde_json::from_str(input).ok());
+        let arguments = parsed
+            .as_ref()
+            .or_else(|| record.raw_input.as_ref().filter(|value| value.is_object()));
+        let (summary, mut input, timeout_ms) = tool_input(name, arguments);
         if input.is_none() && command {
-            let plain = record
-                .input
-                .as_deref()
-                .filter(|text| arguments.is_none() && !text.trim_start().starts_with(['{', '[']));
-            input = plain
+            input = plain_input
+                .filter(|text| arguments.is_none() && !text.trim_start().starts_with(['{', '[']))
                 .or_else(|| record.title.strip_prefix("$ "))
                 .map(|text| cap_head(text, COMMAND_CHARS));
         }
-        let output = record.output.as_deref().unwrap_or_default();
-        let delegation = record.viz.as_deref() == Some("delegate_task");
-        let (output, exit_code) = if command || delegation {
+        let rendered = record.output_text();
+        let output = rendered.as_deref().unwrap_or_default();
+        let delegation = record
+            .viz
+            .as_ref()
+            .is_some_and(|viz| viz.tool == "delegate_task");
+        let (output, legacy_exit) = if command || delegation {
             antigravity_output(output, record.status).unwrap_or((output, None))
         } else {
             (output, None)
         };
+        let exit_code = record
+            .exit
+            .as_ref()
+            .and_then(|exit| exit.code)
+            .and_then(|code| i32::try_from(code).ok())
+            .or(legacy_exit);
         let preserve_output = command || matches!(name, "read" | "read_file");
         let (output, task_id) = readable_output(output, preserve_output, delegation);
         let status = match record.status {
@@ -500,7 +521,12 @@ impl Tool {
                 input
                     .as_deref()
                     .or_else(|| (!title.is_empty()).then_some(title))
-                    .or_else(|| record.locations.first().map(String::as_str))
+                    .or_else(|| {
+                        record
+                            .locations
+                            .first()
+                            .and_then(|location| location.path.to_str())
+                    })
                     .unwrap_or_default(),
                 SUMMARY_CHARS,
             )
@@ -520,10 +546,10 @@ impl Tool {
             exit_code,
             output: cap_output(output, status),
             task_id,
-            child: record.child,
-            child_environment: record.child_environment.clone(),
-            viz: record.viz.clone(),
-            diffs: record.diffs.clone(),
+            child: record.viz.as_ref().and_then(|viz| viz.child),
+            child_environment: record.viz.as_ref().and_then(|viz| viz.environment.clone()),
+            viz: record.viz.as_ref().map(|viz| viz.tool.clone()),
+            diffs: record.diffs().cloned().collect(),
         }
     }
 }

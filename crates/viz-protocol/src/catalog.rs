@@ -3,69 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-#[cfg(doc)]
-use super::LiveTurn;
-use super::{ConfigOption, ThreadId};
-
-/// An ACP tool call: the data of a tool entry, or an unfinished
-/// call in [`LiveTurn::tools`].
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolRecord {
-    /// ACP tool call id; unique within one turn.
-    pub id: String,
-    /// Display title.
-    pub title: String,
-    /// Programmatic tool name, when reported by the runner.
-    pub name: Option<String>,
-    /// ACP tool kind, such as `execute` or `edit`.
-    pub kind: Option<String>,
-    /// Progress of the call.
-    pub status: ToolCallStatus,
-    /// The viz tool this call ran, if it was one.
-    pub viz: Option<String>,
-    /// The thread the call started, if any.
-    pub child: Option<ThreadId>,
-    pub child_environment: Option<String>,
-    /// Unix milliseconds when viz first observed the call running.
-    pub started_at: Option<i64>,
-    /// Raw input: a string as sent, else JSON.
-    pub input: Option<String>,
-    /// ACP text content, else readable raw output.
-    pub output: Option<String>,
-    /// File changes.
-    #[serde(default)]
-    pub diffs: Vec<ToolDiff>,
-    /// Paths the call touched.
-    #[serde(default)]
-    pub locations: Vec<String>,
-}
-
-/// Progress of an ACP tool call.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum ToolCallStatus {
-    /// Not started.
-    Pending,
-    /// Running.
-    InProgress,
-    /// Finished successfully.
-    Completed,
-    /// Finished with an error.
-    Failed,
-}
-
-/// One file change of a tool call.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolDiff {
-    /// Changed file.
-    pub path: String,
-    /// Previous content; `None` for a new file.
-    pub old_text: Option<String>,
-    /// New content.
-    pub new_text: String,
-}
+use super::ConfigOption;
 
 /// Context window usage reported by an ACP runner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

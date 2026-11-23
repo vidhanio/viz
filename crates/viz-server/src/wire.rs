@@ -7,10 +7,10 @@ use serde_json::Value;
 pub(crate) use viz_protocol::{
     Attachment, AttachmentCapabilities, ClientKind, ConfigOption, ContextUsage as Usage, Entry,
     EntryData as NewEntry, EntryId, EntryPage, Environment, EnvironmentStatus, Harness, Hello,
-    HelloParams, LiveText, LiveTextKind, LiveTurn, Notification, OptionValue, Origin,
-    PROTOCOL_VERSION, PlanEntry, PlanPriority, PlanStatus, Project, PromptAttachment, QueuedInput,
-    Run, RunId, RunKind, RunStatus, SearchHit, SlashCommand as Command, Task, TaskStatus, ThreadId,
-    ThreadState, ThreadSummary, ThreadWorktree, ToolCallStatus, ToolDiff, ToolRecord, WaitResult,
+    HelloParams, LiveTurn, Notification, OptionValue, Origin, PROTOCOL_VERSION, Project,
+    PromptAttachment, QueuedInput, Run, RunId, RunKind, RunStatus, SearchHit,
+    SlashCommand as Command, Task, TaskStatus, ThreadId, ThreadState, ThreadSummary,
+    ThreadWorktree, ToolCallStatus, WaitResult,
 };
 
 use crate::error::{Error, Kind, RequestError};

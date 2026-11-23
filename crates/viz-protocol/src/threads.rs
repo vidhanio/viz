@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Attachment, AttachmentCapabilities, Attention, ContextUsage, ForkSource, Lifecycle,
-    QueuedInput, RunId, Shelf, ThreadId, ThreadWorktree, ToolRecord, WorktreeTarget,
+    Attachment, AttachmentCapabilities, Attention, ContextUsage, ForkSource, Lifecycle, LiveTurn,
+    QueuedInput, RunId, Shelf, ThreadId, ThreadWorktree, WorktreeTarget,
 };
 
 /// `threads.list` params.
@@ -237,37 +237,4 @@ pub struct ThreadState {
     pub live: Option<LiveTurn>,
     /// The ACP runner's last context usage report, if any.
     pub usage: Option<ContextUsage>,
-}
-
-/// The running ACP turn's uncommitted tail. The commit that appends it as
-/// entries, or ends the turn, clears it; its text comes before its tools.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-pub struct LiveTurn {
-    /// Entry id of the turn's active run, as a string.
-    pub turn: String,
-    /// The text run being streamed, if any.
-    pub text: Option<LiveText>,
-    /// Unfinished tool calls, in the order they started.
-    pub tools: Vec<ToolRecord>,
-}
-
-/// A streamed text run.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-pub struct LiveText {
-    /// Stable key; also `data.key` of the entry that commits this run.
-    pub key: String,
-    /// Prose or thinking.
-    pub kind: LiveTextKind,
-    /// The text so far.
-    pub text: String,
-}
-
-/// What a [`LiveText`] run is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum LiveTextKind {
-    /// Agent prose.
-    Text,
-    /// Agent thinking.
-    Thought,
 }

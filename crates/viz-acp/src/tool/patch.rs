@@ -3,18 +3,17 @@
 use std::sync::Arc;
 
 use serde_json::Value;
+use viz_protocol::{Exit, Location, Terminal, ToolCall, ToolCallStatus, ToolContent, ToolDiff};
 
-use super::{Exit, FileDiff, Location, Terminal, ToolCall, ToolContent, ToolStatus};
+use super::{block, review};
 use crate::{
     receipts::{ReceiptBook, Receipts},
     schema::{
-        self, ContentBlock, Meta, TerminalId, ToolCallContent, ToolCallLocation,
-        ToolCallStatus as AcpStatus, ToolCallUpdate, ToolKind,
+        self, ContentBlock, Meta, ToolCallContent, ToolCallLocation, ToolCallStatus as AcpStatus,
+        ToolCallUpdate, ToolKind,
     },
 };
 
-/// Bytes kept of a streamed terminal's output; the start is dropped first.
-const TERMINAL_LIMIT: usize = 64 * 1024;
 /// Metadata that streams a terminal and is not kept as metadata.
 const TERMINAL_META: [&str; 4] = [
     "terminal_info",
@@ -81,6 +80,9 @@ impl From<ToolCallUpdate> for ToolFields {
 #[derive(Debug)]
 pub struct ToolPatch {
     pub id: String,
+    /// Identity used if this report is the first one persisted for the call.
+    pub key: String,
+    pub order: u64,
     pub(crate) fields: ToolFields,
     pub(crate) receipts: Arc<Receipts>,
     pub(crate) observed_at: i64,
@@ -96,14 +98,17 @@ impl ToolPatch {
     }
 }
 
-impl ToolCall {
+pub trait ToolReport {
+    fn report(&mut self, fields: ToolFields, receipts: &mut ReceiptBook, observed_at: i64);
+    fn set_status(&mut self, status: ToolCallStatus, observed_at: i64);
+    fn replace_content(&mut self, content: Vec<ToolCallContent>, receipts: &mut ReceiptBook);
+    fn terminal(&mut self, id: &str) -> &mut Terminal;
+    fn read_meta(&mut self, meta: Meta, receipts: &mut ReceiptBook);
+}
+
+impl ToolReport for ToolCall {
     /// Applies one report.
-    pub(crate) fn report(
-        &mut self,
-        fields: ToolFields,
-        receipts: &mut ReceiptBook,
-        observed_at: i64,
-    ) {
+    fn report(&mut self, fields: ToolFields, receipts: &mut ReceiptBook, observed_at: i64) {
         if let Some(title) = fields.title {
             self.title = title;
         }
@@ -111,15 +116,17 @@ impl ToolCall {
             self.name = fields.name;
         }
         if let Some(kind) = fields.kind {
-            self.kind = Some(kind);
+            self.kind = serde_json::to_value(kind)
+                .ok()
+                .and_then(|kind| kind.as_str().map(str::to_owned));
         }
         if let Some(status) = fields.status {
             self.set_status(
                 match status {
-                    AcpStatus::InProgress => ToolStatus::InProgress,
-                    AcpStatus::Completed => ToolStatus::Completed,
-                    AcpStatus::Failed => ToolStatus::Failed,
-                    _ => ToolStatus::Pending,
+                    AcpStatus::InProgress => ToolCallStatus::InProgress,
+                    AcpStatus::Completed => ToolCallStatus::Completed,
+                    AcpStatus::Failed => ToolCallStatus::Failed,
+                    _ => ToolCallStatus::Pending,
                 },
                 observed_at,
             );
@@ -155,11 +162,11 @@ impl ToolCall {
                 })
                 .collect();
         }
-        self.read_review();
+        review::read(self);
     }
 
-    pub(crate) fn set_status(&mut self, status: ToolStatus, observed_at: i64) {
-        if status == ToolStatus::InProgress && self.status == ToolStatus::Pending {
+    fn set_status(&mut self, status: ToolCallStatus, observed_at: i64) {
+        if status == ToolCallStatus::InProgress && self.status == ToolCallStatus::Pending {
             self.started_at = Some(observed_at);
         }
         if status.is_settled() {
@@ -174,8 +181,8 @@ impl ToolCall {
         self.content.clear();
         for item in content {
             let item = match item {
-                ToolCallContent::Diff(diff) => ToolContent::Diff(FileDiff {
-                    path: diff.path,
+                ToolCallContent::Diff(diff) => ToolContent::Diff(ToolDiff {
+                    path: diff.path.to_string_lossy().into_owned(),
                     old_text: diff.old_text,
                     new_text: diff.new_text,
                 }),
@@ -186,13 +193,13 @@ impl ToolCall {
                             self.viz = link;
                         }
                         text.text = stripped;
-                        ToolContent::Block(Box::new(ContentBlock::Text(text)))
+                        ToolContent::Block(Box::new(block(ContentBlock::Text(text))))
                     }
-                    block => ToolContent::Block(Box::new(block)),
+                    content => ToolContent::Block(Box::new(block(content))),
                 },
                 ToolCallContent::Terminal(terminal) => {
-                    self.terminal(&terminal.terminal_id);
-                    ToolContent::Terminal(terminal.terminal_id)
+                    self.terminal(&terminal.terminal_id.0);
+                    ToolContent::Terminal(terminal.terminal_id.0.to_string())
                 }
                 ToolCallContent::Session(session) => {
                     ToolContent::Session(session.session_id.0.to_string())
@@ -203,14 +210,14 @@ impl ToolCall {
         }
     }
 
-    fn terminal(&mut self, id: &TerminalId) -> &mut Terminal {
+    fn terminal(&mut self, id: &str) -> &mut Terminal {
         let index = self
             .terminals
             .iter()
             .position(|terminal| terminal.id == *id)
             .unwrap_or_else(|| {
                 self.terminals.push(Terminal {
-                    id: id.clone(),
+                    id: id.to_owned(),
                     output: String::new(),
                     truncated: false,
                     exit: None,
@@ -234,7 +241,7 @@ impl ToolCall {
         }
         let [info, output, delta, exit] = TERMINAL_META.map(|key| meta.remove(key));
         if let Some(id) = info.as_ref().and_then(terminal_id) {
-            self.terminal(&id);
+            self.terminal(id);
         }
         for chunk in [output, delta].into_iter().flatten() {
             let Some(data) = chunk.get("data").and_then(Value::as_str) else {
@@ -245,7 +252,7 @@ impl ToolCall {
                 self.viz = link;
             }
             if let Some(id) = terminal_id(&chunk) {
-                append(self.terminal(&id), &data);
+                self.terminal(id).output.push_str(&data);
             }
         }
         if let Some(status) = exit
@@ -258,7 +265,7 @@ impl ToolCall {
                     .and_then(Value::as_str)
                     .map(str::to_owned),
             };
-            self.terminal(&id).exit = Some(exit.clone());
+            self.terminal(id).exit = Some(exit.clone());
             self.exit = Some(exit);
         }
         if !meta.is_empty() {
@@ -267,21 +274,8 @@ impl ToolCall {
     }
 }
 
-fn terminal_id(value: &Value) -> Option<TerminalId> {
-    value
-        .get("terminal_id")
-        .and_then(Value::as_str)
-        .map(|id| TerminalId::new(id.to_owned()))
-}
-
-fn append(terminal: &mut Terminal, data: &str) {
-    terminal.output.push_str(data);
-    let excess = terminal.output.len().saturating_sub(TERMINAL_LIMIT);
-    if excess > 0 {
-        let start = terminal.output.ceil_char_boundary(excess);
-        terminal.output.drain(..start);
-        terminal.truncated = true;
-    }
+fn terminal_id(value: &Value) -> Option<&str> {
+    value.get("terminal_id").and_then(Value::as_str)
 }
 
 /// The exit code in a command's raw output: `exit_code` or `exitCode`, at the

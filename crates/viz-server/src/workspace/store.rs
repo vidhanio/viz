@@ -1,5 +1,6 @@
 //! Shared persistence helpers and aggregate-specific stores.
 
+mod entry_wire;
 mod fork;
 mod lifecycle;
 mod projects;
@@ -11,6 +12,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) use self::{
+    entry_wire::{chunk, live_preview},
     fork::{copy_history, fork_prompt, turns},
     lifecycle::{lifecycle, save_lifecycle, standings, touch},
     projects::{directory, path_text, preferences, project, project_at, projects, thread_worktree},

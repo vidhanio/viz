@@ -4,7 +4,7 @@ use std::{future::Future, mem, sync::Arc, time::Instant};
 
 use tokio::{sync::mpsc, time::sleep_until};
 use tokio_util::sync::CancellationToken;
-use viz_protocol::RunId;
+use viz_protocol::{ContextUsage, RunId, TurnTokens, TurnUsage, UsageCost};
 
 use super::{Session, SessionSnapshot, state::lock};
 use crate::{
@@ -43,7 +43,7 @@ pub struct Outcome {
     /// The ACP stop reason, such as `end_turn` or `cancelled`.
     pub stop_reason: StopReason,
     /// Per-turn token usage, when reported with the response.
-    pub usage: Option<crate::schema::Usage>,
+    pub usage: Option<TurnUsage>,
 }
 
 impl Session {
@@ -166,11 +166,7 @@ impl Session {
                         let mut entries = transcript.apply(mem::take(&mut pending));
                         self.fill_terminals(&mut entries);
                         let mut live = transcript.live();
-                        for entry in &mut live.entries {
-                            if let Body::Tool(tool) = &mut entry.body {
-                                self.fill_tool_terminals(tool);
-                            }
-                        }
+                        self.fill_live_terminals(&mut live);
                         if let Err(error) = updates(entries, Some(live), self.take_snapshot()).await
                         {
                             break Err(Error::Publish(Box::new(error)));
@@ -188,7 +184,11 @@ impl Session {
         let settled = guard.settled;
         drop(guard);
         drop(tools);
-        lock(&self.state).turn = None;
+        let usage = {
+            let mut state = lock(&self.state);
+            state.turn = None;
+            state.turn_usage.take()
+        };
         drain_updates(&mut receiver, &mut pending);
         let mut entries = transcript.apply(pending);
         entries.extend(transcript.finish());
@@ -208,10 +208,18 @@ impl Session {
             Outcome {
                 answer: transcript.answer().to_owned(),
                 stop_reason: response.stop_reason,
-                usage: response.usage,
+                usage: turn_usage(usage, response.usage),
             },
             settled,
         ))
+    }
+
+    fn fill_live_terminals(&self, live: &mut LiveTurn) {
+        for entry in &mut live.entries {
+            if let Body::Tool(tool) = &mut entry.body {
+                self.fill_tool_terminals(tool);
+            }
+        }
     }
 
     fn fill_terminals(&self, entries: &mut [Output]) {
@@ -230,8 +238,11 @@ impl Session {
         }
         let session = crate::schema::SessionId::new(self.id.clone());
         for terminal in &mut tool.terminals {
-            if let Some(output) = self.agent.terminal_output(&session, &terminal.id) {
-                terminal.host_output(output);
+            if let Some(output) = self.agent.terminal_output(
+                &session,
+                &crate::schema::TerminalId::new(terminal.id.clone()),
+            ) {
+                crate::tool::host_output(terminal, output);
                 if terminal.exit.is_some() {
                     tool.exit.clone_from(&terminal.exit);
                 }
@@ -245,6 +256,7 @@ impl Session {
     ) -> Vec<ObservedUpdate> {
         let mut state = lock(&self.state);
         state.turn = Some(sender);
+        state.turn_usage = None;
         state.dirty = false;
         drop(state);
         self.idle_updates()
@@ -286,4 +298,33 @@ pub fn stop_reason_name(reason: StopReason) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_owned))
         .unwrap_or_else(|| format!("{reason:?}"))
+}
+
+fn turn_usage(
+    update: Option<crate::schema::UsageUpdate>,
+    tokens: Option<crate::schema::Usage>,
+) -> Option<TurnUsage> {
+    if update.is_none() && tokens.is_none() {
+        return None;
+    }
+    Some(TurnUsage {
+        context: update.as_ref().map(|update| ContextUsage {
+            used: update.used,
+            size: update.size,
+        }),
+        cost: update.and_then(|update| update.cost).and_then(|cost| {
+            Some(UsageCost {
+                currency: cost.currency,
+                amount: serde_json::Number::from_f64(cost.amount)?,
+            })
+        }),
+        tokens: tokens.map(|tokens| TurnTokens {
+            total_tokens: tokens.total_tokens,
+            input_tokens: tokens.input_tokens,
+            output_tokens: tokens.output_tokens,
+            thought_tokens: tokens.thought_tokens,
+            cached_read_tokens: tokens.cached_read_tokens,
+            cached_write_tokens: tokens.cached_write_tokens,
+        }),
+    })
 }

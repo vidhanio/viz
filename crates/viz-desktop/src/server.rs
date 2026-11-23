@@ -578,6 +578,17 @@ impl Session<'_> {
                 self.ui.update(move |s, tx| s.set_state(thread, state, tx));
                 Ok(())
             }
+            Notification::ThreadLive { thread, delta } => {
+                self.ui.update(move |s, _| {
+                    if s.selected == Some(thread)
+                        && let Some(state) = &mut s.state
+                    {
+                        delta.apply(&mut state.live);
+                        s.thread.sync_acp(state.live.as_ref());
+                    }
+                });
+                Ok(())
+            }
             Notification::ThreadView {
                 thread,
                 entries,

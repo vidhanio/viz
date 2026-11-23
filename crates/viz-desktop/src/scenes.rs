@@ -2,12 +2,13 @@
 //! server.
 
 use viz_client::protocol::{
-    Attachment, AttachmentCapabilities, Attention, ConfigOption, DependentChoice, DependentOption,
-    Entry, EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, Harness, Lifecycle,
-    LiveText, LiveTextKind, LiveTurn, OptionChoice, OptionKind, OptionValue, PlanEntry,
-    PlanPriority, PlanStatus, Project, PromptAttachment, RunEnd, SearchHit, Shelf, SlashCommand,
-    Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary, ThreadWorktree,
-    ToolCallStatus, ToolDiff, ToolRecord, Worktree, WorktreeTarget,
+    Attachment, AttachmentCapabilities, Attention, Body, ConfigOption, DependentChoice,
+    DependentOption, Entry, EntryData, EntryId, Environment, EnvironmentStatus, GitBranch, Harness,
+    Lifecycle, LiveTurn, OptionChoice, OptionKind, OptionValue, Plan, PlanContent, PlanEntry,
+    PlanPriority, PlanStatus, Project, PromptAttachment, RunEnd, SearchHit, Segment, Shelf,
+    SlashCommand, Task, TaskStatus, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    ThreadWorktree, ToolCall, ToolCallStatus, ToolContent, ToolDiff, TranscriptEntry, VizLink,
+    Worktree, WorktreeTarget,
 };
 
 use crate::{
@@ -255,8 +256,7 @@ fn transcript(attachments: &[&str]) -> Thread {
             response(
                 "The export drops the final newline when it joins blocks. I’ll fix that at the boundary.",
             ),
-            EntryData::Plan {
-                entries: [
+            preview_plan( [
                     ("Read the export pipeline", PlanStatus::Completed),
                     ("Preserve the final newline", PlanStatus::Completed),
                     ("Check export output", PlanStatus::InProgress),
@@ -268,15 +268,15 @@ fn transcript(attachments: &[&str]) -> Thread {
                     status,
                 })
                 .collect(),
-            },
-            EntryData::Tool(ToolRecord {
-                output: Some("Updated 1 file.".into()),
-                diffs: vec![ToolDiff {
+            ),
+            preview_tool_entry(ToolCall {
+                raw_output: Some("Updated 1 file.".into()),
+                content: vec![ToolContent::Diff(ToolDiff {
                     path: "src/export.rs".into(),
                     old_text: Some("let body = blocks.join(\"\n\n\");\nOk(body)\n".into()),
                     new_text: "let body = blocks.join(\"\n\n\");\nOk(format!(\"{body}\n\"))\n"
                         .into(),
-                }],
+                })],
                 ..preview_tool(
                     "write-1",
                     "Update markdown export",
@@ -285,6 +285,7 @@ fn transcript(attachments: &[&str]) -> Thread {
                 )
             }),
             EntryData::Run(RunEnd {
+                usage: None,
                 stop_reason: Some("end_turn".into()),
                 error: None,
                 answer: Some(
@@ -304,17 +305,14 @@ fn activity(s: &mut Desktop) {
     s.thread = preview_thread(
         [
             prompt("Check the sample exports."),
-            EntryData::Tool(ToolRecord {
-                input: Some(r#"{"query":"export newline conventions"}"#.into()),
+            preview_tool_entry(ToolCall {
+                raw_input: Some(r#"{"query":"export newline conventions"}"#.into()),
                 ..preview_tool("search-1", "Search", "search", ToolCallStatus::Completed)
             }),
-            EntryData::Thought {
-                key: "1:0".into(),
-                text: "\n\n**Compare the output.** The only meaningful difference should be the final newline.\n\n\n\n".into(),
-            },
-            EntryData::Tool(ToolRecord {
-                input: Some(r#"{"command":"wc -l old.md new.md"}"#.into()),
-                output: Some(
+            EntryData::Transcript(preview_text("1:0", "\n\n**Compare the output.** The only meaningful difference should be the final newline.\n\n\n\n", true)),
+            preview_tool_entry(ToolCall {
+                raw_input: Some(r#"{"command":"wc -l old.md new.md"}"#.into()),
+                raw_output: Some(
                     "Created At: 2026-11-20T19:51:26-05:00\nCompleted At: 2026-11-20T19:51:31-05:00\nCommand exited with code 0.\n\nCommand output:\n    42 old.md\n    43 new.md\n    85 total\n".into(),
                 ),
                 ..preview_tool("run-1", "Check line counts", "execute", ToolCallStatus::Completed)
@@ -332,15 +330,14 @@ fn activity(s: &mut Desktop) {
 /// run.
 fn worklog(s: &mut Desktop) {
     workspace(s);
-    let tool = |id: &str, title: &str, kind: &str, input: &str| ToolRecord {
-        input: Some(input.into()),
+    let tool = |id: &str, title: &str, kind: &str, input: &str| ToolCall {
+        raw_input: Some(input.into()),
         ..preview_tool(id, title, kind, ToolCallStatus::Completed)
     };
     s.thread = preview_thread(
         [
             prompt("Make the export keep CRLF line endings, then run the tests."),
-            EntryData::Plan {
-                entries: [
+            preview_plan( [
                     ("Find where blocks are joined", PlanStatus::Completed),
                     ("Keep the input's line endings", PlanStatus::InProgress),
                     ("Run the export tests", PlanStatus::Pending),
@@ -352,22 +349,19 @@ fn worklog(s: &mut Desktop) {
                     status,
                 })
                 .collect(),
-            },
-            EntryData::Thought {
-                key: "1:0".into(),
-                text: "The join uses a literal `\\n`; it should reuse whatever the source file used."
-                    .into(),
-            },
-            EntryData::Tool(tool(
+            ),
+            EntryData::Transcript(preview_text("1:0", "The join uses a literal `\\n`; it should reuse whatever the source file used."
+                    , true)),
+            preview_tool_entry(tool(
                 "read-1",
                 "Read",
                 "read",
                 r#"{"path":"/work/workbench/src/export/markdown.rs"}"#,
             )),
-            EntryData::Tool(tool("grep-1", "Search", "search", r#"{"pattern":"join(\"\\n"}"#)),
-            EntryData::Tool(ToolRecord {
-                output: Some("Updated 1 file.".into()),
-                diffs: vec![ToolDiff {
+            preview_tool_entry(tool("grep-1", "Search", "search", r#"{"pattern":"join(\"\\n"}"#)),
+            preview_tool_entry(ToolCall {
+                raw_output: Some("Updated 1 file.".into()),
+                content: vec![ToolContent::Diff(ToolDiff {
                     path: "/work/workbench/src/export/markdown.rs".into(),
                     old_text: Some(
                         "fn render(blocks: &[Block]) -> String {\n    let body = blocks.join(\"\\n\\n\");\n    body\n}\n"
@@ -375,7 +369,7 @@ fn worklog(s: &mut Desktop) {
                     ),
                     new_text: "fn render(blocks: &[Block], ending: LineEnding) -> String {\n    let separator = ending.repeat(2);\n    let body = blocks.join(&separator);\n    body + ending.as_str()\n}\n"
                         .into(),
-                }],
+                })],
                 ..tool(
                     "edit-1",
                     "Edit",
@@ -383,8 +377,8 @@ fn worklog(s: &mut Desktop) {
                     r#"{"path":"/work/workbench/src/export/markdown.rs"}"#,
                 )
             }),
-            EntryData::Tool(ToolRecord {
-                output: Some(
+            preview_tool_entry(ToolCall {
+                raw_output: Some(
                     "Created At: 2026-11-20T19:51:26-05:00\nCompleted At: 2026-11-20T19:51:31-05:00\nCommand exited with code 101.\n\nCommand output:\nrunning 12 tests\ntest export::crlf ... FAILED\n\nfailures:\n    export::crlf: expected \"a\\r\\n\\r\\nb\\r\\n\", got \"a\\r\\n\\r\\nb\\n\"\n".into(),
                 ),
                 ..tool(
@@ -394,7 +388,7 @@ fn worklog(s: &mut Desktop) {
                     r#"{"command":"cargo test -p workbench export::"}"#,
                 )
             }),
-            EntryData::Tool(tool(
+            preview_tool_entry(tool(
                 "mcp-1",
                 "mcp__docs__search_pages",
                 "mcp__docs__search_pages",
@@ -406,6 +400,7 @@ fn worklog(s: &mut Desktop) {
                 text: "Task t-21 (Review line endings) on local thread 21 completed.\n\nCRLF survives the join; only the final newline was missing.".into(),
             },
             EntryData::Run(RunEnd {
+                usage: None,
                 stop_reason: Some("cancelled".into()),
                 error: None,
                 answer: None,
@@ -638,17 +633,17 @@ fn subagents(s: &mut Desktop) {
     s.thread = preview_thread([
         prompt("Compare the export against the old CLI, and review line endings."),
         response("I’ll delegate the export comparison and the line-ending review."),
-        EntryData::Tool(ToolRecord {
-            viz: Some("delegate_task".into()), child: Some(ThreadId(20)),
+        preview_tool_entry(ToolCall {
+            viz: Some(VizLink { tool: "delegate_task".into(), child: Some(ThreadId(20)), environment: None }),
             ..preview_tool("spawn-1", "Compare exports", "other", ToolCallStatus::InProgress)
         }),
-        EntryData::Tool(ToolRecord {
-            viz: Some("delegate_task".into()), child: Some(ThreadId(21)),
-            output: Some("CRLF survives the join; only the final newline was missing.\nNo other changes needed.".into()),
+        preview_tool_entry(ToolCall {
+            viz: Some(VizLink { tool: "delegate_task".into(), child: Some(ThreadId(21)), environment: None }),
+            raw_output: Some("CRLF survives the join; only the final newline was missing.\nNo other changes needed.".into()),
             ..preview_tool("spawn-2", "Review line endings", "other", ToolCallStatus::Completed)
         }),
-        EntryData::Tool(ToolRecord {
-            viz: Some("thread_send".into()), child: Some(ThreadId(20)),
+        preview_tool_entry(ToolCall {
+            viz: Some(VizLink { tool: "thread_send".into(), child: Some(ThreadId(20)), environment: None }),
             ..preview_tool("message-1", "Compare exports", "other", ToolCallStatus::Completed)
         }),
     ], None);
@@ -708,21 +703,26 @@ fn subagent(s: &mut Desktop) {
     });
     state.live = Some(LiveTurn {
         turn: "1".into(),
-        text: Some(LiveText {
-            key: "1:1".into(),
-            kind: LiveTextKind::Thought,
-            text: "Run both exporters against the same inputs and compare their output.".into(),
-        }),
-        tools: vec![ToolRecord {
-            started_at: Some(now_ms() - 11_000),
-            input: Some(r#"{"command":"diff -u old.md new.md","timeout":30}"#.into()),
-            ..preview_tool(
-                "compare",
-                "Compare sample exports",
-                "execute",
-                ToolCallStatus::InProgress,
-            )
-        }],
+        entries: vec![
+            preview_text(
+                "1:1",
+                "Run both exporters against the same inputs and compare their output.",
+                true,
+            ),
+            preview_entry(
+                "1:2",
+                Body::Tool(Box::new(ToolCall {
+                    started_at: Some(now_ms() - 11_000),
+                    raw_input: Some(r#"{"command":"diff -u old.md new.md","timeout":30}"#.into()),
+                    ..preview_tool(
+                        "compare",
+                        "Compare sample exports",
+                        "execute",
+                        ToolCallStatus::InProgress,
+                    )
+                })),
+            ),
+        ],
     });
     s.thread = preview_thread(
         [
@@ -969,26 +969,55 @@ fn prompt(text: &str) -> EntryData {
 }
 
 fn response(text: &str) -> EntryData {
-    EntryData::Text {
+    EntryData::Transcript(preview_text("1:0", text, false))
+}
+
+fn preview_text(key: &str, text: &str, thought: bool) -> TranscriptEntry {
+    let segment = Segment {
         text: text.into(),
-        key: "1:0".into(),
+        message: key.into(),
+        started_at: None,
+        ended_at: None,
+    };
+    preview_entry(
+        key,
+        if thought {
+            Body::Thought(segment)
+        } else {
+            Body::Text(segment)
+        },
+    )
+}
+
+fn preview_entry(key: &str, body: Body) -> TranscriptEntry {
+    TranscriptEntry {
+        key: key.into(),
+        order: 0,
+        body,
+        more: false,
     }
 }
 
-fn preview_tool(id: &str, title: &str, kind: &str, status: ToolCallStatus) -> ToolRecord {
-    ToolRecord {
-        id: id.into(),
-        title: title.into(),
-        name: None,
-        kind: Some(kind.into()),
-        status,
-        viz: None,
-        child: None,
-        child_environment: None,
-        started_at: None,
-        input: None,
-        output: None,
-        diffs: Vec::new(),
-        locations: Vec::new(),
-    }
+fn preview_tool_entry(tool: ToolCall) -> EntryData {
+    let key = tool.id.clone();
+    EntryData::Transcript(preview_entry(&key, Body::Tool(Box::new(tool))))
+}
+
+fn preview_plan(entries: Vec<PlanEntry>) -> EntryData {
+    EntryData::Transcript(preview_entry(
+        "plan",
+        Body::Plan(Plan {
+            id: None,
+            at: None,
+            content: PlanContent::Items { entries },
+        }),
+    ))
+}
+
+fn preview_tool(id: &str, title: &str, kind: &str, status: ToolCallStatus) -> ToolCall {
+    let mut tool = ToolCall::new(id.into());
+    tool.title = title.into();
+    tool.kind = Some(kind.into());
+    tool.status = status;
+    tool
 }

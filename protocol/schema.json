@@ -979,6 +979,16 @@
                   "string",
                   "null"
                 ]
+              },
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TurnUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -1024,6 +1034,130 @@
               "failed",
               "cancelled",
               "interrupted"
+            ]
+          },
+          "TurnUsage": {
+            "description": "The last usage update inside a turn and the tokens reported at its end.",
+            "type": "object",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ContextUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cost": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/UsageCost"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tokens": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TurnTokens"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "ContextUsage": {
+            "description": "Context window usage reported by an ACP runner.",
+            "type": "object",
+            "properties": {
+              "used": {
+                "description": "Tokens currently in context.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "size": {
+                "description": "Context window size in tokens.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "used",
+              "size"
+            ]
+          },
+          "UsageCost": {
+            "description": "The harness's cumulative session cost at the time of the usage update.",
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "currency",
+              "amount"
+            ]
+          },
+          "TurnTokens": {
+            "description": "The harness's prompt response token account. Some harnesses report session\ntotals here, so the fields retain the values exactly as reported.",
+            "type": "object",
+            "properties": {
+              "totalTokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "inputTokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "thoughtTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cachedReadTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cachedWriteTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "totalTokens",
+              "inputTokens",
+              "outputTokens"
             ]
           }
         }
@@ -1448,81 +1582,250 @@
             ]
           },
           "LiveTurn": {
-            "description": "The running ACP turn's uncommitted tail. The commit that appends it as\nentries, or ends the turn, clears it; its text comes before its tools.",
+            "description": "The running turn's uncommitted entries, in start order.",
             "type": "object",
             "properties": {
               "turn": {
-                "description": "Entry id of the turn's active run, as a string.",
+                "description": "The caller's identity for the turn, the prefix of its entry keys.",
                 "type": "string"
               },
-              "text": {
-                "description": "The text run being streamed, if any.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/LiveText"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
-              },
-              "tools": {
-                "description": "Unfinished tool calls, in the order they started.",
+              "entries": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/ToolRecord"
+                  "$ref": "#/$defs/TranscriptEntry"
                 }
               }
             },
             "required": [
               "turn",
-              "tools"
+              "entries"
             ]
           },
-          "LiveText": {
-            "description": "A streamed text run.",
+          "TranscriptEntry": {
+            "description": "One part of a turn's output.",
             "type": "object",
             "properties": {
               "key": {
-                "description": "Stable key; also `data.key` of the entry that commits this run.",
+                "description": "Stable identity, shared by the live and the committed entry.",
                 "type": "string"
               },
-              "kind": {
-                "description": "Prose or thinking.",
-                "$ref": "#/$defs/LiveTextKind"
+              "order": {
+                "description": "Where the entry started relative to the others of its turn.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
               },
-              "text": {
-                "description": "The text so far.",
-                "type": "string"
+              "body": {
+                "$ref": "#/$defs/Body"
+              },
+              "more": {
+                "description": "More body data is available through `thread.entry_chunk`.",
+                "type": "boolean"
               }
             },
             "required": [
               "key",
-              "kind",
-              "text"
+              "order",
+              "body"
             ]
           },
-          "LiveTextKind": {
-            "description": "What a [`LiveText`] run is.",
+          "Body": {
+            "description": "The content of an [`TranscriptEntry`].",
             "oneOf": [
               {
                 "description": "Agent prose.",
-                "type": "string",
-                "const": "text"
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Segment"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
               },
               {
                 "description": "Agent thinking.",
-                "type": "string",
-                "const": "thought"
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "thought"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Segment"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "A non-text block the agent sent as part of a message or a thought.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "media"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Media"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "tool"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/ToolCall"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "plan"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Plan"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "The full body is available through `thread.entry_chunk`.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "omitted"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
               }
             ]
           },
-          "ToolRecord": {
-            "description": "An ACP tool call: the data of a tool entry, or an unfinished\ncall in [`LiveTurn::tools`].",
+          "Segment": {
+            "description": "A run of streamed text. Long messages are committed as several segments, so\nlittle is lost when the server stops mid-turn.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "message": {
+                "description": "Key of the message's first segment. Adjacent segments of one message\nare one text, without a separator.",
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "Unix milliseconds of the first and last observed chunk.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "endedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              }
+            },
+            "required": [
+              "text",
+              "message"
+            ]
+          },
+          "Media": {
+            "description": "An image, audio clip, or resource in the agent's own output.",
+            "type": "object",
+            "properties": {
+              "block": {
+                "$ref": "#/$defs/ContentBlock"
+              },
+              "source": {
+                "$ref": "#/$defs/TextKind"
+              },
+              "at": {
+                "description": "Unix milliseconds when the block was observed.",
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "block",
+              "source",
+              "at"
+            ]
+          },
+          "ContentBlock": {
+            "description": "One ACP content block, including the payload, annotations and extension\nfields.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/ContentKind"
+              },
+              "payload": {
+                "description": "The original block with its ACP field names."
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ]
+          },
+          "ContentKind": {
+            "description": "The content types clients can use to render a block.",
+            "type": "string",
+            "enum": [
+              "text",
+              "image",
+              "audio",
+              "resource_link",
+              "resource",
+              "other"
+            ]
+          },
+          "TextKind": {
+            "description": "Whether streamed content is prose or thinking.",
+            "type": "string",
+            "enum": [
+              "text",
+              "thought"
+            ]
+          },
+          "ToolCall": {
+            "description": "One tool call, as last reported by the harness. Nothing the harness sent is\nshortened except the output of a terminal it streams.",
             "type": "object",
             "properties": {
               "id": {
-                "description": "ACP tool call id; unique within one turn.",
+                "description": "ACP tool call id, or the child session's id for a subagent.",
                 "type": "string"
               },
               "title": {
@@ -1530,94 +1833,124 @@
                 "type": "string"
               },
               "name": {
-                "description": "Programmatic tool name, when reported by the runner.",
+                "description": "Programmatic tool name, when reported.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "kind": {
-                "description": "ACP tool kind, such as `execute` or `edit`.",
+                "description": "The tool's category, when reported.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "status": {
-                "description": "Progress of the call.",
                 "$ref": "#/$defs/ToolCallStatus"
               },
-              "viz": {
-                "description": "The viz tool this call ran, if it was one.",
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "locations": {
+                "description": "Files the call touches, with the line when reported.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Location"
+                }
               },
-              "child": {
-                "description": "The thread the call started, if any.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ThreadId"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "rawInput": true,
+              "rawOutput": true,
+              "content": {
+                "description": "What the call produced, in the harness's order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolContent"
+                }
               },
-              "childEnvironment": {
+              "terminals": {
+                "description": "Output of the terminals [`ToolContent::Terminal`] refers to, and of\ncommands that stream output without showing a terminal.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Terminal"
+                }
+              },
+              "parent": {
+                "description": "The call that made this one, when a subagent's calls are reported flat.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "startedAt": {
-                "description": "Unix milliseconds when viz first observed the call running.",
+                "description": "Unix milliseconds when the call was first seen running, or first seen\nwhen the harness does not report that.",
                 "type": [
                   "integer",
                   "null"
                 ],
                 "format": "int64"
               },
-              "input": {
-                "description": "Raw input: a string as sent, else JSON.",
+              "endedAt": {
+                "description": "Unix milliseconds when the call first completed or failed.",
                 "type": [
-                  "string",
+                  "integer",
                   "null"
+                ],
+                "format": "int64"
+              },
+              "exit": {
+                "description": "How a command ended, when reported.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Exit"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
-              "output": {
-                "description": "ACP text content, else readable raw output.",
-                "type": [
-                  "string",
-                  "null"
+              "viz": {
+                "description": "The viz tool the call ran, if it was one.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/VizLink"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
-              "diffs": {
-                "description": "File changes.",
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/ToolDiff"
-                },
-                "default": []
+              "review": {
+                "description": "Set when the call is an automatic approval review of another call.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Review"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
-              "locations": {
-                "description": "Paths the call touched.",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "default": []
+              "meta": {
+                "description": "Harness metadata, without the terminal stream.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true
+              },
+              "more": {
+                "type": "boolean"
               }
             },
             "required": [
               "id",
               "title",
-              "status"
+              "status",
+              "locations",
+              "content",
+              "terminals"
             ]
           },
           "ToolCallStatus": {
-            "description": "Progress of an ACP tool call.",
+            "description": "Progress of a tool call.",
             "oneOf": [
               {
                 "description": "Not started.",
@@ -1641,18 +1974,103 @@
               }
             ]
           },
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1
-          },
-          "ToolDiff": {
-            "description": "One file change of a tool call.",
+          "Location": {
+            "description": "A place in a file.",
             "type": "object",
             "properties": {
               "path": {
-                "description": "Changed file.",
+                "type": "string"
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "path"
+            ]
+          },
+          "ToolContent": {
+            "description": "One block of a tool call's content.",
+            "oneOf": [
+              {
+                "description": "Text, an image, audio, a resource link, or an embedded resource.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "block"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/ContentBlock"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "diff"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/ToolDiff"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "A terminal, described in [`ToolCall::terminals`].",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "terminal"
+                  },
+                  "data": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "A child session the call operates on.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "session"
+                  },
+                  "data": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              }
+            ]
+          },
+          "ToolDiff": {
+            "description": "A file's contents before and after an edit.",
+            "type": "object",
+            "properties": {
+              "path": {
                 "type": "string"
               },
               "oldText": {
@@ -1663,13 +2081,249 @@
                 ]
               },
               "newText": {
-                "description": "New content.",
                 "type": "string"
               }
             },
             "required": [
               "path",
               "newText"
+            ]
+          },
+          "Terminal": {
+            "description": "A command's output so far.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "output": {
+                "type": "string"
+              },
+              "truncated": {
+                "description": "Whether the start of the output was dropped.",
+                "type": "boolean"
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Exit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "output",
+              "truncated"
+            ]
+          },
+          "Exit": {
+            "description": "How a command ended.",
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "signal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "VizLink": {
+            "description": "The viz tool behind a call.",
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string"
+              },
+              "child": {
+                "description": "The thread the call started or addressed.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "environment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "tool"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "Review": {
+            "description": "The verdict of a harness's own reviewer on another call.\n\ncodex-acp reports one `think` call titled `Guardian Review` next to every\ncommand it assesses. The fold gives it the reviewed action as its title,\nand a client can fold the record into the call it reviews or hide it unless\nit failed.",
+            "type": "object",
+            "properties": {
+              "target": {
+                "description": "The reviewed call, when the harness names it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "action": {
+                "description": "What was reviewed, such as the command.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verdict": {
+                "description": "The harness's word for the verdict, such as `approved` or `denied`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "risk": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "authorization": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rationale": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "Plan": {
+            "description": "A plan as it stood at one moment; each change is a new entry.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "The harness's plan id, when it keeps several plans.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "description": "Unix milliseconds when observed, when known.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "content": {
+                "$ref": "#/$defs/PlanContent"
+              }
+            },
+            "required": [
+              "content"
+            ]
+          },
+          "PlanContent": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "items"
+                  },
+                  "entries": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/PlanEntry"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "entries"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "markdown"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ]
+              }
+            ]
+          },
+          "PlanEntry": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string"
+              },
+              "priority": {
+                "$ref": "#/$defs/PlanPriority"
+              },
+              "status": {
+                "$ref": "#/$defs/PlanStatus"
+              }
+            },
+            "required": [
+              "content",
+              "priority",
+              "status"
+            ]
+          },
+          "PlanPriority": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "PlanStatus": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "in_progress",
+              "completed"
             ]
           },
           "ContextUsage": {
@@ -8033,22 +8687,10 @@
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "const": "text"
+                    "const": "transcript"
                   },
                   "data": {
-                    "type": "object",
-                    "properties": {
-                      "text": {
-                        "type": "string"
-                      },
-                      "key": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "text",
-                      "key"
-                    ]
+                    "$ref": "#/$defs/TranscriptEntry"
                   }
                 },
                 "required": [
@@ -8057,47 +8699,16 @@
                 ]
               },
               {
+                "description": "The full row is available through `thread.entry_chunk`.",
                 "type": "object",
                 "properties": {
                   "kind": {
                     "type": "string",
-                    "const": "thought"
-                  },
-                  "data": {
-                    "type": "object",
-                    "properties": {
-                      "text": {
-                        "type": "string"
-                      },
-                      "key": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "text",
-                      "key"
-                    ]
+                    "const": "omitted"
                   }
                 },
                 "required": [
-                  "kind",
-                  "data"
-                ]
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "tool"
-                  },
-                  "data": {
-                    "$ref": "#/$defs/ToolRecord"
-                  }
-                },
-                "required": [
-                  "kind",
-                  "data"
+                  "kind"
                 ]
               },
               {
@@ -8115,39 +8726,12 @@
                         "$ref": "#/$defs/EntryId"
                       },
                       "record": {
-                        "$ref": "#/$defs/ToolRecord"
+                        "$ref": "#/$defs/ToolCall"
                       }
                     },
                     "required": [
                       "entry",
                       "record"
-                    ]
-                  }
-                },
-                "required": [
-                  "kind",
-                  "data"
-                ]
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "plan"
-                  },
-                  "data": {
-                    "type": "object",
-                    "properties": {
-                      "entries": {
-                        "type": "array",
-                        "items": {
-                          "$ref": "#/$defs/PlanEntry"
-                        }
-                      }
-                    },
-                    "required": [
-                      "entries"
                     ]
                   }
                 },
@@ -8279,12 +8863,231 @@
               "channel"
             ]
           },
-          "ToolRecord": {
-            "description": "An ACP tool call: the data of a tool entry, or an unfinished\ncall in [`LiveTurn::tools`].",
+          "TranscriptEntry": {
+            "description": "One part of a turn's output.",
+            "type": "object",
+            "properties": {
+              "key": {
+                "description": "Stable identity, shared by the live and the committed entry.",
+                "type": "string"
+              },
+              "order": {
+                "description": "Where the entry started relative to the others of its turn.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "body": {
+                "$ref": "#/$defs/Body"
+              },
+              "more": {
+                "description": "More body data is available through `thread.entry_chunk`.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "key",
+              "order",
+              "body"
+            ]
+          },
+          "Body": {
+            "description": "The content of an [`TranscriptEntry`].",
+            "oneOf": [
+              {
+                "description": "Agent prose.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Segment"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "Agent thinking.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "thought"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Segment"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "A non-text block the agent sent as part of a message or a thought.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "media"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Media"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "tool"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/ToolCall"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "plan"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/Plan"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "The full body is available through `thread.entry_chunk`.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "omitted"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          },
+          "Segment": {
+            "description": "A run of streamed text. Long messages are committed as several segments, so\nlittle is lost when the server stops mid-turn.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "message": {
+                "description": "Key of the message's first segment. Adjacent segments of one message\nare one text, without a separator.",
+                "type": "string"
+              },
+              "startedAt": {
+                "description": "Unix milliseconds of the first and last observed chunk.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "endedAt": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              }
+            },
+            "required": [
+              "text",
+              "message"
+            ]
+          },
+          "Media": {
+            "description": "An image, audio clip, or resource in the agent's own output.",
+            "type": "object",
+            "properties": {
+              "block": {
+                "$ref": "#/$defs/ContentBlock"
+              },
+              "source": {
+                "$ref": "#/$defs/TextKind"
+              },
+              "at": {
+                "description": "Unix milliseconds when the block was observed.",
+                "type": "integer",
+                "format": "int64"
+              }
+            },
+            "required": [
+              "block",
+              "source",
+              "at"
+            ]
+          },
+          "ContentBlock": {
+            "description": "One ACP content block, including the payload, annotations and extension\nfields.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/ContentKind"
+              },
+              "payload": {
+                "description": "The original block with its ACP field names."
+              }
+            },
+            "required": [
+              "kind",
+              "payload"
+            ]
+          },
+          "ContentKind": {
+            "description": "The content types clients can use to render a block.",
+            "type": "string",
+            "enum": [
+              "text",
+              "image",
+              "audio",
+              "resource_link",
+              "resource",
+              "other"
+            ]
+          },
+          "TextKind": {
+            "description": "Whether streamed content is prose or thinking.",
+            "type": "string",
+            "enum": [
+              "text",
+              "thought"
+            ]
+          },
+          "ToolCall": {
+            "description": "One tool call, as last reported by the harness. Nothing the harness sent is\nshortened except the output of a terminal it streams.",
             "type": "object",
             "properties": {
               "id": {
-                "description": "ACP tool call id; unique within one turn.",
+                "description": "ACP tool call id, or the child session's id for a subagent.",
                 "type": "string"
               },
               "title": {
@@ -8292,94 +9095,124 @@
                 "type": "string"
               },
               "name": {
-                "description": "Programmatic tool name, when reported by the runner.",
+                "description": "Programmatic tool name, when reported.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "kind": {
-                "description": "ACP tool kind, such as `execute` or `edit`.",
+                "description": "The tool's category, when reported.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "status": {
-                "description": "Progress of the call.",
                 "$ref": "#/$defs/ToolCallStatus"
               },
-              "viz": {
-                "description": "The viz tool this call ran, if it was one.",
-                "type": [
-                  "string",
-                  "null"
-                ]
+              "locations": {
+                "description": "Files the call touches, with the line when reported.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Location"
+                }
               },
-              "child": {
-                "description": "The thread the call started, if any.",
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/ThreadId"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ]
+              "rawInput": true,
+              "rawOutput": true,
+              "content": {
+                "description": "What the call produced, in the harness's order.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/ToolContent"
+                }
               },
-              "childEnvironment": {
+              "terminals": {
+                "description": "Output of the terminals [`ToolContent::Terminal`] refers to, and of\ncommands that stream output without showing a terminal.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/Terminal"
+                }
+              },
+              "parent": {
+                "description": "The call that made this one, when a subagent's calls are reported flat.",
                 "type": [
                   "string",
                   "null"
                 ]
               },
               "startedAt": {
-                "description": "Unix milliseconds when viz first observed the call running.",
+                "description": "Unix milliseconds when the call was first seen running, or first seen\nwhen the harness does not report that.",
                 "type": [
                   "integer",
                   "null"
                 ],
                 "format": "int64"
               },
-              "input": {
-                "description": "Raw input: a string as sent, else JSON.",
+              "endedAt": {
+                "description": "Unix milliseconds when the call first completed or failed.",
                 "type": [
-                  "string",
+                  "integer",
                   "null"
+                ],
+                "format": "int64"
+              },
+              "exit": {
+                "description": "How a command ended, when reported.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Exit"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
-              "output": {
-                "description": "ACP text content, else readable raw output.",
-                "type": [
-                  "string",
-                  "null"
+              "viz": {
+                "description": "The viz tool the call ran, if it was one.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/VizLink"
+                  },
+                  {
+                    "type": "null"
+                  }
                 ]
               },
-              "diffs": {
-                "description": "File changes.",
-                "type": "array",
-                "items": {
-                  "$ref": "#/$defs/ToolDiff"
-                },
-                "default": []
+              "review": {
+                "description": "Set when the call is an automatic approval review of another call.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Review"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               },
-              "locations": {
-                "description": "Paths the call touched.",
-                "type": "array",
-                "items": {
-                  "type": "string"
-                },
-                "default": []
+              "meta": {
+                "description": "Harness metadata, without the terminal stream.",
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "additionalProperties": true
+              },
+              "more": {
+                "type": "boolean"
               }
             },
             "required": [
               "id",
               "title",
-              "status"
+              "status",
+              "locations",
+              "content",
+              "terminals"
             ]
           },
           "ToolCallStatus": {
-            "description": "Progress of an ACP tool call.",
+            "description": "Progress of a tool call.",
             "oneOf": [
               {
                 "description": "Not started.",
@@ -8403,18 +9236,103 @@
               }
             ]
           },
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1
-          },
-          "ToolDiff": {
-            "description": "One file change of a tool call.",
+          "Location": {
+            "description": "A place in a file.",
             "type": "object",
             "properties": {
               "path": {
-                "description": "Changed file.",
+                "type": "string"
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "path"
+            ]
+          },
+          "ToolContent": {
+            "description": "One block of a tool call's content.",
+            "oneOf": [
+              {
+                "description": "Text, an image, audio, a resource link, or an embedded resource.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "block"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/ContentBlock"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "diff"
+                  },
+                  "data": {
+                    "$ref": "#/$defs/ToolDiff"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "A terminal, described in [`ToolCall::terminals`].",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "terminal"
+                  },
+                  "data": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              },
+              {
+                "description": "A child session the call operates on.",
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "session"
+                  },
+                  "data": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "data"
+                ]
+              }
+            ]
+          },
+          "ToolDiff": {
+            "description": "A file's contents before and after an edit.",
+            "type": "object",
+            "properties": {
+              "path": {
                 "type": "string"
               },
               "oldText": {
@@ -8425,13 +9343,214 @@
                 ]
               },
               "newText": {
-                "description": "New content.",
                 "type": "string"
               }
             },
             "required": [
               "path",
               "newText"
+            ]
+          },
+          "Terminal": {
+            "description": "A command's output so far.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "output": {
+                "type": "string"
+              },
+              "truncated": {
+                "description": "Whether the start of the output was dropped.",
+                "type": "boolean"
+              },
+              "exit": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/Exit"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "output",
+              "truncated"
+            ]
+          },
+          "Exit": {
+            "description": "How a command ended.",
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "signal": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "VizLink": {
+            "description": "The viz tool behind a call.",
+            "type": "object",
+            "properties": {
+              "tool": {
+                "type": "string"
+              },
+              "child": {
+                "description": "The thread the call started or addressed.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ThreadId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "environment": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "tool"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "Review": {
+            "description": "The verdict of a harness's own reviewer on another call.\n\ncodex-acp reports one `think` call titled `Guardian Review` next to every\ncommand it assesses. The fold gives it the reviewed action as its title,\nand a client can fold the record into the call it reviews or hide it unless\nit failed.",
+            "type": "object",
+            "properties": {
+              "target": {
+                "description": "The reviewed call, when the harness names it.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "action": {
+                "description": "What was reviewed, such as the command.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "verdict": {
+                "description": "The harness's word for the verdict, such as `approved` or `denied`.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "risk": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "authorization": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "rationale": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            }
+          },
+          "Plan": {
+            "description": "A plan as it stood at one moment; each change is a new entry.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "The harness's plan id, when it keeps several plans.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "at": {
+                "description": "Unix milliseconds when observed, when known.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "int64"
+              },
+              "content": {
+                "$ref": "#/$defs/PlanContent"
+              }
+            },
+            "required": [
+              "content"
+            ]
+          },
+          "PlanContent": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "items"
+                  },
+                  "entries": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/PlanEntry"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "entries"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "markdown"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "text"
+                ]
+              }
             ]
           },
           "PlanEntry": {
@@ -8489,10 +9608,255 @@
                   "string",
                   "null"
                 ]
+              },
+              "usage": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TurnUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             }
+          },
+          "TurnUsage": {
+            "description": "The last usage update inside a turn and the tokens reported at its end.",
+            "type": "object",
+            "properties": {
+              "context": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ContextUsage"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "cost": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/UsageCost"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tokens": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/TurnTokens"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          },
+          "ContextUsage": {
+            "description": "Context window usage reported by an ACP runner.",
+            "type": "object",
+            "properties": {
+              "used": {
+                "description": "Tokens currently in context.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "size": {
+                "description": "Context window size in tokens.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "used",
+              "size"
+            ]
+          },
+          "UsageCost": {
+            "description": "The harness's cumulative session cost at the time of the usage update.",
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "currency",
+              "amount"
+            ]
+          },
+          "TurnTokens": {
+            "description": "The harness's prompt response token account. Some harnesses report session\ntotals here, so the fields retain the values exactly as reported.",
+            "type": "object",
+            "properties": {
+              "totalTokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "inputTokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "outputTokens": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "thoughtTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cachedReadTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              },
+              "cachedWriteTokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "totalTokens",
+              "inputTokens",
+              "outputTokens"
+            ]
           }
         }
+      }
+    },
+    "thread.entry_chunk": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ReadEntryChunk",
+        "description": "Load an omitted or truncated entry in bounded chunks.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "source": {
+            "$ref": "#/$defs/EntrySource"
+          },
+          "offset": {
+            "description": "UTF-8 byte offset, initially zero.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "revision": {
+            "description": "Use the first chunk's revision for subsequent reads.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "thread",
+          "source",
+          "offset"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "EntrySource": {
+            "description": "Identifies a stored transcript row or an in-progress segment.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "stored"
+                  },
+                  "entry": {
+                    "$ref": "#/$defs/EntryId"
+                  }
+                },
+                "required": [
+                  "type",
+                  "entry"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "live"
+                  },
+                  "key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "key"
+                ]
+              }
+            ]
+          },
+          "EntryId": {
+            "description": "A transcript entry id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "EntryChunk",
+        "description": "Concatenate chunks as UTF-8 JSON, then decode as `EntryData` (stored) or\n`TranscriptEntry` (live).",
+        "type": "object",
+        "properties": {
+          "revision": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string"
+          },
+          "next": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "revision",
+          "data"
+        ]
       }
     },
     "queue.remove": {
@@ -9374,6 +10738,34 @@
         "properties": {
           "method": {
             "type": "string",
+            "const": "thread.live"
+          },
+          "params": {
+            "type": "object",
+            "properties": {
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              },
+              "delta": {
+                "$ref": "#/$defs/LiveDelta"
+              }
+            },
+            "required": [
+              "thread",
+              "delta"
+            ]
+          }
+        },
+        "required": [
+          "method",
+          "params"
+        ]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string",
             "const": "threads.changed"
           },
           "params": {
@@ -9511,22 +10903,10 @@
             "properties": {
               "kind": {
                 "type": "string",
-                "const": "text"
+                "const": "transcript"
               },
               "data": {
-                "type": "object",
-                "properties": {
-                  "text": {
-                    "type": "string"
-                  },
-                  "key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "text",
-                  "key"
-                ]
+                "$ref": "#/$defs/TranscriptEntry"
               }
             },
             "required": [
@@ -9535,47 +10915,16 @@
             ]
           },
           {
+            "description": "The full row is available through `thread.entry_chunk`.",
             "type": "object",
             "properties": {
               "kind": {
                 "type": "string",
-                "const": "thought"
-              },
-              "data": {
-                "type": "object",
-                "properties": {
-                  "text": {
-                    "type": "string"
-                  },
-                  "key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "text",
-                  "key"
-                ]
+                "const": "omitted"
               }
             },
             "required": [
-              "kind",
-              "data"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "tool"
-              },
-              "data": {
-                "$ref": "#/$defs/ToolRecord"
-              }
-            },
-            "required": [
-              "kind",
-              "data"
+              "kind"
             ]
           },
           {
@@ -9593,39 +10942,12 @@
                     "$ref": "#/$defs/EntryId"
                   },
                   "record": {
-                    "$ref": "#/$defs/ToolRecord"
+                    "$ref": "#/$defs/ToolCall"
                   }
                 },
                 "required": [
                   "entry",
                   "record"
-                ]
-              }
-            },
-            "required": [
-              "kind",
-              "data"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "plan"
-              },
-              "data": {
-                "type": "object",
-                "properties": {
-                  "entries": {
-                    "type": "array",
-                    "items": {
-                      "$ref": "#/$defs/PlanEntry"
-                    }
-                  }
-                },
-                "required": [
-                  "entries"
                 ]
               }
             },
@@ -9718,12 +11040,231 @@
           "mime"
         ]
       },
-      "ToolRecord": {
-        "description": "An ACP tool call: the data of a tool entry, or an unfinished\ncall in [`LiveTurn::tools`].",
+      "TranscriptEntry": {
+        "description": "One part of a turn's output.",
+        "type": "object",
+        "properties": {
+          "key": {
+            "description": "Stable identity, shared by the live and the committed entry.",
+            "type": "string"
+          },
+          "order": {
+            "description": "Where the entry started relative to the others of its turn.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "body": {
+            "$ref": "#/$defs/Body"
+          },
+          "more": {
+            "description": "More body data is available through `thread.entry_chunk`.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "key",
+          "order",
+          "body"
+        ]
+      },
+      "Body": {
+        "description": "The content of an [`TranscriptEntry`].",
+        "oneOf": [
+          {
+            "description": "Agent prose.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "text"
+              },
+              "data": {
+                "$ref": "#/$defs/Segment"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "description": "Agent thinking.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "thought"
+              },
+              "data": {
+                "$ref": "#/$defs/Segment"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "description": "A non-text block the agent sent as part of a message or a thought.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "media"
+              },
+              "data": {
+                "$ref": "#/$defs/Media"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "tool"
+              },
+              "data": {
+                "$ref": "#/$defs/ToolCall"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "plan"
+              },
+              "data": {
+                "$ref": "#/$defs/Plan"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "description": "The full body is available through `thread.entry_chunk`.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "omitted"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        ]
+      },
+      "Segment": {
+        "description": "A run of streamed text. Long messages are committed as several segments, so\nlittle is lost when the server stops mid-turn.",
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          },
+          "message": {
+            "description": "Key of the message's first segment. Adjacent segments of one message\nare one text, without a separator.",
+            "type": "string"
+          },
+          "startedAt": {
+            "description": "Unix milliseconds of the first and last observed chunk.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "endedAt": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          }
+        },
+        "required": [
+          "text",
+          "message"
+        ]
+      },
+      "Media": {
+        "description": "An image, audio clip, or resource in the agent's own output.",
+        "type": "object",
+        "properties": {
+          "block": {
+            "$ref": "#/$defs/ContentBlock"
+          },
+          "source": {
+            "$ref": "#/$defs/TextKind"
+          },
+          "at": {
+            "description": "Unix milliseconds when the block was observed.",
+            "type": "integer",
+            "format": "int64"
+          }
+        },
+        "required": [
+          "block",
+          "source",
+          "at"
+        ]
+      },
+      "ContentBlock": {
+        "description": "One ACP content block, including the payload, annotations and extension\nfields.",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "$ref": "#/$defs/ContentKind"
+          },
+          "payload": {
+            "description": "The original block with its ACP field names."
+          }
+        },
+        "required": [
+          "kind",
+          "payload"
+        ]
+      },
+      "ContentKind": {
+        "description": "The content types clients can use to render a block.",
+        "type": "string",
+        "enum": [
+          "text",
+          "image",
+          "audio",
+          "resource_link",
+          "resource",
+          "other"
+        ]
+      },
+      "TextKind": {
+        "description": "Whether streamed content is prose or thinking.",
+        "type": "string",
+        "enum": [
+          "text",
+          "thought"
+        ]
+      },
+      "ToolCall": {
+        "description": "One tool call, as last reported by the harness. Nothing the harness sent is\nshortened except the output of a terminal it streams.",
         "type": "object",
         "properties": {
           "id": {
-            "description": "ACP tool call id; unique within one turn.",
+            "description": "ACP tool call id, or the child session's id for a subagent.",
             "type": "string"
           },
           "title": {
@@ -9731,94 +11272,124 @@
             "type": "string"
           },
           "name": {
-            "description": "Programmatic tool name, when reported by the runner.",
+            "description": "Programmatic tool name, when reported.",
             "type": [
               "string",
               "null"
             ]
           },
           "kind": {
-            "description": "ACP tool kind, such as `execute` or `edit`.",
+            "description": "The tool's category, when reported.",
             "type": [
               "string",
               "null"
             ]
           },
           "status": {
-            "description": "Progress of the call.",
             "$ref": "#/$defs/ToolCallStatus"
           },
-          "viz": {
-            "description": "The viz tool this call ran, if it was one.",
-            "type": [
-              "string",
-              "null"
-            ]
+          "locations": {
+            "description": "Files the call touches, with the line when reported.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Location"
+            }
           },
-          "child": {
-            "description": "The thread the call started, if any.",
-            "anyOf": [
-              {
-                "$ref": "#/$defs/ThreadId"
-              },
-              {
-                "type": "null"
-              }
-            ]
+          "rawInput": true,
+          "rawOutput": true,
+          "content": {
+            "description": "What the call produced, in the harness's order.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ToolContent"
+            }
           },
-          "childEnvironment": {
+          "terminals": {
+            "description": "Output of the terminals [`ToolContent::Terminal`] refers to, and of\ncommands that stream output without showing a terminal.",
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/Terminal"
+            }
+          },
+          "parent": {
+            "description": "The call that made this one, when a subagent's calls are reported flat.",
             "type": [
               "string",
               "null"
             ]
           },
           "startedAt": {
-            "description": "Unix milliseconds when viz first observed the call running.",
+            "description": "Unix milliseconds when the call was first seen running, or first seen\nwhen the harness does not report that.",
             "type": [
               "integer",
               "null"
             ],
             "format": "int64"
           },
-          "input": {
-            "description": "Raw input: a string as sent, else JSON.",
+          "endedAt": {
+            "description": "Unix milliseconds when the call first completed or failed.",
             "type": [
-              "string",
+              "integer",
               "null"
+            ],
+            "format": "int64"
+          },
+          "exit": {
+            "description": "How a command ended, when reported.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Exit"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "output": {
-            "description": "ACP text content, else readable raw output.",
-            "type": [
-              "string",
-              "null"
+          "viz": {
+            "description": "The viz tool the call ran, if it was one.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/VizLink"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
-          "diffs": {
-            "description": "File changes.",
-            "type": "array",
-            "items": {
-              "$ref": "#/$defs/ToolDiff"
-            },
-            "default": []
+          "review": {
+            "description": "Set when the call is an automatic approval review of another call.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Review"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
-          "locations": {
-            "description": "Paths the call touched.",
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "default": []
+          "meta": {
+            "description": "Harness metadata, without the terminal stream.",
+            "type": [
+              "object",
+              "null"
+            ],
+            "additionalProperties": true
+          },
+          "more": {
+            "type": "boolean"
           }
         },
         "required": [
           "id",
           "title",
-          "status"
+          "status",
+          "locations",
+          "content",
+          "terminals"
         ]
       },
       "ToolCallStatus": {
-        "description": "Progress of an ACP tool call.",
+        "description": "Progress of a tool call.",
         "oneOf": [
           {
             "description": "Not started.",
@@ -9842,12 +11413,103 @@
           }
         ]
       },
-      "ToolDiff": {
-        "description": "One file change of a tool call.",
+      "Location": {
+        "description": "A place in a file.",
         "type": "object",
         "properties": {
           "path": {
-            "description": "Changed file.",
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "ToolContent": {
+        "description": "One block of a tool call's content.",
+        "oneOf": [
+          {
+            "description": "Text, an image, audio, a resource link, or an embedded resource.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "block"
+              },
+              "data": {
+                "$ref": "#/$defs/ContentBlock"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "diff"
+              },
+              "data": {
+                "$ref": "#/$defs/ToolDiff"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "description": "A terminal, described in [`ToolCall::terminals`].",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "terminal"
+              },
+              "data": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          },
+          {
+            "description": "A child session the call operates on.",
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "session"
+              },
+              "data": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "data"
+            ]
+          }
+        ]
+      },
+      "ToolDiff": {
+        "description": "A file's contents before and after an edit.",
+        "type": "object",
+        "properties": {
+          "path": {
             "type": "string"
           },
           "oldText": {
@@ -9858,13 +11520,208 @@
             ]
           },
           "newText": {
-            "description": "New content.",
             "type": "string"
           }
         },
         "required": [
           "path",
           "newText"
+        ]
+      },
+      "Terminal": {
+        "description": "A command's output so far.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "output": {
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Whether the start of the output was dropped.",
+            "type": "boolean"
+          },
+          "exit": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Exit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "output",
+          "truncated"
+        ]
+      },
+      "Exit": {
+        "description": "How a command ended.",
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "signal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "VizLink": {
+        "description": "The viz tool behind a call.",
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "child": {
+            "description": "The thread the call started or addressed.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "environment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "tool"
+        ]
+      },
+      "Review": {
+        "description": "The verdict of a harness's own reviewer on another call.\n\ncodex-acp reports one `think` call titled `Guardian Review` next to every\ncommand it assesses. The fold gives it the reviewed action as its title,\nand a client can fold the record into the call it reviews or hide it unless\nit failed.",
+        "type": "object",
+        "properties": {
+          "target": {
+            "description": "The reviewed call, when the harness names it.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "action": {
+            "description": "What was reviewed, such as the command.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "description": "The harness's word for the verdict, such as `approved` or `denied`.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "risk": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "authorization": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "rationale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "Plan": {
+        "description": "A plan as it stood at one moment; each change is a new entry.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "The harness's plan id, when it keeps several plans.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "at": {
+            "description": "Unix milliseconds when observed, when known.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "content": {
+            "$ref": "#/$defs/PlanContent"
+          }
+        },
+        "required": [
+          "content"
+        ]
+      },
+      "PlanContent": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "items"
+              },
+              "entries": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PlanEntry"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "entries"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "markdown"
+              },
+              "text": {
+                "type": "string"
+              },
+              "path": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "text"
+            ]
+          }
         ]
       },
       "PlanEntry": {
@@ -9922,8 +11779,142 @@
               "string",
               "null"
             ]
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TurnUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
+      },
+      "TurnUsage": {
+        "description": "The last usage update inside a turn and the tokens reported at its end.",
+        "type": "object",
+        "properties": {
+          "context": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ContextUsage"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/UsageCost"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tokens": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/TurnTokens"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "ContextUsage": {
+        "description": "Context window usage reported by an ACP runner.",
+        "type": "object",
+        "properties": {
+          "used": {
+            "description": "Tokens currently in context.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "size": {
+            "description": "Context window size in tokens.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "used",
+          "size"
+        ]
+      },
+      "UsageCost": {
+        "description": "The harness's cumulative session cost at the time of the usage update.",
+        "type": "object",
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "currency",
+          "amount"
+        ]
+      },
+      "TurnTokens": {
+        "description": "The harness's prompt response token account. Some harnesses report session\ntotals here, so the fields retain the values exactly as reported.",
+        "type": "object",
+        "properties": {
+          "totalTokens": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "inputTokens": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "outputTokens": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "thoughtTokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "cachedReadTokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          },
+          "cachedWriteTokens": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "totalTokens",
+          "inputTokens",
+          "outputTokens"
+        ]
       },
       "ThreadState": {
         "description": "The current application state of a watched thread.",
@@ -10303,95 +12294,23 @@
         ]
       },
       "LiveTurn": {
-        "description": "The running ACP turn's uncommitted tail. The commit that appends it as\nentries, or ends the turn, clears it; its text comes before its tools.",
+        "description": "The running turn's uncommitted entries, in start order.",
         "type": "object",
         "properties": {
           "turn": {
-            "description": "Entry id of the turn's active run, as a string.",
+            "description": "The caller's identity for the turn, the prefix of its entry keys.",
             "type": "string"
           },
-          "text": {
-            "description": "The text run being streamed, if any.",
-            "anyOf": [
-              {
-                "$ref": "#/$defs/LiveText"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "tools": {
-            "description": "Unfinished tool calls, in the order they started.",
+          "entries": {
             "type": "array",
             "items": {
-              "$ref": "#/$defs/ToolRecord"
+              "$ref": "#/$defs/TranscriptEntry"
             }
           }
         },
         "required": [
           "turn",
-          "tools"
-        ]
-      },
-      "LiveText": {
-        "description": "A streamed text run.",
-        "type": "object",
-        "properties": {
-          "key": {
-            "description": "Stable key; also `data.key` of the entry that commits this run.",
-            "type": "string"
-          },
-          "kind": {
-            "description": "Prose or thinking.",
-            "$ref": "#/$defs/LiveTextKind"
-          },
-          "text": {
-            "description": "The text so far.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "key",
-          "kind",
-          "text"
-        ]
-      },
-      "LiveTextKind": {
-        "description": "What a [`LiveText`] run is.",
-        "oneOf": [
-          {
-            "description": "Agent prose.",
-            "type": "string",
-            "const": "text"
-          },
-          {
-            "description": "Agent thinking.",
-            "type": "string",
-            "const": "thought"
-          }
-        ]
-      },
-      "ContextUsage": {
-        "description": "Context window usage reported by an ACP runner.",
-        "type": "object",
-        "properties": {
-          "used": {
-            "description": "Tokens currently in context.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "size": {
-            "description": "Context window size in tokens.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "used",
-          "size"
+          "entries"
         ]
       },
       "GitStatus": {
@@ -10486,6 +12405,34 @@
         "required": [
           "added",
           "removed"
+        ]
+      },
+      "LiveDelta": {
+        "description": "Changes to a previously delivered live snapshot. Entries replace values\nwith matching keys. A changed turn discards the previous tail.",
+        "type": "object",
+        "properties": {
+          "turn": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "upsert": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/TranscriptEntry"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "upsert",
+          "remove"
         ]
       },
       "Empty": {
