@@ -4,7 +4,8 @@ use std::fmt::Write as _;
 
 use rune::{El, col, row, text};
 use rune_kit::{
-    ButtonVariant, FileTree, IconButtonVariant, Placement, Tree, TreeItem,
+    ButtonVariant, FileTree, IconButtonVariant, Placement, Popover, RadioGroup, RadioItem, Tree,
+    TreeItem,
     diff::{self, DiffMode, DiffView, FileDiff, FileStatus},
 };
 use viz_client::protocol::{GitDiffFile, GitDiffTarget, GitFileKind, GitLineStats, RunId};
@@ -267,50 +268,44 @@ fn scope(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         GitDiffTarget::Turn { .. } => "Turn",
         GitDiffTarget::Thread => "Thread",
     };
-    if open {
-        let base = default_branch(&s.model).to_owned();
-        let rows = [
-            ("Working", GitDiffTarget::Working),
-            ("Staged", GitDiffTarget::Staged),
-            ("vs Base", GitDiffTarget::Base { revision: base }),
-            ("Thread changes", GitDiffTarget::Thread),
-        ]
-        .into_iter()
-        .map(|(label, target)| {
-            ui::list_row(label, label)
-                .selected(target == git.target)
-                .on_press_tx(move |s: &mut Desktop, tx| {
-                    super::dispatch(s, GitMsg::Scope(target.clone()), tx);
-                })
-                .build(t)
-        });
-        let contents = col()
-            .padding(8.0)
-            .gap(4.0)
-            .children(rows)
-            .child(input_scope(
-                &s.widgets.git_revision,
-                "Commit revision",
-                false,
-                t,
-            ))
-            .child(input_scope(&s.widgets.git_run, "Turn run ID", true, t));
-        layer.push(
-            ui::anchored_popover(
-                "diff-scopes",
-                SCOPE,
-                Placement::BottomStart,
-                236.0,
-                contents,
-                t,
-            )
-            .modal(true, super::close_popup),
-        );
-    }
-    ui::button(label, ButtonVariant::Outline, Size::Small)
+    let base = default_branch(&s.model).to_owned();
+    let scopes = [
+        ("Working", GitDiffTarget::Working),
+        ("Staged", GitDiffTarget::Staged),
+        ("vs Base", GitDiffTarget::Base { revision: base }),
+        ("Thread changes", GitDiffTarget::Thread),
+    ]
+    .into_iter()
+    .fold(RadioGroup::new(), |group, (label, target)| {
+        group.item(RadioItem::new(label, target == git.target).on_select_tx(
+            move |s: &mut Desktop, tx| {
+                super::dispatch(s, GitMsg::Scope(target.clone()), tx);
+            },
+        ))
+    });
+    let trigger = ui::button(label, ButtonVariant::Outline, Size::Small)
         .on_press_tx(|s: &mut Desktop, tx| super::toggle_popup(s, Popup::Scope, tx))
-        .build(&t.k)
-        .key(SCOPE)
+        .build(&t.k);
+    Popover::new(SCOPE)
+        .trigger(trigger)
+        .title("Diff scope")
+        .open(open)
+        .placement(Placement::BottomStart)
+        .on_close(super::close_popup)
+        .child(
+            col()
+                .w_full()
+                .gap(8.0)
+                .child(scopes.build(&t.overlay))
+                .child(input_scope(
+                    &s.widgets.git_revision,
+                    "Commit revision",
+                    false,
+                    t,
+                ))
+                .child(input_scope(&s.widgets.git_run, "Turn run ID", true, t)),
+        )
+        .build(&t.overlay, layer)
 }
 
 fn input_scope(edit: &rune::TextEdit, label: &str, turn: bool, t: &Theme) -> El {

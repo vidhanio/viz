@@ -1,7 +1,7 @@
 //! Pull request status, checks, reviews, and creation.
 
 use rune::{El, col, row, text};
-use rune_kit::{ButtonVariant, Placement};
+use rune_kit::{ButtonVariant, Menu, MenuItem, Placement};
 use viz_client::protocol::{GitHubPull, GitHubPullState};
 
 use crate::{
@@ -44,113 +44,99 @@ pub fn view(s: &Desktop, pr: &GitHubPull, t: &Theme, overlays: &mut Vec<El>) -> 
         .gap(4.0)
         .child(text(format!("#{}", pr.number)).font(t.small).color(t.muted))
         .child(chip(
+            s,
             &checks,
             "pr-checks",
             Popup::Checks,
             Request::Checks(pr.head_commit.clone()),
             t,
+            overlays,
         ))
         .child(chip(
+            s,
             "Reviews",
             "pr-reviews",
             Popup::Reviews,
             Request::Reviews(pr.number),
             t,
+            overlays,
         ));
-    popover(s, t, overlays);
     col().child(title).child(meta)
 }
 
-fn popover(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
-    let (key, entries) = match s.model.git.popup {
-        Some(Popup::Checks) => (
-            "pr-checks",
-            s.model.git.checks.as_ref().map(|checks| {
-                checks
-                    .iter()
-                    .map(|check| {
-                        result_row(
-                            check.id,
-                            &check.name,
-                            check.conclusion.as_deref().unwrap_or(&check.status),
-                            check.url.as_deref(),
-                            t,
-                        )
-                    })
-                    .collect()
-            }),
-        ),
-        Some(Popup::Reviews) => (
-            "pr-reviews",
-            s.model.git.reviews.as_ref().map(|reviews| {
-                reviews
-                    .iter()
-                    .map(|review| {
-                        result_row(
-                            review.id,
-                            review.author.as_deref().unwrap_or("Reviewer"),
-                            &review.state,
-                            Some(&review.url),
-                            t,
-                        )
-                    })
-                    .collect()
-            }),
-        ),
-        _ => return,
+/// The open popup's results as menu items, or a disabled status item while
+/// loading, failed, or empty.
+fn results(s: &Desktop, popup: Popup) -> Vec<MenuItem> {
+    let git = &s.model.git;
+    let items: Option<Vec<MenuItem>> = match popup {
+        Popup::Checks => git.checks.as_ref().map(|checks| {
+            checks
+                .iter()
+                .map(|check| {
+                    result(
+                        &check.name,
+                        check.conclusion.as_deref().unwrap_or(&check.status),
+                        check.url.as_deref(),
+                    )
+                })
+                .collect()
+        }),
+        Popup::Reviews => git.reviews.as_ref().map(|reviews| {
+            reviews
+                .iter()
+                .map(|review| {
+                    result(
+                        review.author.as_deref().unwrap_or("Reviewer"),
+                        &review.state,
+                        Some(&review.url),
+                    )
+                })
+                .collect()
+        }),
+        _ => Some(Vec::new()),
     };
-    let mut contents = col().padding(ui::MENU_INSET).w_full();
-    match entries {
-        Some(entries) if !Vec::<El>::is_empty(&entries) => contents = contents.children(entries),
-        Some(_) => {
-            contents = contents.child(text("No results").font(t.small).color(t.muted).padding(8.0));
-        }
-        None => {
-            contents = contents.child(
-                text(s.model.git.error.as_deref().unwrap_or("Loading…"))
-                    .font(t.small)
-                    .color(t.muted)
-                    .padding(8.0),
-            );
-        }
+    match items {
+        Some(items) if !items.is_empty() => items,
+        Some(_) => vec![MenuItem::new("No results").disabled(true)],
+        None => vec![MenuItem::new(git.error.as_deref().unwrap_or("Loading…")).disabled(true)],
     }
-    overlays.push(
-        ui::anchored_popover(
-            "pr-results",
-            key,
-            Placement::BottomEnd,
-            CARD_WIDTH,
-            rune_kit::popover::fit_scroll(contents)
-                .key("pr-results-scroll")
-                .scroll_anchor()
-                .max_h(224.0),
-            t,
-        )
-        .modal(true, super::close_popup),
-    );
 }
 
-fn chip(label: &str, key: &str, popup: Popup, request: Request, t: &Theme) -> El {
-    ui::button(label, ButtonVariant::Ghost, Size::Small)
+fn chip(
+    s: &Desktop,
+    label: &str,
+    key: &str,
+    popup: Popup,
+    request: Request,
+    t: &Theme,
+    overlays: &mut Vec<El>,
+) -> El {
+    let trigger = ui::button(label, ButtonVariant::Ghost, Size::Small)
         .on_press_tx(move |s: &mut Desktop, tx| {
             super::toggle_popup(s, popup, tx);
             if s.model.git.popup == Some(popup) {
                 super::dispatch(s, GitMsg::Request(request.clone()), tx);
             }
         })
-        .build(&t.k)
-        .key(key)
+        .build(&t.k);
+    let open = s.model.git.popup == Some(popup);
+    let items = if open { results(s, popup) } else { Vec::new() };
+    ui::menu_items(Menu::new(key), items)
+        .trigger(trigger)
+        .open(open)
+        .placement(Placement::BottomEnd)
+        .min_width(CARD_WIDTH)
+        .on_close(super::close_popup)
+        .build(&t.overlay, overlays)
 }
 
-fn result_row(id: u64, title: &str, detail: &str, url: Option<&str>, t: &Theme) -> El {
-    let row = ui::list_row(format!("pr-result-{id}"), title).detail(detail);
+fn result(title: &str, status: &str, url: Option<&str>) -> MenuItem {
+    let item = MenuItem::new(title).badge(status);
     match url.map(str::to_owned) {
-        Some(url) => row
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.clone())), tx);
-            })
-            .build(t),
-        None => row.build(t),
+        Some(url) => item.on_select_tx(move |s: &mut Desktop, tx| {
+            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.clone())), tx);
+        }),
+        None => item,
     }
 }
 
