@@ -94,7 +94,7 @@ impl Workspace {
             return Err(Rejection::EmptyText.into());
         }
         let decoded = attachments::decode(std::mem::take(&mut args.attachments))?;
-        let thread = self.task_thread(&mut tx, &args, placement).await?;
+        let (thread, scratch) = self.task_thread(&mut tx, &args, placement).await?;
         let attachments = attachments::save(&mut tx, thread, decoded).await?;
         let run = runs::enqueue(
             &mut tx,
@@ -116,7 +116,12 @@ impl Workspace {
             ],
         )
         .await?;
-        tx.commit().await?;
+        let scratch_title = scratch.then(|| {
+            args.title
+                .unwrap_or_else(|| titles::from_prompt(&args.text))
+        });
+        self.commit_thread(tx, thread, scratch_title.as_deref())
+            .await?;
         self.kick(thread, false);
         drop(db);
         self.relist(thread);
@@ -144,7 +149,7 @@ impl Workspace {
         db: &mut Connection,
         args: &ReceiveTask,
         resolved: Option<&Placement>,
-    ) -> Result<ThreadId, Error> {
+    ) -> Result<(ThreadId, bool), Error> {
         if let Some(thread) = args.thread {
             let binding = store::binding(db, thread).await?;
             tasks::reuse(Reuse {
@@ -154,7 +159,7 @@ impl Workspace {
                 harness: &binding.harness,
                 project: binding.project.as_deref(),
             })?;
-            return Ok(thread);
+            return Ok((thread, false));
         }
         let parent = self.parent(db, args).await?;
         let placed = parent.as_ref().map(Parent::placed);
@@ -192,11 +197,7 @@ impl Workspace {
             },
         )
         .await?;
-        if project.is_none() {
-            self.provision_scratch(db, thread, &titles::from_prompt(&args.text))
-                .await?;
-        }
-        Ok(thread)
+        Ok((thread, project.is_none()))
     }
 
     pub(crate) async fn retract(&self, args: RetractTask) -> Result<Option<Received>, Error> {

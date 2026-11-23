@@ -108,13 +108,6 @@ impl Workspace {
             },
         )
         .await?;
-        if args.project.is_none() {
-            let title = args
-                .title
-                .clone()
-                .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()));
-            self.provision_scratch(&mut tx, thread, &title).await?;
-        }
         let run = if args.text.is_some() || !attachments.is_empty() {
             let attachments = attachments::save(&mut tx, thread, attachments).await?;
             Some(
@@ -139,7 +132,12 @@ impl Workspace {
             )
             .await?;
         }
-        tx.commit().await?;
+        let scratch_title = args.project.is_none().then(|| {
+            args.title
+                .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()))
+        });
+        self.commit_thread(tx, thread, scratch_title.as_deref())
+            .await?;
         self.kick(thread, run.is_none());
         drop(db);
         self.relist(thread);

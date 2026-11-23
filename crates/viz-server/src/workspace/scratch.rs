@@ -7,36 +7,49 @@ use viz_protocol::{ProjectSettings, PromoteThread, PromotedThread, ThreadId};
 
 use super::{
     Workspace,
-    sql::{Connection, exec, row, rows},
+    sql::{Transaction, exec, row, rows},
     store,
 };
 use crate::error::Error;
 
 impl Workspace {
-    /// Provision a thread's private working directory before any run is
-    /// enqueued.
-    pub(super) async fn provision_scratch(
+    /// Commit a new thread after provisioning its private directory, if needed.
+    pub(super) async fn commit_thread(
         &self,
-        db: &mut Connection,
+        mut tx: Transaction<'_>,
         thread: ThreadId,
-        title: &str,
+        scratch_title: Option<&str>,
     ) -> Result<(), Error> {
-        let at = store::now();
-        let date = chrono::DateTime::from_timestamp_millis(at)
+        let Some(title) = scratch_title else {
+            return tx.commit().await;
+        };
+        let date = chrono::DateTime::from_timestamp_millis(store::now())
             .ok_or_else(|| Error::invalid("invalid scratch creation time"))?
             .date_naive()
             .to_string();
-        let root = self.scratch_root().await?;
-        let path = root.join(placement::scratch_name(&date, title, thread));
+        let path = self
+            .scratch_root()
+            .await?
+            .join(placement::scratch_name(&date, title, thread));
+        let cwd = store::path_text(&path)?;
         tokio::fs::create_dir(&path).await?;
-        ensure_outside_git(&path, &self.closing).await?;
-        exec(
-            db,
-            "UPDATE threads SET cwd = ?2 WHERE id = ?1",
-            [thread.into(), store::path_text(&path)?.into()],
-        )
-        .await?;
-        Ok(())
+        let result = async {
+            ensure_outside_git(&path, &self.closing).await?;
+            exec(
+                &mut tx,
+                "UPDATE threads SET cwd = ?2 WHERE id = ?1",
+                [thread.into(), cwd.into()],
+            )
+            .await?;
+            tx.commit().await
+        }
+        .await;
+        if result.is_err()
+            && let Err(error) = tokio::fs::remove_dir(&path).await
+        {
+            tracing::warn!(%error, %thread, "could not remove uncommitted scratch folder");
+        }
+        result
     }
 
     async fn scratch_root(&self) -> Result<PathBuf, Error> {

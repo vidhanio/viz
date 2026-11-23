@@ -127,6 +127,12 @@ impl Workspace {
             [thread.into(), source.into(), shared.into()],
         )
         .await?;
+        let scratch_title = binding.project.is_none().then(|| {
+            args.title
+                .as_deref()
+                .unwrap_or_else(|| metadata.title())
+                .to_owned()
+        });
         if args.title.is_none() {
             let title = Title::Derived(metadata.title().to_owned());
             let metadata = threads::Metadata { title, ..metadata };
@@ -140,7 +146,8 @@ impl Workspace {
             )
             .await?;
         }
-        tx.commit().await?;
+        self.commit_thread(tx, thread, scratch_title.as_deref())
+            .await?;
         self.kick(thread, true);
         drop(db);
         self.relist(thread);
