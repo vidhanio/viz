@@ -9,7 +9,7 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rune::AppHandle;
-use viz_client::protocol::Attachment;
+use viz_client::protocol::{Attachment, ThreadId};
 
 use super::{AttachmentSource, LoadedAttachments};
 use crate::{
@@ -127,20 +127,58 @@ pub fn spawn_attach(
     });
 }
 
-/// Shows a desktop notification; a missing notification service is not an error
-/// worth a toast. The freedesktop backend talks D-Bus on this runtime;
-/// elsewhere `show` blocks, so it runs on the blocking pool.
-pub fn spawn_notify(title: &str, body: &'static str) {
-    let mut notification = notify_rust::Notification::new();
-    notification.appname("viz").summary(title).body(body);
+/// Notification id for a thread so newer updates replace older ones in the
+/// system notification center and selecting the thread clears it.
+pub fn thread_notification_id(thread: ThreadId) -> String {
+    format!("thread-{thread}")
+}
+
+/// Registers the app's `rune-notify` identity and click handler so clicking a
+/// delivered notification brings viz forward and opens that thread.
+pub fn install_notifications(ui: AppHandle<Desktop>) {
+    let identity = rune_notify::Identity::new("io.vidhan.viz", "viz");
+    _ = rune_notify::register(&identity);
+    rune_notify::on_click(move |click| {
+        let thread = click
+            .get("thread")
+            .and_then(|value| value.parse::<u64>().ok())
+            .map(ThreadId);
+        ui.update(move |s, tx| {
+            rune_notify::bring_to_front();
+            if let Some(id) = thread {
+                s.dispatch(Msg::Selection(crate::update::SelectionMsg::Select(id)), tx);
+            }
+        });
+    });
+}
+
+/// Removes any delivered notification for `thread` from the system center.
+pub fn clear_thread_notification(thread: ThreadId) {
+    let id = thread_notification_id(thread);
+    rune_notify::remove(&[id.as_str()]);
+}
+
+/// Shows a desktop notification via `rune-notify` (macOS
+/// `UNUserNotificationCenter` and Windows toasts), falling back to freedesktop
+/// D-Bus on Linux where `rune-notify` is unavailable.
+pub fn spawn_notify(thread: ThreadId, title: &str, body: &'static str) {
+    if rune_notify::app_focused() {
+        return;
+    }
+    let note = rune_notify::Notification::new(thread_notification_id(thread), title)
+        .body(body)
+        .info("thread", thread.to_string());
+    if rune_notify::post(&note) {
+        return;
+    }
     #[cfg(all(unix, not(target_os = "macos")))]
-    tokio::spawn(async move {
-        _ = notification.show_async().await;
-    });
-    #[cfg(not(all(unix, not(target_os = "macos"))))]
-    tokio::task::spawn_blocking(move || {
-        _ = notification.show();
-    });
+    {
+        let mut notification = notify_rust::Notification::new();
+        notification.appname("viz").summary(title).body(body);
+        tokio::spawn(async move {
+            _ = notification.show_async().await;
+        });
+    }
 }
 
 /// Read a user-selected icon file on the blocking pool.

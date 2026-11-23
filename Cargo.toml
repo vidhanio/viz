@@ -70,6 +70,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 url = "2"
 uuid = "1"
+wgpu = { version = "30", default-features = false }
 
 viz-acp = { path = "crates/viz-acp" }
 viz-client = { path = "crates/viz-client" }
@@ -80,7 +81,9 @@ viz-core = { path = "crates/viz-core" }
 viz-protocol = { path = "crates/viz-protocol" }
 
 rune = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+rune-fx = { git = "https://github.com/anomalyco/rune", branch = "dev" }
 rune-kit = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+rune-notify = { git = "https://github.com/anomalyco/rune", branch = "dev" }
 
 [workspace.lints.clippy]
 cargo = { level = "warn", priority = -1 }

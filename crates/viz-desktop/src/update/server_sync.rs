@@ -45,6 +45,7 @@ pub(super) fn apply_workspace_sync(
             _ => continue,
         };
         effects.push(Effect::Notify {
+            thread: thread.id,
             title: thread_title(thread).to_owned(),
             body,
         });

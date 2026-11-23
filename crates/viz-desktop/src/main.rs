@@ -428,7 +428,8 @@ fn main() {
         }
         desktop
     })
-    .on_focus(Desktop::set_focus);
+    .on_focus(Desktop::set_focus)
+    .compositor(motion::FxCompositor::default());
     if let Some(detail) = theme_error {
         app.handle().update(move |s, tx| {
             s.dispatch(
@@ -441,6 +442,7 @@ fn main() {
         });
     }
     if !preview {
+        effects::platform::install_notifications(app.handle());
         let (first, connected) = std::sync::mpsc::channel();
         effects::server::spawn(app.handle(), receiver, first, endpoint);
         if headless {

@@ -74,9 +74,7 @@ pub const STAGGER_BULK_LIMIT: usize = 12;
 
 /// Linear sweep period for live thinking and running tool shimmer bands
 /// (seconds).
-pub const SHIMMER_PERIOD: f64 = 1.8;
-/// Fractional width of the swept shimmer beam across its host surface.
-pub(super) const SHIMMER_BEAM_FRAC: f32 = 0.45;
+pub const SHIMMER_PERIOD: f32 = 1.8;
 
 /// Reference width for `PaneMotion::scale_with_width` (points).
 pub(super) const PANE_REF_WIDTH: f32 = 360.0;

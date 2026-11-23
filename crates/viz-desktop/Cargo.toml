@@ -14,10 +14,11 @@ clap = { workspace = true, features = ["derive"] }
 fontique.workspace = true
 lucide-static-svg.workspace = true
 mime_guess.workspace = true
-notify-rust = { workspace = true, features = ["z-with-tokio"] }
 rfd = { workspace = true, features = ["xdg-portal", "wayland"] }
 rune = { workspace = true, features = ["native-file-dialog"] }
+rune-fx.workspace = true
 rune-kit = { workspace = true, features = ["markdown", "mermaid", "math"] }
+rune-notify.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde-saphyr.workspace = true
 serde_json.workspace = true
@@ -29,6 +30,10 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 uuid = { workspace = true, features = ["v4"] }
 viz-client.workspace = true
 viz-config.workspace = true
+wgpu.workspace = true
+
+[target.'cfg(all(unix, not(target_os = "macos")))'.dependencies]
+notify-rust = { workspace = true, features = ["z-with-tokio"] }
 
 [lints]
 workspace = true

@@ -194,18 +194,14 @@ fn thinking_header(
         preview.unwrap_or_else(|| "Reasoning hidden".to_owned())
     };
     let header_key = format!("{key}-row");
-    let mut head = row()
-        .key(header_key.clone())
-        .w_full()
-        .min_h(S24)
-        .px(S4)
-        .py(S2)
+    let lead = row()
         .gap(S6)
         .center_y()
-        .radius(RADIUS_SM)
+        .shrink()
+        .min_w(0.0)
         .child(icon_slot(
             icon(&ui::BRAIN, ICON)
-                .color(if streaming { t.accent } else { t.faint })
+                .color(if streaming { t.muted } else { t.faint })
                 .group_color(t.text),
         ))
         .child(
@@ -217,11 +213,29 @@ fn thinking_header(
                     t.faint
                 })
                 .group_color(t.text)
-                .grow(1.0)
                 .shrink()
                 .min_w(0.0)
                 .truncate(),
         );
+    let lead = motion::text_shimmer(
+        format!("{key}-shimmer"),
+        streaming,
+        lead,
+        rune::Color::WHITE,
+        if t.k.dark { 0.9 } else { 0.62 },
+    );
+
+    let mut head = row()
+        .key(header_key.clone())
+        .w_full()
+        .min_h(S24)
+        .px(S4)
+        .py(S2)
+        .gap(S6)
+        .center_y()
+        .radius(RADIUS_SM)
+        .child(lead)
+        .child(rune::spacer());
 
     if let Some(clock) = ended_at.and_then(format_clock_hm) {
         head = head.child(
@@ -277,11 +291,48 @@ fn tool_header(
     let icon_color = if tool.status == ToolStatus::Failed {
         t.danger
     } else if running {
-        t.accent
+        t.muted
     } else {
         t.faint
     };
     let header_key = format!("{}-row", tool.key);
+    let mut label_el = text(label.clone())
+        .font(if is_command(&tool.name) {
+            t.mono_small
+        } else {
+            t.ui
+        })
+        .color(t.text_secondary)
+        .group_color(t.text)
+        .shrink()
+        .min_w(0.0)
+        .truncate();
+    label_el = match tooltip {
+        Some(tip) => label_el.help(tip),
+        None => label_el.help_when_truncated(label.clone()),
+    };
+    let lead = row()
+        .gap(S6)
+        .center_y()
+        .shrink()
+        .min_w(0.0)
+        .child(icon_slot(
+            icon(tool_icon(tool, action), ICON)
+                .color(icon_color)
+                .group_color(if tool.status == ToolStatus::Failed {
+                    t.danger
+                } else {
+                    t.text
+                }),
+        ))
+        .child(label_el);
+    let lead = motion::text_shimmer(
+        format!("{}-shimmer", tool.key),
+        running,
+        lead,
+        rune::Color::WHITE,
+        if t.k.dark { 0.9 } else { 0.62 },
+    );
     let mut head = row()
         .key(header_key.clone())
         .w_full()
@@ -291,33 +342,8 @@ fn tool_header(
         .gap(S6)
         .center_y()
         .radius(RADIUS_SM)
-        .child(icon_slot(
-            icon(tool_icon(tool, action), ICON)
-                .color(icon_color)
-                .group_color(if tool.status == ToolStatus::Failed {
-                    t.danger
-                } else {
-                    t.text
-                }),
-        ));
-
-    let mut label_el = text(label.clone())
-        .font(if is_command(&tool.name) {
-            t.mono_small
-        } else {
-            t.ui
-        })
-        .color(t.text_secondary)
-        .group_color(t.text)
-        .grow(1.0)
-        .shrink()
-        .min_w(0.0)
-        .truncate();
-    label_el = match tooltip {
-        Some(tip) => label_el.help(tip),
-        None => label_el.help_when_truncated(label.clone()),
-    };
-    head = head.child(label_el);
+        .child(lead)
+        .child(rune::spacer());
 
     if let Some((add, del)) = diff_totals {
         head = head.child(ui::diff_stat(add, del, t));

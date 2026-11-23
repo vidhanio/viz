@@ -4354,7 +4354,7 @@ dependencies = [
 [[package]]
 name = "rune"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "accesskit",
  "accesskit_macos",
@@ -4423,7 +4423,7 @@ dependencies = [
 [[package]]
 name = "rune-core"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "js-sys",
  "libc",
@@ -4442,7 +4442,7 @@ dependencies = [
 [[package]]
 name = "rune-edit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "js-sys",
  "parley",
@@ -4454,9 +4454,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rune-fx"
+version = "0.0.1"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
+dependencies = [
+ "bytemuck",
+ "rune-motion",
+ "rune-staging",
+ "wgpu",
+]
+
+[[package]]
 name = "rune-gpu"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "blake3",
  "bytemuck",
@@ -4483,7 +4494,7 @@ dependencies = [
 [[package]]
 name = "rune-highlights"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "unicode-ident",
  "wasmparser 0.245.1",
@@ -4492,7 +4503,7 @@ dependencies = [
 [[package]]
 name = "rune-image"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "blake3",
  "image",
@@ -4509,7 +4520,7 @@ dependencies = [
 [[package]]
 name = "rune-kit"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "icu_normalizer",
  "js-sys",
@@ -4530,7 +4541,7 @@ dependencies = [
 [[package]]
 name = "rune-media"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "ash",
  "blake3",
@@ -4561,7 +4572,7 @@ dependencies = [
 [[package]]
 name = "rune-mermaid"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "rune",
 ]
@@ -4569,12 +4580,24 @@ dependencies = [
 [[package]]
 name = "rune-motion"
 version = "0.1.0"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
+
+[[package]]
+name = "rune-notify"
+version = "0.0.1"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "windows",
+ "windows-core",
+ "windows-registry",
+]
 
 [[package]]
 name = "rune-spell"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "js-sys",
  "objc2-app-kit 0.3.2",
@@ -4593,7 +4616,7 @@ dependencies = [
 [[package]]
 name = "rune-staging"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "wgpu",
  "windows",
@@ -4602,7 +4625,7 @@ dependencies = [
 [[package]]
 name = "rune-taffy"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "stacker",
  "taffy",
@@ -4611,7 +4634,7 @@ dependencies = [
 [[package]]
 name = "rune-text"
 version = "0.0.1"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "bytemuck",
  "fontique",
@@ -4639,7 +4662,7 @@ dependencies = [
 [[package]]
 name = "rune-tiny-skia-path"
 version = "0.11.4"
-source = "git+https://github.com/anomalyco/rune?branch=dev#3d4e2dfcecb71890f7f4d6167e82fe6db9dbb695"
+source = "git+https://github.com/anomalyco/rune?branch=dev#a91694cef3763a8613a95a0de5ff36d913788558"
 dependencies = [
  "arrayref",
  "bytemuck",
@@ -6279,7 +6302,9 @@ dependencies = [
  "notify-rust",
  "rfd 0.18.0",
  "rune",
+ "rune-fx",
  "rune-kit",
+ "rune-notify",
  "serde",
  "serde-saphyr",
  "serde_json",
@@ -6291,6 +6316,7 @@ dependencies = [
  "uuid",
  "viz-client",
  "viz-config",
+ "wgpu",
 ]
 
 [[package]]
@@ -6964,6 +6990,17 @@ checksum = "6e2e40844ac143cdb44aead537bbf727de9b044e107a0f1220392177d15b0f26"
 dependencies = [
  "windows-core",
  "windows-link",
+]
+
+[[package]]
+name = "windows-registry"
+version = "0.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "02752bf7fbdcce7f2a27a742f798510f3e5ad88dbe84871e5168e2120c3d5720"
+dependencies = [
+ "windows-link",
+ "windows-result",
+ "windows-strings",
 ]
 
 [[package]]

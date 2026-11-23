@@ -206,7 +206,7 @@ pub fn skeleton_rows(key: &str, count: usize, row_height: f32, active: bool, t: 
             .children(motion::shimmer_band(
                 format!("{key}-shimmer-{i}"),
                 active,
-                t.muted,
+                rune::Color::WHITE,
                 RADIUS_CONTROL,
             ));
         stack = stack.child(bar);

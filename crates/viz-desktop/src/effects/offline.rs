@@ -133,7 +133,11 @@ pub(super) fn handle(
             target,
             source,
         } => platform::spawn_attach(ui, scope, target, source),
-        ServerEffect::Notify { title, body } => platform::spawn_notify(&title, body),
+        ServerEffect::Notify {
+            thread,
+            title,
+            body,
+        } => platform::spawn_notify(thread, &title, body),
         ServerEffect::Answer(answer) => ui.update(move |app, tx| {
             app.dispatch(
                 Msg::Requests(crate::update::requests::RequestMsg::Finished(

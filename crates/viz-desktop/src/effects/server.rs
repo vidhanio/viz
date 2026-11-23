@@ -400,8 +400,12 @@ impl Session<'_> {
                 Ok(())
             }
             ServerEffect::LoadEarlier { thread, before } => self.load_earlier(thread, before).await,
-            ServerEffect::Notify { title, body } => {
-                platform::spawn_notify(&title, body);
+            ServerEffect::Notify {
+                thread,
+                title,
+                body,
+            } => {
+                platform::spawn_notify(thread, &title, body);
                 Ok(())
             }
             ServerEffect::Attach {

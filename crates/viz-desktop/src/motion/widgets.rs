@@ -1,19 +1,17 @@
 //! Interactive motion primitives: reflow, fold, morph, rolling counters,
 //! shimmer, shared elements, and drag reorder.
 
-use std::f32::consts::FRAC_PI_2;
-
 use rune::{
-    Anim, Color, Drag, Easing, El, GrowthSpec, Icon, LoopSpec, Phase, TextStyle, Transition, Tx,
-    el, icon, row,
+    Anim, Color, Drag, El, GrowthSpec, Icon, Phase, TextStyle, Transition, Tx, el, icon, row,
 };
 use rune_kit::{Kit, RollingText};
 
 use super::{
+    fx::{SHIMMER_MARK, TEXT_SHIMMER_END, TEXT_SHIMMER_START},
     presence::fade,
     tokens::{
         DRAG_SLOP, FOLD_FEATHER, GLIDE, MORPH_SCALE, PRESS_SCALE, QUICK, QUICK_PAIR, REFLOW,
-        REFLOW_PAIR, SETTLE, SHIMMER_BEAM_FRAC, SHIMMER_PERIOD, SNAP,
+        REFLOW_PAIR, SETTLE, SNAP,
     },
 };
 use crate::theme::{HAIRLINE, S6, Theme};
@@ -143,39 +141,60 @@ pub fn rolling_diff_stat(key_prefix: &str, added: u32, removed: u32, t: &Theme) 
         ))
 }
 
-/// Optional horizontal linear shimmer overlay for active thinking and tool
-/// rows.
+/// Optional GPU shimmer overlay powered by `rune-fx` (`Fx::shimmer`) for
+/// rounded skeleton rows.
 ///
-/// Returns `None` when `active` is `false` so no loop track mounts and idle
-/// windows request zero frames. Under Reduce Motion, Rune freezes the sweep at
-/// its calm midpoint and stops scheduling frames.
+/// Returns `None` when `active` is `false` so no effect slot mounts and idle
+/// windows draw zero frames. Under Reduce Motion, `FxCompositor` holds the
+/// shimmer static and reports `animating() == false`.
 pub fn shimmer_band(key: impl Into<String>, active: bool, tint: Color, radius: f32) -> Option<El> {
     if !active {
         return None;
     }
-    let stops = [
-        (0.0, Color::TRANSPARENT),
-        (0.32, tint.alpha(0.05)),
-        (0.50, tint.alpha(0.16)),
-        (0.68, tint.alpha(0.05)),
-        (1.0, Color::TRANSPARENT),
-    ];
-    let beam = el()
-        .key("beam")
-        .w_frac(SHIMMER_BEAM_FRAC)
-        .h_full()
-        .linear_gradient(FRAC_PI_2, stops)
-        .looping(
-            LoopSpec::slide(SHIMMER_PERIOD, [-1.0, 0.0], [1.0 / SHIMMER_BEAM_FRAC, 0.0])
-                .easing(Easing::LINEAR),
-        );
     Some(
         el().key(key)
             .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
-            .clip_rounded(radius)
-            .a11y_hidden()
-            .child(beam),
+            .radius(radius)
+            .effect(SHIMMER_MARK)
+            .effect_data([tint.r, tint.g, tint.b, radius])
+            .a11y_hidden(),
     )
+}
+
+/// Wraps `content` in a glyph-masked GPU shimmer sweep (`ShimmerParams {
+/// use_mask: true }`) when `active` is `true`, leaving background pixels
+/// untouched.
+///
+/// When `active` is `false`, returns `content` unwrapped so no effect slots
+/// mount and idle windows draw zero frames.
+pub fn text_shimmer(
+    key: impl Into<String>,
+    active: bool,
+    content: El,
+    tint: Color,
+    intensity: f32,
+) -> El {
+    if !active {
+        return content;
+    }
+    row()
+        .key(key)
+        .shrink()
+        .min_w(0.0)
+        .child(
+            el().key("start")
+                .size(0.0, 0.0)
+                .effect(TEXT_SHIMMER_START)
+                .a11y_hidden(),
+        )
+        .child(content)
+        .child(
+            el().key("end")
+                .pin(Some(0.0), Some(0.0), Some(0.0), Some(0.0))
+                .effect(TEXT_SHIMMER_END)
+                .effect_data([tint.r, tint.g, tint.b, intensity])
+                .a11y_hidden(),
+        )
 }
 
 /// Shared-element glide for compact indicators (provider rail pill, segmented

@@ -31,8 +31,19 @@ impl Desktop {
                     },
                     tx.as_deref_mut(),
                 ),
-                Effect::Notify { title, body } => {
-                    self.send_server(ServerEffect::Notify { title, body }, tx.as_deref_mut());
+                Effect::Notify {
+                    thread,
+                    title,
+                    body,
+                } => {
+                    self.send_server(
+                        ServerEffect::Notify {
+                            thread,
+                            title,
+                            body,
+                        },
+                        tx.as_deref_mut(),
+                    );
                 }
                 Effect::SavePrefs(data) => {
                     if let Some(path) = self.prefs_path() {

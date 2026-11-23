@@ -43,6 +43,8 @@ pub enum Effect {
     },
     /// Deliver an OS desktop notification.
     Notify {
+        /// Thread id used to deduplicate notifications and jump on click.
+        thread: ThreadId,
         /// Notification summary/title.
         title: String,
         /// Short body text.
@@ -439,6 +441,8 @@ pub enum ServerEffect {
     },
     /// Deliver a desktop notification on the runtime.
     Notify {
+        /// Thread id used to deduplicate notifications and jump on click.
+        thread: ThreadId,
         /// Notification summary.
         title: String,
         /// Short body string.

@@ -184,7 +184,13 @@ impl Desktop {
     pub fn dispatch(&mut self, msg: Msg, tx: &mut Tx) {
         self.sync_draft_text();
         self.model.palette.pages.clock = tx.clock();
+        let before_selected = self.model.selection.selected;
         let effects = update::update(&mut self.model, msg);
+        if self.model.selection.selected != before_selected
+            && let Some(id) = self.model.selection.selected
+        {
+            effects::platform::clear_thread_notification(id);
+        }
         crate::git::diff_panel::sync(self);
         crate::requests::sync(self);
         self.decode_draft_attachments();
@@ -195,7 +201,13 @@ impl Desktop {
     /// [`Tx`].
     pub fn dispatch_local(&mut self, msg: Msg) {
         self.sync_draft_text();
+        let before_selected = self.model.selection.selected;
         let effects = update::update(&mut self.model, msg);
+        if self.model.selection.selected != before_selected
+            && let Some(id) = self.model.selection.selected
+        {
+            effects::platform::clear_thread_notification(id);
+        }
         crate::git::diff_panel::sync(self);
         crate::requests::sync(self);
         self.apply_effects(effects, None);
@@ -203,6 +215,9 @@ impl Desktop {
 
     /// Window focus hook called by Rune's window lifecycle.
     pub fn set_focus(&mut self, focused: bool, tx: &mut Tx) {
+        if focused && let Some(id) = self.model.selection.selected {
+            effects::platform::clear_thread_notification(id);
+        }
         self.dispatch(Msg::Shell(ShellMsg::WindowFocus(focused)), tx);
     }
 

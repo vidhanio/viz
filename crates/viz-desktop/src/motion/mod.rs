@@ -21,6 +21,7 @@
 //! - Panel slide: [`pane_motion`], [`stable_content`].
 //! - Drag settle: [`DragOrder`], [`drag_row`].
 
+mod fx;
 mod presence;
 mod tokens;
 mod widgets;
@@ -30,6 +31,7 @@ mod widgets;
     reason = "motion tokens and transitions form the shared Phase 1 motion API"
 )]
 pub use self::{
+    fx::FxCompositor,
     presence::{
         Switch, chip_enter, dialog, fade, pane_motion, popover, row_enter, scrim, stable_content,
         stagger_delay, toast, tucked_deck, tucked_menu,
@@ -43,6 +45,6 @@ pub use self::{
     widgets::{
         DragOrder, chevron, drag_row, fold_container, fold_row, icon_morph, launch_from, pressable,
         reflow, reflow_container, rolling_count, rolling_diff_stat, shared_pill, shared_surface,
-        shimmer_band, toggle_anchored,
+        shimmer_band, text_shimmer, toggle_anchored,
     },
 };
