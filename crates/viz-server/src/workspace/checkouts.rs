@@ -16,7 +16,7 @@ use viz_protocol::{MoveThread, Moved, ThreadId, Worktree, WorktreeList, Worktree
 use super::{
     Workspace, runs,
     sql::{exec, row, rows},
-    store,
+    store::{self, Handoff},
     worktree::{self, Placement},
 };
 use crate::error::Error;
@@ -225,21 +225,19 @@ impl Workspace {
         )
         .await?
         .is_some();
-        let handoff = threads::handoff_from(
-            prompted,
-            current.session.handoff.as_deref(),
-            &current.checkout.cwd,
-        );
+        let handoff = threads::handoff(prompted, current.session.handoff, || Handoff::Moved {
+            from: current.checkout.cwd,
+        });
         exec(
             &mut tx,
             "UPDATE threads SET cwd = ?2, worktree = ?3, setup_failed = 0,
-                session = json_set(session, '$.session_id', NULL, '$.handoff', ?4)
+                session = json_set(session, '$.session_id', NULL, '$.handoff', json(?4))
              WHERE id = ?1",
             [
                 thread.into(),
                 placement.checkout.cwd.as_str().into(),
                 placement.checkout.worktree.as_deref().into(),
-                handoff.into(),
+                store::json(&handoff)?.into(),
             ],
         )
         .await?;

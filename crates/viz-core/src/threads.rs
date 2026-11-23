@@ -151,13 +151,9 @@ pub fn retitle(current: Metadata, harness: Option<&str>, prompt: Option<&str>) -
     }
 }
 
-/// Keep the original directory through repeated moves until a prompt uses the
-/// handoff.
+/// The handoff a move leaves for the next prompt. One still waiting for its
+/// prompt stays as it is.
 #[must_use]
-pub fn handoff_from<'a>(
-    has_history: bool,
-    prior: Option<&'a str>,
-    cwd: &'a str,
-) -> Option<&'a str> {
-    has_history.then_some(prior.unwrap_or(cwd))
+pub fn handoff<T>(has_history: bool, prior: Option<T>, moved: impl FnOnce() -> T) -> Option<T> {
+    prior.or_else(|| has_history.then(moved))
 }

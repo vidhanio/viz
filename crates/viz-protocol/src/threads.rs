@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Attachment, AttachmentCapabilities, Attention, ContextUsage, Lifecycle, QueuedInput, RunId,
-    Shelf, ThreadId, ThreadWorktree, ToolRecord, WorktreeTarget,
+    Attachment, AttachmentCapabilities, Attention, ContextUsage, ForkSource, Lifecycle,
+    QueuedInput, RunId, Shelf, ThreadId, ThreadWorktree, ToolRecord, WorktreeTarget,
 };
 
 /// `threads.list` params.
@@ -35,6 +35,8 @@ pub struct ThreadSummary {
     /// For a subagent: the thread that started it.
     pub parent: Option<ThreadId>,
     pub parent_environment: Option<String>,
+    /// The thread this one continues a copy of.
+    pub forked_from: Option<ForkSource>,
     /// The project directory this thread belongs to, if any.
     pub project: Option<String>,
     /// The project's linked Git worktree the thread runs in; `None` in the

@@ -1929,6 +1929,17 @@
                   "null"
                 ]
               },
+              "forkedFrom": {
+                "description": "The thread this one continues a copy of.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/ForkSource"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "project": {
                 "description": "The project directory this thread belongs to, if any.",
                 "type": [
@@ -2026,6 +2037,36 @@
           },
           "ThreadId": {
             "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "ForkSource": {
+            "description": "Where a thread was forked from.",
+            "type": "object",
+            "properties": {
+              "thread": {
+                "description": "The source thread, which may be gone.",
+                "$ref": "#/$defs/ThreadId"
+              },
+              "entry": {
+                "description": "The last of its entries the fork shares, if any.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/EntryId"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "thread"
+            ]
+          },
+          "EntryId": {
+            "description": "A transcript entry id.",
             "type": "integer",
             "format": "uint64",
             "minimum": 1
@@ -4006,6 +4047,261 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 1
+          }
+        }
+      }
+    },
+    "thread.fork": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ForkThread",
+        "description": "Copy a thread's history up to a point into a new idle thread, in the same\ndirectory unless `worktree` says otherwise. The source is unchanged.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "point": {
+            "$ref": "#/$defs/ForkPoint",
+            "default": {
+              "at": "head"
+            }
+          },
+          "worktree": {
+            "description": "Another checkout of the project to run in.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WorktreeTarget"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness": {
+            "description": "Another harness to continue with.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "description": "Defaults to the source's title.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "requestId": {
+            "description": "Idempotency key: a retry with the same id returns the same thread.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "ForkPoint": {
+            "description": "Where a fork leaves its source.",
+            "oneOf": [
+              {
+                "description": "After its last finished run.",
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "const": "head"
+                  }
+                },
+                "required": [
+                  "at"
+                ]
+              },
+              {
+                "description": "After the run containing this entry.",
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "const": "through"
+                  },
+                  "entry": {
+                    "$ref": "#/$defs/EntryId"
+                  }
+                },
+                "required": [
+                  "at",
+                  "entry"
+                ]
+              },
+              {
+                "description": "Before this prompt, to send another version of it.",
+                "type": "object",
+                "properties": {
+                  "at": {
+                    "type": "string",
+                    "const": "before"
+                  },
+                  "entry": {
+                    "$ref": "#/$defs/EntryId"
+                  }
+                },
+                "required": [
+                  "at",
+                  "entry"
+                ]
+              }
+            ]
+          },
+          "EntryId": {
+            "description": "A transcript entry id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "WorktreeTarget": {
+            "description": "Where in a project's Git repository a thread runs.",
+            "oneOf": [
+              {
+                "description": "The project's own checkout.",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "local"
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              {
+                "description": "A new linked worktree on a new branch.",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "new"
+                  },
+                  "base": {
+                    "description": "Branch, remote-tracking branch or commit to start from; defaults\nto the project checkout's HEAD.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "branch": {
+                    "description": "New branch name; defaults to `viz/` and a slug of the thread title.",
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              {
+                "description": "An existing linked worktree of the project's repository.",
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "const": "existing"
+                  },
+                  "path": {
+                    "description": "Absolute path of the worktree root.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "mode",
+                  "path"
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Forked",
+        "description": "`thread.fork` result.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "prompt": {
+            "description": "The prompt the fork was made before, to edit.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ForkedPrompt"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "ForkedPrompt": {
+            "description": "The prompt a fork leaves out.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "attachments": {
+                "description": "Stored in the source thread.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PromptAttachment"
+                }
+              }
+            },
+            "required": [
+              "text",
+              "attachments"
+            ]
+          },
+          "PromptAttachment": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "mime": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "mime"
+            ]
           }
         }
       }

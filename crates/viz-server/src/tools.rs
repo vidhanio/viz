@@ -11,9 +11,9 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use viz_protocol::{
-    Cleared, CreateProject, Empty, EntryId, EnvironmentList, HarnessList, HarnessOptions,
-    LaunchThread, Launched, ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads,
-    ListWorktrees, Method, MoveThread, ReadThreadState, RemoveProject, RemoveWorktree,
+    Cleared, CreateProject, Empty, EntryId, EnvironmentList, ForkThread, Forked, HarnessList,
+    HarnessOptions, LaunchThread, Launched, ListBranches, ListEntries, ListHarnesses, ListProjects,
+    ListThreads, ListWorktrees, Method, MoveThread, ReadThreadState, RemoveProject, RemoveWorktree,
     RetitleThread, SearchThreads, SendInput, Shelf, StopThread, TaskId, TaskResult, ThreadId,
     ThreadStateResult, TriageThread, UpdateProject, UpdateThread, WaitThread,
 };
@@ -84,6 +84,8 @@ rpc_tools! {
         "Search all thread transcripts in an environment. Read a hit with thread_read.";
     "thread_launch", LaunchThread, LaunchThread, |response: &Launched| Some(response.thread), identity,
         "Start an independent thread for the user. Use delegate_task instead when you need its result.";
+    "thread_fork", ForkThread, ForkThread, |forked: &Forked| Some(forked.thread), identity,
+        "Copy a thread's history into a new idle thread: up to its head, through an entry's run, or before a prompt ({\"at\":\"before\",\"entry\":…}). Pass worktree {\"mode\":\"new\"} to give it its own checkout.";
     "thread_send", SendInput, SendText, no_link, identity,
         "Send an input to an existing thread. mode \"steer\" ends its current turn for this input; otherwise it queues. Returns the run to wait for.";
     "thread_wait", WaitThread, WaitRun, no_link, views::waited,

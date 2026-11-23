@@ -6,11 +6,11 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
 use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
-    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, HarnessList,
-    HarnessOptions, HarnessOptionsResult, ListBranches, ListEntries, ListProjects, ListWorktrees,
-    MoveThread, ProjectList, ProjectResult, ReadProject, ReadThreadState, RemoveProject,
-    RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId, SearchFiles, SearchHits,
-    SearchThreads, SendInput, SteerQueuedInput, StopThread, ThreadId, ThreadList,
+    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, ForkThread,
+    HarnessList, HarnessOptions, HarnessOptionsResult, ListBranches, ListEntries, ListProjects,
+    ListWorktrees, MoveThread, ProjectList, ProjectResult, ReadProject, ReadThreadState,
+    RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId, SearchFiles,
+    SearchHits, SearchThreads, SendInput, SteerQueuedInput, StopThread, ThreadId, ThreadList,
     ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
 };
 
@@ -89,6 +89,9 @@ handlers! {
         }
         viz_protocol::LaunchThread, viz_protocol::LaunchThread, |workspace, input| {
             workspace.launch(input).await
+        }
+        ForkThread, ForkThread, |workspace, input| {
+            workspace.fork(input).await
         }
         SendInput, SendInput, |workspace, input| {
             if input.origin.is_some() {

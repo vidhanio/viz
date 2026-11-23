@@ -6,6 +6,7 @@ mod attachments;
 mod checkouts;
 mod files;
 mod follow_ups;
+mod fork;
 mod notifications;
 mod projects;
 pub(crate) mod rpc;

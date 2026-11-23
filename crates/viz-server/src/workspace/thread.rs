@@ -302,7 +302,7 @@ impl Workspace {
     }
 }
 
-async fn launched(
+pub(super) async fn launched(
     db: &mut Connection,
     request_id: Option<&str>,
 ) -> Result<Option<Launched>, Error> {

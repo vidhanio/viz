@@ -6,7 +6,7 @@ use viz_core::{
     placement::Checkout,
     threads::{Metadata, Title},
 };
-use viz_protocol::ThreadUpdated;
+use viz_protocol::{ForkSource, ThreadUpdated};
 
 use super::{
     super::{
@@ -24,6 +24,19 @@ use crate::{
     },
 };
 
+/// Why a thread continues in a new session whose first prompt carries its
+/// earlier turns.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(in crate::workspace) enum Handoff {
+    /// It moved away from this directory. Harnesses differ in whether a
+    /// restored session follows a new one.
+    Moved {
+        from: String,
+    },
+    Forked,
+}
+
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub(in crate::workspace) struct SavedSession {
     pub(in crate::workspace) session_id: Option<String>,
@@ -35,11 +48,8 @@ pub(in crate::workspace) struct SavedSession {
     /// The harness's latest title for the session.
     pub(in crate::workspace) title: Option<String>,
     pub(in crate::workspace) selection: Option<Selection>,
-    /// Set when the thread moved away from this working directory since
-    /// its last prompt. Harnesses differ in whether a restored session
-    /// follows a new directory, so a move starts a new session and its first
-    /// prompt carries the earlier turns.
-    pub(in crate::workspace) handoff: Option<String>,
+    /// The earlier turns the next prompt must carry, and why.
+    pub(in crate::workspace) handoff: Option<Handoff>,
 }
 
 #[derive(Debug)]
@@ -170,7 +180,7 @@ pub(in crate::workspace) async fn list_threads(
 ) -> Result<Vec<ThreadSummary>, Error> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
-            t.model, t.thinking, t.worktree, {}
+            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, {}
         FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)",
         lifecycle::COLUMNS
     );
@@ -179,7 +189,7 @@ pub(in crate::workspace) async fn list_threads(
         .await?
         .map(|mut row| {
             let harness = row.str(5)?;
-            let (lifecycle, activity, status) = lifecycle::decode(&mut row, 9)?;
+            let (lifecycle, activity, status) = lifecycle::decode(&mut row, 11)?;
             let id = row.id(0)?;
             let shelf = triage::shelf(&lifecycle, &activity, now);
             let summary = ThreadSummary {
@@ -187,6 +197,15 @@ pub(in crate::workspace) async fn list_threads(
                 title: row.str(1)?,
                 parent: row.opt_id(2)?,
                 parent_environment: row.opt_str(3)?,
+                forked_from: row
+                    .opt_id(9)?
+                    .map(|thread| {
+                        Ok::<_, Error>(ForkSource {
+                            thread,
+                            entry: row.opt_id(10)?,
+                        })
+                    })
+                    .transpose()?,
                 project: row.opt_str(4)?,
                 worktree: row.opt_str(8)?.map(thread_worktree),
                 harness_name: workspace.harness_name(&harness).to_owned(),

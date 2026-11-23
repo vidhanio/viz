@@ -5,6 +5,7 @@
 
 mod catalog;
 mod connections;
+mod fork;
 mod history;
 mod ids;
 mod lifecycle;
@@ -22,6 +23,7 @@ pub use connections::{
     Run, RunKind, RunStatus, Task, TaskList, TaskResult, TaskStatus, TaskStatusRequest,
     TaskStatusResult, ThreadStateResult, Unwatch, WaitResult, WaitThread, Watch, Watching,
 };
+pub use fork::{ForkPoint, ForkSource, ForkThread, Forked, ForkedPrompt};
 pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryData, EntryPage, ListEntries, PlanEntry,
     PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd, SearchHit,
@@ -115,6 +117,7 @@ methods! {
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     SearchFiles<'_> => "files.search", FileList;
     LaunchThread => "thread.launch", Launched;
+    ForkThread => "thread.fork", Forked;
     SendInput => "thread.send", Sent;
     Watch => "thread.watch", Watching;
     Unwatch => "thread.unwatch", Watching;

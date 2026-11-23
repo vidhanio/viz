@@ -180,6 +180,7 @@ fn list() -> Vec<ThreadSummary> {
         },
         attention: (id == 9).then_some(Attention::Unread),
         waiting_on: 0,
+        forked_from: None,
         last_input_at: None,
     })
     .into()

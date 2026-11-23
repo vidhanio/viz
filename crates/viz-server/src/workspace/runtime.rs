@@ -6,7 +6,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 
 use tokio::time::{Instant, sleep_until};
 use viz_core::{
-    handoff,
+    handoff::{self, Reason},
     runs::{self as decisions, Signals, Stop, TurnEnd},
 };
 use viz_protocol::ThreadId;
@@ -16,7 +16,7 @@ use super::{
     runs::{self, Claimed},
     sessions::{Bound, SessionSlot, persist_snapshot},
     sql::{Connection, exec, rows},
-    store,
+    store::{self, Handoff},
     worker::{Driver, Turn},
 };
 use crate::{
@@ -308,7 +308,7 @@ async fn handoff_note(
     db: &mut Connection,
     thread: ThreadId,
     cwd: &str,
-    from: &str,
+    handoff: &Handoff,
 ) -> Result<String, Error> {
     let turns = rows(
         db,
@@ -319,9 +319,12 @@ async fn handoff_note(
     .await?
     .map(|mut row| Ok((row.str(0)?, row.str(1)?)))
     .collect::<Result<Vec<_>, Error>>()?;
+    let reason = match handoff {
+        Handoff::Moved { from } => Reason::Moved { from, to: cwd },
+        Handoff::Forked => Reason::Forked,
+    };
     Ok(handoff::note(
-        cwd,
-        from,
+        reason,
         turns
             .iter()
             .map(|(prompt, answer)| (prompt.as_str(), answer.as_str())),

@@ -7,8 +7,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
-    Empty, LaunchThread, ListEntries, MoveThread, ReadThreadState, RetitleThread, RunId, SendInput,
-    SendMode, StopThread, ThreadId, TriageThread, WaitThread,
+    Empty, ForkThread, LaunchThread, ListEntries, MoveThread, ReadThreadState, RetitleThread,
+    RunId, SendInput, SendMode, StopThread, ThreadId, TriageThread, WaitThread,
 };
 
 use super::{DEFAULT_WAIT, MAX_WAIT};
@@ -73,6 +73,7 @@ macro_rules! thread_inputs {
 thread_inputs! {
     ListEntries => |input: &ListEntries| input.thread,
     ReadThreadState => |input: &ReadThreadState| input.thread,
+    ForkThread => |input: &ForkThread| input.thread,
     StopThread => |input: &StopThread| input.thread,
     MoveThread => |input: &MoveThread| input.thread,
     SendText => |input: &SendText| input.thread,

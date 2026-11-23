@@ -4,7 +4,7 @@
 //! JSON-RPC codes.
 
 use viz_core::{
-    lifecycle, placement,
+    fork, lifecycle, placement,
     runs::{Busy, QueueRejection},
     tasks, threads,
 };
@@ -30,6 +30,8 @@ pub(crate) enum Error {
     Thread(#[from] threads::Rejection),
     #[error(transparent)]
     Placement(#[from] placement::Rejection),
+    #[error(transparent)]
+    Fork(#[from] fork::Rejection),
     #[error(transparent)]
     Triage(#[from] lifecycle::Rejection),
     #[error(transparent)]
@@ -116,6 +118,7 @@ impl Error {
             | Self::Thread(_)
             | Self::Task(_)
             | Self::Triage(_)
+            | Self::Fork(_)
             | Self::Placement(_)
             | Self::Invalid(_)
             | Self::Request(_) => Kind::Invalid,
