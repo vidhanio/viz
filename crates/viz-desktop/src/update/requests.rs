@@ -1,13 +1,12 @@
 //! Resolve pending harness requests and advance structured form steps.
 
-use viz_client::protocol::{AnswerRequest, FormValue, RequestAnswer, RequestBody, RequestId};
+use viz_client::protocol::{
+    AnswerRequest, FormValue, RequestAnswer, RequestBody, RequestId, question_fields,
+};
 
 use crate::{
     effects::{Effect, ServerEffect},
-    model::{
-        Model,
-        requests::{fields, parse_text, pending, required},
-    },
+    model::{Model, requests::pending},
 };
 
 #[derive(Debug)]
@@ -80,20 +79,20 @@ pub fn update(model: &mut Model, msg: RequestMsg) -> Vec<Effect> {
     }) else {
         return Vec::new();
     };
-    let steps = fields(&schema);
+    let steps = question_fields(&schema);
     let form = model.requests.forms.entry(id).or_default();
     form.error = None;
-    if let Some((name, field)) = steps.get(form.step).copied() {
+    if let Some(field) = steps.get(form.step) {
+        let name = field.name;
         if let Some(choice) = choice {
             form.fields.insert(name.to_owned(), choice);
         }
-        let selectable = !crate::model::requests::choices(field).is_empty()
-            || field.get("type").and_then(serde_json::Value::as_str) == Some("boolean");
+        let selectable = !field.options.is_empty();
         if let Some(text) = text.filter(|_| !selectable) {
             if text.trim().is_empty() {
                 form.fields.remove(name);
             } else {
-                match parse_text(field, text) {
+                match field.parse_text(text) {
                     Ok(value) => {
                         form.fields.insert(name.to_owned(), value);
                     }
@@ -105,7 +104,7 @@ pub fn update(model: &mut Model, msg: RequestMsg) -> Vec<Effect> {
             }
         }
         if advance
-            && required(&schema, name)
+            && field.required
             && form.fields.get(name).is_none_or(
                 |value| matches!(value, FormValue::Choices(values) if values.is_empty()),
             )

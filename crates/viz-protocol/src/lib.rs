@@ -7,6 +7,7 @@ mod catalog;
 mod connections;
 mod folders;
 mod fork;
+mod form;
 mod git;
 mod github;
 mod history;
@@ -36,6 +37,7 @@ pub use folders::{
     GitHubRepositoryList, InitRepository, ReadClone, StartClone,
 };
 pub use fork::{ForkPoint, ForkSource, ForkThread, Forked, ForkedPrompt};
+pub use form::{FieldKind, QuestionField, question_fields};
 pub use git::{
     CheckpointEdge, GitAction, GitActionRequest, GitActionResult, GitDiff, GitDiffFile,
     GitDiffLine, GitDiffRequest, GitDiffTarget, GitFailure, GitFileKind, GitHunk, GitLineStats,

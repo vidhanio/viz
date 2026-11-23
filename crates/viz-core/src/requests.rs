@@ -11,7 +11,7 @@ use thiserror::Error;
 use viz_protocol::{
     Access, AccessKind, AccessMode, AccessSource, AnsweredBy, ConfigOption, NativeAccess,
     OptionKind, OptionValue, PermissionKind, RequestAnswer, RequestBody, RequestState, RunStatus,
-    ThreadId, Withdrawal,
+    ThreadId, Withdrawal, question_fields,
 };
 
 /// The option category of a harness's own mode selector.
@@ -214,25 +214,23 @@ pub fn decide(
         }
         (RequestBody::Question { .. }, RequestAnswer::Decline) => {}
         (RequestBody::Question { schema, .. }, RequestAnswer::Accept { fields }) => {
-            let properties = schema
-                .get("properties")
-                .and_then(serde_json::Value::as_object);
-            if fields
-                .keys()
-                .any(|key| !properties.is_some_and(|known| known.contains_key(key)))
-            {
-                return Err(Rejection::InvalidAnswer("a field is not in the form"));
-            }
-            let required = schema
-                .get("required")
-                .and_then(serde_json::Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(serde_json::Value::as_str);
-            for key in required {
-                if !fields.contains_key(key) {
-                    return Err(Rejection::InvalidAnswer("a required field is missing"));
+            let form = question_fields(schema);
+            for (name, value) in fields {
+                let field = form
+                    .iter()
+                    .find(|field| field.name == name)
+                    .ok_or(Rejection::InvalidAnswer("a field is not in the form"))?;
+                if !field.accepts(value) {
+                    return Err(Rejection::InvalidAnswer(
+                        "a field contains an invalid value",
+                    ));
                 }
+            }
+            if form
+                .iter()
+                .any(|field| field.required && !fields.contains_key(field.name))
+            {
+                return Err(Rejection::InvalidAnswer("a required field is missing"));
             }
         }
         (RequestBody::Permission { .. }, _) => {

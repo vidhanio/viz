@@ -2,12 +2,13 @@
 
 use rune::{El, Key, KeyEvent, ScrollSpec, TextEdit, Tx, col, icon, row, text};
 use rune_kit::{ButtonVariant, IconButtonVariant, Markdown};
-use serde_json::Value;
-use viz_client::protocol::{FormValue, RequestAnswer, RequestBody, RequestId};
+use viz_client::protocol::{
+    FieldKind, FormValue, QuestionField, RequestAnswer, RequestBody, RequestId, question_fields,
+};
 
 use crate::{
     app::Desktop,
-    model::requests::{choices, fields, question, required},
+    model::requests::question,
     theme::{ICON_SMALL, S4, S8, S12, Size, Theme},
     ui,
     update::{Msg, requests::RequestMsg},
@@ -35,7 +36,7 @@ pub fn sync(app: &mut Desktop) {
         let RequestBody::Question { schema, .. } = &question(&app.model)?.body else {
             return None;
         };
-        let (name, _) = *fields(schema).get(step)?;
+        let name = question_fields(schema).get(step)?.name;
         let value = app.model.requests.forms.get(&id)?.fields.get(name)?;
         match value {
             FormValue::Text(text) => Some(text.clone()),
@@ -46,16 +47,15 @@ pub fn sync(app: &mut Desktop) {
     app.widgets.request_edit = TextEdit::new(value.as_deref().unwrap_or_default());
 }
 
-fn select(app: &mut Desktop, id: RequestId, field: &Value, value: &str, tx: &mut Tx) {
-    let kind = field.get("type").and_then(Value::as_str);
-    if kind == Some("array") {
+fn select(app: &mut Desktop, id: RequestId, kind: FieldKind, value: &str, tx: &mut Tx) {
+    if kind == FieldKind::Choices {
         let mut values = question(&app.model)
             .and_then(|request| {
                 let RequestBody::Question { schema, .. } = &request.body else {
                     return None;
                 };
                 let form = app.model.requests.forms.get(&id)?;
-                let (name, _) = *fields(schema).get(form.step)?;
+                let name = question_fields(schema).get(form.step)?.name;
                 match form.fields.get(name)? {
                     FormValue::Choices(values) => Some(values.clone()),
                     _ => None,
@@ -73,7 +73,7 @@ fn select(app: &mut Desktop, id: RequestId, field: &Value, value: &str, tx: &mut
             tx,
         );
     } else {
-        let selection = if kind == Some("boolean") {
+        let selection = if kind == FieldKind::Boolean {
             FormValue::Boolean(value == "true")
         } else {
             FormValue::Text(value.to_owned())
@@ -82,31 +82,18 @@ fn select(app: &mut Desktop, id: RequestId, field: &Value, value: &str, tx: &mut
     }
 }
 
-fn options(field: &Value) -> Vec<(&str, &str, Option<&str>)> {
-    if field.get("type").and_then(Value::as_str) == Some("boolean") {
-        vec![("true", "Yes", None), ("false", "No", None)]
-    } else {
-        choices(field)
-    }
-}
-
-fn numeric(app: &mut Desktop, event: &KeyEvent, tx: &mut Tx, id: RequestId, field: &Value) -> bool {
+fn numeric_choice<'a>(
+    event: &KeyEvent,
+    mut options: impl Iterator<Item = &'a str>,
+) -> Option<&'a str> {
     let Key::Text(text) = &event.key else {
-        return false;
+        return None;
     };
     if event.mods.cmd || event.mods.alt || event.mods.ctrl || text.len() != 1 {
-        return false;
+        return None;
     }
-    if let Some((value, _, _)) = text
-        .parse::<usize>()
-        .ok()
-        .and_then(|digit| digit.checked_sub(1))
-        .and_then(|index| options(field).get(index).copied())
-    {
-        select(app, id, field, value, tx);
-        return true;
-    }
-    false
+    let index = text.parse::<usize>().ok()?.checked_sub(1)?;
+    options.nth(index)
 }
 
 pub fn on_draft_key(app: &mut Desktop, event: &KeyEvent, tx: &mut Tx) -> bool {
@@ -124,14 +111,16 @@ pub fn on_draft_key(app: &mut Desktop, event: &KeyEvent, tx: &mut Tx) -> bool {
         return false;
     }
     let id = request.id;
-    let Some((_, field)) = fields(schema)
-        .get(form.map_or(0, |form| form.step))
-        .copied()
-    else {
+    let fields = question_fields(schema);
+    let Some(field) = fields.get(form.map_or(0, |form| form.step)) else {
         return false;
     };
-    if app.widgets.draft.text.is_empty() && matches!(event.key, Key::Text(_)) {
-        return numeric(app, event, tx, id, &field.clone());
+    if app.widgets.draft.text.is_empty()
+        && let Some(value) = numeric_choice(event, field.options.iter().map(|(value, ..)| *value))
+    {
+        let value = value.to_owned();
+        select(app, id, field.kind, &value, tx);
+        return true;
     }
     false
 }
@@ -159,14 +148,12 @@ fn action(
 fn editor(
     app: &Desktop,
     id: RequestId,
-    field: &Value,
-    name: &str,
-    mandatory: bool,
+    field: &QuestionField<'_>,
     disabled: bool,
     t: &Theme,
 ) -> El {
-    let options = options(field);
-    let label = field.get("title").and_then(Value::as_str).unwrap_or(name);
+    let options = &field.options;
+    let label = field.title;
     if options.is_empty() {
         let input = ui::text_field(
             &app.widgets.request_edit,
@@ -182,7 +169,7 @@ fn editor(
         })
         .build(&t.k);
         let entry = ui::field(label, input);
-        return if mandatory {
+        return if field.required {
             entry.required().build(t)
         } else {
             entry.build(t)
@@ -193,48 +180,51 @@ fn editor(
         .requests
         .forms
         .get(&id)
-        .and_then(|form| form.fields.get(name));
-    let keyboard = field.clone();
+        .and_then(|form| form.fields.get(field.name));
+    let kind = field.kind;
+    let keyboard: Vec<_> = options
+        .iter()
+        .map(|(value, ..)| (*value).to_owned())
+        .collect();
     col()
         .gap(S4)
         .child(text(label).font(t.small).color(t.text))
-        .children(
-            options
-                .into_iter()
-                .enumerate()
-                .map(|(index, (value, label, description))| {
-                    let active = match selected {
-                        Some(FormValue::Choices(values)) => {
-                            values.iter().any(|entry| entry == value)
-                        }
-                        Some(FormValue::Text(text)) => text == value,
-                        Some(FormValue::Boolean(flag)) => value == flag.to_string(),
-                        _ => false,
-                    };
-                    let field = field.clone();
-                    let value = value.to_owned();
-                    row()
-                        .key(format!("question-choice-{index}"))
-                        .center_y()
-                        .gap(S8)
-                        .child(
-                            ui::button(label, ButtonVariant::Ghost, Size::Small)
-                                .active(active)
-                                .disabled(disabled)
-                                .on_press_tx(move |app: &mut Desktop, tx| {
-                                    select(app, id, &field, &value, tx);
-                                })
-                                .build(&t.k),
-                        )
-                        .children(
-                            description
-                                .map(|hint| text(hint).font(t.small).color(t.muted).grow(1.0)),
-                        )
-                        .children((index < 9).then(|| ui::kbd_cap(&(index + 1).to_string(), t)))
-                }),
-        )
+        .children(options.iter().copied().enumerate().map(
+            |(index, (value, label, description))| {
+                let active = match selected {
+                    Some(FormValue::Choices(values)) => values.iter().any(|entry| entry == value),
+                    Some(FormValue::Text(text)) => text == value,
+                    Some(FormValue::Boolean(flag)) => value == flag.to_string(),
+                    _ => false,
+                };
+                let value = value.to_owned();
+                row()
+                    .key(format!("question-choice-{index}"))
+                    .center_y()
+                    .gap(S8)
+                    .child(
+                        ui::button(label, ButtonVariant::Ghost, Size::Small)
+                            .active(active)
+                            .disabled(disabled)
+                            .on_press_tx(move |app: &mut Desktop, tx| {
+                                select(app, id, kind, &value, tx);
+                            })
+                            .build(&t.k),
+                    )
+                    .children(
+                        description.map(|hint| text(hint).font(t.small).color(t.muted).grow(1.0)),
+                    )
+                    .children((index < 9).then(|| ui::kbd_cap(&(index + 1).to_string(), t)))
+            },
+        ))
         .on_key(move |app: &mut Desktop, event, tx| {
-            !disabled && numeric(app, event, tx, id, &keyboard)
+            if !disabled
+                && let Some(value) = numeric_choice(event, keyboard.iter().map(String::as_str))
+            {
+                select(app, id, kind, value, tx);
+                return true;
+            }
+            false
         })
 }
 
@@ -249,7 +239,7 @@ pub fn drawer(app: &Desktop, t: &Theme) -> Option<El> {
     let collapsed = form.is_some_and(|form| form.collapsed);
     let sending = app.model.requests.sending.contains(&id);
     let disabled = sending || !app.model.connected();
-    let fields = fields(schema);
+    let fields = question_fields(schema);
     let last = step + 1 >= fields.len();
     let header = row()
         .key("question-header")
@@ -291,23 +281,10 @@ pub fn drawer(app: &Desktop, t: &Theme) -> Option<El> {
             .build(&t.k),
         );
     let mut content = col().gap(S8).w_full().padding(S12).child(prose(message, t));
-    if let Some((name, field)) = fields.get(step).copied() {
+    if let Some(field) = fields.get(step) {
         content = content
-            .children(
-                field
-                    .get("description")
-                    .and_then(Value::as_str)
-                    .map(|description| prose(description, t)),
-            )
-            .child(editor(
-                app,
-                id,
-                field,
-                name,
-                required(schema, name),
-                disabled,
-                t,
-            ));
+            .children(field.description.map(|description| prose(description, t)))
+            .child(editor(app, id, field, disabled, t));
     }
     let error = form.and_then(|form| form.error.as_deref());
     content = content.children(error.map(|message| text(message).font(t.small).color(t.danger)));
