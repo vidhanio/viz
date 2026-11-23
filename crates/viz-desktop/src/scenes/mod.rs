@@ -78,7 +78,7 @@ pub const SCENES: &[Scene] = &[
     ("loading", overlays::loading),
     ("onboarding", overlays::onboarding),
     ("subagents", subagents),
-    ("tasks-expanded", tasks_expanded),
+    ("thread-details-subagents", thread_details_subagents),
     ("agents", agents),
     ("subagent", subagent),
     ("delete", overlays::delete),
@@ -145,8 +145,8 @@ fn subagents(s: &mut Desktop) {
     s.sync_widgets_from_model();
 }
 
-fn tasks_expanded(s: &mut Desktop) {
-    fixtures::seed_tasks_expanded(&mut s.model);
+fn thread_details_subagents(s: &mut Desktop) {
+    fixtures::seed_thread_details_subagents(&mut s.model);
     s.sync_widgets_from_model();
 }
 

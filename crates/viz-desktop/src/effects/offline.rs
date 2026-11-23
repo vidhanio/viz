@@ -35,12 +35,14 @@ pub(super) fn handle(
             *target = Some(environment);
             return false;
         }
-        ServerEffect::Create { draft, params } => {
+        ServerEffect::Create {
+            draft, recovery, ..
+        } => {
             dispatch_ui(
                 ui,
                 ServerMsg::LaunchFailed {
                     draft,
-                    params,
+                    recovery,
                     title: "Offline".into(),
                     detail: None,
                 },
@@ -55,11 +57,12 @@ pub(super) fn handle(
                 },
             );
         }
-        ServerEffect::SendInput(input) => {
+        ServerEffect::SendInput { input, recovery } => {
             dispatch_ui(
                 ui,
                 ServerMsg::SendFailed {
-                    input: Box::new(input),
+                    thread: input.thread,
+                    recovery,
                     title: "Offline".into(),
                     detail: None,
                 },

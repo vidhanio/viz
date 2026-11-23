@@ -13,7 +13,7 @@ use super::tokens::{
 ///
 /// For threads, rows further down the sidebar sit below (`Down` moves content
 /// up) and a delegated child sits to the right of its parent (`Into` moves
-/// content left). The composer and Tasks Dock stay put; Reduce Motion turns
+/// content left). The composer stays put; Reduce Motion turns
 /// directional travel into a calm fade.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Switch {
@@ -144,7 +144,7 @@ pub fn scrim() -> Transition {
     fade(SNAP_PAIR)
 }
 
-/// Tucked surface rising from behind the composer (Tasks Dock, approval,
+/// Tucked surface rising from behind the composer (approval,
 /// question, queue).
 pub fn tucked_deck() -> Transition {
     Transition::offset(0.0, TRAVEL_SMALL)

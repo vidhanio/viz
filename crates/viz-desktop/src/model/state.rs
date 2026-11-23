@@ -272,8 +272,6 @@ pub struct SidebarState {
     pub filter_query: String,
     /// Highlighted row index inside the project filter combobox.
     pub filter_active: usize,
-    /// Parent thread ids whose delegated child subtrees are collapsed.
-    pub collapsed_parents: HashSet<ThreadId>,
     /// Shelf keys collapsed in the triage list (`working`, `snoozed`,
     /// `settled`).
     pub collapsed_shelves: BTreeSet<String>,
@@ -307,7 +305,6 @@ impl Default for SidebarState {
             filter_open: false,
             filter_query: String::new(),
             filter_active: 0,
-            collapsed_parents: HashSet::new(),
             collapsed_shelves: default_collapsed_shelves(),
             settled_limit: SETTLED_PAGE_SIZE,
             hover_card: None,

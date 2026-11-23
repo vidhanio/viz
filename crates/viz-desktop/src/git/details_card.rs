@@ -1,13 +1,19 @@
 //! Adaptive, flat thread details shared by the inline lane and header popover.
 
+use std::collections::HashSet;
+
 use rune::{El, col, el, text};
 use rune_kit::Placement;
-use viz_client::protocol::TaskStatus;
+use viz_client::protocol::{TaskStatus, ThreadId, ThreadStatus};
 
 use crate::{
     app::Desktop,
     effects::git::Request,
-    model::git::{self, CARD_INSET, CARD_WIDTH, Density},
+    model::{
+        AgentStanding, Item, child_link, delegated_task, first_non_empty_line,
+        git::{self, CARD_INSET, CARD_WIDTH, Density},
+        local_child, spawned_subagent, subagent_title, thread_title,
+    },
     theme::{HAIRLINE, RADIUS_CARD, Theme},
     ui,
     update::{GitMsg, Msg, TimelineMsg},
@@ -26,11 +32,9 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let overlay_start = layer.len();
     let sections = [
         workspace(s, density, t),
+        subagents(s, id, t),
+        usage(s, t),
         version_control(s, id, density, t, layer),
-        (density == Density::Full)
-            .then(|| linked(s, id, t))
-            .flatten(),
-        (density == Density::Full).then(|| usage(s, t)).flatten(),
     ];
     let mut body = col().w_full();
     for (i, item) in sections.into_iter().flatten().enumerate() {
@@ -161,41 +165,182 @@ fn version_control(
     Some(section("Version Control", rows, t))
 }
 
-fn linked(s: &Desktop, id: viz_client::protocol::ThreadId, t: &Theme) -> Option<El> {
-    let children =
-        s.model
-            .tasks()
-            .iter()
-            .filter(|task| task.parent == id)
-            .take(4)
-            .map(|task| {
-                let mut item = ui::list_row(format!("linked-task-{}", task.id), &task.title)
-                    .leading(ui::dot(match task.status {
-                        TaskStatus::Running => t.accent,
-                        TaskStatus::Completed => t.success,
-                        TaskStatus::Failed => t.danger,
-                        TaskStatus::Queued | TaskStatus::Cancelled => t.muted,
-                    }));
-                if let Some(thread) = task.thread {
-                    let environment = task.environment.clone();
-                    item = item.on_press_tx(move |s: &mut Desktop, tx| {
-                        s.dispatch(
-                            Msg::Timeline(TimelineMsg::OpenThreadLink {
-                                thread,
-                                environment: Some(environment.clone()),
-                            }),
-                            tx,
-                        );
-                    });
-                }
-                item.build(t)
+fn subagents(s: &Desktop, id: ThreadId, t: &Theme) -> Option<El> {
+    let m = &s.model;
+    let transcript = m.transcript();
+    let tools = transcript
+        .displayed_history()
+        .iter()
+        .chain(&transcript.acp_partial)
+        .rev()
+        .filter_map(|item| match item {
+            Item::Tool(tool) if spawned_subagent(tool) => Some(tool),
+            _ => None,
+        });
+    let is_local = |environment: Option<&str>| {
+        environment.is_none_or(|env| Some(env) == m.connection.environment.as_deref())
+    };
+    let mut tasks = HashSet::new();
+    let mut local_threads = HashSet::new();
+    let mut rows = Vec::new();
+    for tool in tools {
+        let task = delegated_task(m, tool);
+        if task.is_some_and(|task| !tasks.insert(task.id.as_str())) {
+            continue;
+        }
+        if let Some((thread, env)) = child_link(tool, task)
+            && is_local(env)
+            && !local_threads.insert(thread)
+        {
+            continue;
+        }
+        let child = local_child(m, tool, task);
+        let title = subagent_title(tool, task, child);
+        let title = if title.is_empty() {
+            "Delegated task"
+        } else {
+            title
+        };
+        let standing = AgentStanding::of(m, tool, task);
+        let target = child_link(tool, task)
+            .filter(|_| task.is_none_or(|task| task.reachable))
+            .map(|(thread, env)| (thread, env.map(str::to_owned)));
+        let item = subagent_link(
+            tool.key.clone(),
+            title,
+            standing,
+            task_preview(task),
+            target,
+            t,
+        );
+        rows.push(task_controls(s, item, task, t));
+    }
+    for task in m.tasks().iter().filter(|task| task.parent == id) {
+        if tasks.contains(task.id.as_str()) {
+            continue;
+        }
+        if let Some(thread) = task.thread
+            && is_local(Some(&task.environment))
+            && !local_threads.insert(thread)
+        {
+            continue;
+        }
+        let target = task
+            .thread
+            .filter(|_| task.reachable)
+            .map(|thread| (thread, Some(task.environment.clone())));
+        let row = subagent_link(
+            format!("linked-task-{}", task.id),
+            &task.title,
+            AgentStanding::from_task(task),
+            task_preview(Some(task)),
+            target,
+            t,
+        );
+        rows.push(task_controls(s, row, Some(task), t));
+    }
+    for child in m.cache().threads().filter(|child| {
+        child.parent == Some(id)
+            && is_local(child.parent_environment.as_deref())
+            && !local_threads.contains(&child.id)
+            && !child.lifecycle.archived
+    }) {
+        let standing = match child.status {
+            ThreadStatus::Working => AgentStanding::Working,
+            ThreadStatus::Failed => AgentStanding::Failed,
+            ThreadStatus::Idle => AgentStanding::Done,
+        };
+        rows.push(subagent_link(
+            format!("linked-thread-{}", child.id),
+            thread_title(child),
+            standing,
+            None,
+            Some((child.id, None)),
+            t,
+        ));
+    }
+    (!rows.is_empty()).then(|| section("Subagents", rows, t))
+}
+
+fn subagent_link(
+    key: String,
+    title: &str,
+    standing: AgentStanding,
+    subtitle: Option<&str>,
+    target: Option<(ThreadId, Option<String>)>,
+    t: &Theme,
+) -> El {
+    let ink = match standing {
+        AgentStanding::Working => t.accent,
+        AgentStanding::Failed => t.danger,
+        AgentStanding::Done => t.success,
+        AgentStanding::Queued | AgentStanding::Stopped | AgentStanding::Unreachable => t.muted,
+    };
+    let mut row = ui::list_row(key, title)
+        .leading(ui::dot(ink))
+        .trailing(text(standing.word()).font(t.micro).color(ink));
+    if let Some(subtitle) = subtitle {
+        row = row.subtitle(subtitle);
+    }
+    if let Some((thread, environment)) = target {
+        row = row.on_press_tx(move |s: &mut Desktop, tx| {
+            s.dispatch(
+                Msg::Timeline(TimelineMsg::OpenThreadLink {
+                    thread,
+                    environment: environment.clone(),
+                }),
+                tx,
+            );
+        });
+    }
+    row.build(t)
+}
+
+fn task_preview(task: Option<&viz_client::protocol::Task>) -> Option<&str> {
+    let task = task?;
+    task.error
+        .as_deref()
+        .or(task.result.as_deref())
+        .and_then(first_non_empty_line)
+}
+
+fn task_controls(
+    s: &Desktop,
+    item: El,
+    task: Option<&viz_client::protocol::Task>,
+    t: &Theme,
+) -> El {
+    let Some(task) = task.filter(|task| {
+        task.reachable && matches!(task.status, TaskStatus::Queued | TaskStatus::Running)
+    }) else {
+        return item;
+    };
+    let id = task.id.clone();
+    rune::row()
+        .key(format!("subagent-task-{id}"))
+        .w_full()
+        .center_y()
+        .child(item.grow(1.0).shrink().min_w(0.0))
+        .child(
+            ui::icon_button(
+                &ui::STOP,
+                "Cancel task",
+                rune_kit::IconButtonVariant::GhostMuted,
+                crate::theme::Size::Micro,
+            )
+            .disabled(!s.model.connected())
+            .on_press_tx(move |s: &mut Desktop, tx| {
+                s.dispatch(Msg::Timeline(TimelineMsg::CancelTask(id.clone())), tx);
             })
-            .collect::<Vec<_>>();
-    (!children.is_empty()).then(|| section("Delegated threads", children, t))
+            .build(&t.k),
+        )
 }
 
 fn usage(s: &Desktop, t: &Theme) -> Option<El> {
     let usage = s.model.thread_state()?.usage.as_ref()?;
+    if usage.size == 0 {
+        return None;
+    }
     let width = (u128::from(usage.used.min(usage.size)) * 244) / u128::from(usage.size.max(1));
     let width = f32::from(u16::try_from(width).unwrap_or(244));
     let bar = el()
@@ -205,7 +350,7 @@ fn usage(s: &Desktop, t: &Theme) -> Option<El> {
         .fill(t.hairline)
         .child(el().w(width).h(4.0).radius(2.0).fill(t.accent));
     Some(section(
-        "Context Usage",
+        "Context Window",
         [col()
             .px(8.0)
             .gap(6.0)

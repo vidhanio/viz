@@ -62,8 +62,6 @@ pub enum SidebarMsg {
     ToggleShelf(&'static str),
     /// Reveal the next page of settled threads in the Settled drawer.
     LoadMoreSettled,
-    /// Expand or collapse a parent thread's delegated children.
-    ToggleParent(ThreadId),
     /// Show or hide the delayed right-anchored hover preview card.
     HoverCard(Option<ThreadId>),
     /// Open or close the hover quick-action snooze preset popover for `thread`.
@@ -265,11 +263,6 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
                 .sidebar
                 .settled_limit
                 .saturating_add(SETTLED_PAGE_SIZE);
-        }
-        SidebarMsg::ToggleParent(id) => {
-            if !model.sidebar.collapsed_parents.remove(&id) {
-                model.sidebar.collapsed_parents.insert(id);
-            }
         }
         SidebarMsg::HoverCard(target) => {
             let blocked = model.sidebar.menu.is_some()

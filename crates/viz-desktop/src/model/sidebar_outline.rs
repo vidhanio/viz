@@ -7,7 +7,7 @@ use std::{
 };
 
 use viz_client::protocol::{
-    Attention, Project, Shelf, Standing, ThreadId, ThreadStatus, ThreadSummary, WorktreeTarget,
+    Attention, Project, Shelf, Standing, ThreadId, ThreadSummary, WorktreeTarget,
 };
 
 use super::{
@@ -96,8 +96,6 @@ pub struct SidebarOutline<'a> {
     pub snoozed: Vec<&'a ThreadSummary>,
     /// Settled threads ordered most recently settled/updated first.
     pub settled: Vec<&'a ThreadSummary>,
-    /// Local delegated child threads indexed by their parent thread id.
-    pub children: HashMap<ThreadId, Vec<&'a ThreadSummary>>,
     /// Wall-clock timestamp in Unix ms for relative ages and wake labels.
     pub now: i64,
 }
@@ -118,39 +116,19 @@ impl<'a> SidebarOutline<'a> {
             active: Vec::new(),
             snoozed: Vec::new(),
             settled: Vec::new(),
-            children: HashMap::new(),
             now,
         };
 
-        let mut child_ids = HashSet::new();
         for thread in cache.threads() {
-            if thread.lifecycle.archived || thread.shelf == Shelf::Archived {
-                continue;
-            }
-            if let Some(parent) = thread.parent.filter(|&parent| {
-                thread
+            if outline.open != Some(thread.id)
+                && let Some(parent) = thread.parent.and_then(|id| cache.summary(id))
+                && !parent.lifecycle.archived
+                && thread
                     .parent_environment
                     .as_ref()
                     .is_none_or(|env| Some(env) == model.connection.environment.as_ref())
-                    && parent < thread.id
-                    && cache.summary(parent).is_some()
-            }) {
-                child_ids.insert(thread.id);
-                outline.children.entry(parent).or_default().push(thread);
-            }
-        }
-        for kids in outline.children.values_mut() {
-            kids.sort_by_key(|thread| {
-                (
-                    thread.status != ThreadStatus::Working,
-                    Reverse(thread.updated_at),
-                    Reverse(thread.id),
-                )
-            });
-        }
-
-        for thread in cache.threads() {
-            if child_ids.contains(&thread.id) {
+                && filter.accepts(parent.project.as_deref(), &known_projects)
+            {
                 continue;
             }
             if !filter.accepts(thread.project.as_deref(), &known_projects) {
@@ -168,19 +146,6 @@ impl<'a> SidebarOutline<'a> {
 
         sort_shelves(&mut outline);
         outline
-    }
-
-    /// Whether any descendant of `parent` is currently working or selected.
-    #[must_use]
-    pub fn has_active_or_selected_child(&self, parent: ThreadId) -> bool {
-        let Some(kids) = self.children.get(&parent) else {
-            return false;
-        };
-        kids.iter().any(|child| {
-            child.status == ThreadStatus::Working
-                || self.open == Some(child.id)
-                || self.has_active_or_selected_child(child.id)
-        })
     }
 
     /// Whether all primary shelves above Settled are empty.

@@ -40,15 +40,20 @@ impl Session<'_> {
             .map(drop)
     }
 
-    pub(super) async fn launch(&self, draft: u64, params: Box<LaunchThread>) -> Result<()> {
-        match self.client.launch_thread(&params).await {
+    pub(super) async fn launch(
+        &self,
+        draft: u64,
+        params: &LaunchThread,
+        recovery: Box<crate::model::DraftData>,
+    ) -> Result<()> {
+        match self.client.launch_thread(params).await {
             Ok(thread) => self.dispatch(ServerMsg::ThreadCreated { draft, thread }),
             Err(error) => {
                 let detail = error.to_string();
                 let closed = matches!(error, Error::Closed);
                 self.dispatch(ServerMsg::LaunchFailed {
                     draft,
-                    params,
+                    recovery,
                     title: "Request failed".into(),
                     detail: Some(detail),
                 });
@@ -60,14 +65,19 @@ impl Session<'_> {
         Ok(())
     }
 
-    pub(super) async fn send_input(&self, input: SendInput) -> Result<()> {
-        match self.client.send(&input).await {
+    pub(super) async fn send_input(
+        &self,
+        input: &SendInput,
+        recovery: Option<Box<super::DraftRecovery>>,
+    ) -> Result<()> {
+        match self.client.send(input).await {
             Ok(_) => Ok(()),
             Err(error) => {
                 let detail = error.to_string();
                 let closed = matches!(error, Error::Closed);
                 self.dispatch(ServerMsg::SendFailed {
-                    input: Box::new(input),
+                    thread: input.thread,
+                    recovery,
                     title: "Request failed".into(),
                     detail: Some(detail),
                 });

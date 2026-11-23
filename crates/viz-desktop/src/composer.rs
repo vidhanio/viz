@@ -1,5 +1,5 @@
 //! Per-thread composer, inline chips, attachments strip, tucked completion
-//! drawers, dashed queued deck, Tasks Dock, and Home context strip.
+//! drawers, dashed queued deck, and Home context strip.
 
 mod actions;
 pub mod attachments;
@@ -10,12 +10,9 @@ mod draft;
 mod editor;
 mod menus;
 mod queued;
-mod task_row;
-mod tasks;
 mod toolbar;
 
 use rune::{El, col};
-pub use tasks::DOCK_KEY as TASKS_DOCK_KEY;
 
 use crate::{
     app::Desktop,
@@ -23,7 +20,7 @@ use crate::{
     ui,
 };
 
-/// Renders the bottom-docked composer stack (dashed queued deck, Tasks Dock,
+/// Renders the bottom-docked composer stack (dashed queued deck,
 /// tucked Question or `@`/`/`/`$`/`#` completion drawer, and composer card)
 /// when an active thread is selected.
 pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
@@ -32,9 +29,6 @@ pub fn composer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let mut column = col().w_full();
     if let Some(queued) = queued::stack(s, t) {
         column = column.child(queued);
-    }
-    if let Some(dock) = tasks::dock(s, t) {
-        column = column.child(dock);
     }
     if let Some(drawer) = crate::requests::question_drawer(s, t).or_else(|| menus::drawer(s, t)) {
         column = column.child(drawer);

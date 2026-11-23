@@ -8,8 +8,8 @@ use super::rule;
 use crate::{
     motion,
     theme::{
-        CARD_INSET, COMPOSER_DRAWER_INSET, COMPOSER_DRAWER_OVERLAP, DECK_INSET, DECK_OVERLAP,
-        HAIRLINE, RADIUS_CARD, RADIUS_DECK, RADIUS_SURFACE, S4, S6, S8, S12, S16, Theme,
+        CARD_INSET, COMPOSER_DRAWER_INSET, COMPOSER_DRAWER_OVERLAP, HAIRLINE, RADIUS_CARD,
+        RADIUS_SURFACE, S4, S6, S8, S12, S16, Theme,
     },
 };
 
@@ -234,20 +234,6 @@ pub fn tucked_drawer(key: impl Into<String>, order: i16, body: El, t: &Theme) ->
         .border(HAIRLINE, t.hairline)
         .transition(motion::tucked_menu())
         .child(body)
-}
-
-/// A flat deck tucked behind the top edge of the composer below it, with inset
-/// horizontal width and a crisp hairline border.
-pub fn tucked_deck(key: impl Into<String>, order: i16, fill: rune::Color, t: &Theme) -> El {
-    col()
-        .key(key)
-        .paint_order(order)
-        .mx(DECK_INSET)
-        .mb(-DECK_OVERLAP)
-        .pb(DECK_OVERLAP)
-        .corners([RADIUS_DECK, RADIUS_DECK, 0.0, 0.0])
-        .fill(fill)
-        .border(HAIRLINE, t.hairline)
 }
 
 /// Vertical scroll behavior for [`scroll_viewport`].

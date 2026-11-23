@@ -259,7 +259,11 @@ impl Session<'_> {
                 *selected = None;
                 Ok(())
             }
-            ServerEffect::Create { draft, params } => self.launch(draft, params).await,
+            ServerEffect::Create {
+                draft,
+                params,
+                recovery,
+            } => self.launch(draft, &params, recovery).await,
             ServerEffect::CancelTask(task) => {
                 self.client.request(&CancelTask { task: &task }).await?;
                 self.refresh_tasks().await
@@ -365,7 +369,7 @@ impl Session<'_> {
                 platform::spawn_attach(self.ui, scope, target, source);
                 Ok(())
             }
-            ServerEffect::SendInput(send_input) => self.send_input(send_input).await,
+            ServerEffect::SendInput { input, recovery } => self.send_input(&input, recovery).await,
             ServerEffect::Fork {
                 params,
                 load_prompt,

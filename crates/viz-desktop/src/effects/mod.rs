@@ -20,7 +20,7 @@ use viz_client::protocol::{
     SendInput, ThreadId, TriageAction, WorktreeTarget,
 };
 
-use crate::model::{AttachmentTarget, DraftPill, Prefs, UndoTriage};
+use crate::model::{AttachmentTarget, DraftData, DraftPill, Prefs, UndoTriage};
 
 /// Maximum base64-encoded bytes per message across all attachments.
 pub const ATTACHMENT_ENCODED_LIMIT: usize = platform::ENCODED_LIMIT;
@@ -199,8 +199,6 @@ pub enum EditSync {
     },
     /// Clear text contents.
     Clear(EditTarget),
-    /// Prepend restored message text to the active draft when a send fails.
-    PrependDraft(String),
     /// Replace a byte range in the draft with an accepted completion token.
     ReplaceDraftRange {
         /// Start byte offset.
@@ -245,6 +243,13 @@ pub struct LoadedAttachments {
     pub errors: Vec<String>,
 }
 
+/// Local editor state carried alongside the wire request until it settles.
+#[derive(Debug)]
+pub struct DraftRecovery {
+    pub environment: String,
+    pub draft: DraftData,
+}
+
 /// Command sent to the background server connection task.
 #[derive(Debug)]
 pub enum ServerEffect {
@@ -273,6 +278,8 @@ pub enum ServerEffect {
         draft: u64,
         /// Launch parameters.
         params: Box<LaunchThread>,
+        /// Submitted composer state retained until the RPC settles.
+        recovery: Box<DraftData>,
     },
     /// Fetch thinking levels for a specific `(harness, model)` pair.
     HarnessOptions {
@@ -403,7 +410,13 @@ pub enum ServerEffect {
         before: EntryId,
     },
     /// Send a prompt or steering message to an existing thread.
-    SendInput(SendInput),
+    SendInput {
+        /// Wire request.
+        input: SendInput,
+        /// Local editor snapshot and destination environment, for composer
+        /// submissions.
+        recovery: Option<Box<DraftRecovery>>,
+    },
     /// Fork a thread from a specific transcript point.
     Fork {
         /// Fork parameters.

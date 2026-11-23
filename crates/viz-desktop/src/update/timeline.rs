@@ -15,9 +15,8 @@ use crate::{
 /// Messages emitted by timeline rows, folds, inspectors, cards, and minimap.
 #[derive(Debug)]
 pub enum TimelineMsg {
-    /// Expand or collapse a disclosure row or tucked deck by key (legacy
-    /// toggle).
-    ToggleExpanded(String),
+    /// Cancel a running or queued delegated task.
+    CancelTask(String),
     /// Toggle a per-thread timeline fold (turn fold, tool inspector, long
     /// message, plan collapse, or changed-files folder) anchored on screen.
     ToggleFold {
@@ -128,11 +127,7 @@ pub enum TimelineMsg {
 pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
     let mut effects = Vec::new();
     match msg {
-        TimelineMsg::ToggleExpanded(key) => {
-            if !model.disclosure.expanded.remove(&key) {
-                model.disclosure.expanded.insert(key);
-            }
-        }
+        TimelineMsg::CancelTask(id) => effects.push(Effect::Server(ServerEffect::CancelTask(id))),
         TimelineMsg::ToggleFold {
             key,
             legacy_key,
@@ -336,16 +331,19 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
                             _ => None,
                         })
             {
-                effects.push(Effect::Server(ServerEffect::SendInput(SendInput {
-                    thread,
-                    mode: None,
-                    text: last_prompt,
-                    request_id: None,
-                    origin: None,
-                    attachments: Vec::new(),
-                    stored: Vec::new(),
-                    context: Vec::new(),
-                })));
+                effects.push(Effect::Server(ServerEffect::SendInput {
+                    recovery: None,
+                    input: SendInput {
+                        thread,
+                        mode: None,
+                        text: last_prompt,
+                        request_id: None,
+                        origin: None,
+                        attachments: Vec::new(),
+                        stored: Vec::new(),
+                        context: Vec::new(),
+                    },
+                }));
             }
         }
         TimelineMsg::TickToolClock(now) => {

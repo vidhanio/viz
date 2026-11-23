@@ -11,10 +11,7 @@ use super::data::{
     THREAD, WORKTREE, list, now_ms, preview_entry, preview_plan, preview_text, preview_thread,
     preview_tool, preview_tool_entry, prompt, response, thread_state, transcript,
 };
-use crate::{
-    composer,
-    model::{Checkouts, Model, PaneSwitch, Status, Transcript},
-};
+use crate::model::{Checkouts, Model, PaneSwitch, Status, Transcript};
 
 /// Populates the baseline connected workspace model.
 pub(super) fn seed_workspace(m: &mut Model) {
@@ -259,7 +256,7 @@ pub(super) fn seed_subagents(m: &mut Model) {
     }
 }
 
-pub(super) fn seed_tasks_expanded(m: &mut Model) {
+pub(super) fn seed_thread_details_subagents(m: &mut Model) {
     seed_subagents(m);
     let cache = m.cache_mut();
     cache.tasks.push(Task {
@@ -286,7 +283,13 @@ pub(super) fn seed_tasks_expanded(m: &mut Model) {
         result: Some("Pipe escapes verified.".into()),
         error: None,
     });
-    toggle(m, composer::TASKS_DOCK_KEY);
+    if let Some(state) = &mut cache.open_thread_mut(THREAD).state {
+        state.usage = Some(ContextUsage {
+            used: 34_817,
+            size: 200_000,
+        });
+    }
+    m.panels.details_open = true;
 }
 
 pub(super) fn seed_agents(m: &mut Model) {

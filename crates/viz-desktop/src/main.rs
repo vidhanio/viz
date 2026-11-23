@@ -8,8 +8,8 @@
 //!
 //! UI rules:
 //!
-//! - Layout: shell slots for sidebar, main (timeline + composer + Tasks Dock),
-//!   details, diff, and overlays (menus, palette, dialogs, toasts).
+//! - Layout: shell slots for sidebar, main (timeline + composer), details,
+//!   diff, and overlays (menus, palette, dialogs, toasts).
 //! - Visuals come from `theme` tokens and `ui` components, derived strictly
 //!   from the configured base16 scheme in a flat, sans-serif style with crisp
 //!   hairline borders and no blur, glow, or drop shadows. Icons are Lucide plus

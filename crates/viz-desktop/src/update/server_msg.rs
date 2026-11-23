@@ -5,8 +5,7 @@ use std::sync::Arc;
 
 use viz_client::protocol::{
     ConfigOption, Entry, EntryId, EntrySource, Environment, FileSearchMatch, Forked, GitHubItem,
-    Harness, LaunchThread, Lifecycle, LiveDelta, Project, SearchHit, SendInput, Task, ThreadId,
-    ThreadState, ThreadSummary,
+    Harness, Lifecycle, LiveDelta, Project, SearchHit, Task, ThreadId, ThreadState, ThreadSummary,
 };
 
 use crate::{
@@ -129,8 +128,8 @@ pub enum ServerMsg {
     LaunchFailed {
         /// Local draft sequence id.
         draft: u64,
-        /// Original launch params carrying prompt and attachments.
-        params: Box<LaunchThread>,
+        /// Submitted editor state.
+        recovery: Box<crate::model::DraftData>,
         /// Toast title.
         title: String,
         /// Optional toast detail.
@@ -139,8 +138,10 @@ pub enum ServerMsg {
     /// Sending input to an existing thread failed; restore prompt and
     /// attachments.
     SendFailed {
-        /// Original input params.
-        input: Box<SendInput>,
+        /// Destination thread.
+        thread: ThreadId,
+        /// Original editor snapshot, when submitted from the composer.
+        recovery: Option<Box<crate::effects::DraftRecovery>>,
         /// Toast title.
         title: String,
         /// Optional toast detail.

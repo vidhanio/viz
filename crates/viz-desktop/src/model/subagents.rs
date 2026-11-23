@@ -1,7 +1,5 @@
 //! Pure derivations for delegated tasks and subagent tool calls.
 
-use std::fmt::Write as _;
-
 use viz_client::protocol::{Task, TaskStatus, ThreadId, ThreadStatus, ThreadSummary};
 
 use super::{Model, Tool, ToolStatus};
@@ -40,39 +38,26 @@ pub enum AgentStanding {
 }
 
 impl AgentStanding {
-    /// Display ordering for burst status summaries.
-    pub const ALL: [Self; 6] = [
-        Self::Working,
-        Self::Queued,
-        Self::Done,
-        Self::Failed,
-        Self::Stopped,
-        Self::Unreachable,
-    ];
-    /// Total number of [`AgentStanding`] variants.
-    pub const COUNT: usize = Self::ALL.len();
-
-    /// Position in [`Self::ALL`].
+    /// Maps task lifecycle and connectivity to the displayed status.
     #[must_use]
-    pub const fn index(self) -> usize {
-        self as usize
+    pub const fn from_task(task: &Task) -> Self {
+        if !task.reachable {
+            return Self::Unreachable;
+        }
+        match task.status {
+            TaskStatus::Running => Self::Working,
+            TaskStatus::Queued => Self::Queued,
+            TaskStatus::Completed => Self::Done,
+            TaskStatus::Failed => Self::Failed,
+            TaskStatus::Cancelled => Self::Stopped,
+        }
     }
 
-    /// Derives the standing of a subagent call from `task`, local thread
-    /// summary, and `tool` status.
+    /// Derives the standing of a subagent call from its task or tool state.
     #[must_use]
     pub fn of(model: &Model, tool: &Tool, task: Option<&Task>) -> Self {
         if let Some(task) = task {
-            if !task.reachable {
-                return Self::Unreachable;
-            }
-            return match task.status {
-                TaskStatus::Running => Self::Working,
-                TaskStatus::Queued => Self::Queued,
-                TaskStatus::Completed => Self::Done,
-                TaskStatus::Failed => Self::Failed,
-                TaskStatus::Cancelled => Self::Stopped,
-            };
+            return Self::from_task(task);
         }
         let status = local_child(model, tool, None).map(|thread| thread.status);
         match (status, tool.status) {
@@ -83,30 +68,6 @@ impl AgentStanding {
             (None, ToolStatus::Done) if tool.child.is_none() => Self::Queued,
             _ => Self::Done,
         }
-    }
-
-    /// Formats non-zero agent standing counts into a compact ` · ` summary.
-    #[must_use]
-    pub fn summary(counts: &[usize; Self::COUNT]) -> Option<String> {
-        let mut result = String::new();
-        for (agent, &count) in Self::ALL.iter().zip(counts) {
-            if count == 0 {
-                continue;
-            }
-            let word = match agent {
-                Self::Working => "running",
-                Self::Queued => "queued",
-                Self::Done => "done",
-                Self::Failed => "failed",
-                Self::Stopped => "stopped",
-                Self::Unreachable => "unreachable",
-            };
-            if !result.is_empty() {
-                result.push_str(" · ");
-            }
-            _ = write!(result, "{count} {word}");
-        }
-        (!result.is_empty()).then_some(result)
     }
 
     /// Capitalized status word for a single subagent card.

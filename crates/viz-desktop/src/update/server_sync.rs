@@ -4,16 +4,16 @@
 use std::sync::Arc;
 
 use viz_client::protocol::{
-    Attachment, Entry, EntryId, LaunchThread, Lifecycle, Project, ProjectIcon, SendInput, ThreadId,
-    ThreadState, ThreadStatus, ThreadSummary,
+    Entry, EntryId, Lifecycle, Project, ProjectIcon, ThreadId, ThreadState, ThreadStatus,
+    ThreadSummary,
 };
 
 use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
 use crate::{
     effects::{ATTACHMENT_ENCODED_LIMIT, EditSync, Effect, LoadedAttachments, ServerEffect},
     model::{
-        AttachmentTarget, Model, OptimisticUndo, PaneSwitch, Transcript, sync_summary_derived,
-        thread_title,
+        AttachmentStatus, AttachmentTarget, DraftData, Model, OptimisticUndo, PaneSwitch,
+        Transcript, sync_summary_derived, thread_title,
     },
 };
 
@@ -293,7 +293,7 @@ pub(super) fn apply_project_icon_loaded(
 pub(super) fn apply_launch_failed(
     model: &mut Model,
     draft: u64,
-    params: LaunchThread,
+    recovery: DraftData,
     title: String,
     detail: Option<String>,
     effects: &mut Vec<Effect>,
@@ -305,50 +305,35 @@ pub(super) fn apply_launch_failed(
         .filter(|thread| thread.id == draft)
     {
         thread.sending = false;
-        let text = params.text.unwrap_or_default();
-        prepend_draft_data(
-            &mut model.composer.draft.text,
-            &mut model.composer.draft.attachments,
-            &text,
-            params.attachments,
-        );
-        if !text.is_empty() {
-            effects.push(Effect::SyncEdit(EditSync::PrependDraft(text)));
-        }
+        restore_active_draft(model, recovery, effects);
     }
     effects.push(Effect::Toast { title, detail });
 }
 
 pub(super) fn apply_send_failed(
     model: &mut Model,
-    input: SendInput,
+    thread: ThreadId,
+    recovery: Option<crate::effects::DraftRecovery>,
     title: String,
     detail: Option<String>,
     effects: &mut Vec<Effect>,
 ) {
-    let thread = input.thread;
-    let text = input.text;
-    let files = input.attachments;
-    if model.selection.selected == Some(thread) {
-        prepend_draft_data(
-            &mut model.composer.draft.text,
-            &mut model.composer.draft.attachments,
-            &text,
-            files,
-        );
-        if !text.is_empty() {
-            effects.push(Effect::SyncEdit(EditSync::PrependDraft(text)));
+    if let Some(recovery) = recovery {
+        if model.active_env_key() == recovery.environment
+            && model.selection.selected == Some(thread)
+        {
+            restore_active_draft(model, recovery.draft, effects);
+        } else {
+            let saved = model
+                .composer
+                .drafts_by_env
+                .entry(recovery.environment)
+                .or_default()
+                .entry(thread)
+                .or_default();
+            prepend_draft(saved, recovery.draft);
         }
-    } else {
-        let env = model.active_env_key().to_owned();
-        let entry = model
-            .composer
-            .drafts_by_env
-            .entry(env)
-            .or_default()
-            .entry(thread)
-            .or_default();
-        prepend_draft_data(&mut entry.text, &mut entry.attachments, &text, files);
+        effects.push(Effect::SavePrefs(model.to_prefs()));
     }
     effects.push(Effect::Toast { title, detail });
 }
@@ -436,23 +421,32 @@ pub(super) fn rollback_optimistic(model: &mut Model, undo: OptimisticUndo) {
     }
 }
 
-fn prepend_draft_data(
-    draft_text: &mut String,
-    draft_attachments: &mut Vec<Attachment>,
-    text: &str,
-    mut files: Vec<Attachment>,
-) {
-    if !text.is_empty() {
-        if draft_text.is_empty() {
-            draft_text.push_str(text);
-        } else {
-            let mut combined = String::with_capacity(text.len() + 2 + draft_text.len());
-            combined.push_str(text);
-            combined.push_str("\n\n");
-            combined.push_str(draft_text);
-            *draft_text = combined;
-        }
+fn restore_active_draft(model: &mut Model, recovery: DraftData, effects: &mut Vec<Effect>) {
+    let draft = &mut model.composer.draft;
+    prepend_draft(draft, recovery);
+    effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
+        text: draft.text.clone(),
+        pills: draft.pills.clone(),
+    }));
+}
+
+fn prepend_draft(draft: &mut DraftData, mut recovery: DraftData) {
+    if !recovery.text.is_empty() && !draft.text.is_empty() {
+        recovery.text.push_str("\n\n");
     }
-    files.append(draft_attachments);
-    *draft_attachments = files;
+    let offset = recovery.text.len();
+    recovery.text.push_str(&draft.text);
+    recovery.pills.extend(draft.pills.drain(..).map(|mut pill| {
+        pill.range.start += offset;
+        pill.range.end += offset;
+        pill
+    }));
+    recovery
+        .attachment_statuses
+        .resize(recovery.attachments.len(), AttachmentStatus::Ready);
+    recovery
+        .attachment_statuses
+        .append(&mut draft.attachment_statuses);
+    recovery.attachments.append(&mut draft.attachments);
+    *draft = recovery;
 }

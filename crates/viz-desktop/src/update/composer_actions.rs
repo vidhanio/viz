@@ -13,8 +13,8 @@ use super::{
 use crate::{
     effects::{EditSync, EditTarget, Effect, ServerEffect},
     model::{
-        BuiltinCommand, CompletionChoice, CompletionKind, DraftCursor, DraftData, Item, Model,
-        NewThread, completion_choice_at, completion_count, completion_token_at,
+        BuiltinCommand, CompletionChoice, CompletionKind, DraftCursor, Item, Model, NewThread,
+        completion_choice_at, completion_count, completion_token_at,
     },
 };
 
@@ -57,14 +57,15 @@ pub(super) fn send_input(
         model.selection.next_draft += 1;
         model.selection.new_thread = Some(draft);
     }
-    let context = model.composer.draft.prompt_context();
-    let text = model.composer.draft.text.clone();
-    let attachments = mem::take(&mut model.composer.draft.attachments);
-    model.composer.draft.attachment_statuses.clear();
+    let submitted = mem::take(&mut model.composer.draft);
+    let context = submitted.prompt_context();
+    let text = submitted.text.clone();
+    let attachments = submitted.attachments.clone();
     let command = if let Some(thread) = &mut model.selection.new_thread {
         thread.sending = true;
         ServerEffect::Create {
             draft: thread.id,
+            recovery: Box::new(submitted),
             params: Box::new(LaunchThread {
                 project: thread.project.clone(),
                 worktree: thread.worktree.clone(),
@@ -84,20 +85,25 @@ pub(super) fn send_input(
         } else {
             None
         };
-        ServerEffect::SendInput(SendInput {
-            thread,
-            text,
-            attachments,
-            stored: Vec::new(),
-            context,
-            request_id: None,
-            origin: None,
-            mode,
-        })
+        ServerEffect::SendInput {
+            recovery: Some(Box::new(crate::effects::DraftRecovery {
+                environment: model.active_env_key().to_owned(),
+                draft: submitted,
+            })),
+            input: SendInput {
+                thread,
+                text,
+                attachments,
+                stored: Vec::new(),
+                context,
+                request_id: None,
+                origin: None,
+                mode,
+            },
+        }
     } else {
         return;
     };
-    model.composer.draft = DraftData::default();
     model.composer.completion.reset();
     model.composer.open_picker = None;
     model.composer.history_cursor = None;
@@ -279,16 +285,19 @@ pub(super) fn choose_completion(
         CompletionChoice::Builtin(BuiltinCommand::Compact) => {
             if let Some(thread) = model.selection.selected.filter(|_| !model.busy()) {
                 clear_token_range(model, start, end, effects);
-                effects.push(Effect::Server(ServerEffect::SendInput(SendInput {
-                    thread,
-                    text: "/compact".to_owned(),
-                    attachments: Vec::new(),
-                    stored: Vec::new(),
-                    context: Vec::new(),
-                    request_id: None,
-                    origin: None,
-                    mode: None,
-                })));
+                effects.push(Effect::Server(ServerEffect::SendInput {
+                    recovery: None,
+                    input: SendInput {
+                        thread,
+                        text: "/compact".to_owned(),
+                        attachments: Vec::new(),
+                        stored: Vec::new(),
+                        context: Vec::new(),
+                        request_id: None,
+                        origin: None,
+                        mode: None,
+                    },
+                }));
                 effects.push(focus_draft());
             } else {
                 replace_plain(model, start, end, "/compact", needs_space, effects);

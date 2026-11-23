@@ -174,14 +174,17 @@ impl Desktop {
                     self.apply_effects(effects, tx);
                     return;
                 }
-                ServerEffect::Create { draft, params } => Some(ServerMsg::LaunchFailed {
+                ServerEffect::Create {
+                    draft, recovery, ..
+                } => Some(ServerMsg::LaunchFailed {
                     draft,
-                    params,
+                    recovery,
                     title: "Offline".into(),
                     detail: None,
                 }),
-                ServerEffect::SendInput(input) => Some(ServerMsg::SendFailed {
-                    input: Box::new(input),
+                ServerEffect::SendInput { input, recovery } => Some(ServerMsg::SendFailed {
+                    thread: input.thread,
+                    recovery,
                     title: "Offline".into(),
                     detail: None,
                 }),
@@ -245,17 +248,6 @@ impl Desktop {
             }
             EditSync::Clear(target) => {
                 self.edit_mut(target).clear();
-            }
-            EditSync::PrependDraft(text) => {
-                let draft = &mut self.widgets.draft;
-                if !text.is_empty() {
-                    if !draft.text.is_empty() {
-                        draft.set_caret(0);
-                        draft.insert("\n\n");
-                        draft.set_caret(0);
-                    }
-                    draft.insert(&text);
-                }
             }
             EditSync::ReplaceDraftRange {
                 start,

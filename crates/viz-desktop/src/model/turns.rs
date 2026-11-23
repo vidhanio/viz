@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 use viz_client::protocol::{CompactionStatus, EntrySource};
 
 use super::{
-    CompactionNotice, ErrorKind, Item, MediaItem, Model, PlanCard, TaskResult, Tool, ToolStatus,
-    Transcript, TurnEnd, User, diff_line_stats, relative_path, spawned_subagent,
+    CompactionNotice, ErrorKind, Item, MediaItem, Model, PlanCard, TaskResult, ToolStatus,
+    Transcript, TurnEnd, User, diff_line_stats, relative_path,
 };
 
 /// One projected conversation turn ready for the timeline renderer.
@@ -25,8 +25,6 @@ pub struct TurnView<'a> {
     pub task_result: Option<&'a TaskResult>,
     /// Intermediate work-log entries (reasoning, tools, subagent messages).
     pub work: Vec<(&'a Item, bool)>,
-    /// Spawned subagent tool calls surfaced as dedicated rows or a group.
-    pub subagents: Vec<&'a Tool>,
     /// Plans reported in this turn.
     pub plans: Vec<&'a PlanCard>,
     /// Context compaction notices in this turn.
@@ -63,12 +61,6 @@ impl TurnView<'_> {
     #[must_use]
     pub fn fold_key(&self) -> String {
         format!("{}-fold", self.key)
-    }
-
-    /// Stable key for this turn's subagent group disclosure.
-    #[must_use]
-    pub fn subagents_key(&self) -> String {
-        format!("{}-subagents", self.key)
     }
 
     /// Completed turn duration in milliseconds when timestamps are available.
@@ -153,10 +145,6 @@ pub struct ChangedFile {
 
 /// Projects a [`Transcript`] into an ordered sequence of [`TurnView`]s.
 #[must_use]
-#[expect(
-    clippy::too_many_lines,
-    reason = "single pass groups prompts, worklog, subagents, plans, prose, and diffs cleanly"
-)]
 pub fn project_turns<'a>(
     model: &Model,
     transcript: &'a Transcript,
@@ -176,7 +164,6 @@ pub fn project_turns<'a>(
                     !turn.continued
                         && turn.task_result.is_none()
                         && turn.work.is_empty()
-                        && turn.subagents.is_empty()
                         && turn.plans.is_empty()
                         && turn.prose.is_empty()
                         && turn.end.is_none()
@@ -247,12 +234,7 @@ pub fn project_turns<'a>(
             turn.legacy_fold_key = turn
                 .work
                 .first()
-                .map(|(item, _)| format!("{}-activity", item.key()))
-                .or_else(|| {
-                    turn.subagents
-                        .first()
-                        .map(|tool| format!("{}-activity", tool.key))
-                });
+                .map(|(item, _)| format!("{}-activity", item.key()));
         }
     }
 
@@ -278,7 +260,6 @@ fn new_turn(index: usize, key: String, user: Option<&User>) -> TurnView<'_> {
         continued: false,
         task_result: None,
         work: Vec::new(),
-        subagents: Vec::new(),
         plans: Vec::new(),
         compactions: Vec::new(),
         media: Vec::new(),
@@ -319,11 +300,7 @@ fn push_turn_item<'a>(turn: &mut TurnView<'a>, item: &'a Item, streaming: bool) 
                 return;
             }
             record_span(turn, tool.started_at, tool.ended_at);
-            if spawned_subagent(tool) {
-                turn.subagents.push(tool);
-            } else {
-                turn.work.push((item, streaming));
-            }
+            turn.work.push((item, streaming));
         }
         Item::Plan(plan) => {
             record_span(turn, plan.at, plan.at);

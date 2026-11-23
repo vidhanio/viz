@@ -184,15 +184,23 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         }
         ServerMsg::LaunchFailed {
             draft,
-            params,
+            recovery,
             title,
             detail,
-        } => apply_launch_failed(model, draft, *params, title, detail, &mut effects),
+        } => apply_launch_failed(model, draft, *recovery, title, detail, &mut effects),
         ServerMsg::SendFailed {
-            input,
+            thread,
+            recovery,
             title,
             detail,
-        } => apply_send_failed(model, *input, title, detail, &mut effects),
+        } => apply_send_failed(
+            model,
+            thread,
+            recovery.map(|recovery| *recovery),
+            title,
+            detail,
+            &mut effects,
+        ),
         ServerMsg::ProjectPalette {
             environment,
             request,

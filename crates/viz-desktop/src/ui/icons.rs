@@ -32,9 +32,6 @@ lucide! {
     /// Navigate forward.
     /// Steer or send immediately into an active turn.
     CORNER_UP_RIGHT = CornerUpRight;
-    /// Return to parent directory or thread.
-    /// Open delegated task thread or external action.
-    ARROW_UP_RIGHT = ArrowUpRight;
     /// Extra-high thinking tier.
     ZAP = Zap;
     /// Maximum thinking tier.

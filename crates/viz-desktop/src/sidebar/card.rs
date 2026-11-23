@@ -1,4 +1,4 @@
-//! Three-row sidebar thread cards, zero-shift hover quick actions, inline
+//! Compact sidebar threads, zero-shift hover quick actions, inline
 //! rename, and drag-and-drop pinning/reordering.
 
 use std::time::Duration;
@@ -12,10 +12,7 @@ use crate::{
     app::Desktop,
     model::{DragShelf, SidebarOutline, format_wake_label, thread_title},
     motion,
-    theme::{
-        self, HAIRLINE, ICON_MD, RADIUS_CARD, RADIUS_SM, RADIUS_XS, S2, S4, S6, S8, S10, Size,
-        Theme,
-    },
+    theme::{self, HAIRLINE, ICON_MD, RADIUS_SM, RADIUS_XS, S2, S4, S6, S10, Size, Theme},
     ui,
     update::{INLINE_RENAME_INPUT, Msg, SelectionMsg, SidebarMsg},
 };
@@ -34,11 +31,10 @@ pub(super) struct DragSlot {
     pub index: usize,
 }
 
-/// Renders a 3-row thread card and any expanded delegated child rows beneath
-/// it.
+/// Renders one flat triage row.
 #[expect(
     clippy::too_many_lines,
-    reason = "cohesive 3-row card layout combining identity, title, metadata, hover actions, and drag state"
+    reason = "cohesive thread row combining identity, title, metadata, hover actions, and drag state"
 )]
 pub(super) fn thread_card(
     s: &Desktop,
@@ -57,9 +53,6 @@ pub(super) fn thread_card(
         .project
         .as_deref()
         .and_then(|path| m.cache().project(path));
-    let kids = outline.children.get(&id).map_or(&[][..], Vec::as_slice);
-    let auto_open = outline.has_active_or_selected_child(id);
-    let show_kids = !kids.is_empty() && (auto_open || !m.sidebar.collapsed_parents.contains(&id));
     let renaming = m
         .sidebar
         .inline_rename
@@ -73,9 +66,16 @@ pub(super) fn thread_card(
 
     menu::thread_context_menu(s, thread, &key, shelf, outline.now, t, layer);
 
-    let row1 = identity_row(s, outline, thread, project, shelf, force_actions, t, layer);
-    let row2 = title_row(s, thread, shelf, selected, renaming, t);
-    let row3 = card_meta::metadata_row(thread, project, kids.len(), show_kids, selected, t);
+    let title = title_row(s, thread, shelf, selected, renaming, t);
+    let status = row_status(s, outline, thread, shelf, force_actions, t, layer);
+    let identity = row()
+        .w_full()
+        .gap(S6)
+        .center_y()
+        .child(project_mark::mark(s, project, ICON_MD, t))
+        .child(title.grow(1.0).shrink().min_w(0.0))
+        .child(status);
+    let row3 = card_meta::metadata_row(thread, project, selected, t);
 
     let fill = if lifted.is_some() {
         t.surface_raised
@@ -92,17 +92,16 @@ pub(super) fn thread_card(
         .level(1)
         .w_full()
         .px(S10)
-        .py(S8)
-        .gap(3.0)
-        .radius(RADIUS_CARD)
+        .py(S4)
+        .gap(S2)
+        .radius(RADIUS_SM)
         .fill(fill)
         .hover_group()
         .hover(if selected { t.selected } else { t.hover_wash })
         .press(t.pressed_wash)
         .focusable(!renaming)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .child(row1)
-        .child(row2)
+        .child(identity)
         .child(row3);
 
     if matches!(shelf, Shelf::Settled | Shelf::Snoozed) && !selected && lifted.is_none() {
@@ -180,68 +179,19 @@ pub(super) fn thread_card(
             .border(HAIRLINE, t.accent);
     }
 
-    if kids.is_empty() {
-        return card;
-    }
-    let mut branch = col()
-        .key(format!("thread-branch-{id}"))
-        .w_full()
-        .child(card);
-    if show_kids {
-        let active_tree = outline.has_active_or_selected_child(id);
-        branch = branch.children(card_meta::child_rows(s, outline, kids, 1, active_tree, t));
-    }
-    branch
+    card
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "Row 1 renders project identity alongside shelf-specific resting status and overlaid hover actions"
-)]
-fn identity_row(
+fn row_status(
     s: &Desktop,
     outline: &SidebarOutline<'_>,
     thread: &ThreadSummary,
-    project: Option<&viz_client::protocol::Project>,
     shelf: Shelf,
     force_actions: bool,
     t: &Theme,
     layer: &mut Vec<El>,
 ) -> El {
     let m = &s.model;
-    let project_name = project.map_or("No project", |p| p.name.as_str());
-    let remote_env = thread
-        .parent_environment
-        .as_deref()
-        .filter(|env| Some(*env) != m.connection.environment.as_deref());
-
-    let mut left = row()
-        .grow(1.0)
-        .shrink()
-        .min_w(0.0)
-        .gap(S6)
-        .center_y()
-        .child(project_mark::mark(s, project, ICON_MD, t))
-        .child(
-            text(project_name)
-                .font(t.small)
-                .color(t.muted)
-                .truncate()
-                .shrink()
-                .min_w(0.0)
-                .a11y_hidden(),
-        );
-    if let Some(env) = remote_env {
-        left = left.child(
-            row()
-                .gap(S2)
-                .center_y()
-                .a11y_hidden()
-                .child(icon(&ui::SERVER, 10.0).color(t.remote))
-                .child(text(env).font(t.mono_micro).color(t.remote)),
-        );
-    }
-
     let resting = resting_status(outline, thread, shelf, t);
     let hover = m
         .connected()
@@ -270,14 +220,7 @@ fn identity_row(
         );
     }
 
-    row()
-        .key("row1")
-        .w_full()
-        .h(18.0)
-        .gap(S6)
-        .center_y()
-        .child(left)
-        .child(right)
+    right
 }
 
 fn resting_status(
@@ -481,7 +424,6 @@ fn title_row(
     };
     row()
         .key("row2")
-        .w_full()
         .min_h(19.0)
         .gap(S6)
         .center_y()

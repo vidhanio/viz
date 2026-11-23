@@ -120,8 +120,6 @@ pub enum ComposerMsg {
     },
     /// Close whichever inline picker is open.
     ClosePicker,
-    /// Cancel a running or queued delegated task from the Tasks Dock.
-    CancelTask(String),
 }
 
 #[expect(
@@ -291,9 +289,6 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
         }
         ComposerMsg::ClosePicker => {
             model.composer.open_picker = None;
-        }
-        ComposerMsg::CancelTask(id) => {
-            effects.push(Effect::Server(ServerEffect::CancelTask(id)));
         }
     }
     effects

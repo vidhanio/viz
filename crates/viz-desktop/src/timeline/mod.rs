@@ -208,10 +208,6 @@ fn render_turn(
         section = section.child(folded);
     }
 
-    if let Some(agents) = subagents::subagents_section(s, turn, t) {
-        section = section.child(agents);
-    }
-
     for plan in &turn.plans {
         section = section.child(plan_card::plan_card(s, plan, t, layer));
     }

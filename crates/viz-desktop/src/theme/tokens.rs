@@ -55,8 +55,6 @@ pub const RADIUS_CONTROL: f32 = S8;
 pub const RADIUS_CARD: f32 = S12;
 /// Composer shell, tucked drawers, user bubbles, dialogs, and palette (16pt).
 pub const RADIUS_SURFACE: f32 = S16;
-/// Tucked deck top-corner radius.
-pub const RADIUS_DECK: f32 = RADIUS_SURFACE;
 /// Full circular / pill corner radius.
 pub const RADIUS_PILL: f32 = 9999.0;
 
@@ -75,10 +73,6 @@ pub const TOOLBAR_PAD: f32 = S12;
 pub const SIDEBAR_PAD: f32 = S8;
 /// Leading inset for sidebar content, section titles, and footer.
 pub const SIDEBAR_INSET: f32 = S16;
-/// Indented delegated child row height (26pt).
-pub const TREE_ROW_CHILD: f32 = 26.0;
-/// Indent step per delegated tree depth (20pt).
-pub const TREE_STEP: f32 = S20;
 
 /// Standard reading lane width for timeline and composer (736pt / `46rem`).
 pub const CHAT_CONTENT_MAX_WIDTH: f32 = 736.0;
@@ -113,10 +107,6 @@ pub const COMPOSER_DRAWER_INSET: f32 = 22.0;
 /// Bottom overlap tucking a composer drawer behind the composer hairline
 /// (17pt).
 pub const COMPOSER_DRAWER_OVERLAP: f32 = 17.0;
-/// Horizontal inset for legacy tucked decks inside `READING_WIDTH`.
-pub const DECK_INSET: f32 = S12;
-/// Bottom overlap for legacy tucked decks.
-pub const DECK_OVERLAP: f32 = S8;
 
 /// Padding inside cards, tool outputs, plans, and toasts (12pt).
 pub const CARD_INSET: f32 = S12;
