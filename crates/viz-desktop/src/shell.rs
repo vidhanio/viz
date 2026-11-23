@@ -47,14 +47,14 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
         terminal,
         mut overlays,
     } = slots;
-    if let Some(details) = details.filter(|_| s.model.panels.details_open) {
+    if let Some(details) = details {
         main = row()
             .key("main-with-details")
             .w_full()
             .h_full()
             .min_h(0.0)
+            .items_start()
             .child(main.grow(1.0).shrink().min_w(0.0))
-            .child(rune::hairline(t.hairline).h_full().a11y_hidden())
             .child(details);
     }
     if let Some(terminal) = terminal.filter(|_| s.model.panels.terminal_open) {
@@ -67,7 +67,15 @@ pub fn build(s: &Desktop, slots: ShellSlots, titlebar_inset: f32, reduced: bool,
             .child(ui::rule(t).key("terminal-rule"))
             .child(terminal.h(s.model.panels.terminal_height));
     }
-    let main = motion::stable_content(main);
+    let main = motion::stable_content(
+        col()
+            .w_full()
+            .h_full()
+            .min_h(0.0)
+            .mt(crate::header::CHAT_HEADER_HEIGHT - TOOLBAR_HEIGHT)
+            .child(ui::rule(t).key("header-rule"))
+            .child(main.grow(1.0)),
+    );
     let sidebar = sidebar.child(
         ui::drag_guard("sidebar-drag-guard")
             .pin(

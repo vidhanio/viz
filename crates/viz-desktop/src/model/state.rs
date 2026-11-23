@@ -185,6 +185,7 @@ pub struct PanelsState {
     pub terminal_height: f32,
     /// Last drawn window width in points, used for responsive layout choices.
     pub window_width: f32,
+    pub window_height: f32,
 }
 
 impl Default for PanelsState {
@@ -206,6 +207,7 @@ impl Default for PanelsState {
             terminal_open: false,
             terminal_height: TERMINAL_DEFAULT_HEIGHT,
             window_width: WINDOW_SIZE.0,
+            window_height: WINDOW_SIZE.1,
         }
     }
 }

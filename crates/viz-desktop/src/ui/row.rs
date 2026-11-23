@@ -164,10 +164,6 @@ impl ListRow {
     }
 
     /// Registers a transaction-aware click/activation callback.
-    #[expect(
-        dead_code,
-        reason = "transaction-aware row press hook for Phase 1 lists"
-    )]
     pub fn on_press_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.press = Some(Box::new(move |el| el.on_press_tx(f)));
         self

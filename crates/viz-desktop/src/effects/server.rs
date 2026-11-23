@@ -170,6 +170,7 @@ async fn session(
         client,
         environment: Arc::from(hello.environment.as_str()),
         watched: None,
+        git_watched: None,
         entries: Vec::new(),
         before: None,
     };
@@ -212,6 +213,7 @@ async fn session(
                     session.client.close();
                     return Ended::Environment { target: environment, thread };
                 }
+                Some(ServerEffect::Git { thread, serial, request }) => session.git(thread, serial, request).await,
                 Some(command) => session.on_command(command, selected).await,
                 None => return Ended::Quit,
             },
@@ -230,6 +232,7 @@ pub(super) struct Session<'a> {
     pub(super) client: Client,
     pub(super) environment: Arc<str>,
     pub(super) watched: Option<ThreadId>,
+    pub(super) git_watched: Option<ThreadId>,
     pub(super) entries: Vec<Arc<Vec<Entry>>>,
     pub(super) before: Option<EntryId>,
 }
@@ -337,7 +340,7 @@ impl Session<'_> {
                 Ok(())
             }
             ServerEffect::SendInput(send_input) => self.send_input(send_input).await,
-            ServerEffect::Reconnect => Ok(()),
+            ServerEffect::Reconnect | ServerEffect::Git { .. } => Ok(()),
         }
     }
 
@@ -408,8 +411,15 @@ impl Session<'_> {
                 }
                 Ok(())
             }
+            Notification::GitChanged { thread, status } => {
+                if self.git_watched == Some(thread) {
+                    self.dispatch(ServerMsg::Git(crate::update::GitMsg::Status(
+                        thread, status,
+                    )));
+                }
+                Ok(())
+            }
             Notification::Reply { .. }
-            | Notification::GitChanged { .. }
             | Notification::TerminalUpdate { .. }
             | Notification::TerminalSnapshot { .. }
             | Notification::TerminalsChanged(_) => Ok(()),
@@ -447,7 +457,7 @@ impl Session<'_> {
         Ok(())
     }
 
-    async fn refresh_list(&self) -> viz_client::Result<()> {
+    pub(super) async fn refresh_list(&self) -> viz_client::Result<()> {
         let (mut threads, mut projects, ()) = tokio::try_join!(
             self.client.list_threads(),
             self.client.list_projects(),

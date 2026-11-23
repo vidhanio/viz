@@ -14,7 +14,7 @@ pub enum ShellMsg {
     /// thread read.
     WindowFocus(bool),
     /// Window width changed after layout/draw.
-    WindowResized(f32),
+    WindowResized(f32, f32),
     /// Shell's `PaneState` for the sidebar changed via drag or header toggle.
     SidebarPaneChanged {
         /// Whether the sidebar is open.
@@ -49,8 +49,9 @@ pub(super) fn update(model: &mut Model, msg: ShellMsg) -> Vec<Effect> {
                 apply_thread_change(model, id, ThreadChange::Unread(false), &mut effects);
             }
         }
-        ShellMsg::WindowResized(width) => {
+        ShellMsg::WindowResized(width, height) => {
             model.panels.window_width = width;
+            model.panels.window_height = height;
         }
         ShellMsg::SidebarPaneChanged { open, width } => {
             let changed = model.panels.sidebar.open != open

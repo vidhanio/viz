@@ -3,6 +3,7 @@
 
 mod data;
 mod fixtures;
+mod git;
 mod overlays;
 
 use crate::{app::Desktop, motion_scene::MotionDemo};
@@ -12,6 +13,16 @@ type Scene = (&'static str, fn(&mut Desktop));
 /// All registered headless preview scenes.
 pub const SCENES: &[Scene] = &[
     ("workspace", workspace),
+    ("git-details", git::full),
+    ("git-details-compact", git::compact),
+    ("git-details-essential", git::essential),
+    ("git-popover", git::popover),
+    ("git-branches", git::branch),
+    ("git-actions", git::actions),
+    ("git-commit", git::commit),
+    ("git-checks", git::checks),
+    ("git-diff", git::unified),
+    ("git-diff-split", git::split),
     ("components", components),
     ("components-reduced", components_reduced),
     ("terminal-shell", crate::terminal::scene::shell),

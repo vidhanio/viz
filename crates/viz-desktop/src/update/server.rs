@@ -24,6 +24,7 @@ use crate::{
 /// Events pushed from the background server runtime or blocking platform tasks.
 #[derive(Debug)]
 pub enum ServerMsg {
+    Git(super::GitMsg),
     /// Configured display endpoint string.
     Endpoint(String),
     /// Connection status changed (connecting or error).
@@ -216,6 +217,7 @@ pub enum ServerMsg {
 pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
     let mut effects = Vec::new();
     match msg {
+        ServerMsg::Git(msg) => return super::git::update(model, msg),
         ServerMsg::Endpoint(endpoint) => {
             model.connection.endpoint = Some(endpoint);
         }
@@ -255,6 +257,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                 .as_deref()
                 .is_none_or(|active| active == environment)
             {
+                model.connection.environment.get_or_insert(environment);
                 apply_workspace_sync(model, projects, threads, &mut effects);
             }
         }
@@ -265,6 +268,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                 .as_deref()
                 .is_none_or(|active| active == environment)
             {
+                model.connection.environment.get_or_insert(environment);
                 model.cache_mut().tasks = tasks;
             }
         }

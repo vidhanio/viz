@@ -8,13 +8,11 @@ use viz_client::protocol::{Task, ThreadId, ThreadSummary};
 
 use crate::{
     app::{Desktop, motion_switch},
-    checkout,
+    git,
     model::{first_non_empty_line, thread_title},
     motion::{Switch, TITLE_ENTER_DELAY, TRAVEL_TITLE},
     sidebar,
-    theme::{
-        HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_HEIGHT, TOOLBAR_PAD, Theme,
-    },
+    theme::{HAIRLINE, ICON, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_PAD, Theme},
     ui,
     update::{Msg, TimelineMsg},
 };
@@ -22,9 +20,12 @@ use crate::{
 /// The widest the parent's title gets in a subagent's breadcrumb.
 const BREADCRUMB_MAX: f32 = 272.0;
 
+/// Visible chat header height below the window chrome.
+pub const CHAT_HEADER_HEIGHT: f32 = 44.0;
+
 /// The toolbar. Its title is keyed per thread inside its own clip, so it
 /// moves with the transcript when the thread changes.
-pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
+pub fn toolbar(s: &Desktop, t: &Theme) -> Toolbar {
     let m = &s.model;
     let switch = motion_switch(m.selection.switch);
     let mut toolbar = Toolbar::new().center(ui::drag_guard("toolbar-drag-guard").pin(
@@ -46,7 +47,7 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
     }
     let title = row()
         .key("title-pane")
-        .h(TOOLBAR_HEIGHT)
+        .h(CHAT_HEADER_HEIGHT)
         .center_y()
         .min_w(0.0)
         .shrink()
@@ -59,11 +60,80 @@ pub fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Toolbar {
         toolbar = toolbar.leading(sidebar::new_thread_button(s, Size::Default, t));
         title
     };
-    let toolbar = toolbar.leading(title);
-    match checkout::thread(s, t, layer) {
-        Some(checkout) => toolbar.trailing(checkout),
-        None => toolbar,
+    let mut toolbar = toolbar.leading(title);
+    if m.selection.selected.is_none() {
+        return toolbar;
     }
+    toolbar = toolbar.trailing(header_button(
+        &ui::TERMINAL,
+        "Terminal",
+        m.panels.terminal_open,
+        crate::update::GitMsg::ToggleTerminal,
+        t,
+    ));
+    if let Some(status) = &m.git.status {
+        let diff = row()
+            .center_y()
+            .gap(S2)
+            .children(
+                (status.stats.added > 0 || status.stats.removed > 0)
+                    .then(|| git::diff_panel::stat(status.stats, t)),
+            )
+            .child(header_button(
+                &ui::FILE_DIFF,
+                "Diff",
+                m.panels.diff.open,
+                crate::update::GitMsg::ToggleDiff,
+                t,
+            ));
+        toolbar = toolbar.trailing(diff);
+    }
+    if !crate::model::git::inline(m) {
+        toolbar = toolbar.trailing(
+            header_button(
+                &ui::PANEL_RIGHT,
+                "Thread Details",
+                m.panels.details_open,
+                crate::update::GitMsg::ToggleDetails,
+                t,
+            )
+            .key(git::details_card::ANCHOR),
+        );
+    }
+    toolbar
+}
+
+fn header_button(
+    glyph: &'static rune::Icon,
+    label: &str,
+    selected: bool,
+    msg: crate::update::GitMsg,
+    t: &Theme,
+) -> El {
+    ui::icon_button(
+        glyph,
+        label,
+        rune_kit::IconButtonVariant::Ghost,
+        Size::Small,
+    )
+    .on_press_tx(move |s: &mut Desktop, tx| git::dispatch(s, msg.clone(), tx))
+    .build(&t.k)
+    .a11y_value(if selected { "Open" } else { "Closed" })
+}
+
+fn project_mark(project: &viz_client::protocol::Project, t: &Theme) -> El {
+    row()
+        .center_y()
+        .gap(S8)
+        .child(ui::project_monogram(&project.name, 18.0, None, t))
+        .child(
+            text(&project.name)
+                .font(t.ui_medium)
+                .color(t.muted)
+                .max_w(128.0)
+                .truncate(),
+        )
+        .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint).a11y_hidden())
 }
 
 /// Identity for older timeline entries that have no durable task.
@@ -181,11 +251,7 @@ fn title(s: &Desktop, t: &Theme) -> El {
         );
     };
     let thread = m.summary(id);
-    let mark = ui::harness_mark(
-        thread.map(|thread| (thread.harness.as_str(), thread.harness_name.as_str())),
-        m.busy(),
-        t,
-    );
+    let mark = m.project().map(|project| project_mark(project, t));
     let title = title_text(m.title(id), t);
     let Some((parent, environment)) = thread
         .and_then(|thread| {
@@ -197,12 +263,12 @@ fn title(s: &Desktop, t: &Theme) -> El {
             *parent != id || env.is_some_and(|env| Some(env) != m.connection.environment.as_deref())
         })
     else {
-        return group.child(mark).child(title);
+        return group.children(mark).child(title);
     };
     group
         .child(breadcrumb(s, parent, environment, t))
         .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint).a11y_hidden())
-        .child(mark)
+        .children(mark)
         .child(title)
 }
 

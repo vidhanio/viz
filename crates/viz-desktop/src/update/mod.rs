@@ -4,6 +4,8 @@
 //! Nothing under `update` imports Rune, Tokio, channels, or performs I/O.
 
 mod composer;
+mod git;
+pub use git::GitMsg;
 mod model_picker;
 mod palette;
 mod selection;
@@ -38,6 +40,7 @@ pub enum NavKey {
 /// Top-level message routed through [`update`].
 #[derive(Debug)]
 pub enum Msg {
+    Git(GitMsg),
     /// Event arriving from the background server or blocking platform worker.
     Server(ServerMsg),
     /// Thread selection, navigation history, draft setup, or environment
@@ -60,7 +63,8 @@ pub enum Msg {
 /// the shell edge.
 #[must_use]
 pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
-    match msg {
+    let mut effects = match msg {
+        Msg::Git(msg) => git::update(model, msg),
         Msg::Server(msg) => server::update(model, msg),
         Msg::Selection(msg) => selection::update(model, msg),
         Msg::Sidebar(msg) => sidebar::update(model, msg),
@@ -68,5 +72,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::Timeline(msg) => timeline::update(model, msg),
         Msg::Palette(msg) => palette::update(model, msg),
         Msg::Shell(msg) => shell::update(model, msg),
-    }
+    };
+    git::reconcile(model, &mut effects);
+    effects
 }

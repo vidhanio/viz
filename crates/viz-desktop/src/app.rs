@@ -36,8 +36,16 @@ pub struct ToastContent {
 
 /// Stateful Rune and `rune-kit` widget controllers kept outside the pure
 /// [`Model`].
-#[derive(Debug)]
 pub struct ShellWidgets {
+    pub git_query: TextEdit,
+    pub git_message: TextEdit,
+    pub git_body: TextEdit,
+    pub git_revision: TextEdit,
+    pub git_run: TextEdit,
+    pub git_diff: rune_kit::diff::DiffState,
+    pub git_diff_tree: rune_kit::TreeModel<rune_kit::FileNode<(usize, u32, u32)>>,
+    pub git_diff_source: Option<std::sync::Arc<viz_client::protocol::GitDiff>>,
+    pub git_tree_open: bool,
     /// Main composer text editor.
     pub draft: TextEdit,
     /// Sidebar thread filter input.
@@ -61,6 +69,15 @@ impl Default for ShellWidgets {
         let mut draft = TextEdit::new("");
         draft.focused = true;
         Self {
+            git_query: TextEdit::new(""),
+            git_message: TextEdit::new(""),
+            git_body: TextEdit::new(""),
+            git_revision: TextEdit::new(""),
+            git_run: TextEdit::new(""),
+            git_diff: rune_kit::diff::DiffState::new(Vec::new()),
+            git_diff_tree: rune_kit::TreeModel::new(),
+            git_diff_source: None,
+            git_tree_open: false,
             draft,
             sidebar_filter: TextEdit::new(""),
             sidebar_dialog: TextEdit::new(""),
@@ -78,7 +95,6 @@ impl Default for ShellWidgets {
 
 /// Root Rune application state: pure [`Model`] plus shell widgets and effect
 /// sinks.
-#[derive(Debug)]
 pub struct Desktop {
     /// Pure domain and client state.
     pub model: Model,
@@ -129,6 +145,7 @@ impl Desktop {
     pub fn dispatch(&mut self, msg: Msg, tx: &mut Tx) {
         self.sync_draft_text();
         let effects = update::update(&mut self.model, msg);
+        crate::git::diff_panel::sync(self);
         self.apply_effects(effects, Some(tx));
     }
 
@@ -137,6 +154,7 @@ impl Desktop {
     pub fn dispatch_local(&mut self, msg: Msg) {
         self.sync_draft_text();
         let effects = update::update(&mut self.model, msg);
+        crate::git::diff_panel::sync(self);
         self.apply_effects(effects, None);
     }
 
@@ -158,6 +176,8 @@ impl Desktop {
     /// Synchronizes all Rune widget controllers from [`Self::model`] after a
     /// headless scene populates fixture state directly.
     pub fn sync_widgets_from_model(&mut self) {
+        crate::git::diff_panel::sync(self);
+        self.widgets.git_query = TextEdit::new(&self.model.git.query);
         self.widgets.draft = TextEdit::new(&self.model.composer.draft.text);
         self.widgets.draft.focused = self.model.composer.draft_focused;
 

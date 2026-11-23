@@ -7,6 +7,7 @@
 pub mod cache;
 pub mod completion;
 pub mod composer_state;
+pub mod git;
 pub mod palette;
 pub mod picker;
 pub mod prefs;
@@ -64,6 +65,7 @@ pub const DEFAULT_ENV_KEY: &str = "local";
 /// Complete pure state of the desktop workspace.
 #[derive(Debug, Clone)]
 pub struct Model {
+    pub git: git::GitState,
     /// Connection status, endpoint, and environment roster.
     pub connection: ConnectionState,
     /// Normalised server cache per environment id.
@@ -95,6 +97,7 @@ impl Model {
     #[must_use]
     pub fn new(now_ms: i64) -> Self {
         let mut model = Self {
+            git: git::GitState::default(),
             connection: ConnectionState::default(),
             caches: BTreeMap::new(),
             selection: SelectionState::default(),

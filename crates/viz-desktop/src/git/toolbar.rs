@@ -1,6 +1,6 @@
 //! Where a thread runs in its Git project: the project's own checkout or a
-//! linked worktree. A draft picks its checkout beside its project; an open
-//! thread shows its branch in the toolbar, whose menu moves it.
+//! linked worktree. Draft and active-thread checkout controls share their
+//! labels.
 
 use std::path::Path;
 
@@ -58,7 +58,7 @@ pub fn draft(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) ->
         let head = project.branch.as_deref().unwrap_or("HEAD");
         menu = menu
             .item(choice(
-                "Local",
+                "Current checkout",
                 Some(head),
                 &ui::GIT_BRANCH,
                 WorktreeTarget::Local,
@@ -98,7 +98,7 @@ pub fn draft(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) ->
             }
             let linked: Vec<_> = checkouts.worktrees.iter().filter(|w| !w.main).collect();
             if !linked.is_empty() {
-                menu = menu.separator().group_label("Existing worktree");
+                menu = menu.separator().group_label("Previous worktree");
                 menu = ui::menu_items(
                     menu,
                     linked.into_iter().map(|worktree| {
@@ -121,7 +121,7 @@ pub fn draft(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>) ->
 /// A draft checkout picker's label and icon.
 fn draft_label(thread: &NewThread, checkouts: Option<&Checkouts>) -> (String, &'static Icon) {
     match &thread.worktree {
-        None | Some(WorktreeTarget::Local) => ("Local".to_owned(), &ui::GIT_BRANCH),
+        None | Some(WorktreeTarget::Local) => ("Current checkout".to_owned(), &ui::GIT_BRANCH),
         Some(WorktreeTarget::New { base: None, .. }) => {
             ("New worktree".to_owned(), &ui::GIT_BRANCH_PLUS)
         }
@@ -150,7 +150,11 @@ pub fn thread(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
     let branch = worktree.map_or(project.branch.as_deref(), |worktree| {
         worktree.branch.as_deref()
     });
-    let label = branch.unwrap_or("detached");
+    let label = if worktree.is_some() {
+        branch.unwrap_or("Previous worktree")
+    } else {
+        "Current checkout"
+    };
     let glyph = if worktree.is_some() {
         &ui::GIT_BRANCH_PLUS
     } else {
@@ -161,11 +165,28 @@ pub fn thread(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         label,
         glyph,
         open,
-        !m.connected(),
+        !m.connected() || m.busy(),
         false,
         t,
     )
     .on_press_tx(toggle(THREAD_CHECKOUT, &project.path));
+    let mismatch = worktree.is_none()
+        && m.git
+            .status
+            .as_ref()
+            .and_then(|status| status.branch.as_deref())
+            != branch;
+    let trigger = if m.busy() {
+        ui::with_tooltip(trigger, "Stop the thread to move it", None)
+    } else if mismatch && m.git.status.is_some() {
+        ui::with_tooltip(
+            trigger,
+            "The checkout branch changed outside this thread",
+            None,
+        )
+    } else {
+        trigger
+    };
     let mut menu = Menu::new(format!("{THREAD_CHECKOUT}-menu"))
         .placement(Placement::Bottom)
         .min_width(ui::MENU_WIDTH)
@@ -214,22 +235,22 @@ fn move_items(
     });
     menu = menu
         .item(action(
-            "Project checkout",
+            "Current checkout",
             project.branch.as_deref(),
             &ui::GIT_BRANCH,
             current.is_none(),
             WorktreeTarget::Local,
         ))
-        .item(action(
-            "New worktree",
-            Some("New branch from here"),
-            &ui::GIT_BRANCH_PLUS,
-            false,
-            WorktreeTarget::New {
-                base: None,
-                branch: None,
-            },
-        ));
+        .item(
+            MenuItem::new("New worktree")
+                .icon(&ui::GIT_BRANCH_PLUS)
+                .disabled(busy)
+                .on_select_tx(|s: &mut Desktop, tx| {
+                    s.widgets.git_query = rune::TextEdit::new("");
+                    super::dispatch(s, crate::update::GitMsg::NewWorktree, tx);
+                    tx.focus_when_shown("git-branch-search", false);
+                }),
+        );
     if let Some(checkouts) = s.model.checkouts(&project.path) {
         for worktree in checkouts.worktrees.iter().filter(|worktree| !worktree.main) {
             menu = menu.item(action(

@@ -2,6 +2,7 @@
 //! runtime, filesystem, clipboard, notifications, file dialogs, or preferences
 //! file.
 
+pub mod git;
 pub mod platform;
 pub mod prefs;
 pub mod requests;
@@ -182,6 +183,11 @@ pub struct LoadedAttachments {
 /// Command sent to the background server connection task.
 #[derive(Debug)]
 pub enum ServerEffect {
+    Git {
+        thread: ThreadId,
+        serial: u64,
+        request: git::Request,
+    },
     /// Watch this thread instead.
     Select(ThreadId),
     /// Stop watching the active thread.

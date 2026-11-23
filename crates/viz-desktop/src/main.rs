@@ -20,7 +20,8 @@
 
 mod app;
 mod attachments;
-mod checkout;
+mod git;
+use git::toolbar as checkout;
 mod composer;
 mod config;
 mod effects;
@@ -79,21 +80,24 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         .w_full()
         .h_full()
         .min_h(0.0)
-        .child(ui::rule(t).key("header-rule"))
         .child(timeline::timeline(s, t, &mut overlays));
     if let Some(dock) = dock {
         main = main.child(dock);
     }
     let sidebar = sidebar::sidebar(s, t, &mut overlays);
-    let toolbar = header::toolbar(s, t, &mut overlays);
+    let toolbar = header::toolbar(s, t);
+    let details = git::details_card::mount(s, t, &mut overlays);
+    let diff = (s.model.git.status.is_some() || s.model.panels.diff.open)
+        .then(|| git::diff_panel::view(s, t, &mut overlays));
+    git::dialogs(s, t, &mut overlays);
     sidebar::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
     let slots = ShellSlots {
         sidebar,
         toolbar,
         main,
-        details: None,
-        diff: None,
+        details,
+        diff,
         terminal: None,
         overlays,
     };
@@ -101,6 +105,14 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
 }
 
 fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    if ev.key == rune::Key::Escape
+        && s.model.panels.details_open
+        && s.model.git.popup.is_none()
+        && s.model.git.dialog.is_none()
+    {
+        git::dispatch(s, update::GitMsg::CloseDetails, tx);
+        return true;
+    }
     if ev.is_command('k') && !ev.mods.shift && !ev.mods.alt {
         s.dispatch(Msg::Palette(PaletteMsg::Toggle), tx);
         return true;
@@ -110,6 +122,10 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     }
     if ev.mods.shift || ev.mods.alt {
         return false;
+    }
+    if ev.is_command('d') && s.model.git.status.is_some() {
+        git::dispatch(s, update::GitMsg::ToggleDiff, tx);
+        return true;
     }
     if ev.is_command('b') {
         s.dispatch(Msg::Sidebar(SidebarMsg::TogglePane), tx);
@@ -136,6 +152,12 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
 
 fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     let pane_changed = sync_sidebar_pane(s, tx);
+    let diff_width = s.widgets.diff_pane.width();
+    let diff_resized =
+        !s.widgets.diff_pane.is_resizing() && (s.model.panels.diff.width - diff_width).abs() >= 0.5;
+    if diff_resized {
+        git::dispatch(s, update::GitMsg::PaneWidth(diff_width), tx);
+    }
     let completion = poll_completion(s, clock, tx);
     let palette = poll_palette(s, clock, tx);
     let tool_timer = if s.model.transcript().acp_partial.iter().any(|item| {
@@ -153,7 +175,12 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     } else {
         false
     };
-    s.expire_toasts(clock, tx) || pane_changed || completion || palette || tool_timer
+    s.expire_toasts(clock, tx)
+        || pane_changed
+        || diff_resized
+        || completion
+        || palette
+        || tool_timer
 }
 
 fn sync_sidebar_pane(s: &mut Desktop, tx: &mut Tx) -> bool {
@@ -245,6 +272,7 @@ fn main() {
     let headless = tooling.headless();
     let preview = headless && tooling.scene.is_some();
     let initial_width = tooling.size.map_or(WINDOW_SIZE.0, |(width, _)| width);
+    let initial_height = tooling.size.map_or(WINDOW_SIZE.1, |(_, height)| height);
     let scene_theme = preview
         .then(|| std::env::var("VIZ_SCENE_THEME").ok())
         .flatten();
@@ -285,6 +313,7 @@ fn main() {
     .init(move || {
         let mut desktop = Desktop::new(commands);
         desktop.model.panels.window_width = initial_width;
+        desktop.model.panels.window_height = initial_height;
         if !preview {
             desktop.restore_prefs();
         }
@@ -305,9 +334,15 @@ fn main() {
     }
     let ui = app.handle();
     let app = app.on_frame_drawn(move |rt| {
-        let width = rt.window_viewport().0 / rt.zoom();
-        if (rt.state.model.panels.window_width - width).abs() >= 1.0 {
-            ui.update(move |s, tx| s.dispatch(Msg::Shell(ShellMsg::WindowResized(width)), tx));
+        let (width, height) = rt.window_viewport();
+        let (width, height) = (width / rt.zoom(), height / rt.zoom());
+        let panels = &rt.state.model.panels;
+        if (panels.window_width - width).abs() >= 1.0
+            || (panels.window_height - height).abs() >= 1.0
+        {
+            ui.update(move |s, tx| {
+                s.dispatch(Msg::Shell(ShellMsg::WindowResized(width, height)), tx);
+            });
         }
     });
     if !preview {

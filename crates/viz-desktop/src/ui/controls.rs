@@ -58,10 +58,6 @@ impl Switch {
     }
 
     /// Registers a transaction-aware toggle callback.
-    #[expect(
-        dead_code,
-        reason = "transaction-aware callback hook for Phase 1 settings and toggles"
-    )]
     pub fn on_toggle_tx<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
         self.press = Some(Box::new(move |el| el.on_press_tx(f)));
         self

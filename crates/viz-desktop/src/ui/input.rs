@@ -130,11 +130,14 @@ impl SearchInput {
         self
     }
 
+    /// Runs after the editable text changes.
+    pub fn on_change<S: 'static>(mut self, f: impl Fn(&mut S, &mut Tx) + 'static) -> Self {
+        self.hooks
+            .push(Box::new(move |input| input.on_input_change(f)));
+        self
+    }
+
     /// Intercepts keyboard navigation (ArrowUp/Down, Enter, Escape).
-    #[expect(
-        dead_code,
-        reason = "keyboard nav hook for Phase 1 comboboxes and palette"
-    )]
     pub fn on_key<S: 'static>(
         mut self,
         f: impl Fn(&mut S, &KeyEvent, &mut Tx) -> bool + 'static,
