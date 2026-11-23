@@ -8,6 +8,8 @@
 //! The desktop can search and select locally using the restored screen and
 //! scrollback. Updates to one viewer's viewport never affect other viewers.
 
+#[cfg(all(unix, feature = "pty"))]
+pub mod pty;
 #[cfg(feature = "emulator")]
 mod screen;
 mod wire;

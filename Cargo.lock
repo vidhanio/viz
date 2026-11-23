@@ -4094,6 +4094,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "pty-process"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5f0cff49b5194f464ce14bfaef7d6dba180889934e9bfa37ca5f2528ea515c0b"
+dependencies = [
+ "rustix 1.1.6",
+ "tokio",
+]
+
+[[package]]
 name = "pulldown-cmark"
 version = "0.13.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6880,10 +6890,14 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "ghostty-vt",
+ "pty-process",
+ "rustix 1.1.6",
  "schemars 1.2.3",
  "serde",
  "thiserror 2.0.21",
+ "tokio",
  "uuid",
+ "viz-protocol",
 ]
 
 [[package]]

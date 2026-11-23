@@ -46,6 +46,7 @@ octocrab = { version = "0.54", default-features = false, features = [
 ghostty-vt = { version = "0.9", default-features = false }
 notify-rust = { version = "4", default-features = false }
 regex = "1"
+pty-process = "0.5"
 reqwest = { version = "0.13", default-features = false }
 rmcp = "3.11"
 rfd = { version = "0.18", default-features = false }

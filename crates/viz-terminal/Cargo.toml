@@ -10,6 +10,14 @@ publish.workspace = true
 [features]
 default = ["emulator"]
 emulator = ["dep:ghostty-vt", "dep:thiserror"]
+pty = [
+  "emulator",
+  "dep:pty-process",
+  "dep:rustix",
+  "dep:tokio",
+  "dep:viz-protocol",
+  "uuid/v4",
+]
 
 [dependencies]
 base64.workspace = true
@@ -18,6 +26,23 @@ schemars = { workspace = true, features = ["uuid1"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror = { workspace = true, optional = true }
 uuid = { workspace = true, features = ["serde"] }
+
+[target.'cfg(unix)'.dependencies]
+pty-process = { workspace = true, features = ["async"], optional = true }
+rustix = { workspace = true, features = [
+  "process",
+  "termios",
+], optional = true }
+tokio = { workspace = true, features = [
+  "io-util",
+  "macros",
+  "net",
+  "process",
+  "rt",
+  "sync",
+  "time",
+], optional = true }
+viz-protocol = { workspace = true, optional = true }
 
 [lints]
 workspace = true
