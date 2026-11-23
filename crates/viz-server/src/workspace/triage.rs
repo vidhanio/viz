@@ -16,7 +16,7 @@ use super::{
     sql::{Connection, exec, row},
     store,
 };
-use crate::error::Error;
+use crate::{acp::Housekeeping, error::Error};
 
 /// The longest wait between looks at the clock; a suspended machine may have
 /// slept through a timer.
@@ -42,8 +42,17 @@ impl Workspace {
             }
         }
         let (lifecycle, _) = store::lifecycle(&mut tx, thread).await?;
+        let binding = store::binding(&mut tx, thread).await?;
         tx.commit().await?;
         drop(db);
+        if lifecycle.archived != prior.archived {
+            let command = if lifecycle.archived {
+                Housekeeping::Archive
+            } else {
+                Housekeeping::Unarchive
+            };
+            self.housekeep(&binding, command);
+        }
         self.due.notify_one();
         self.relist(thread);
         Ok(Triaged { prior, lifecycle })

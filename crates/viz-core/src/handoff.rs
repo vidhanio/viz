@@ -11,6 +11,8 @@ pub enum Reason<'a> {
     Moved { from: &'a str, to: &'a str },
     /// It was forked from another thread.
     Forked,
+    /// Its harness could not reopen the session it was in.
+    Reopened,
 }
 
 /// Build the handoff using transcript turns supplied newest first.
@@ -26,6 +28,7 @@ pub fn note<'a>(
             )
         }
         Reason::Forked => "This conversation was forked from another thread into a new session, and continues from there".to_owned(),
+        Reason::Reopened => "The agent could not reopen its earlier session, so this conversation continues in a new one".to_owned(),
     };
     let mut turns = Vec::new();
     let mut size = 0;

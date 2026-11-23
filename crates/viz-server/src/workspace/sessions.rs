@@ -1,6 +1,8 @@
 //! Open and configure the worker's ACP session and persist its latest view.
 //! Session notifications are read by the worker that owns the process.
 
+use std::path::Path;
+
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use viz_core::{options::Labels, titles};
@@ -9,10 +11,10 @@ use viz_protocol::ThreadId;
 use super::{
     Workspace,
     sql::{Connection, exec, row},
-    store::{self, Binding},
+    store::{self, Binding, Handoff},
 };
 use crate::{
-    acp::{Catalog, Desired, Session, SessionSnapshot},
+    acp::{Catalog, Desired, Housekeeping, OpenSession, Session, SessionSnapshot, housekeep},
     error::Error,
     wire::OptionValue,
 };
@@ -27,6 +29,14 @@ impl SessionSlot {
     pub(super) fn clear(&mut self) {
         self.updates.take();
         self.current.take();
+    }
+
+    /// Releases the session, telling the harness it is closed here.
+    pub(super) async fn close(&mut self) {
+        self.updates.take();
+        if let Some(session) = self.current.take() {
+            session.close().await;
+        }
     }
 
     pub(super) fn is_restorable(&self) -> bool {
@@ -83,16 +93,36 @@ impl Workspace {
                 .map(Into::into)
                 .collect();
         }
-        let running = tokio::select! {
+        let operation = match (session.session_id.as_deref(), &session.handoff) {
+            (Some(id), _) => OpenSession::Restore {
+                id,
+                replay: Some(""),
+            },
+            (None, Some(Handoff::Forked { session: Some(id) })) => OpenSession::Fork {
+                id,
+                replay: Some(""),
+            },
+            (None, _) => OpenSession::New,
+        };
+        let mut running = tokio::select! {
             biased;
             () = cancel.cancelled() => return Err(Error::from(viz_acp::Error::Cancelled)),
-            result = Session::open(config, setup, session.session_id.as_deref(), Some(&endpoint), self.client_events(thread)) => result?,
+            result = Session::open(config, setup, operation, Some(&endpoint), self.client_events(thread)) => result?,
         };
-        if session.session_id.as_deref() != Some(running.id()) {
+        let fell_back = running.take_handoff().is_some();
+        tracing::info!(%thread, session = running.id(), ?operation, fell_back, "opened ACP session");
+        let handoff = match operation {
+            OpenSession::Restore { .. } if fell_back => Some(Some(Handoff::Reopened)),
+            OpenSession::Fork { .. } if fell_back => Some(Some(Handoff::Forked { session: None })),
+            OpenSession::Fork { .. } => Some(None),
+            OpenSession::Restore { .. } | OpenSession::New => None,
+        };
+        if session.session_id.as_deref() != Some(running.id()) || handoff.is_some() {
+            let handoff = handoff.unwrap_or(session.handoff);
             exec(
                 &mut *self.db.lock().await,
-                "UPDATE threads SET session = json_set(session, '$.session_id', ?2) WHERE id = ?1",
-                [thread.into(), running.id().into()],
+                "UPDATE threads SET session = json_set(session, '$.session_id', ?2, '$.handoff', json(?3)) WHERE id = ?1",
+                [thread.into(), running.id().into(), store::json(&handoff)?.into()],
             )
             .await?;
         }
@@ -208,6 +238,40 @@ impl Workspace {
             self.changed(Some(thread));
         }
         Ok(())
+    }
+}
+
+impl Workspace {
+    /// Deletes or archives a thread's saved harness session in the
+    /// background, where the harness supports it.
+    pub(super) fn housekeep(&self, binding: &Binding, command: Housekeeping) {
+        let (Some(id), Some(config)) = (
+            binding.session.session_id.clone(),
+            self.harnesses.get(&binding.harness).cloned(),
+        ) else {
+            return;
+        };
+        let cwd = binding.checkout.cwd.clone();
+        self.jobs.spawn(async move {
+            match housekeep(&config, Path::new(&cwd), &id, command).await {
+                Ok(done) => {
+                    tracing::debug!(session = %id, ?command, done, "ACP session housekeeping");
+                }
+                Err(error) => {
+                    tracing::warn!(session = %id, ?command, %error, "ACP session housekeeping");
+                }
+            }
+        });
+    }
+
+    /// Names the thread's open session after the user's title.
+    pub(super) async fn title_session(&self, thread: ThreadId, slot: &SessionSlot, title: &str) {
+        let Some(session) = slot.current.as_ref().filter(|session| session.is_alive()) else {
+            return;
+        };
+        if let Err(error) = session.set_title(title).await {
+            tracing::warn!(%thread, %error, "naming the ACP session");
+        }
     }
 }
 

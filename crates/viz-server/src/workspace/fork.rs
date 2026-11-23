@@ -94,19 +94,25 @@ impl Workspace {
         let (harness, _) =
             self.harness(Some(args.harness.as_deref().unwrap_or(&binding.harness)))?;
         let same_harness = harness == binding.harness;
+        let checkout = placement.map_or(&binding.checkout, |placement| &placement.checkout);
+        let native = binding
+            .session
+            .session_id
+            .clone()
+            .filter(|_| same_harness && placement.is_none());
         let session = SavedSession {
             desired: if same_harness {
                 binding.session.desired
             } else {
                 SavedSession::default().desired
             },
-            handoff: match fork::transfer(&cut, false) {
-                Transfer::Handoff => Some(Handoff::Forked),
-                Transfer::Native | Transfer::Nothing => None,
+            handoff: match fork::transfer(&cut, native.is_some()) {
+                Transfer::Native => Some(Handoff::Forked { session: native }),
+                Transfer::Handoff => Some(Handoff::Forked { session: None }),
+                Transfer::Nothing => None,
             },
             ..SavedSession::default()
         };
-        let checkout = placement.map_or(&binding.checkout, |placement| &placement.checkout);
         let thread = store::create_thread(
             &mut tx,
             &NewThread {

@@ -39,10 +39,11 @@ pub struct Session {
 }
 
 impl Session {
-    /// Starts the harness in `cwd` and opens the thread's session:
-    /// `session/resume` or `session/load` when `saved` is given, otherwise
-    /// `session/new`. `mcp` gives the agent viz's tools, and `events` receives
-    /// the harness's requests.
+    /// Starts the harness in `cwd` and opens the thread's session as
+    /// `operation` says. `mcp` gives the agent viz's tools, and `events`
+    /// receives the harness's requests. A restore or fork the harness cannot
+    /// do natively opens a new session; [`Self::take_handoff`] then returns
+    /// the replay given for it.
     ///
     /// Dropping the future stops the harness.
     ///
@@ -51,14 +52,10 @@ impl Session {
     pub async fn open(
         config: &HarnessConfig,
         setup: SessionSetup,
-        saved: Option<&str>,
+        operation: OpenSession<'_>,
         mcp: Option<&McpEndpoint>,
         events: ClientEvents,
     ) -> Result<Self> {
-        let operation = saved.map_or(OpenSession::New, |id| OpenSession::Restore {
-            id,
-            replay: None,
-        });
         Self::open_with(config, setup, operation, mcp, events).await
     }
 
@@ -127,6 +124,23 @@ impl Session {
     #[must_use]
     pub fn id(&self) -> &str {
         &self.id
+    }
+
+    /// Takes the replay a fallback session carries into its first prompt:
+    /// `Some` when a restore or fork opened a new session instead.
+    pub const fn take_handoff(&mut self) -> Option<String> {
+        self.handoff.take()
+    }
+
+    /// Tells the harness the session is done here, when it supports closing,
+    /// then stops the harness.
+    pub async fn close(self) {
+        if self.agent.capabilities().close
+            && !self.agent.is_closed()
+            && let Err(error) = self.agent.close_session(&self.id).await
+        {
+            tracing::debug!(%error, session = %self.id, "closing an ACP session");
+        }
     }
 
     /// Whether the session can take another turn.

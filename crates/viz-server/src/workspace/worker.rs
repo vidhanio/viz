@@ -100,6 +100,7 @@ enum Request {
         after: Placement,
         reply: oneshot::Sender<Result<(), Error>>,
     },
+    Title(String),
 }
 
 #[derive(Clone, Copy)]
@@ -239,6 +240,11 @@ impl Driver {
         .await
     }
 
+    /// Names the open session after the user's title once the worker is free.
+    pub(super) fn title(&self, title: String) {
+        let _ = self.inbox.send(Request::Title(title));
+    }
+
     pub(super) async fn close(&self) {
         self.lifetime.cancel();
         let _ = self.done.clone().changed().await;
@@ -356,7 +362,7 @@ impl Workspace {
                     idle_at = Instant::now() + IDLE_SESSION;
                 }
                 () = retry.due() => ready = true,
-                () = sleep_until(idle_at), if restorable => worker.slot.clear(),
+                () = sleep_until(idle_at), if restorable => worker.slot.close().await,
             }
         }
     }
@@ -395,6 +401,7 @@ impl Workspace {
                     let _ = reply.send(result);
                 }
             }
+            Request::Title(title) => self.title_session(thread, slot, &title).await,
         }
     }
 

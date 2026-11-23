@@ -31,10 +31,15 @@ use crate::{
 pub(in crate::workspace) enum Handoff {
     /// It moved away from this directory. Harnesses differ in whether a
     /// restored session follows a new one.
-    Moved {
-        from: String,
+    Moved { from: String },
+    /// Forked from another thread; `session` is the source's session to fork
+    /// natively, when the harness can.
+    Forked {
+        #[serde(default)]
+        session: Option<String>,
     },
-    Forked,
+    /// The harness could not reopen the thread's session.
+    Reopened,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

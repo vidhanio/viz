@@ -23,7 +23,7 @@ use super::{
     worker::Intent,
     worktree::{self, Placement},
 };
-use crate::{error::Error, tasks};
+use crate::{acp::Housekeeping, error::Error, tasks};
 
 impl Workspace {
     /// Launches a thread; a worktree target is resolved, and a new worktree
@@ -253,6 +253,12 @@ impl Workspace {
         store::save_metadata(&mut tx, thread, &updated).await?;
         tx.commit().await?;
         drop(db);
+        if let threads::Title::User(title) = &updated.title
+            && updated.title != current.title
+            && let Some(driver) = self.workers.get(thread)
+        {
+            driver.title(title.clone());
+        }
         self.relist(thread);
         Ok(store::updated(&current, &updated))
     }
@@ -282,9 +288,10 @@ impl Workspace {
         } else {
             None
         };
-        let driver = {
+        let (driver, binding) = {
             let mut db = self.db.lock().await;
             let mut tx = db.transaction().await?;
+            let binding = store::binding(&mut tx, thread).await?;
             tasks::store::release(&mut tx, thread).await?;
             super::checkpoints::queue_releases(&mut tx, thread).await?;
             let count = exec(
@@ -301,13 +308,14 @@ impl Workspace {
             let driver = self.workers.remove(thread);
             drop(db);
             self.terminals.lock().await.release_thread(thread);
-            driver
+            (driver, binding)
         };
         self.settled(thread);
         self.due.notify_one();
         if let Some(driver) = driver {
             driver.close().await;
         }
+        self.housekeep(&binding, Housekeeping::Delete);
         match tokio::fs::remove_dir_all(self.attachment_dir(thread)).await {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

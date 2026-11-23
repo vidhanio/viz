@@ -335,7 +335,8 @@ async fn handoff_note(
     .collect::<Result<Vec<_>, Error>>()?;
     let reason = match handoff {
         Handoff::Moved { from } => Reason::Moved { from, to: cwd },
-        Handoff::Forked => Reason::Forked,
+        Handoff::Forked { .. } => Reason::Forked,
+        Handoff::Reopened => Reason::Reopened,
     };
     Ok(handoff::note(
         reason,
