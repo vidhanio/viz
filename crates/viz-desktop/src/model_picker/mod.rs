@@ -30,7 +30,6 @@ use crate::{
     model::{
         MODEL_PICKER, PickerColumn, context_badge, effort_column, picker_list, picker_scope, speed,
     },
-    motion,
     theme::{
         HAIRLINE, ICON_SMALL, MODEL_PICKER_BODY_HEIGHT, MODEL_PICKER_OPTIONS_WIDTH,
         MODEL_PICKER_RAIL_WIDTH, RADIUS_CONTROL, RADIUS_XS, S4, S6, S8, S12, S16, Theme,
@@ -216,7 +215,8 @@ fn popover(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .focus_return(TRIGGER)
         .paint_order(40);
     layer.push(scrim("model-scrim", close));
-    layer.push(motion::anchored_popover(
+    layer.push(rune_kit::popover::anchored(
+        &t.overlay,
         frame,
         TRIGGER,
         Placement::TopStart,

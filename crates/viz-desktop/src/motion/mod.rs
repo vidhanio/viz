@@ -31,8 +31,8 @@ mod widgets;
 )]
 pub use self::{
     presence::{
-        Switch, anchored_popover, chip_enter, dialog, fade, pane_motion, popover, row_enter, scrim,
-        stable_content, stagger_delay, toast, tucked_deck, tucked_menu,
+        Switch, chip_enter, dialog, fade, pane_motion, popover, row_enter, scrim, stable_content,
+        stagger_delay, toast, tucked_deck, tucked_menu,
     },
     tokens::{
         FOLD_FEATHER, GLIDE, HOVER_OUT, INSTANT, LOADING_DELAY, MORPH_SCALE, OVERLAY_SCALE,

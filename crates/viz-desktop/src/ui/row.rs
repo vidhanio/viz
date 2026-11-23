@@ -7,7 +7,7 @@ use rune::{Color, El, Icon, Tx, col, icon, row, text};
 use super::{icons::CHEVRON, section};
 use crate::{
     motion,
-    theme::{HAIRLINE, ICON, ICON_SMALL, RADIUS_CONTROL, RADIUS_SM, S2, S4, S6, S8, Theme},
+    theme::{HAIRLINE, ICON, ICON_SMALL, RADIUS_SM, RADIUS_XS, S2, S4, S6, S8, Theme},
 };
 
 type ElHook = Box<dyn FnOnce(El) -> El>;
@@ -221,7 +221,7 @@ impl ListRow {
             .px(S8)
             .gap(S8)
             .center_y()
-            .radius(RADIUS_CONTROL)
+            .radius(RADIUS_XS)
             .fill(fill)
             .disabled(self.disabled);
 

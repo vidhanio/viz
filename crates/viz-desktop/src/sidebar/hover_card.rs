@@ -3,6 +3,7 @@
 //! shadow).
 
 use rune::{El, Icon, col, icon, row, text};
+use rune_kit::Placement;
 use viz_client::protocol::{GitHubPull, GitHubPullState, ThreadSummary};
 
 use crate::{
@@ -34,16 +35,14 @@ pub(super) fn mount(s: &Desktop, outline: &SidebarOutline<'_>, t: &Theme, layer:
         return;
     };
     let anchor_key = format!("thread-{id}");
-    layer.push(
-        ui::popover_frame(
-            format!("hover-card-{id}"),
-            HOVER_CARD_WIDTH,
-            thread_preview(s, thread, outline.now, t),
-            t,
-        )
-        .anchored_fit(anchor_key, rune::Side::Right, rune::Align::Start, S4)
-        .transition(crate::motion::popover(0.0)),
-    );
+    layer.push(ui::anchored_popover(
+        format!("hover-card-{id}"),
+        &anchor_key,
+        Placement::RightStart,
+        HOVER_CARD_WIDTH,
+        thread_preview(s, thread, outline.now, t),
+        t,
+    ));
 }
 
 /// Shared title and metadata for a hovered thread row.

@@ -1,12 +1,12 @@
 //! Paged checkout ref search and worktree base selection.
 
-use rune::{El, ScrollSpec, col, text};
+use rune::{El, ScrollSpec, col, row, text};
 use rune_kit::Placement;
 
 use crate::{
     app::Desktop,
     model::git::{CARD_WIDTH, Popup},
-    theme::Theme,
+    theme::{S2, S4, S6, S8, S12, Theme},
     ui,
     update::GitMsg,
 };
@@ -94,10 +94,11 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
         text(git.error.as_deref().unwrap_or(label))
             .font(t.small)
             .color(t.muted)
-            .padding(8.0)
+            .padding(S12)
     } else {
         col()
             .key("git-branch-scroll")
+            .w_full()
             .max_h(224.0)
             .scroll(ScrollSpec {
                 stick_bottom: false,
@@ -106,6 +107,9 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
             .child(
                 col()
                     .key("git-branch-list")
+                    .w_full()
+                    .padding(ui::MENU_INSET)
+                    .gap(S2)
                     .growth(rune::GrowthSpec::default())
                     .virtualize(28.0)
                     .on_visible_rows(|s: &mut Desktop, visible| {
@@ -125,20 +129,23 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
                     .children(rows),
             )
     };
-    col()
+    let mut body = col()
         .w_full()
-        .gap(4.0)
-        .padding(6.0)
-        .child(search)
+        .child(row().w_full().px(S6).py(S4).child(search))
         .child(ui::rule(t))
-        .child(list)
-        .children(git.new_worktree.then(|| {
-            rune_kit::Switch::new(git.remote_base)
-                .label("Start from remote")
-                .description("Use the tracked remote branch or the matching branch on origin")
-                .on_toggle_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::RemoteBase, tx))
-                .build(&t.k)
-        }))
+        .child(list);
+    if git.new_worktree {
+        body = body.child(ui::rule(t)).child(
+            row().w_full().px(S8).py(S6).child(
+                rune_kit::Switch::new(git.remote_base)
+                    .label("Start from remote")
+                    .description("Use the tracked remote branch or the matching branch on origin")
+                    .on_toggle_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::RemoteBase, tx))
+                    .build(&t.k),
+            ),
+        );
+    }
+    body
 }
 
 struct BranchChoice {

@@ -1,12 +1,12 @@
 //! Presence, directional view-switch, popover, and pane-slide transitions.
 
-use rune::{Align, El, Side, SpringPair, Transition};
-use rune_kit::{Placement, shell::PaneMotion};
+use rune::{El, SpringPair, Transition};
+use rune_kit::shell::PaneMotion;
 
 use super::tokens::{
     GLIDE, OVERLAY_SCALE, PANE_FADE_TAIL, PANE_MAX_DURATION, PANE_MIN_DURATION, PANE_REDUCED_FADE,
     PANE_REF_WIDTH, QUICK_PAIR, REFLOW_PAIR, SETTLE_PAIR, SNAP_PAIR, STAGGER_BULK_LIMIT,
-    STAGGER_MAX_ITEMS, STAGGER_STEP, TITLE_PAIR, TRAVEL_DRAWER, TRAVEL_MICRO, TRAVEL_SMALL,
+    STAGGER_MAX_ITEMS, STAGGER_STEP, TITLE_PAIR, TRAVEL_DRAWER, TRAVEL_SMALL,
 };
 
 /// Which way a pane or view stack moves when selection changes.
@@ -107,28 +107,6 @@ pub fn popover(offset_y: f32) -> Transition {
         .combined(Transition::scale(OVERLAY_SCALE))
         .combined(Transition::opacity())
         .springs(SNAP_PAIR)
-}
-
-/// Anchors `content` to the element keyed `anchor_key` with viewport flipping,
-/// unresolved-anchor suppression, and viz's standard popover spring transition.
-pub fn anchored_popover(content: El, anchor_key: &str, placement: Placement, gap: f32) -> El {
-    let (side, align, offset_y) = match placement {
-        Placement::Top => (Side::Top, Align::Center, TRAVEL_MICRO),
-        Placement::TopStart => (Side::Top, Align::Start, TRAVEL_MICRO),
-        Placement::TopEnd => (Side::Top, Align::End, TRAVEL_MICRO),
-        Placement::Bottom => (Side::Bottom, Align::Center, -TRAVEL_MICRO),
-        Placement::BottomStart => (Side::Bottom, Align::Start, -TRAVEL_MICRO),
-        Placement::BottomEnd => (Side::Bottom, Align::End, -TRAVEL_MICRO),
-        Placement::Left => (Side::Left, Align::Center, 0.0),
-        Placement::Right => (Side::Right, Align::Center, 0.0),
-        Placement::RightStart => (Side::Right, Align::Start, 0.0),
-    };
-    let placed = if matches!(side, Side::Top | Side::Bottom) {
-        content.anchored_fit(anchor_key, side, align, gap)
-    } else {
-        content.anchored(anchor_key, side, align, gap)
-    };
-    placed.transition(popover(offset_y))
 }
 
 /// Centered modal dialog or command palette panel presence transition.

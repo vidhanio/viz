@@ -9,14 +9,14 @@ use crate::{
     motion,
     theme::{
         CARD_INSET, COMPOSER_DRAWER_INSET, COMPOSER_DRAWER_OVERLAP, HAIRLINE, RADIUS_CARD,
-        RADIUS_CONTROL, S4, S6, S8, S12, S16, Theme,
+        RADIUS_CONTROL, RADIUS_XS, S4, S6, S8, S12, S16, Theme,
     },
 };
 
 /// The model picker's trigger max width.
 pub const MODEL_TRIGGER_MAX: f32 = 240.0;
-/// Padding between a [`popover_frame`] edge and its [`RADIUS_CONTROL`] rows.
-pub const MENU_INSET: f32 = RADIUS_CARD - RADIUS_CONTROL;
+/// Padding between a [`popover_frame`] edge and its [`RADIUS_XS`] rows.
+pub const MENU_INSET: f32 = RADIUS_CONTROL - RADIUS_XS;
 /// A menu's narrowest width.
 pub const MENU_WIDTH: f32 = 196.0;
 
@@ -69,24 +69,25 @@ impl Card {
     }
 }
 
-/// Flat opaque floating surface for popovers, context menus, and details cards
-/// (`t.surface_raised` + `1px` `t.border_overlay`, zero drop shadow).
+/// The kit's raised popover surface (`rune_kit::popover::raised`) at a fixed
+/// width for app-drawn popovers, pickers, and details cards.
 ///
-/// The [`RADIUS_CARD`] corner is concentric with [`RADIUS_CONTROL`] rows inset
-/// by [`MENU_INSET`], so menu bodies should pad by exactly that inset.
+/// The [`RADIUS_CONTROL`] corner is concentric with [`RADIUS_XS`] rows inset
+/// by [`MENU_INSET`], so list bodies should pad by exactly that inset.
 pub fn popover_frame(key: impl Into<String>, width: f32, content: El, t: &Theme) -> El {
-    col()
-        .key(key)
-        .w(width)
-        .radius(RADIUS_CARD)
-        .fill(t.surface_raised)
-        .border(HAIRLINE, t.border_overlay)
-        .clip_rounded(RADIUS_CARD)
-        .child(content)
+    rune_kit::popover::raised(
+        &t.overlay,
+        col()
+            .key(key)
+            .w(width)
+            .clip_rounded(RADIUS_CONTROL)
+            .child(content),
+        RADIUS_CONTROL,
+    )
 }
 
-/// Anchors a flat [`popover_frame`] to `anchor_key` using
-/// [`motion::anchored_popover`] with viewport flipping and `SNAP_PAIR` motion.
+/// Anchors a [`popover_frame`] to `anchor_key` with
+/// `rune_kit::popover::anchored`.
 pub fn anchored_popover(
     key: impl Into<String>,
     anchor_key: &str,
@@ -96,7 +97,7 @@ pub fn anchored_popover(
     t: &Theme,
 ) -> El {
     let frame = popover_frame(key, width, content, t);
-    motion::anchored_popover(frame, anchor_key, placement, S4)
+    rune_kit::popover::anchored(&t.overlay, frame, anchor_key, placement, S4)
 }
 
 /// Reusable flat combobox / command-palette shell: optional plain search
@@ -144,8 +145,8 @@ impl ComboboxShell {
         self
     }
 
-    /// Sets the top search input slot (typically [`super::SearchInput`] with
-    /// [`super::SearchStyle::Plain`]).
+    /// Sets the top search input slot (typically `rune_kit::TextInput` with
+    /// `.plain()`).
     pub fn search(mut self, input: El) -> Self {
         self.search = Some(input);
         self
@@ -172,12 +173,7 @@ impl ComboboxShell {
 
     /// Builds the flat combobox shell against `t`.
     pub fn build(self, t: &Theme) -> El {
-        let mut shell = col()
-            .key(&self.key)
-            .radius(RADIUS_CARD)
-            .fill(t.surface_raised)
-            .border(HAIRLINE, t.border_overlay)
-            .clip_rounded(RADIUS_CARD);
+        let mut shell = col().key(&self.key).clip_rounded(RADIUS_CONTROL);
         shell = match self.width {
             Some(points) => shell.w(points),
             None => shell.w_full(),
@@ -221,7 +217,7 @@ impl ComboboxShell {
                 .child(rule(t))
                 .child(row().w_full().px(S8).py(S6).child(footer));
         }
-        shell
+        rune_kit::popover::raised(&t.overlay, shell, RADIUS_CONTROL)
     }
 }
 

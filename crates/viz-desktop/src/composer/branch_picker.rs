@@ -9,7 +9,6 @@ use super::context_strip::{close_picker, strip_pill, worktree_branch_name};
 use crate::{
     app::Desktop,
     model::{NewThread, draft_branch_options},
-    motion,
     theme::{ICON_SMALL, S6, Theme},
     ui::{self, RowDensity},
     update::{ComposerMsg, DRAFT_BRANCH_PICKER, DRAFT_BRANCH_SEARCH, Msg, NavKey, SelectionMsg},
@@ -164,7 +163,8 @@ fn popover(
         .focus_return(anchor)
         .modal(true, close_picker);
     layer.push(scrim("draft-branch-scrim", close_picker));
-    layer.push(motion::anchored_popover(
+    layer.push(rune_kit::popover::anchored(
+        &t.overlay,
         popover,
         anchor,
         Placement::TopStart,

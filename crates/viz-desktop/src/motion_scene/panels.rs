@@ -226,7 +226,7 @@ fn details_popover(t: &Theme) -> El {
                 .color(t.muted)
                 .wrap(),
         );
-    motion::anchored_popover(card, "btn-popover", Placement::TopStart, S6)
+    rune_kit::popover::anchored(&t.overlay, card, "btn-popover", Placement::TopStart, S6)
 }
 
 pub(super) fn diff_inspector(demo: &WorkbenchDemo, t: &Theme) -> El {

@@ -9,7 +9,6 @@ use super::PROJECT_TRIGGER_KEY;
 use crate::{
     app::Desktop,
     model::{HomeProjectOption, home_project_options},
-    motion,
     theme::{HAIRLINE, ICON_MD, ICON_SMALL, RADIUS_SM, S4, S6, S8, Theme},
     ui::{self, RowDensity},
     update::{ComposerMsg, HOME_PROJECT_SEARCH, Msg, NavKey, SelectionMsg},
@@ -121,7 +120,8 @@ pub(super) fn popover(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .modal(true, close_project_picker);
 
     layer.push(scrim("home-project-scrim", close_project_picker));
-    layer.push(motion::anchored_popover(
+    layer.push(rune_kit::popover::anchored(
+        &t.overlay,
         shell,
         PROJECT_TRIGGER_KEY,
         Placement::Bottom,

@@ -14,8 +14,8 @@ use crate::{
     app::Desktop,
     model::{EffortColumn, EffortLevel, ExtraOption, PickerColumn, sentence_label},
     theme::{
-        HAIRLINE, ICON_SMALL, MODEL_PICKER_OPTIONS_WIDTH, RADIUS_CONTROL, S2, S4, S6, S8, S10, S12,
-        S16, S32, S40, Theme,
+        HAIRLINE, ICON_SMALL, MODEL_PICKER_OPTIONS_WIDTH, RADIUS_XS, S2, S4, S6, S8, S10, S12, S16,
+        S32, S40, Theme,
     },
     ui,
     update::{ModelPickerMsg, Msg},
@@ -129,7 +129,7 @@ fn base_row(key: String, label: &str, highlighted: bool, t: &Theme) -> El {
         .px(S8)
         .gap(S8)
         .center_y()
-        .radius(RADIUS_CONTROL)
+        .radius(RADIUS_XS)
         .fill(if highlighted {
             t.selected
         } else {
@@ -267,7 +267,7 @@ pub(super) fn submenu(s: &Desktop, column: &EffortColumn<'_>, t: &Theme) -> Opti
         .role("listbox")
         .label(&option.name)
         .w_full()
-        .padding(S4)
+        .padding(ui::MENU_INSET)
         .gap(S2)
         .instant_changes();
     for (index, choice) in option.choices.iter().enumerate() {

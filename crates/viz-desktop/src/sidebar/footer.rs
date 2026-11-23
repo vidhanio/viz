@@ -2,14 +2,13 @@
 //! configured) or connection status popover, quick project access, offline
 //! retry button, and read-only shortcuts/config info popover.
 
-use rune::{Align, El, Side, col, icon, row, text};
-use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement, scrim};
+use rune::{El, col, icon, row, text};
+use rune_kit::{ButtonVariant, IconButtonVariant, Menu, MenuItem, Placement, Popover};
 use viz_client::protocol::EnvironmentStatus;
 
 use crate::{
     app::Desktop,
     model::Status,
-    motion,
     theme::{HAIRLINE, ICON_SMALL, RADIUS_CONTROL, S4, S6, S8, S12, Size, Theme},
     ui,
     update::{Msg, SelectionMsg, SidebarMsg},
@@ -278,60 +277,55 @@ fn info_button(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     .build(&t.k)
     .key(INFO_TRIGGER_KEY);
 
-    if open {
-        let close = |s: &mut Desktop| s.dispatch_local(Msg::Sidebar(SidebarMsg::CloseInfoMenu));
-        let shortcuts = [
-            (
-                "Command palette",
-                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "K"]).build(&t.k),
-            ),
-            (
-                "Toggle sidebar",
-                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "B"]).build(&t.k),
-            ),
-            (
-                "New thread",
-                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "N"]).build(&t.k),
-            ),
-            (
-                "Jump to thread",
-                rune_kit::Keybind::new(&[ui::COMMAND_KEY, "1–9"]).build(&t.k),
-            ),
-            ("Rename thread", rune_kit::Keybind::new(&["F2"]).build(&t.k)),
-        ];
-        let mut body = col().w_full().padding(S12).gap(S8).child(
-            text("Keyboard shortcuts")
-                .font(t.small_medium)
-                .color(t.text_strong),
-        );
-        for (label, caps) in shortcuts {
-            body = body.child(
-                row()
-                    .w_full()
-                    .gap(S8)
-                    .center_y()
-                    .child(text(label).font(t.small).color(t.muted).grow(1.0))
-                    .child(caps),
-            );
-        }
-        body = body.child(ui::rule(t)).child(
-            text("Process settings live in desktop.toml")
-                .font(t.micro)
-                .color(t.faint),
-        );
-        let frame = ui::popover_frame("sidebar-info-popover", 244.0, body, t)
-            .role("dialog")
-            .label("Shortcuts and configuration")
-            .focus_return(INFO_TRIGGER_KEY)
-            .modal(true, close);
-        layer.push(scrim("sidebar-info-scrim", close));
-        layer.push(
-            frame
-                .anchored(INFO_TRIGGER_KEY, Side::Top, Align::End, S6)
-                .transition(motion::fade(motion::QUICK_PAIR)),
+    if !open {
+        return trigger;
+    }
+    let close = |s: &mut Desktop| s.dispatch_local(Msg::Sidebar(SidebarMsg::CloseInfoMenu));
+    let shortcuts = [
+        (
+            "Command palette",
+            rune_kit::Keybind::new(&[ui::COMMAND_KEY, "K"]).build(&t.k),
+        ),
+        (
+            "Toggle sidebar",
+            rune_kit::Keybind::new(&[ui::COMMAND_KEY, "B"]).build(&t.k),
+        ),
+        (
+            "New thread",
+            rune_kit::Keybind::new(&[ui::COMMAND_KEY, "N"]).build(&t.k),
+        ),
+        (
+            "Jump to thread",
+            rune_kit::Keybind::new(&[ui::COMMAND_KEY, "1–9"]).build(&t.k),
+        ),
+        ("Rename thread", rune_kit::Keybind::new(&["F2"]).build(&t.k)),
+    ];
+    let mut body = col().w(220.0).gap(S8);
+    for (label, caps) in shortcuts {
+        body = body.child(
+            row()
+                .w_full()
+                .gap(S8)
+                .center_y()
+                .child(text(label).font(t.small).color(t.muted).grow(1.0))
+                .child(caps),
         );
     }
-    trigger
+    body = body.child(ui::rule(t)).child(
+        text("Process settings live in desktop.toml")
+            .font(t.micro)
+            .color(t.faint),
+    );
+    Popover::new("sidebar-info-popover")
+        .trigger(trigger)
+        .title("Keyboard shortcuts")
+        .padding(S12)
+        .placement(Placement::TopEnd)
+        .gutter(S6)
+        .open(true)
+        .on_close(close)
+        .child(body)
+        .build(&t.overlay, layer)
 }
 
 fn connection_summary<'a>(s: &'a Desktop, t: &Theme) -> (rune::Color, &'static str, &'a str) {
