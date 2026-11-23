@@ -44,17 +44,15 @@ pub(super) fn draft_card(s: &Desktop, draft: &DraftPreview<'_>, t: &Theme) -> El
                         .min_w(0.0),
                 )
                 .child(
-                    ui::icon_button(
-                        &ui::CLOSE,
-                        "Discard draft",
-                        IconButtonVariant::GhostMuted,
-                        Size::Tiny,
-                    )
-                    .on_press_tx(|s: &mut Desktop, tx| {
-                        s.dispatch(Msg::Sidebar(SidebarMsg::DiscardDraft), tx);
-                    })
-                    .build(&t.k)
-                    .key("discard-draft"),
+                    rune_kit::IconButton::new(&ui::CLOSE)
+                        .help("Discard draft")
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Tiny.kit())
+                        .on_press_tx(|s: &mut Desktop, tx| {
+                            s.dispatch(Msg::Sidebar(SidebarMsg::DiscardDraft), tx);
+                        })
+                        .build(&t.k)
+                        .key("discard-draft"),
                 ),
         )
         .child(

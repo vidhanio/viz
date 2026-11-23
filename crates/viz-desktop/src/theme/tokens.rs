@@ -145,18 +145,6 @@ impl Size {
         }
     }
 
-    /// Horizontal text-button padding in points.
-    pub const fn px(self) -> f32 {
-        match self {
-            Self::Tiny => 0.0,
-            Self::Micro => S6,
-            Self::Small => S8,
-            Self::Compact => S10,
-            Self::Default => S12,
-            Self::Large => S14,
-        }
-    }
-
     /// Corner radius in points.
     pub const fn radius(self) -> f32 {
         match self {

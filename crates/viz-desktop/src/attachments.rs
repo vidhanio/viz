@@ -82,16 +82,14 @@ pub fn button(s: &Desktop, t: &Theme) -> El {
     };
     let can_attach =
         s.model.can_attach() || (s.model.connected() && s.model.selection.selected.is_none());
-    ui::icon_button(
-        &ui::PAPERCLIP,
-        title,
-        IconButtonVariant::GhostMuted,
-        Size::Compact,
-    )
-    .disabled(!can_attach)
-    .on_press_tx(choose)
-    .build(&t.k)
-    .key("attach")
+    rune_kit::IconButton::new(&ui::PAPERCLIP)
+        .help(title)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Compact.kit())
+        .disabled(!can_attach)
+        .on_press_tx(choose)
+        .build(&t.k)
+        .key("attach")
 }
 
 /// Approximate decoded byte count of a base64 payload.

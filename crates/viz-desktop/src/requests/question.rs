@@ -139,7 +139,9 @@ fn action(
     t: &Theme,
     handler: impl Fn(&mut Desktop, &mut Tx) + 'static,
 ) -> El {
-    ui::button(label, variant, Size::Compact)
+    rune_kit::Button::new(label)
+        .variant(variant)
+        .control_size(Size::Compact.kit())
         .disabled(disabled)
         .on_press_tx(handler)
         .build(&t.k)
@@ -199,8 +201,10 @@ fn editor(
                     .center_y()
                     .gap(S8)
                     .child(
-                        ui::button(label, ButtonVariant::Ghost, Size::Small)
-                            .active(active)
+                        rune_kit::Button::new(label)
+                            .variant(ButtonVariant::Ghost)
+                            .control_size(Size::Small.kit())
+                            .expanded(active)
                             .disabled(disabled)
                             .on_press_tx(move |app: &mut Desktop, tx| {
                                 select(app, id, kind, &value, tx);
@@ -263,20 +267,18 @@ pub fn drawer(app: &Desktop, t: &Theme) -> Option<El> {
         }))
         .child(rune::el().grow(1.0))
         .child(
-            ui::icon_button(
-                if collapsed {
-                    &ui::CHEVRON_OPEN
-                } else {
-                    &ui::CHEVRON_UP
-                },
-                if collapsed {
-                    "Expand question"
-                } else {
-                    "Collapse question"
-                },
-                IconButtonVariant::Ghost,
-                Size::Compact,
-            )
+            rune_kit::IconButton::new(if collapsed {
+                &ui::CHEVRON_OPEN
+            } else {
+                &ui::CHEVRON_UP
+            })
+            .help(if collapsed {
+                "Expand question"
+            } else {
+                "Collapse question"
+            })
+            .variant(IconButtonVariant::Ghost)
+            .control_size(Size::Compact.kit())
             .on_press_tx(move |app: &mut Desktop, tx| dispatch(app, RequestMsg::Collapse(id), tx))
             .build(&t.k),
         );

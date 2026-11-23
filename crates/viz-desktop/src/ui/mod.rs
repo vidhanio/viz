@@ -7,7 +7,6 @@
 //! ad-hoc buttons, inputs, rows, or overlays.
 
 mod badge;
-mod button;
 mod dialog;
 mod feedback;
 pub mod gallery;
@@ -27,13 +26,12 @@ use rune_kit::Spinner;
 )]
 pub use self::{
     badge::{Tone, ToneColors, diff_stat, diff_stat_rolling, dot, tooltip_text, with_tooltip},
-    button::{Button, button},
     dialog::{DialogForm, dialog_actions, dialog_body, dialog_subject, sheet},
     feedback::{
         Banner, EmptyState, LoadingDelay, empty, empty_state, error_banner, loading_state,
         skeleton_rows, status_banner,
     },
-    icon_button::{IconButton, InlineButton, InlineStyle, icon_button, inline_button},
+    icon_button::{InlineButton, InlineStyle, inline_button},
     icons::{
         AGENT, ANTIGRAVITY, ARCHIVE, ARROW_DOWN, ARROW_LEFT, ARROW_UP, BOT, BRAIN, CHECK, CHEVRON,
         CHEVRON_OPEN, CHEVRON_UP, CHEVRONS_UP_DOWN, CIRCLE_ALERT, CIRCLE_CHECK, CIRCLE_DASHED,

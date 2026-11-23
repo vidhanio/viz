@@ -402,17 +402,15 @@ fn task_controls(
         .center_y()
         .child(item.grow(1.0).shrink().min_w(0.0))
         .child(
-            ui::icon_button(
-                &ui::STOP,
-                "Cancel task",
-                rune_kit::IconButtonVariant::GhostMuted,
-                crate::theme::Size::Micro,
-            )
-            .disabled(!s.model.connected())
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                s.dispatch(Msg::Timeline(TimelineMsg::CancelTask(id.clone())), tx);
-            })
-            .build(&t.k),
+            rune_kit::IconButton::new(&ui::STOP)
+                .help("Cancel task")
+                .variant(rune_kit::IconButtonVariant::GhostMuted)
+                .control_size(crate::theme::Size::Micro.kit())
+                .disabled(!s.model.connected())
+                .on_press_tx(move |s: &mut Desktop, tx| {
+                    s.dispatch(Msg::Timeline(TimelineMsg::CancelTask(id.clone())), tx);
+                })
+                .build(&t.k),
         )
 }
 

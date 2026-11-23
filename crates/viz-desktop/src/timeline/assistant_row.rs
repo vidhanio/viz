@@ -159,38 +159,34 @@ pub fn turn_footer(s: &Desktop, turn: &TurnView<'_>, is_latest: bool, t: &Theme)
 
     if let Some(entry) = end.entry_id {
         bar = bar.child(
-            ui::icon_button(
-                &ui::GIT_FORK,
-                "Fork from this response",
-                IconButtonVariant::GhostMuted,
-                Size::Small,
-            )
-            .disabled(!connected)
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(Msg::Timeline(TimelineMsg::ForkThrough(entry)), tx);
-            })
-            .build(&t.k)
-            .key("fork-through"),
+            rune_kit::IconButton::new(&ui::GIT_FORK)
+                .help("Fork from this response")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Small.kit())
+                .disabled(!connected)
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(Msg::Timeline(TimelineMsg::ForkThrough(entry)), tx);
+                })
+                .build(&t.k)
+                .key("fork-through"),
         );
     }
 
     if !answer.is_empty() {
         let reply_source = answer.clone();
         bar = bar.child(
-            ui::icon_button(
-                &ui::REPLY,
-                "Reply to this response",
-                IconButtonVariant::GhostMuted,
-                Size::Small,
-            )
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::ReplyTo(reply_source.clone())),
-                    tx,
-                );
-            })
-            .build(&t.k)
-            .key("reply"),
+            rune_kit::IconButton::new(&ui::REPLY)
+                .help("Reply to this response")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Small.kit())
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(
+                        Msg::Timeline(TimelineMsg::ReplyTo(reply_source.clone())),
+                        tx,
+                    );
+                })
+                .build(&t.k)
+                .key("reply"),
         );
     }
 
@@ -309,41 +305,37 @@ fn code_frame_card(
                 .truncate(),
         )
         .child(
-            ui::icon_button(
-                &ui::TEXT_WRAP,
-                if frame.wrapped {
+            rune_kit::IconButton::new(&ui::TEXT_WRAP)
+                .help(if frame.wrapped {
                     "Disable word wrap"
                 } else {
                     "Enable word wrap"
-                },
-                IconButtonVariant::GhostMuted,
-                Size::Micro,
-            )
-            .active(frame.wrapped)
-            .on_press(move |s: &mut Desktop| {
-                s.dispatch_local(Msg::Timeline(TimelineMsg::ToggleCodeWrap(wrap_key.clone())));
-            })
-            .build(&t.k)
-            .key("wrap"),
+                })
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .expanded(frame.wrapped)
+                .on_press(move |s: &mut Desktop| {
+                    s.dispatch_local(Msg::Timeline(TimelineMsg::ToggleCodeWrap(wrap_key.clone())));
+                })
+                .build(&t.k)
+                .key("wrap"),
         )
         .child(
-            ui::icon_button(
-                if is_copied { &ui::CHECK } else { &ui::COPY },
-                "Copy code",
-                IconButtonVariant::GhostMuted,
-                Size::Micro,
-            )
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::CopyWithFeedback {
-                        key: copy_id.clone(),
-                        text: code_source.clone(),
-                    }),
-                    tx,
-                );
-            })
-            .build(&t.k)
-            .key("copy"),
+            rune_kit::IconButton::new(if is_copied { &ui::CHECK } else { &ui::COPY })
+                .help("Copy code")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(
+                        Msg::Timeline(TimelineMsg::CopyWithFeedback {
+                            key: copy_id.clone(),
+                            text: code_source.clone(),
+                        }),
+                        tx,
+                    );
+                })
+                .build(&t.k)
+                .key("copy"),
         );
     col()
         .key(block_key)

@@ -103,15 +103,13 @@ fn header_button(
     msg: crate::update::GitMsg,
     t: &Theme,
 ) -> El {
-    ui::icon_button(
-        glyph,
-        label,
-        rune_kit::IconButtonVariant::Ghost,
-        Size::Small,
-    )
-    .on_press_tx(move |s: &mut Desktop, tx| git::dispatch(s, msg.clone(), tx))
-    .build(&t.k)
-    .a11y_value(if selected { "Open" } else { "Closed" })
+    rune_kit::IconButton::new(glyph)
+        .help(label)
+        .variant(rune_kit::IconButtonVariant::Ghost)
+        .control_size(Size::Small.kit())
+        .on_press_tx(move |s: &mut Desktop, tx| git::dispatch(s, msg.clone(), tx))
+        .build(&t.k)
+        .a11y_value(if selected { "Open" } else { "Closed" })
 }
 
 fn project_mark(s: &Desktop, project: &viz_client::protocol::Project, t: &Theme) -> El {

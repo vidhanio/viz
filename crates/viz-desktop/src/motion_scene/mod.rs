@@ -271,15 +271,13 @@ fn workbench_toolbar(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> Toolbar 
         .gap(S8)
         .center_y()
         .child(
-            ui::button(
-                if demo.live.active {
-                    "Live: on"
-                } else {
-                    "Live: off"
-                },
-                ButtonVariant::Outline,
-                Size::Small,
-            )
+            rune_kit::Button::new(if demo.live.active {
+                "Live: on"
+            } else {
+                "Live: off"
+            })
+            .variant(ButtonVariant::Outline)
+            .control_size(Size::Small.kit())
             .on_press(|s: &mut Desktop| {
                 with_demo(s, |d| d.live.active = !d.live.active);
             })
@@ -287,7 +285,9 @@ fn workbench_toolbar(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> Toolbar 
             .key("btn-live-status"),
         )
         .child(
-            ui::button("Toast", ButtonVariant::Outline, Size::Small)
+            rune_kit::Button::new("Toast")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
                 .on_press(|s: &mut Desktop| {
                     with_demo(s, |d| d.overlays.toast = !d.overlays.toast);
                 })
@@ -295,15 +295,13 @@ fn workbench_toolbar(demo: &WorkbenchDemo, reduced: bool, t: &Theme) -> Toolbar 
                 .key("btn-toast"),
         )
         .child(
-            ui::button(
-                if demo.panel.is_open() {
-                    "Hide diff"
-                } else {
-                    "Diff panel"
-                },
-                ButtonVariant::Outline,
-                Size::Small,
-            )
+            rune_kit::Button::new(if demo.panel.is_open() {
+                "Hide diff"
+            } else {
+                "Diff panel"
+            })
+            .variant(ButtonVariant::Outline)
+            .control_size(Size::Small.kit())
             .on_press(|s: &mut Desktop| {
                 with_demo(s, |d| d.panel.toggle());
             })

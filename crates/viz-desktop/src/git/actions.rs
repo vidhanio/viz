@@ -8,7 +8,7 @@ use crate::{
     app::Desktop,
     effects::git::Request,
     model::git::{self, Dialog, Popup},
-    theme::{Size, Theme},
+    theme::{S6, Size, Theme},
     ui,
     update::GitMsg,
 };
@@ -135,29 +135,39 @@ pub fn view(s: &Desktop, status: &GitStatus, t: &Theme, overlays: &mut Vec<El>) 
     let open = s.model.git.popup == Some(Popup::Actions);
     let primary = primary(s, status);
     let busy = s.model.git.busy || status.operation.is_some();
-    let action = ui::button(
-        if busy {
-            "Git action running…"
+    let label = if busy {
+        "Git action running…"
+    } else {
+        primary.label()
+    };
+    let mut action_btn = rune_kit::Button::new(label)
+        .variant(if busy {
+            ButtonVariant::Loading
         } else {
-            primary.label()
-        },
-        ButtonVariant::Ghost,
-        Size::Small,
-    )
-    .icon(primary.glyph())
-    .loading(busy)
-    .disabled(!primary.enabled(s, status))
-    .on_press_tx(move |s: &mut Desktop, tx| primary.activate(s, tx))
-    .build(&t.overlay)
-    .key("git-primary-action");
-    let trigger = ui::icon_button(
-        &ui::CHEVRON_OPEN,
-        "Git actions",
-        IconButtonVariant::Ghost,
-        Size::Small,
-    )
-    .on_press_tx(|s: &mut Desktop, tx| super::toggle_popup(s, Popup::Actions, tx))
-    .build(&t.overlay);
+            ButtonVariant::Ghost
+        })
+        .control_size(Size::Small.kit())
+        .disabled(!primary.enabled(s, status))
+        .on_press_tx(move |s: &mut Desktop, tx| primary.activate(s, tx));
+    if busy {
+        let spinner = ui::spinner(t);
+        action_btn = action_btn.label_with(move |font, ink| {
+            row()
+                .gap(S6)
+                .center_y()
+                .child(spinner)
+                .child(text(label).font(font).color(ink))
+        });
+    } else {
+        action_btn = action_btn.icon(primary.glyph());
+    }
+    let action = action_btn.build(&t.overlay).key("git-primary-action");
+    let trigger = rune_kit::IconButton::new(&ui::CHEVRON_OPEN)
+        .help("Git actions")
+        .variant(IconButtonVariant::Ghost)
+        .control_size(Size::Small.kit())
+        .on_press_tx(|s: &mut Desktop, tx| super::toggle_popup(s, Popup::Actions, tx))
+        .build(&t.overlay);
     let items = [
         Action::Commit,
         Action::Push,
@@ -237,28 +247,30 @@ pub fn push_dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
         .and_then(|status| status.branch.as_deref())
         .unwrap_or("Unknown branch");
     let footer = ui::dialog_actions([
-        ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
+        rune_kit::Button::new("Cancel")
+            .variant(ButtonVariant::Ghost)
+            .control_size(Size::Default.kit())
             .on_press(super::close_dialog)
             .build(&t.k),
-        ui::button(
-            "Create feature branch",
-            ButtonVariant::Outline,
-            Size::Default,
-        )
-        .disabled(git.busy || s.widgets.git_message.text.trim().is_empty())
-        .on_press_tx(|s: &mut Desktop, tx| {
-            let name = s.widgets.git_message.text.trim().to_owned();
-            super::dispatch(
-                s,
-                GitMsg::Request(Request::CreateCheckout {
-                    name,
-                    start: "HEAD".into(),
-                }),
-                tx,
-            );
-        })
-        .build(&t.k),
-        ui::button("Push branch", ButtonVariant::Submit, Size::Default)
+        rune_kit::Button::new("Create feature branch")
+            .variant(ButtonVariant::Outline)
+            .control_size(Size::Default.kit())
+            .disabled(git.busy || s.widgets.git_message.text.trim().is_empty())
+            .on_press_tx(|s: &mut Desktop, tx| {
+                let name = s.widgets.git_message.text.trim().to_owned();
+                super::dispatch(
+                    s,
+                    GitMsg::Request(Request::CreateCheckout {
+                        name,
+                        start: "HEAD".into(),
+                    }),
+                    tx,
+                );
+            })
+            .build(&t.k),
+        rune_kit::Button::new("Push branch")
+            .variant(ButtonVariant::Submit)
+            .control_size(Size::Default.kit())
             .disabled(git.busy)
             .on_press_tx(|s: &mut Desktop, tx| {
                 super::dispatch(
@@ -358,17 +370,17 @@ pub fn commit_dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
     .into_iter()
     .flatten();
     let footer = ui::dialog_actions([
-        ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
+        rune_kit::Button::new("Cancel")
+            .variant(ButtonVariant::Ghost)
+            .control_size(Size::Default.kit())
             .on_press(super::close_dialog)
             .build(&t.k),
-        ui::button(
-            if git.busy { "Committing…" } else { "Commit" },
-            ButtonVariant::Submit,
-            Size::Default,
-        )
-        .disabled(git.busy || total == 0 || s.widgets.git_message.text.trim().is_empty())
-        .on_press_tx(commit)
-        .build(&t.k),
+        rune_kit::Button::new(if git.busy { "Committing…" } else { "Commit" })
+            .variant(ButtonVariant::Submit)
+            .control_size(Size::Default.kit())
+            .disabled(git.busy || total == 0 || s.widgets.git_message.text.trim().is_empty())
+            .on_press_tx(commit)
+            .build(&t.k),
     ]);
     rune_kit::Dialog::new("git-commit", "Commit changes")
         .open(true)

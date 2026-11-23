@@ -311,7 +311,9 @@ fn load_earlier(s: &Desktop, t: &Theme) -> El {
         .center_y()
         .child(ui::rule(t).grow(1.0).w(0.0))
         .child(
-            ui::button(label, ButtonVariant::GhostMuted, Size::Small)
+            rune_kit::Button::new(label)
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(Size::Small.kit())
                 .disabled(m.is_history_loading() || !m.connected())
                 .on_press_tx(|s: &mut Desktop, tx| {
                     s.dispatch(Msg::Timeline(TimelineMsg::LoadEarlier), tx);

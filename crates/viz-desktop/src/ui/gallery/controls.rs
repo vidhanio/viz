@@ -2,12 +2,12 @@
 //! segmented controls, and form fields column for the `components` gallery.
 
 use rune::{El, col, row, text};
-use rune_kit::{ButtonVariant, IconButtonVariant};
+use rune_kit::{Button, ButtonVariant, IconButton, IconButtonVariant, State};
 
 use super::{GalleryState, edit_gallery, gallery_card, with_gallery};
 use crate::{
     app::Desktop,
-    theme::{S6, S8, Size, Theme},
+    theme::{RADIUS_PILL, S6, S8, Size, Theme},
     ui::{self, InlineStyle, Tone},
 };
 
@@ -21,13 +21,11 @@ pub(super) fn buttons_card(state: &GalleryState, t: &Theme) -> El {
         .child(button_sizes_and_disabled(t))
         .child(icon_and_inline_buttons(t))
         .child(
-            ui::button(
-                "Full-width primary action",
-                ButtonVariant::Submit,
-                Size::Small,
-            )
-            .full_width()
-            .build(&t.k),
+            Button::new("Full-width primary action")
+                .variant(ButtonVariant::Submit)
+                .control_size(Size::Small.kit())
+                .build(&t.k)
+                .w_full(),
         );
     gallery_card(
         "card-buttons",
@@ -44,46 +42,88 @@ fn button_variants(state: &GalleryState, t: &Theme) -> El {
         .gap(S6)
         .center_y()
         .child(
-            ui::button("Submit", ButtonVariant::Submit, Size::Compact)
+            Button::new("Submit")
+                .variant(ButtonVariant::Submit)
+                .control_size(Size::Compact.kit())
                 .on_press(|s: &mut Desktop| with_gallery(s, |g| g.active_btn = !g.active_btn))
                 .build(&t.k)
                 .key("btn-gal-submit"),
         )
         .child(
-            ui::button("Neutral", ButtonVariant::Neutral, Size::Compact)
+            Button::new("Neutral")
+                .variant(ButtonVariant::Neutral)
+                .control_size(Size::Compact.kit())
                 .build(&t.k)
                 .key("btn-gal-neutral"),
         )
         .child(
-            ui::button("Outline", ButtonVariant::Outline, Size::Compact)
-                .active(state.active_btn)
+            Button::new("Outline")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Compact.kit())
+                .state(if state.active_btn {
+                    State::Pressed
+                } else {
+                    State::Rest
+                })
                 .on_press(|s: &mut Desktop| with_gallery(s, |g| g.active_btn = !g.active_btn))
                 .build(&t.k)
                 .key("btn-gal-outline"),
         )
-        .child(ui::button("Danger", ButtonVariant::Danger, Size::Compact).build(&t.k))
-        .child(ui::button("Warn", ButtonVariant::Warning, Size::Compact).build(&t.k));
+        .child(
+            Button::new("Danger")
+                .variant(ButtonVariant::Danger)
+                .control_size(Size::Compact.kit())
+                .build(&t.k),
+        )
+        .child(
+            Button::new("Warn")
+                .variant(ButtonVariant::Warning)
+                .control_size(Size::Compact.kit())
+                .build(&t.k),
+        );
 
+    let saving_spinner = ui::spinner(t);
     let ghost = row()
         .w_full()
         .gap(S6)
         .center_y()
         .child(
-            ui::button("Ghost", ButtonVariant::Ghost, Size::Compact)
+            Button::new("Ghost")
+                .variant(ButtonVariant::Ghost)
+                .control_size(Size::Compact.kit())
                 .shortcut(ui::shortcut("N"))
                 .build(&t.k),
         )
-        .child(ui::button("Muted", ButtonVariant::GhostMuted, Size::Compact).build(&t.k))
-        .child(ui::button("Faint", ButtonVariant::GhostFaint, Size::Compact).build(&t.k))
         .child(
-            ui::button("New", ButtonVariant::Outline, Size::Compact)
-                .icon(&ui::PLUS)
-                .trailing_icon(&ui::CHEVRON_OPEN)
+            Button::new("Muted")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(Size::Compact.kit())
                 .build(&t.k),
         )
         .child(
-            ui::button("Saving", ButtonVariant::Submit, Size::Compact)
-                .loading(true)
+            Button::new("Faint")
+                .variant(ButtonVariant::GhostFaint)
+                .control_size(Size::Compact.kit())
+                .build(&t.k),
+        )
+        .child(
+            Button::new("New")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Compact.kit())
+                .icon(&ui::PLUS)
+                .build(&t.k),
+        )
+        .child(
+            Button::new("Saving")
+                .variant(ButtonVariant::Loading)
+                .control_size(Size::Compact.kit())
+                .label_with(move |font, ink| {
+                    row()
+                        .gap(S6)
+                        .center_y()
+                        .child(saving_spinner)
+                        .child(text("Saving").font(font).color(ink))
+                })
                 .build(&t.k),
         );
 
@@ -95,109 +135,124 @@ fn button_sizes_and_disabled(t: &Theme) -> El {
         .w_full()
         .gap(S6)
         .center_y()
-        .child(ui::button("Micro", ButtonVariant::Outline, Size::Micro).build(&t.k))
-        .child(ui::button("Small", ButtonVariant::Outline, Size::Small).build(&t.k))
-        .child(ui::button("Compact", ButtonVariant::Outline, Size::Compact).build(&t.k))
-        .child(ui::button("Default", ButtonVariant::Outline, Size::Default).build(&t.k))
-        .child(ui::button("Large", ButtonVariant::Outline, Size::Large).build(&t.k));
+        .child(
+            Button::new("Micro")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Micro.kit())
+                .build(&t.k),
+        )
+        .child(
+            Button::new("Small")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
+                .build(&t.k),
+        )
+        .child(
+            Button::new("Compact")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Compact.kit())
+                .build(&t.k),
+        )
+        .child(
+            Button::new("Large")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Large.kit())
+                .build(&t.k),
+        );
 
     let disabled = row()
         .w_full()
         .gap(S6)
         .center_y()
         .child(
-            ui::button("Disabled submit", ButtonVariant::Submit, Size::Small)
+            Button::new("Submit")
+                .variant(ButtonVariant::Submit)
+                .control_size(Size::Small.kit())
                 .disabled(true)
                 .build(&t.k),
         )
         .child(
-            ui::button("Disabled outline", ButtonVariant::Outline, Size::Small)
+            Button::new("Outline")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
                 .disabled(true)
                 .build(&t.k),
         )
         .child(
-            ui::button("Disabled ghost", ButtonVariant::Ghost, Size::Small)
+            Button::new("Ghost")
+                .variant(ButtonVariant::Ghost)
+                .control_size(Size::Small.kit())
                 .disabled(true)
                 .build(&t.k),
-        );
+        )
+        .child(text("Disabled").font(t.micro).color(t.faint));
 
     col().w_full().gap(S6).child(sizes).child(disabled)
 }
 
 fn icon_and_inline_buttons(t: &Theme) -> El {
-    row()
+    let icons = row()
         .w_full()
         .gap(S6)
         .center_y()
         .child(
-            ui::icon_button(
-                &ui::CLOSE,
-                "Tiny close",
-                IconButtonVariant::GhostMuted,
-                Size::Tiny,
-            )
-            .build(&t.k),
+            IconButton::new(&ui::CLOSE)
+                .help("Tiny close")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Tiny.kit())
+                .build(&t.k),
         )
         .child(
-            ui::icon_button(
-                &ui::PLUS,
-                "Micro add",
-                IconButtonVariant::GhostMuted,
-                Size::Micro,
-            )
-            .build(&t.k),
+            IconButton::new(&ui::PLUS)
+                .help("Micro add")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .build(&t.k),
         )
         .child(
-            ui::icon_button(
-                &ui::PIN,
-                "Pin active",
-                IconButtonVariant::Ghost,
-                Size::Small,
-            )
-            .active(true)
-            .build(&t.k),
+            IconButton::new(&ui::PIN)
+                .help("Pin active")
+                .variant(IconButtonVariant::Ghost)
+                .control_size(Size::Small.kit())
+                .expanded(true)
+                .build(&t.k),
         )
         .child(
-            ui::icon_button(
-                &ui::LIST_FILTER,
-                "Filter",
-                IconButtonVariant::Neutral,
-                Size::Compact,
-            )
-            .build(&t.k),
+            IconButton::new(&ui::LIST_FILTER)
+                .help("Filter")
+                .variant(IconButtonVariant::Neutral)
+                .control_size(Size::Compact.kit())
+                .build(&t.k),
         )
         .child(
-            ui::icon_button(
-                &ui::ARROW_UP,
-                "Send",
-                IconButtonVariant::Submit,
-                Size::Default,
-            )
-            .circle()
-            .build(&t.k),
+            IconButton::new(&ui::ARROW_UP)
+                .help("Send")
+                .variant(IconButtonVariant::Submit)
+                .control_size(Size::Default.kit())
+                .build(&t.k)
+                .radius(RADIUS_PILL),
         )
         .child(
-            ui::icon_button(
-                &ui::ARROW_UP,
-                "Send disabled",
-                IconButtonVariant::Submit,
-                Size::Default,
-            )
-            .circle()
-            .disabled(true)
-            .build(&t.k),
+            IconButton::new(&ui::ARROW_UP)
+                .help("Send disabled")
+                .variant(IconButtonVariant::Submit)
+                .control_size(Size::Default.kit())
+                .disabled(true)
+                .build(&t.k)
+                .radius(RADIUS_PILL),
         )
         .child(
-            ui::icon_button(
-                &ui::SETTINGS,
-                "Disabled",
-                IconButtonVariant::Ghost,
-                Size::Small,
-            )
-            .disabled(true)
-            .build(&t.k),
-        )
-        .child(rune::spacer())
+            IconButton::new(&ui::SETTINGS)
+                .help("Disabled")
+                .variant(IconButtonVariant::Ghost)
+                .control_size(Size::Small.kit())
+                .disabled(true)
+                .build(&t.k),
+        );
+    let inline = row()
+        .w_full()
+        .gap(S6)
+        .center_y()
         .child(
             ui::inline_button("Copy")
                 .icon(&ui::COPY)
@@ -216,7 +271,8 @@ fn icon_and_inline_buttons(t: &Theme) -> El {
                 .icon(&ui::ROTATE_CW)
                 .build(t),
         )
-        .child(ui::inline_button("Locked").disabled(true).build(t))
+        .child(ui::inline_button("Locked").disabled(true).build(t));
+    col().w_full().gap(S6).child(icons).child(inline)
 }
 
 pub(super) fn badges_card(state: &GalleryState, t: &Theme) -> El {
@@ -253,7 +309,9 @@ pub(super) fn badges_card(state: &GalleryState, t: &Theme) -> El {
         .child(text("·").font(t.small).color(t.faint))
         .child(ui::diff_stat_rolling("gal-diff", add, del, t))
         .child(
-            ui::button("+", ButtonVariant::Outline, Size::Micro)
+            rune_kit::Button::new("+")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Micro.kit())
                 .on_press(|s: &mut Desktop| with_gallery(s, |g| g.diff_step += 1))
                 .build(&t.k)
                 .key("btn-gallery-diff"),

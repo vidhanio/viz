@@ -153,36 +153,32 @@ fn queued_actions(
         .build(t)
         .key("send-now");
 
-    let edit = ui::icon_button(
-        &ui::PENCIL,
-        "Edit queued message",
-        IconButtonVariant::GhostMuted,
-        Size::Micro,
-    )
-    .active(editing)
-    .disabled(!connected)
-    .on_press_tx(move |s: &mut Desktop, tx| {
-        if editing {
-            s.dispatch(Msg::Composer(ComposerMsg::CancelEditQueued), tx);
-        } else {
-            s.dispatch(Msg::Composer(ComposerMsg::EditQueued(run)), tx);
-        }
-    })
-    .build(&t.k)
-    .key("edit");
+    let edit = rune_kit::IconButton::new(&ui::PENCIL)
+        .help("Edit queued message")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Micro.kit())
+        .expanded(editing)
+        .disabled(!connected)
+        .on_press_tx(move |s: &mut Desktop, tx| {
+            if editing {
+                s.dispatch(Msg::Composer(ComposerMsg::CancelEditQueued), tx);
+            } else {
+                s.dispatch(Msg::Composer(ComposerMsg::EditQueued(run)), tx);
+            }
+        })
+        .build(&t.k)
+        .key("edit");
 
-    let remove = ui::icon_button(
-        &ui::CLOSE,
-        "Remove queued message",
-        IconButtonVariant::GhostMuted,
-        Size::Micro,
-    )
-    .disabled(!connected)
-    .on_press_tx(move |s: &mut Desktop, tx| {
-        s.dispatch(Msg::Composer(ComposerMsg::RemoveQueued(run)), tx);
-    })
-    .build(&t.k)
-    .key("remove");
+    let remove = rune_kit::IconButton::new(&ui::CLOSE)
+        .help("Remove queued message")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Micro.kit())
+        .disabled(!connected)
+        .on_press_tx(move |s: &mut Desktop, tx| {
+            s.dispatch(Msg::Composer(ComposerMsg::RemoveQueued(run)), tx);
+        })
+        .build(&t.k)
+        .key("remove");
 
     row()
         .key(format!("queued-actions-{}", run.0))

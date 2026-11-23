@@ -104,7 +104,9 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .child(ui::rule(t));
     if matches!(git.target, GitDiffTarget::Turn { .. }) && git.diff.is_some() {
         panel = panel.child(
-            ui::button("Restore checkpoint…", ButtonVariant::Ghost, Size::Small)
+            rune_kit::Button::new("Restore checkpoint…")
+                .variant(ButtonVariant::Ghost)
+                .control_size(Size::Small.kit())
                 .disabled(s.model.busy())
                 .on_press_tx(|s: &mut Desktop, tx| {
                     s.widgets.git_body = rune::TextEdit::new("");
@@ -213,34 +215,28 @@ fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
                 .build(&t.k),
         )
         .child(
-            ui::icon_button(
-                &ui::REFRESH_CW,
-                "Refresh diff",
-                IconButtonVariant::Ghost,
-                Size::Small,
-            )
-            .on_press_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::RefreshDiff, tx))
-            .build(&t.k),
+            rune_kit::IconButton::new(&ui::REFRESH_CW)
+                .help("Refresh diff")
+                .variant(IconButtonVariant::Ghost)
+                .control_size(Size::Small.kit())
+                .on_press_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::RefreshDiff, tx))
+                .build(&t.k),
         )
         .child(
-            ui::icon_button(
-                &ui::FOLDER_TREE,
-                "Toggle changed files",
-                IconButtonVariant::Ghost,
-                Size::Small,
-            )
-            .on_press(|s: &mut Desktop| s.widgets.git_tree_open = !s.widgets.git_tree_open)
-            .build(&t.k),
+            rune_kit::IconButton::new(&ui::FOLDER_TREE)
+                .help("Toggle changed files")
+                .variant(IconButtonVariant::Ghost)
+                .control_size(Size::Small.kit())
+                .on_press(|s: &mut Desktop| s.widgets.git_tree_open = !s.widgets.git_tree_open)
+                .build(&t.k),
         )
         .child(
-            ui::icon_button(
-                &ui::CLOSE,
-                "Close diff",
-                IconButtonVariant::Ghost,
-                Size::Small,
-            )
-            .on_press_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::ToggleDiff, tx))
-            .build(&t.k),
+            rune_kit::IconButton::new(&ui::CLOSE)
+                .help("Close diff")
+                .variant(IconButtonVariant::Ghost)
+                .control_size(Size::Small.kit())
+                .on_press_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::ToggleDiff, tx))
+                .build(&t.k),
         )
 }
 
@@ -283,7 +279,9 @@ fn scope(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             },
         ))
     });
-    let trigger = ui::button(label, ButtonVariant::Outline, Size::Small)
+    let trigger = rune_kit::Button::new(label)
+        .variant(ButtonVariant::Outline)
+        .control_size(Size::Small.kit())
         .on_press_tx(|s: &mut Desktop, tx| super::toggle_popup(s, Popup::Scope, tx))
         .build(&t.k);
     Popover::new(SCOPE)
@@ -364,10 +362,14 @@ pub fn restore_dialog(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         )
         .build(&t.k);
     let footer = ui::dialog_actions([
-        ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
+        rune_kit::Button::new("Cancel")
+            .variant(ButtonVariant::Ghost)
+            .control_size(Size::Default.kit())
             .on_press(super::close_dialog)
             .build(&t.k),
-        ui::button("Restore", ButtonVariant::Danger, Size::Default)
+        rune_kit::Button::new("Restore")
+            .variant(ButtonVariant::Danger)
+            .control_size(Size::Default.kit())
             .disabled(s.model.git.busy || run_id(&s.widgets.git_body.text).is_none())
             .on_press_tx(move |s: &mut Desktop, tx| {
                 if let Some(expected_run) = run_id(&s.widgets.git_body.text) {

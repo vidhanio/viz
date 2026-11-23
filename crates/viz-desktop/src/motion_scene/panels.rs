@@ -41,15 +41,13 @@ pub(super) fn presence_card(demo: &WorkbenchDemo, t: &Theme, overlays: &mut Vec<
         .gap(S8)
         .center_y()
         .child(
-            ui::button(
-                if demo.overlays.drawer {
-                    "Close @files"
-                } else {
-                    "Open @files"
-                },
-                ButtonVariant::Outline,
-                Size::Small,
-            )
+            rune_kit::Button::new(if demo.overlays.drawer {
+                "Close @files"
+            } else {
+                "Open @files"
+            })
+            .variant(ButtonVariant::Outline)
+            .control_size(Size::Small.kit())
             .on_press(|s: &mut Desktop| {
                 with_demo(s, |d| d.overlays.drawer = !d.overlays.drawer);
             })
@@ -57,15 +55,13 @@ pub(super) fn presence_card(demo: &WorkbenchDemo, t: &Theme, overlays: &mut Vec<
             .key("btn-drawer"),
         )
         .child(
-            ui::button(
-                if demo.overlays.popover {
-                    "Close popover"
-                } else {
-                    "Details popover"
-                },
-                ButtonVariant::Outline,
-                Size::Small,
-            )
+            rune_kit::Button::new(if demo.overlays.popover {
+                "Close popover"
+            } else {
+                "Details popover"
+            })
+            .variant(ButtonVariant::Outline)
+            .control_size(Size::Small.kit())
             .on_press(|s: &mut Desktop| {
                 with_demo(s, |d| d.overlays.popover = !d.overlays.popover);
             })
@@ -207,16 +203,14 @@ fn details_popover(t: &Theme) -> El {
                 .child(text("Thread details").font(t.ui_medium).color(t.text))
                 .child(rune::spacer())
                 .child(
-                    ui::icon_button(
-                        &ui::CLOSE,
-                        "Close",
-                        IconButtonVariant::GhostMuted,
-                        Size::Small,
-                    )
-                    .on_press(|s: &mut Desktop| {
-                        with_demo(s, |d| d.overlays.popover = false);
-                    })
-                    .build(&t.overlay),
+                    rune_kit::IconButton::new(&ui::CLOSE)
+                        .help("Close")
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Small.kit())
+                        .on_press(|s: &mut Desktop| {
+                            with_demo(s, |d| d.overlays.popover = false);
+                        })
+                        .build(&t.overlay),
                 ),
         )
         .child(ui::rule(t))
@@ -335,7 +329,9 @@ pub(super) fn undo_toast(t: &Theme) -> El {
                 ),
         )
         .child(
-            ui::button("Undo", ButtonVariant::Outline, Size::Small)
+            rune_kit::Button::new("Undo")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
                 .on_press(|s: &mut Desktop| {
                     with_demo(s, |d| d.overlays.toast = false);
                 })

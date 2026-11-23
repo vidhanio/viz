@@ -2,9 +2,9 @@
 //! shimmer skeleton rows.
 
 use rune::{Align, El, Icon, Tx, col, el, icon, row, text};
-use rune_kit::IconButtonVariant;
+use rune_kit::{IconButton, IconButtonVariant};
 
-use super::{badge::Tone, icon_button::icon_button, icons::CLOSE, radar};
+use super::{badge::Tone, icons::CLOSE, radar};
 use crate::{
     motion,
     theme::{
@@ -195,15 +195,13 @@ impl Banner {
         t: &Theme,
     ) -> Self {
         self.dismiss = Some(
-            icon_button(
-                &CLOSE,
-                "Dismiss",
-                IconButtonVariant::GhostMuted,
-                Size::Micro,
-            )
-            .on_press_tx(on_dismiss)
-            .build(&t.k)
-            .key("dismiss"),
+            IconButton::new(&CLOSE)
+                .help("Dismiss")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .on_press_tx(on_dismiss)
+                .build(&t.k)
+                .key("dismiss"),
         );
         self
     }

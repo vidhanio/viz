@@ -135,18 +135,16 @@ fn busy_actions(actions: El, s: &Desktop, t: &Theme) -> El {
     }
 
     let queue_hint = format!("Queue message ({}+Enter)", ui::COMMAND_KEY);
-    let queue_btn = ui::icon_button(
-        &ui::LIST_PLUS,
-        &queue_hint,
-        IconButtonVariant::GhostMuted,
-        Size::Compact,
-    )
-    .disabled(!m.connected())
-    .on_press_tx(|s: &mut Desktop, tx| {
-        s.dispatch(Msg::Composer(ComposerMsg::QueueInput), tx);
-    })
-    .build(&t.k)
-    .key("queue");
+    let queue_btn = rune_kit::IconButton::new(&ui::LIST_PLUS)
+        .help(&queue_hint)
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Compact.kit())
+        .disabled(!m.connected())
+        .on_press_tx(|s: &mut Desktop, tx| {
+            s.dispatch(Msg::Composer(ComposerMsg::QueueInput), tx);
+        })
+        .build(&t.k)
+        .key("queue");
 
     let stop_btn = row()
         .key("stop")

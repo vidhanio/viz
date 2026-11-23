@@ -2,9 +2,8 @@
 //! the frameless command-palette sheet (the kit dialog always draws a header).
 
 use rune::{El, TextEdit, Tx, col, el, row, text};
-use rune_kit::ButtonVariant;
+use rune_kit::{Button, ButtonVariant};
 
-use super::button::button;
 use crate::{
     motion,
     theme::{DIALOG_INSET, HAIRLINE, RADIUS_SURFACE, S8, Size, Theme},
@@ -139,10 +138,14 @@ impl DialogForm<'_> {
             .field
             .is_some_and(|(value, _)| value.text.trim().is_empty());
         let actions = dialog_actions([
-            button("Cancel", ButtonVariant::Ghost, Size::Default)
+            Button::new("Cancel")
+                .variant(ButtonVariant::Ghost)
+                .control_size(Size::Default.kit())
                 .on_press(close.clone())
                 .build(&t.k),
-            button(self.action, self.variant, Size::Default)
+            Button::new(self.action)
+                .variant(self.variant)
+                .control_size(Size::Default.kit())
                 .disabled(disabled)
                 .on_press_tx(submit)
                 .build(&t.k),

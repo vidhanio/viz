@@ -304,59 +304,53 @@ fn hover_actions(s: &Desktop, user: &User, t: &Theme) -> Option<El> {
     if let Some(entry) = user.entry_id {
         if has_git {
             actions = actions.child(
-                ui::icon_button(
-                    &ui::ROTATE_CCW,
-                    "Restore checkpoint",
-                    IconButtonVariant::GhostMuted,
-                    Size::Small,
-                )
-                .disabled(!connected)
-                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                    s.dispatch(Msg::Timeline(TimelineMsg::RestoreCheckpoint(entry)), tx);
-                })
-                .build(&t.k)
-                .key("restore"),
+                rune_kit::IconButton::new(&ui::ROTATE_CCW)
+                    .help("Restore checkpoint")
+                    .variant(IconButtonVariant::GhostMuted)
+                    .control_size(Size::Small.kit())
+                    .disabled(!connected)
+                    .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                        s.dispatch(Msg::Timeline(TimelineMsg::RestoreCheckpoint(entry)), tx);
+                    })
+                    .build(&t.k)
+                    .key("restore"),
             );
         }
         actions = actions.child(
-            ui::icon_button(
-                &ui::GIT_FORK,
-                "Fork from here",
-                IconButtonVariant::GhostMuted,
-                Size::Small,
-            )
-            .disabled(!connected)
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::ForkBefore {
-                        entry,
-                        load_prompt: false,
-                    }),
-                    tx,
-                );
-            })
-            .build(&t.k)
-            .key("fork-before"),
+            rune_kit::IconButton::new(&ui::GIT_FORK)
+                .help("Fork from here")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Small.kit())
+                .disabled(!connected)
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(
+                        Msg::Timeline(TimelineMsg::ForkBefore {
+                            entry,
+                            load_prompt: false,
+                        }),
+                        tx,
+                    );
+                })
+                .build(&t.k)
+                .key("fork-before"),
         );
         actions = actions.child(
-            ui::icon_button(
-                &ui::PENCIL,
-                "Edit from here",
-                IconButtonVariant::GhostMuted,
-                Size::Small,
-            )
-            .disabled(!connected)
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::ForkBefore {
-                        entry,
-                        load_prompt: true,
-                    }),
-                    tx,
-                );
-            })
-            .build(&t.k)
-            .key("edit-from-here"),
+            rune_kit::IconButton::new(&ui::PENCIL)
+                .help("Edit from here")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Small.kit())
+                .disabled(!connected)
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(
+                        Msg::Timeline(TimelineMsg::ForkBefore {
+                            entry,
+                            load_prompt: true,
+                        }),
+                        tx,
+                    );
+                })
+                .build(&t.k)
+                .key("edit-from-here"),
         );
     }
 

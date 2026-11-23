@@ -193,14 +193,12 @@ fn legend(folder: bool, t: &Theme) -> El {
 }
 
 fn header(title: &str, t: &Theme) -> El {
-    let back = ui::icon_button(
-        &ui::ARROW_LEFT,
-        "Back",
-        rune_kit::IconButtonVariant::Ghost,
-        Size::Compact,
-    )
-    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Palette(PaletteMsg::Back), tx))
-    .build(&t.overlay);
+    let back = rune_kit::IconButton::new(&ui::ARROW_LEFT)
+        .help("Back")
+        .variant(rune_kit::IconButtonVariant::Ghost)
+        .control_size(Size::Compact.kit())
+        .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Palette(PaletteMsg::Back), tx))
+        .build(&t.overlay);
     row()
         .px(S8)
         .gap(S8)

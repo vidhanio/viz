@@ -324,7 +324,17 @@ pub(super) fn build_theme(scheme: &Scheme) -> Theme {
         color: border_control,
         ..Shadow::default()
     };
+    let neutral_ring = Shadow {
+        spread: HAIRLINE,
+        color: hairline,
+        inset: true,
+        ..Shadow::default()
+    };
     k.elevation = rune_kit::Elevation::default().with_input(vec![input_ring]);
+    k.elevation.button_neutral = vec![neutral_ring];
+    k.elevation.button_contrast = Vec::new();
+    k.elevation.raised = Vec::new();
+    k.elevation.elements = Vec::new();
     k.elevation.floating = Vec::new();
     k.elevation.md = Vec::new();
     k.elevation.overlay = Vec::new();

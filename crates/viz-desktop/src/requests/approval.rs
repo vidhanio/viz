@@ -71,18 +71,18 @@ fn card(app: &Desktop, request: &RunRequest, t: &Theme) -> Option<El> {
             }))
             .child(row().gap(S4).wrap().children(options.iter().map(|option| {
                 let option_id = option.id.clone();
-                ui::button(
-                    &option.label,
-                    if matches!(option.kind, PermissionKind::AllowOnce) {
+                rune_kit::Button::new(&option.label)
+                    .variant(if matches!(option.kind, PermissionKind::AllowOnce) {
                         ButtonVariant::Submit
                     } else {
                         ButtonVariant::Ghost
-                    },
-                    Size::Compact,
-                )
-                .disabled(disabled)
-                .on_press_tx(move |app: &mut Desktop, tx| choose(app, id, option_id.clone(), tx))
-                .build(&t.k)
+                    })
+                    .control_size(Size::Compact.kit())
+                    .disabled(disabled)
+                    .on_press_tx(move |app: &mut Desktop, tx| {
+                        choose(app, id, option_id.clone(), tx);
+                    })
+                    .build(&t.k)
             })))
             .on_key(move |app: &mut Desktop, event, tx| {
                 let Key::Text(value) = &event.key else {

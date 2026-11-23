@@ -28,19 +28,17 @@ pub fn plan_card(s: &Desktop, plan: &PlanCard, t: &Theme, layer: &mut Vec<El>) -
     let copy_text = serialize_plan(&plan.content);
     let menu_open = s.model.timeline.open_plan_menu.as_deref() == Some(plan.key.as_str());
     let toggle_key = plan.key.clone();
-    let menu_trigger = ui::icon_button(
-        &ui::MORE,
-        "Plan actions",
-        IconButtonVariant::GhostMuted,
-        Size::Micro,
-    )
-    .on_press(move |s: &mut Desktop| {
-        s.dispatch_local(Msg::Timeline(TimelineMsg::TogglePlanMenu(
-            toggle_key.clone(),
-        )));
-    })
-    .build(&t.k)
-    .key(format!("{}-more", plan.key));
+    let menu_trigger = rune_kit::IconButton::new(&ui::MORE)
+        .help("Plan actions")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Micro.kit())
+        .on_press(move |s: &mut Desktop| {
+            s.dispatch_local(Msg::Timeline(TimelineMsg::TogglePlanMenu(
+                toggle_key.clone(),
+            )));
+        })
+        .build(&t.k)
+        .key(format!("{}-more", plan.key));
 
     let mut menu = Menu::new(format!("{}-plan-menu", plan.key))
         .placement(Placement::BottomEnd)

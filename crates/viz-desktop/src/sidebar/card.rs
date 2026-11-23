@@ -310,17 +310,15 @@ fn hover_actions(
 ) -> El {
     let id = thread.id;
     let mut snooze_btn = || {
-        let trigger = ui::icon_button(
-            &ui::CLOCK,
-            "Snooze",
-            IconButtonVariant::GhostMuted,
-            Size::Micro,
-        )
-        .on_press_tx(move |s: &mut Desktop, tx| {
-            s.dispatch(Msg::Sidebar(SidebarMsg::ToggleSnoozePopover(id)), tx);
-        })
-        .build(&t.k)
-        .key(format!("snooze-trigger-{id}"));
+        let trigger = rune_kit::IconButton::new(&ui::CLOCK)
+            .help("Snooze")
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(Size::Micro.kit())
+            .on_press_tx(move |s: &mut Desktop, tx| {
+                s.dispatch(Msg::Sidebar(SidebarMsg::ToggleSnoozePopover(id)), tx);
+            })
+            .build(&t.k)
+            .key(format!("snooze-trigger-{id}"));
         actions::snooze_popover(s, thread, trigger, now, t, layer)
     };
     let pill = |glyph: &'static rune::Icon, label: &'static str, action: TriageAction, undo| {

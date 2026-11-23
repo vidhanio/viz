@@ -149,7 +149,9 @@ fn task_result_heading(
         .and_then(|task| task.thread.map(|child| (child, task.environment.clone())))
     {
         heading = heading.child(
-            ui::button("Open", ButtonVariant::GhostMuted, Size::Small)
+            rune_kit::Button::new("Open")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(Size::Small.kit())
                 .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                     s.dispatch(
                         Msg::Timeline(TimelineMsg::OpenThreadLink {

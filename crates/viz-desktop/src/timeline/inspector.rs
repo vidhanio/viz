@@ -200,23 +200,21 @@ fn cmd_header(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         );
 
     header.child(
-        ui::icon_button(
-            if copied { &ui::CHECK } else { &ui::COPY },
-            "Copy command",
-            IconButtonVariant::GhostMuted,
-            Size::Micro,
-        )
-        .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-            s.dispatch(
-                Msg::Timeline(TimelineMsg::CopyWithFeedback {
-                    key: copy_id.clone(),
-                    text: cmd_copy.clone(),
-                }),
-                tx,
-            );
-        })
-        .build(&t.k)
-        .key("copy-cmd"),
+        rune_kit::IconButton::new(if copied { &ui::CHECK } else { &ui::COPY })
+            .help("Copy command")
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(Size::Micro.kit())
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::CopyWithFeedback {
+                        key: copy_id.clone(),
+                        text: cmd_copy.clone(),
+                    }),
+                    tx,
+                );
+            })
+            .build(&t.k)
+            .key("copy-cmd"),
     )
 }
 
@@ -294,17 +292,15 @@ fn plain_output_inspector(s: &Desktop, tool: &Tool, mono: bool, t: &Theme) -> El
                 .truncate(),
         )
         .child(
-            ui::icon_button(
-                &ui::COPY,
-                "Copy output",
-                IconButtonVariant::GhostMuted,
-                Size::Micro,
-            )
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(Msg::Timeline(TimelineMsg::CopyText(copied.clone())), tx);
-            })
-            .build(&t.k)
-            .key("copy"),
+            rune_kit::IconButton::new(&ui::COPY)
+                .help("Copy output")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(Msg::Timeline(TimelineMsg::CopyText(copied.clone())), tx);
+                })
+                .build(&t.k)
+                .key("copy"),
         );
     let streaming = tool.status == ToolStatus::Running;
     let mut card = inspector_frame("plain-card", t)

@@ -350,7 +350,9 @@ pub fn error_banner(
 
     if s.model.connected() && !s.model.busy() && kind != ErrorKind::Auth {
         banner = banner.action(
-            ui::button("Retry", ButtonVariant::Neutral, Size::Small)
+            rune_kit::Button::new("Retry")
+                .variant(ButtonVariant::Neutral)
+                .control_size(Size::Small.kit())
                 .icon(&ui::REFRESH_CW)
                 .on_press_tx(|s: &mut Desktop, tx: &mut Tx| {
                     s.dispatch(Msg::Timeline(TimelineMsg::RetryLastPrompt), tx);

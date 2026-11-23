@@ -344,7 +344,9 @@ fn state_b_stacked_heading(
 
 /// State C: Zero projects configured on first launch (`home.md` §2).
 fn zero_projects_hero(t: &Theme) -> El {
-    let add = ui::button("Add project", ButtonVariant::Submit, Size::Default)
+    let add = rune_kit::Button::new("Add project")
+        .variant(ButtonVariant::Submit)
+        .control_size(Size::Default.kit())
         .icon(&ui::PLUS)
         .on_press_tx(|s: &mut Desktop, tx| {
             s.dispatch(
@@ -357,23 +359,21 @@ fn zero_projects_hero(t: &Theme) -> El {
         .build(&t.k)
         .key("hero-add-project");
 
-    let without = ui::button(
-        "Start without a project",
-        ButtonVariant::Neutral,
-        Size::Default,
-    )
-    .icon(&ui::MESSAGE_SQUARE_DASHED)
-    .on_press_tx(|s: &mut Desktop, tx| {
-        s.dispatch(
-            Msg::Sidebar(SidebarMsg::NewThreadIn {
-                project: None,
-                branch: None,
-            }),
-            tx,
-        );
-    })
-    .build(&t.k)
-    .key("hero-without-project");
+    let without = rune_kit::Button::new("Start without a project")
+        .variant(ButtonVariant::Neutral)
+        .control_size(Size::Default.kit())
+        .icon(&ui::MESSAGE_SQUARE_DASHED)
+        .on_press_tx(|s: &mut Desktop, tx| {
+            s.dispatch(
+                Msg::Sidebar(SidebarMsg::NewThreadIn {
+                    project: None,
+                    branch: None,
+                }),
+                tx,
+            );
+        })
+        .build(&t.k)
+        .key("hero-without-project");
 
     col()
         .key("home-zero-projects")

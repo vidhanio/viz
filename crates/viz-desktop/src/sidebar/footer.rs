@@ -43,7 +43,9 @@ pub(super) fn footer(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 
     if show_retry {
         bar = bar.child(
-            ui::button("Retry", ButtonVariant::GhostMuted, Size::Small)
+            rune_kit::Button::new("Retry")
+                .variant(ButtonVariant::GhostMuted)
+                .control_size(Size::Small.kit())
                 .on_press_tx(|s: &mut Desktop, tx| {
                     s.dispatch(Msg::Selection(SelectionMsg::Reconnect), tx);
                 })
@@ -266,16 +268,14 @@ fn environment_items<'a>(s: &'a Desktop, t: &'a Theme) -> impl Iterator<Item = M
 
 fn info_button(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let open = s.model.sidebar.info_menu;
-    let trigger = ui::icon_button(
-        &ui::SETTINGS,
-        "Shortcuts & config",
-        IconButtonVariant::GhostMuted,
-        Size::Compact,
-    )
-    .active(open)
-    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::ToggleInfoMenu), tx))
-    .build(&t.k)
-    .key(INFO_TRIGGER_KEY);
+    let trigger = rune_kit::IconButton::new(&ui::SETTINGS)
+        .help("Shortcuts & config")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Compact.kit())
+        .expanded(open)
+        .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::ToggleInfoMenu), tx))
+        .build(&t.k)
+        .key(INFO_TRIGGER_KEY);
 
     if !open {
         return trigger;

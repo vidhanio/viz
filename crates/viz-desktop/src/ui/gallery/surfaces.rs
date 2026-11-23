@@ -12,13 +12,11 @@ use crate::{
 };
 
 pub(super) fn rows_card(state: &GalleryState, t: &Theme) -> El {
-    let add_btn = ui::icon_button(
-        &ui::PLUS,
-        "New thread",
-        IconButtonVariant::GhostMuted,
-        Size::Micro,
-    )
-    .build(&t.k);
+    let add_btn = rune_kit::IconButton::new(&ui::PLUS)
+        .help("New thread")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Micro.kit())
+        .build(&t.k);
     let sec_open = ui::section_header("gal-sec-open", "Pinned")
         .collapsible(state.sections.pinned_open)
         .count(3)
@@ -286,11 +284,15 @@ pub(super) fn feedback_card(state: &GalleryState, reduced: bool, t: &Theme) -> E
                                 .detail("Clear the search filter or start a new thread.")
                                 .compact()
                                 .secondary_action(
-                                    ui::button("Clear", ButtonVariant::Ghost, Size::Small)
+                                    rune_kit::Button::new("Clear")
+                                        .variant(ButtonVariant::Ghost)
+                                        .control_size(Size::Small.kit())
                                         .build(&t.k),
                                 )
                                 .action(
-                                    ui::button("New thread", ButtonVariant::Outline, Size::Small)
+                                    rune_kit::Button::new("New thread")
+                                        .variant(ButtonVariant::Outline)
+                                        .control_size(Size::Small.kit())
                                         .build(&t.k),
                                 )
                                 .build(t),

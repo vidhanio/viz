@@ -209,18 +209,16 @@ fn file_row(s: &Desktop, index: usize, attachment: &Attachment, t: &Theme) -> El
                         .truncate(),
                 )
                 .child(
-                    ui::icon_button(
-                        &ui::ROTATE_CW,
-                        "Retry attachment",
-                        IconButtonVariant::GhostMuted,
-                        Size::Micro,
-                    )
-                    .on_press_tx(move |s: &mut Desktop, tx| {
-                        crate::attachments::retry_draft_image(s, index);
-                        tx.wake_after(std::time::Duration::from_millis(32));
-                    })
-                    .build(&t.k)
-                    .key("retry"),
+                    rune_kit::IconButton::new(&ui::ROTATE_CW)
+                        .help("Retry attachment")
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Micro.kit())
+                        .on_press_tx(move |s: &mut Desktop, tx| {
+                            crate::attachments::retry_draft_image(s, index);
+                            tx.wake_after(std::time::Duration::from_millis(32));
+                        })
+                        .build(&t.k)
+                        .key("retry"),
                 );
         }
         crate::model::AttachmentStatus::Ready => {
@@ -236,17 +234,15 @@ fn file_row(s: &Desktop, index: usize, attachment: &Attachment, t: &Theme) -> El
     }
 
     item.child(
-        ui::icon_button(
-            &ui::CLOSE,
-            "Remove attachment",
-            IconButtonVariant::GhostMuted,
-            Size::Micro,
-        )
-        .on_press_tx(move |s: &mut Desktop, tx| {
-            s.dispatch(Msg::Composer(ComposerMsg::RemoveAttachment(index)), tx);
-        })
-        .build(&t.k)
-        .key("remove"),
+        rune_kit::IconButton::new(&ui::CLOSE)
+            .help("Remove attachment")
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(Size::Micro.kit())
+            .on_press_tx(move |s: &mut Desktop, tx| {
+                s.dispatch(Msg::Composer(ComposerMsg::RemoveAttachment(index)), tx);
+            })
+            .build(&t.k)
+            .key("remove"),
     )
 }
 

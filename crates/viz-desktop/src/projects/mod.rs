@@ -305,7 +305,9 @@ fn button(label: &str, action: Action, disabled: bool, t: &Theme) -> El {
         }
         _ => rune_kit::ButtonVariant::Outline,
     };
-    ui::button(label, variant, Size::Compact)
+    rune_kit::Button::new(label)
+        .variant(variant)
+        .control_size(Size::Compact.kit())
         .disabled(disabled)
         .on_press_tx(move |s: &mut Desktop, tx| {
             s.dispatch(Msg::Palette(PaletteMsg::Project(action.clone())), tx);

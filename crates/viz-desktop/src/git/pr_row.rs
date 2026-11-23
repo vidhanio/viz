@@ -111,7 +111,9 @@ fn chip(
     t: &Theme,
     overlays: &mut Vec<El>,
 ) -> El {
-    let trigger = ui::button(label, ButtonVariant::Ghost, Size::Small)
+    let trigger = rune_kit::Button::new(label)
+        .variant(ButtonVariant::Ghost)
+        .control_size(Size::Small.kit())
         .on_press_tx(move |s: &mut Desktop, tx| {
             super::toggle_popup(s, popup, tx);
             if s.model.git.popup == Some(popup) {
@@ -192,17 +194,17 @@ pub fn dialog(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
         );
     };
     let footer = ui::dialog_actions([
-        ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
+        rune_kit::Button::new("Cancel")
+            .variant(ButtonVariant::Ghost)
+            .control_size(Size::Default.kit())
             .on_press(super::close_dialog)
             .build(&t.k),
-        ui::button(
-            if git.busy { "Creating…" } else { "Create PR" },
-            ButtonVariant::Submit,
-            Size::Default,
-        )
-        .disabled(git.busy || s.widgets.git_message.text.trim().is_empty())
-        .on_press_tx(submit)
-        .build(&t.k),
+        rune_kit::Button::new(if git.busy { "Creating…" } else { "Create PR" })
+            .variant(ButtonVariant::Submit)
+            .control_size(Size::Default.kit())
+            .disabled(git.busy || s.widgets.git_message.text.trim().is_empty())
+            .on_press_tx(submit)
+            .build(&t.k),
     ]);
     let description = format!(
         "Open a pull request targeting {}.",

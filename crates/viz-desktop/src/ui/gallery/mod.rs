@@ -204,16 +204,18 @@ fn gallery_toolbar(state: &GalleryState, reduced: bool, t: &Theme) -> El {
         .child(mode_badge)
         .child(rune::spacer())
         .child(
-            ui::button(
-                if state.switches.shimmer {
-                    "Shimmer: on"
-                } else {
-                    "Shimmer: off"
-                },
-                ButtonVariant::Outline,
-                Size::Small,
-            )
-            .active(state.switches.shimmer)
+            rune_kit::Button::new(if state.switches.shimmer {
+                "Shimmer: on"
+            } else {
+                "Shimmer: off"
+            })
+            .variant(ButtonVariant::Outline)
+            .control_size(Size::Small.kit())
+            .state(if state.switches.shimmer {
+                rune_kit::State::Pressed
+            } else {
+                rune_kit::State::Rest
+            })
             .on_press(|s: &mut Desktop| {
                 with_gallery(s, |g| g.switches.shimmer = !g.switches.shimmer);
             })
@@ -221,8 +223,14 @@ fn gallery_toolbar(state: &GalleryState, reduced: bool, t: &Theme) -> El {
             .key("btn-gallery-shimmer"),
         )
         .child(
-            ui::button("Popover", ButtonVariant::Outline, Size::Small)
-                .active(state.overlays.popover)
+            rune_kit::Button::new("Popover")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
+                .state(if state.overlays.popover {
+                    rune_kit::State::Pressed
+                } else {
+                    rune_kit::State::Rest
+                })
                 .on_press(|s: &mut Desktop| {
                     with_gallery(s, |g| g.overlays.popover = !g.overlays.popover);
                 })
@@ -230,8 +238,14 @@ fn gallery_toolbar(state: &GalleryState, reduced: bool, t: &Theme) -> El {
                 .key("btn-gallery-popover"),
         )
         .child(
-            ui::button("Dialog", ButtonVariant::Outline, Size::Small)
-                .active(state.overlays.dialog)
+            rune_kit::Button::new("Dialog")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
+                .state(if state.overlays.dialog {
+                    rune_kit::State::Pressed
+                } else {
+                    rune_kit::State::Rest
+                })
                 .on_press(|s: &mut Desktop| {
                     with_gallery(s, |g| g.overlays.dialog = !g.overlays.dialog);
                 })
@@ -239,8 +253,14 @@ fn gallery_toolbar(state: &GalleryState, reduced: bool, t: &Theme) -> El {
                 .key("btn-gallery-dialog"),
         )
         .child(
-            ui::button("Toast", ButtonVariant::Outline, Size::Small)
-                .active(state.overlays.toast)
+            rune_kit::Button::new("Toast")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
+                .state(if state.overlays.toast {
+                    rune_kit::State::Pressed
+                } else {
+                    rune_kit::State::Rest
+                })
                 .on_press(|s: &mut Desktop| {
                     with_gallery(s, |g| g.overlays.toast = !g.overlays.toast);
                 })
@@ -293,7 +313,9 @@ fn gallery_popover(t: &Theme) -> El {
         )
         .child(
             row().w_full().justify_end().child(
-                ui::button("Dismiss", ButtonVariant::Outline, Size::Small)
+                rune_kit::Button::new("Dismiss")
+                    .variant(ButtonVariant::Outline)
+                    .control_size(Size::Small.kit())
                     .on_press(|s: &mut Desktop| with_gallery(s, |g| g.overlays.popover = false))
                     .build(&t.overlay)
                     .key("btn-gallery-popover-close"),
@@ -311,10 +333,14 @@ fn gallery_popover(t: &Theme) -> El {
 
 fn gallery_dialog(t: &Theme, overlays: &mut Vec<El>) {
     let actions = ui::dialog_actions([
-        ui::button("Cancel", ButtonVariant::Ghost, Size::Default)
+        rune_kit::Button::new("Cancel")
+            .variant(ButtonVariant::Ghost)
+            .control_size(Size::Default.kit())
             .on_press(|s: &mut Desktop| with_gallery(s, |g| g.overlays.dialog = false))
             .build(&t.overlay),
-        ui::button("Confirm", ButtonVariant::Submit, Size::Default)
+        rune_kit::Button::new("Confirm")
+            .variant(ButtonVariant::Submit)
+            .control_size(Size::Default.kit())
             .on_press(|s: &mut Desktop| with_gallery(s, |g| g.overlays.dialog = false))
             .build(&t.overlay),
     ]);

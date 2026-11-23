@@ -46,7 +46,9 @@ pub fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             } else {
                 message.as_str()
             };
-            let retry = ui::button("Retry", ButtonVariant::Neutral, Size::Default)
+            let retry = rune_kit::Button::new("Retry")
+                .variant(ButtonVariant::Neutral)
+                .control_size(Size::Default.kit())
                 .on_press_tx(|s: &mut Desktop, tx| {
                     s.dispatch(Msg::Selection(SelectionMsg::Reconnect), tx);
                 })
@@ -84,7 +86,9 @@ pub fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         Status::Connected { .. } => {}
     }
     if m.selection.selected.is_none() && m.selection.new_thread.is_none() {
-        let new_thread = ui::button("New thread", ButtonVariant::Submit, Size::Large)
+        let new_thread = rune_kit::Button::new("New thread")
+            .variant(ButtonVariant::Submit)
+            .control_size(Size::Large.kit())
             .icon(&ui::COMPOSE)
             .on_press_tx(|s: &mut Desktop, tx| {
                 s.dispatch(Msg::Selection(SelectionMsg::CreateHere), tx);
@@ -93,7 +97,9 @@ pub fn empty_state(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         let (detail, actions) = if m.cache().has_projects() {
             ("Select a thread or start a new one.", new_thread)
         } else {
-            let add_project = ui::button("Add project", ButtonVariant::Neutral, Size::Large)
+            let add_project = rune_kit::Button::new("Add project")
+                .variant(ButtonVariant::Neutral)
+                .control_size(Size::Large.kit())
                 .icon(&ui::FOLDER_PLUS)
                 .on_press_tx(|s: &mut Desktop, tx| {
                     s.dispatch(Msg::Sidebar(SidebarMsg::OpenAddProject), tx);
@@ -180,16 +186,14 @@ fn draft_project(s: &Desktop, thread: &NewThread, t: &Theme, layer: &mut Vec<El>
                 .map(|project| choice(&project.name, &ui::FOLDER, Some(&project.path))),
         );
     }
-    let add = ui::icon_button(
-        &ui::FOLDER_PLUS,
-        "Add project",
-        IconButtonVariant::GhostMuted,
-        Size::Default,
-    )
-    .disabled(thread.sending)
-    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::OpenAddProject), tx))
-    .build(&t.k)
-    .key("draft-add-project");
+    let add = rune_kit::IconButton::new(&ui::FOLDER_PLUS)
+        .help("Add project")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Default.kit())
+        .disabled(thread.sending)
+        .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::OpenAddProject), tx))
+        .build(&t.k)
+        .key("draft-add-project");
     let place = menu.build(&t.overlay, layer).min_w(0.0).shrink();
     let checkout = checkout::draft(s, thread, t, layer);
     row()

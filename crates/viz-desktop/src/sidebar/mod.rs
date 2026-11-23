@@ -72,17 +72,15 @@ pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
 /// main toolbar while the sidebar is collapsed.
 pub fn new_thread_button(s: &Desktop, size: Size, t: &Theme) -> El {
     let m = &s.model;
-    ui::icon_button(
-        &ui::COMPOSE,
-        "New thread",
-        IconButtonVariant::GhostMuted,
-        size,
-    )
-    .shortcut(ui::shortcut("N"))
-    .disabled(!m.connected() || m.selection.new_thread.is_some())
-    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::NewThread), tx))
-    .build(&t.k)
-    .key("new-thread")
+    rune_kit::IconButton::new(&ui::COMPOSE)
+        .help("New thread")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(size.kit())
+        .shortcut(ui::shortcut("N"))
+        .disabled(!m.connected() || m.selection.new_thread.is_some())
+        .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::NewThread), tx))
+        .build(&t.k)
+        .key("new-thread")
 }
 
 /// Row 1 titlebar band (`viz` wordmark sitting directly beside `SplitView`'s
@@ -123,16 +121,14 @@ fn utility_bar(s: &Desktop, now: i64, t: &Theme, layer: &mut Vec<El>) -> El {
     let m = &s.model;
     filter::combobox(s, now, t, layer);
 
-    let add_project = ui::icon_button(
-        &ui::FOLDER_PLUS,
-        "Add project",
-        IconButtonVariant::GhostMuted,
-        Size::Compact,
-    )
-    .disabled(!m.connected())
-    .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::OpenAddProject), tx))
-    .build(&t.k)
-    .key("add-project");
+    let add_project = rune_kit::IconButton::new(&ui::FOLDER_PLUS)
+        .help("Add project")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Compact.kit())
+        .disabled(!m.connected())
+        .on_press_tx(|s: &mut Desktop, tx| s.dispatch(Msg::Sidebar(SidebarMsg::OpenAddProject), tx))
+        .build(&t.k)
+        .key("add-project");
 
     row()
         .key("sidebar-action-bar")
@@ -274,21 +270,19 @@ fn active_filter_chip(s: &Desktop, t: &Theme) -> Option<El> {
                     .truncate(),
             )
             .child(
-                ui::icon_button(
-                    &ui::CLOSE,
-                    "Clear filter",
-                    IconButtonVariant::GhostMuted,
-                    Size::Tiny,
-                )
-                .on_press_tx(|s: &mut Desktop, tx| {
-                    tx.instant();
-                    s.dispatch(
-                        Msg::Sidebar(SidebarMsg::SetProjectFilter(ProjectFilter::All)),
-                        tx,
-                    );
-                })
-                .build(&t.k)
-                .key("clear-project-filter"),
+                rune_kit::IconButton::new(&ui::CLOSE)
+                    .help("Clear filter")
+                    .variant(IconButtonVariant::GhostMuted)
+                    .control_size(Size::Tiny.kit())
+                    .on_press_tx(|s: &mut Desktop, tx| {
+                        tx.instant();
+                        s.dispatch(
+                            Msg::Sidebar(SidebarMsg::SetProjectFilter(ProjectFilter::All)),
+                            tx,
+                        );
+                    })
+                    .build(&t.k)
+                    .key("clear-project-filter"),
             ),
     )
 }

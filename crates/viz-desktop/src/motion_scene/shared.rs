@@ -192,7 +192,9 @@ fn morph_controls(demo: &WorkbenchDemo, t: &Theme) -> El {
         .child(cta_btn)
         .child(copy_btn)
         .child(
-            ui::button("Morph shell", ButtonVariant::Outline, Size::Small)
+            rune_kit::Button::new("Morph shell")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
                 .on_press(|s: &mut Desktop| {
                     with_demo(s, |d| d.shared.expanded = !d.shared.expanded);
                 })
@@ -200,7 +202,9 @@ fn morph_controls(demo: &WorkbenchDemo, t: &Theme) -> El {
                 .key("btn-shared-card"),
         )
         .child(
-            ui::button("Stack", ButtonVariant::Outline, Size::Small)
+            rune_kit::Button::new("Stack")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
                 .on_press(|s: &mut Desktop| {
                     with_demo(s, |d| {
                         if d.view_depth == 0 {
@@ -248,7 +252,9 @@ fn odometer_box(diff_step: usize, t: &Theme) -> El {
             row()
                 .gap(S6)
                 .child(
-                    ui::button("Step +", ButtonVariant::Outline, Size::Small)
+                    rune_kit::Button::new("Step +")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(Size::Small.kit())
                         .on_press(|s: &mut Desktop| {
                             with_demo(s, |d| d.diff_step = (d.diff_step + 1) % DIFF_STEPS.len());
                         })
@@ -256,7 +262,9 @@ fn odometer_box(diff_step: usize, t: &Theme) -> El {
                         .key("btn-roll-up"),
                 )
                 .child(
-                    ui::button("Step −", ButtonVariant::Outline, Size::Small)
+                    rune_kit::Button::new("Step −")
+                        .variant(ButtonVariant::Outline)
+                        .control_size(Size::Small.kit())
                         .on_press(|s: &mut Desktop| {
                             with_demo(s, |d| {
                                 d.diff_step =

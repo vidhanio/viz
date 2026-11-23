@@ -163,17 +163,15 @@ fn diff_header(s: &Desktop, file: &FileDiff, t: &Theme) -> El {
                 .key("open-diff"),
         )
         .child(
-            ui::icon_button(
-                &ui::COPY,
-                "Copy patch",
-                IconButtonVariant::GhostMuted,
-                Size::Micro,
-            )
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(Msg::Timeline(TimelineMsg::CopyText(unified.clone())), tx);
-            })
-            .build(&t.k)
-            .key("copy-patch"),
+            rune_kit::IconButton::new(&ui::COPY)
+                .help("Copy patch")
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(Msg::Timeline(TimelineMsg::CopyText(unified.clone())), tx);
+                })
+                .build(&t.k)
+                .key("copy-patch"),
         )
 }
 

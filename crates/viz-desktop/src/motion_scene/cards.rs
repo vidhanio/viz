@@ -67,7 +67,9 @@ pub(super) fn disclosure_card(demo: &WorkbenchDemo, t: &Theme) -> El {
         .child(inner)
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k));
 
-    let launch_btn = ui::button("Launch msg", ButtonVariant::GhostMuted, Size::Small)
+    let launch_btn = rune_kit::Button::new("Launch msg")
+        .variant(ButtonVariant::GhostMuted)
+        .control_size(Size::Small.kit())
         .on_press_tx(|s: &mut Desktop, tx| {
             let next = match s.motion_demo.as_ref() {
                 Some(MotionDemo::Workbench(d)) => d.launched_messages + 1,
@@ -181,7 +183,9 @@ pub(super) fn reorder_card(demo: &WorkbenchDemo, t: &Theme) -> El {
         .gap(S6)
         .center_y()
         .child(
-            ui::button("Rotate FLIP", ButtonVariant::Outline, Size::Small)
+            rune_kit::Button::new("Rotate FLIP")
+                .variant(ButtonVariant::Outline)
+                .control_size(Size::Small.kit())
                 .on_press(|s: &mut Desktop| {
                     with_demo(s, |d| {
                         if d.threads.len() > 1 {
@@ -195,15 +199,13 @@ pub(super) fn reorder_card(demo: &WorkbenchDemo, t: &Theme) -> El {
                 .key("btn-reorder"),
         )
         .child(
-            ui::button(
-                if demo.fold.extra_row {
-                    "Remove row"
-                } else {
-                    "Insert row"
-                },
-                ButtonVariant::Outline,
-                Size::Small,
-            )
+            rune_kit::Button::new(if demo.fold.extra_row {
+                "Remove row"
+            } else {
+                "Insert row"
+            })
+            .variant(ButtonVariant::Outline)
+            .control_size(Size::Small.kit())
             .on_press(|s: &mut Desktop| {
                 with_demo(s, |d| d.fold.extra_row = !d.fold.extra_row);
             })
