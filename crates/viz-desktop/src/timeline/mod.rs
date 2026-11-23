@@ -14,6 +14,7 @@ mod fold;
 mod inspector;
 mod plan_card;
 mod search_card;
+mod status_line;
 mod subagents;
 mod task_result;
 mod user_row;
@@ -52,10 +53,12 @@ pub struct TimelineSlots {
 pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El>) -> El {
     let m = &s.model;
     let thread = m.transcript();
+    let status = status_line::timeline_status(s, t);
     let is_empty = thread.items.is_empty()
         && thread.before.is_none()
         && !m.busy()
         && slots.pending_requests.is_none()
+        && status.is_none()
         && crate::model::requests::pending(m).next().is_none();
 
     let body = if m.is_loading() && m.connected() {
@@ -84,6 +87,9 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         }
         if let Some(pending) = slots.pending_requests {
             list = list.child(col().key("pending-requests").w_full().pt(S8).child(pending));
+        }
+        if let Some(status) = status {
+            list = list.child(status);
         }
         list
     };
@@ -236,6 +242,11 @@ fn render_turn(
 }
 
 fn bare_working(t: &Theme) -> El {
+    let lead = row()
+        .gap(S6)
+        .center_y()
+        .child(ui::spinner(t))
+        .child(text("Working…").font(t.ui).color(t.muted));
     row()
         .key("working-bare")
         .role("status")
@@ -243,10 +254,14 @@ fn bare_working(t: &Theme) -> El {
         .w_full()
         .px(S4)
         .py(S8)
-        .gap(S6)
         .center_y()
-        .child(ui::spinner(t))
-        .child(text("Working…").font(t.ui).color(t.muted))
+        .child(motion::text_shimmer(
+            "working-bare-shimmer",
+            true,
+            lead,
+            rune::Color::WHITE,
+            if t.k.dark { 0.9 } else { 0.62 },
+        ))
 }
 
 /// Flat floating jump-to-latest pill (`t.surface_raised` + `1px

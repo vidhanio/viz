@@ -42,6 +42,7 @@ pub const SCENES: &[Scene] = &[
     ("timeline-populated", timeline::populated),
     ("timeline-expanded", timeline::expanded),
     ("timeline-working", timeline::working),
+    ("timeline-status", timeline::status_line),
     ("timeline-cards", timeline_cards::cards),
     ("selectors", model_picker::claude),
     ("model-search", model_picker::search),

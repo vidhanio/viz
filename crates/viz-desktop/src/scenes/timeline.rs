@@ -3,9 +3,9 @@
 
 use serde_json::Value;
 use viz_client::protocol::{
-    Body, EntryData, Exit, LiveTurn, PromptAttachment, PromptContext, RunEnd, Segment,
-    ThreadStatus, ToolCallStatus, ToolContent, ToolDiff, TranscriptEntry, TurnTokens, TurnUsage,
-    UsageCost,
+    Attention, Body, EntryData, Exit, LiveTurn, PromptAttachment, PromptContext, RunEnd, Segment,
+    SettledBy, Shelf, Standing, ThreadId, ThreadStatus, ToolCallStatus, ToolContent, ToolDiff,
+    TranscriptEntry, TurnTokens, TurnUsage, UsageCost,
 };
 
 use super::{
@@ -40,6 +40,34 @@ pub(super) fn expanded(s: &mut Desktop) {
 /// streaming assistant prose.
 pub(super) fn working(s: &mut Desktop) {
     seed_working(&mut s.model);
+    s.sync_widgets_from_model();
+}
+
+/// Settled thread with a child subagent awaiting approval so both
+/// bottom-of-chat status line families (`ThreadNow` + `ThreadStatusLine`)
+/// render together.
+pub(super) fn status_line(s: &mut Desktop) {
+    seed_populated(&mut s.model);
+    let now = BASE_TS + 2 * 3_600_000;
+    s.model.disclosure.tool_clock = now;
+    if let Some(thread) = s.model.cache_mut().summary_mut(THREAD) {
+        thread.shelf = Shelf::Settled;
+        thread.lifecycle.standing = Standing::Settled {
+            at: BASE_TS,
+            by: SettledBy::User,
+        };
+    }
+    if let Some(mut child) = s.model.cache().summary(THREAD).cloned() {
+        child.id = ThreadId(99);
+        child.title = "Verify release build".into();
+        child.parent = Some(THREAD);
+        child.shelf = Shelf::Working;
+        child.lifecycle.standing = Standing::Open;
+        child.attention = Some(Attention::Approval);
+        let mut threads: Vec<_> = s.model.cache().threads().cloned().collect();
+        threads.push(child);
+        s.model.cache_mut().set_threads(threads);
+    }
     s.sync_widgets_from_model();
 }
 
