@@ -251,14 +251,7 @@ fn resting_status(
                 format!("{} tasks", thread.waiting_on),
                 t.delegated,
             ),
-            _ => {
-                let elapsed = theme::relative_age(thread.updated_at, outline.now);
-                let text_label = match elapsed.as_deref() {
-                    Some("now") | None => "Working".to_owned(),
-                    Some(age) => format!("Working {age}"),
-                };
-                (ui::radar(11.0, t.accent, t), text_label, t.accent_text)
-            }
+            _ => return Some(ui::radar(12.0, t.accent, t).a11y_hidden()),
         };
         return Some(
             row()

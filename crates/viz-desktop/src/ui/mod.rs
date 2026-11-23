@@ -17,7 +17,7 @@ mod row;
 mod surface;
 
 use rune::{Color, El, el, text};
-use rune_kit::Spinner;
+use rune_kit::Loader;
 
 #[expect(
     unused_imports,
@@ -109,12 +109,13 @@ pub fn drag_guard(key: &str) -> El {
     el().key(key).no_window_drag().a11y_hidden()
 }
 
-/// The 5x5 radar sweep indicator, sharing wall-clock phase across the window.
+/// Circular ring spinner (`rune_kit::Loader`), paused at 12 o'clock under
+/// reduced motion.
 pub fn radar(size: f32, color: Color, t: &Theme) -> El {
-    Spinner::new().size(size).color(color).build(&t.k)
+    Loader::new().size(size).color(color).build(&t.k)
 }
 
-/// Accent radar spinner at [`ICON_SMALL`] size.
+/// Accent circular spinner at [`ICON_SMALL`] size.
 pub fn spinner(t: &Theme) -> El {
     radar(ICON_SMALL, t.accent, t)
 }
