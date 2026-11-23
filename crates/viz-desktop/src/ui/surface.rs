@@ -9,12 +9,14 @@ use crate::{
     motion,
     theme::{
         CARD_INSET, COMPOSER_DRAWER_INSET, COMPOSER_DRAWER_OVERLAP, HAIRLINE, RADIUS_CARD,
-        RADIUS_SURFACE, S4, S6, S8, S12, S16, Theme,
+        RADIUS_CONTROL, S4, S6, S8, S12, S16, Theme,
     },
 };
 
 /// The model picker's trigger max width.
 pub const MODEL_TRIGGER_MAX: f32 = 240.0;
+/// Padding between a [`popover_frame`] edge and its [`RADIUS_CONTROL`] rows.
+pub const MENU_INSET: f32 = RADIUS_CARD - RADIUS_CONTROL;
 /// A menu's narrowest width.
 pub const MENU_WIDTH: f32 = 196.0;
 
@@ -69,14 +71,17 @@ impl Card {
 
 /// Flat opaque floating surface for popovers, context menus, and details cards
 /// (`t.surface_raised` + `1px` `t.border_overlay`, zero drop shadow).
+///
+/// The [`RADIUS_CARD`] corner is concentric with [`RADIUS_CONTROL`] rows inset
+/// by [`MENU_INSET`], so menu bodies should pad by exactly that inset.
 pub fn popover_frame(key: impl Into<String>, width: f32, content: El, t: &Theme) -> El {
     col()
         .key(key)
         .w(width)
-        .radius(RADIUS_SURFACE)
+        .radius(RADIUS_CARD)
         .fill(t.surface_raised)
         .border(HAIRLINE, t.border_overlay)
-        .clip_rounded(RADIUS_SURFACE)
+        .clip_rounded(RADIUS_CARD)
         .child(content)
 }
 
@@ -169,10 +174,10 @@ impl ComboboxShell {
     pub fn build(self, t: &Theme) -> El {
         let mut shell = col()
             .key(&self.key)
-            .radius(RADIUS_SURFACE)
+            .radius(RADIUS_CARD)
             .fill(t.surface_raised)
             .border(HAIRLINE, t.border_overlay)
-            .clip_rounded(RADIUS_SURFACE);
+            .clip_rounded(RADIUS_CARD);
         shell = match self.width {
             Some(points) => shell.w(points),
             None => shell.w_full(),
@@ -193,7 +198,7 @@ impl ComboboxShell {
                 .key(format!("{}-list", self.key))
                 .role("listbox")
                 .w_full()
-                .padding(S4)
+                .padding(MENU_INSET)
                 .gap(2.0)
                 .instant_changes()
                 .children(self.items);

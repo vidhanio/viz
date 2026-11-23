@@ -150,7 +150,6 @@ fn level_row(
     highlighted: bool,
     t: &Theme,
 ) -> El {
-    let tier = ui::Effort::classify(level.value, &level.label, level.index, level.total);
     let mut item = base_row(
         format!("level-{}", level.value),
         &level.label,
@@ -160,7 +159,6 @@ fn level_row(
     .role("radio")
     .checked(level.checked)
     .h(S32)
-    .child(ui::effort_glyph(tier, false, t))
     .child(
         text(level.label.as_ref())
             .font(if level.checked { t.ui_medium } else { t.ui })

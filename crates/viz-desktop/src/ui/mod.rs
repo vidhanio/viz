@@ -20,8 +20,6 @@ mod project_icon;
 mod row;
 mod surface;
 
-use std::borrow::Cow;
-
 use rune::{Color, El, el, text};
 use rune_kit::Spinner;
 
@@ -48,16 +46,15 @@ pub use self::{
         AGENT, ANTIGRAVITY, ARCHIVE, ARROW_DOWN, ARROW_LEFT, ARROW_UP, BOT, BRAIN, CHECK, CHEVRON,
         CHEVRON_OPEN, CHEVRON_UP, CHEVRONS_UP_DOWN, CIRCLE_ALERT, CIRCLE_CHECK, CIRCLE_DASHED,
         CIRCLE_DOT, CIRCLE_STOP, CIRCLE_X, CLAUDE, CLOCK, CLOSE, CODEX, COLUMNS2, COMPOSE, COPY,
-        CORNER_UP_RIGHT, CPU, DOWNLOAD, EXTERNAL_LINK, EYE, EYE_OFF, Effort, FILE, FILE_DIFF,
-        FILE_EDIT, FILE_READ, FLAME, FOLDER, FOLDER_CODE, FOLDER_GIT2, FOLDER_OPEN, FOLDER_PLUS,
-        FOLDER_TREE, GIT_BRANCH, GIT_BRANCH_PLUS, GIT_COMMIT, GIT_FORK, GIT_MERGE, GLOBE, HARNESS,
-        INBOX, INFO, LAPTOP, LAYERS, LINK, LIST_FILTER, LIST_PLUS, LOCK, MAIL, MAIL_OPEN,
-        MESSAGE_SQUARE_DASHED, MINIMIZE2, MINUS, MONITOR, MORE, OMP, PANEL_RIGHT, PAPERCLIP,
-        PENCIL, PI, PIN, PIN_OFF, PLAN, PLUS, PR_CLOSED, PR_DRAFT, PR_OPEN, REDO2, REFRESH_CW,
-        REPLY, ROTATE_CCW, ROTATE_CW, SEARCH, SERVER, SETTINGS, SHIELD, SHIELD_CHECK, SIDEBAR,
-        SPARKLES, STAR, STAR_FILLED, STOP, TERMINAL, TEXT_WRAP, THREAD, TIMER, TRASH,
-        TRIANGLE_ALERT, UNLOCK, UPLOAD, WRENCH, ZAP, effort_glyph, harness_glyph, harness_icon,
-        harness_mark, kit_glyphs, swap_kit_icon,
+        CORNER_UP_RIGHT, CPU, DOWNLOAD, EXTERNAL_LINK, EYE, EYE_OFF, FILE, FILE_DIFF, FILE_EDIT,
+        FILE_READ, FLAME, FOLDER, FOLDER_CODE, FOLDER_GIT2, FOLDER_OPEN, FOLDER_PLUS, FOLDER_TREE,
+        GIT_BRANCH, GIT_BRANCH_PLUS, GIT_COMMIT, GIT_FORK, GIT_MERGE, GLOBE, HARNESS, INBOX, INFO,
+        LAPTOP, LAYERS, LINK, LIST_FILTER, LIST_PLUS, LOCK, MAIL, MAIL_OPEN, MESSAGE_SQUARE_DASHED,
+        MINIMIZE2, MINUS, MONITOR, MORE, OMP, PANEL_RIGHT, PAPERCLIP, PENCIL, PI, PIN, PIN_OFF,
+        PLAN, PLUS, PR_CLOSED, PR_DRAFT, PR_OPEN, REDO2, REFRESH_CW, REPLY, ROTATE_CCW, ROTATE_CW,
+        SEARCH, SERVER, SETTINGS, SHIELD, SHIELD_CHECK, SIDEBAR, SPARKLES, STAR, STAR_FILLED, STOP,
+        TERMINAL, TEXT_WRAP, THREAD, TIMER, TRASH, TRIANGLE_ALERT, UNLOCK, UPLOAD, WRENCH, ZAP,
+        harness_glyph, harness_icon, harness_mark, kit_glyphs, swap_kit_icon,
     },
     input::{Field, SearchInput, SearchStyle, field, search_input, text_field},
     project_icon::{
@@ -66,8 +63,9 @@ pub use self::{
     },
     row::{ListRow, RowDensity, SectionHeader, list_row, section_header},
     surface::{
-        Card, ComboboxShell, MENU_WIDTH, MODEL_TRIGGER_MAX, ScrollMode, anchored_popover,
-        combobox_shell, menu_items, popover_frame, scroll_viewport, tucked_drawer,
+        Card, ComboboxShell, MENU_INSET, MENU_WIDTH, MODEL_TRIGGER_MAX, ScrollMode,
+        anchored_popover, combobox_shell, menu_items, popover_frame, scroll_viewport,
+        tucked_drawer,
     },
 };
 use crate::theme::{ICON, ICON_SMALL, READING_INSET, READING_WIDTH, Theme};
@@ -146,28 +144,4 @@ pub fn code(body: &str, t: &Theme) -> El {
         .w_full()
         .selectable(true)
         .selection_color(t.k.selection())
-}
-
-/// Display external labels in sentence case without changing names with
-/// established casing (such as `xAI` or `Use workspace context`).
-pub fn sentence_label(label: &str) -> Cow<'_, str> {
-    let mut chars = label.chars();
-    match chars.next() {
-        Some(first) if first.is_lowercase() && !chars.clone().any(char::is_uppercase) => {
-            Cow::Owned(first.to_uppercase().chain(chars).collect())
-        }
-        _ => Cow::Borrowed(label),
-    }
-}
-
-/// Normalize the extra-high tier label to `Xhigh`.
-pub fn thinking_label(label: &str) -> Cow<'_, str> {
-    if ["xhigh", "x-high", "extra-high", "extra high"]
-        .iter()
-        .any(|id| label.eq_ignore_ascii_case(id))
-    {
-        Cow::Borrowed("Xhigh")
-    } else {
-        sentence_label(label)
-    }
 }

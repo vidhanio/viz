@@ -44,12 +44,6 @@ pub(super) fn draft_card(s: &Desktop, draft: &DraftPreview<'_>, t: &Theme) -> El
                         .min_w(0.0),
                 )
                 .child(
-                    text("Draft")
-                        .font(t.mono_micro)
-                        .color(t.accent_text)
-                        .a11y_hidden(),
-                )
-                .child(
                     ui::icon_button(
                         &ui::CLOSE,
                         "Discard draft",

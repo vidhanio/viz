@@ -21,10 +21,8 @@ pub struct EffortLevel<'a> {
     pub value: &'a str,
     /// Display label.
     pub label: Cow<'a, str>,
-    /// Position among the levels, for glyph tiers.
+    /// Position among the levels, matched against the keyboard cursor.
     pub index: usize,
-    /// Number of levels.
-    pub total: usize,
     /// The level that applies now (or would apply on choosing the model).
     pub checked: bool,
     /// The harness default for this model.
@@ -129,7 +127,6 @@ pub fn effort_column<'a>(list: &PickerList<'a>, state: &ModelMenuState) -> Effor
             .map(|levels| (levels, default))
     };
     let (option_id, levels) = levels.map_or((None, Vec::new()), |(levels, checked)| {
-        let total = levels.choices().len();
         let rows = levels
             .choices()
             .enumerate()
@@ -137,7 +134,6 @@ pub fn effort_column<'a>(list: &PickerList<'a>, state: &ModelMenuState) -> Effor
                 value,
                 label: levels.choice_label(value, name),
                 index,
-                total,
                 checked: checked == Some(value),
                 default: default == Some(value),
             })

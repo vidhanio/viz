@@ -4,9 +4,9 @@
 //! Every icon draws from Lucide's 24pt grid or a bundled monochrome brand mark
 //! in `icons/`, tinted exclusively via base16 semantic tokens.
 
-use rune::{El, Icon, el, icon, row};
+use rune::{El, Icon, icon};
 
-use crate::theme::{HAIRLINE, ICON, ICON_SMALL, S2, Theme};
+use crate::theme::{ICON, Theme};
 
 /// Declares Lucide icons as Rune icons on Lucide's 24-point grid.
 macro_rules! lucide {
@@ -32,9 +32,9 @@ lucide! {
     /// Navigate forward.
     /// Steer or send immediately into an active turn.
     CORNER_UP_RIGHT = CornerUpRight;
-    /// Extra-high thinking tier.
+    /// Fast mode.
     ZAP = Zap;
-    /// Maximum thinking tier.
+    /// Flame project icon.
     FLAME = Flame;
     /// Delegated work or workflow graph.
     AGENT = Workflow;
@@ -312,103 +312,6 @@ pub fn harness_glyph(id: &str, name: &str, size: f32, active: bool, t: &Theme) -
     icon(harness_icon(id), size)
         .color(if active { t.text } else { t.muted })
         .help(name)
-}
-
-/// Visual tier for a thinking/reasoning effort choice, distinguishing `Xhigh`
-/// (`ZAP`) and `Max` (`FLAME`) from the three-bar signal scale (`Off`..`High`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Effort {
-    /// Reasoning disabled (`0` lit bars).
-    Off,
-    /// Low reasoning (`1` lit bar).
-    Low,
-    /// Medium / balanced reasoning (`2` lit bars).
-    Medium,
-    /// High reasoning (`3` lit bars).
-    High,
-    /// Extra-high reasoning (`ZAP` in `t.steer`).
-    Xhigh,
-    /// Maximum reasoning (`FLAME` in `t.danger`).
-    Max,
-}
-
-impl Effort {
-    /// Classifies an arbitrary harness option value/label pair into an
-    /// [`Effort`] tier.
-    pub fn classify(value: &str, name: &str, index: usize, total: usize) -> Self {
-        let lower_val = value.to_ascii_lowercase();
-        let lower_name = name.to_ascii_lowercase();
-        let has = |needle: &str| lower_val.contains(needle) || lower_name.contains(needle);
-        let exact = |needle: &str| lower_val == needle || lower_name == needle;
-        if exact("none") || exact("off") || exact("disabled") {
-            Self::Off
-        } else if has("xhigh") || has("x-high") || has("extra-high") || has("extra high") {
-            Self::Xhigh
-        } else if exact("max") || has("maximum") || has("ultra") || lower_val.ends_with("max") {
-            Self::Max
-        } else if has("min") || has("low") {
-            Self::Low
-        } else if has("high") {
-            Self::High
-        } else if has("med") || has("default") || has("auto") || total <= 1 {
-            Self::Medium
-        } else {
-            match ((index * 3) / total.max(1) + 1).min(3) {
-                0 => Self::Off,
-                1 => Self::Low,
-                2 => Self::Medium,
-                _ => Self::High,
-            }
-        }
-    }
-
-    /// Canonical short label for display in triggers and galleries.
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::Off => "Off",
-            Self::Low => "Low",
-            Self::Medium => "Medium",
-            Self::High => "High",
-            Self::Xhigh => "Xhigh",
-            Self::Max => "Max",
-        }
-    }
-}
-
-/// Signal bars for `Off`..`High`, lightning bolt for `Xhigh`, and flame for
-/// `Max`.
-pub fn effort_glyph(effort: Effort, on_accent: bool, t: &Theme) -> El {
-    match effort {
-        Effort::Xhigh => icon(&ZAP, ICON_SMALL)
-            .color(if on_accent { t.on_accent } else { t.steer })
-            .a11y_hidden(),
-        Effort::Max => icon(&FLAME, ICON_SMALL)
-            .color(if on_accent { t.on_accent } else { t.danger })
-            .a11y_hidden(),
-        Effort::Off | Effort::Low | Effort::Medium | Effort::High => {
-            let bars = match effort {
-                Effort::Off => 0,
-                Effort::Low => 1,
-                Effort::Medium => 2,
-                Effort::High => 3,
-                Effort::Xhigh | Effort::Max => unreachable!(),
-            };
-            let lit = if on_accent { t.on_accent } else { t.text };
-            let dim = if on_accent {
-                t.on_accent.alpha(0.35)
-            } else {
-                t.border_control
-            };
-            row().gap(1.5).items_end().h(10.0).a11y_hidden().children(
-                [4.0, 7.0, 10.0].into_iter().enumerate().map(|(i, height)| {
-                    el().w(S2)
-                        .h(height)
-                        .radius(HAIRLINE)
-                        .fill(if i < bars { lit } else { dim })
-                }),
-            )
-        }
-    }
 }
 
 /// Maps `rune-kit`'s internal glyphs onto Lucide icons.

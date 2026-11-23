@@ -60,7 +60,7 @@ pub use self::{
     palette::{PaletteRow, palette_rows},
     picker::{
         ModelLevels, ModelPicker, OptionRole, OptionTarget, choice_group, model_name, option_role,
-        provider_name, sentence_label, thinking_ids, unseen_model_levels,
+        provider_name, sentence_label, thinking_ids, thinking_label, unseen_model_levels,
     },
     prefs::Prefs,
     sidebar::{

@@ -93,7 +93,7 @@ fn popover(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) {
         ),
         _ => return,
     };
-    let mut contents = col().padding(6.0).w_full();
+    let mut contents = col().padding(ui::MENU_INSET).w_full();
     match entries {
         Some(entries) if !Vec::<El>::is_empty(&entries) => contents = contents.children(entries),
         Some(_) => {

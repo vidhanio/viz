@@ -125,7 +125,11 @@ impl<'a> ModelLevels<'a> {
             .filter(|(prefix, _)| prefix.trim().eq_ignore_ascii_case(self.name()))
             .map_or(name, |(_, rest)| rest)
             .trim();
-        thinking_label(if name.is_empty() { value } else { name })
+        if is_xhigh(value) || name.is_empty() {
+            thinking_label(value)
+        } else {
+            thinking_label(name)
+        }
     }
 
     /// Selected level: draft's override when valid for this model, else the
@@ -214,21 +218,12 @@ impl<'a> ModelPicker<'a> {
         })
     }
 
-    /// Selected thinking level `(levels, raw_value, label, index, total)`.
+    /// Selected thinking level `(levels, label)`.
     #[must_use]
-    pub fn level_selection(
-        &self,
-    ) -> Option<(ModelLevels<'a>, &'a str, Cow<'a, str>, usize, usize)> {
+    pub fn level_selection(&self) -> Option<(ModelLevels<'a>, Cow<'a, str>)> {
         let levels = self.levels?;
         let value = levels.value(self.target)?;
-        let label = levels.label(value);
-        let choices: Vec<_> = levels.choices().collect();
-        let total = choices.len().max(1);
-        let index = choices
-            .iter()
-            .position(|(choice, _)| *choice == value)
-            .unwrap_or(0);
-        Some((levels, value, label, index, total))
+        Some((levels, levels.label(value)))
     }
 
     /// Accessible trigger label combining model name and thinking level.
@@ -237,9 +232,9 @@ impl<'a> ModelPicker<'a> {
         let model = self.model_label();
         let level = self.level_selection();
         match (model, level) {
-            (Some(model), Some((_, _, level, _, _))) => Cow::Owned(format!("{model} · {level}")),
+            (Some(model), Some((_, level))) => Cow::Owned(format!("{model} · {level}")),
             (Some(model), None) => Cow::Borrowed(model),
-            (None, Some((levels, _, level, _, _))) => {
+            (None, Some((levels, level))) => {
                 Cow::Owned(format!("{} · {level}", sentence_label(levels.name())))
             }
             (None, None) => Cow::Borrowed("Model"),
@@ -361,12 +356,16 @@ pub fn sentence_label(label: &str) -> Cow<'_, str> {
 /// Display label for a thinking level value or name.
 #[must_use]
 pub fn thinking_label(label: &str) -> Cow<'_, str> {
-    if ["xhigh", "x-high", "extra-high", "extra high"]
-        .iter()
-        .any(|id| label.eq_ignore_ascii_case(id))
-    {
+    if is_xhigh(label) {
         Cow::Borrowed("Xhigh")
     } else {
         sentence_label(label)
     }
+}
+
+/// Whether `label` names the extra-high tier, which always displays as `Xhigh`.
+fn is_xhigh(label: &str) -> bool {
+    ["xhigh", "x-high", "extra-high", "extra high", "extra"]
+        .iter()
+        .any(|id| label.eq_ignore_ascii_case(id))
 }

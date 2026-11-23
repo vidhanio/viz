@@ -5,8 +5,8 @@ use rune::{Color, El, TextStyle, col, row, text};
 
 use super::{gallery_card, swatch_chip};
 use crate::{
-    theme::{HAIRLINE, ICON, RADIUS_SM, S4, S6, S8, Theme},
-    ui::{self, Effort},
+    theme::{ICON, RADIUS_SM, S4, S6, S8, Theme},
+    ui,
 };
 
 pub(super) fn palette_card(t: &Theme) -> El {
@@ -264,56 +264,12 @@ pub(super) fn identity_card(t: &Theme) -> El {
             t,
         ));
 
-    let body = col()
-        .w_full()
-        .gap(S8)
-        .child(monograms)
-        .child(harnesses)
-        .child(effort_strip(false, t))
-        .child(effort_strip(true, t));
+    let body = col().w_full().gap(S8).child(monograms).child(harnesses);
     gallery_card(
         "card-identity",
-        "Projects, harnesses & effort",
+        "Projects & harnesses",
         "9-slot hash + glyphs",
         body,
         t,
     )
-}
-
-fn effort_strip(on_accent: bool, t: &Theme) -> El {
-    const TIERS: [Effort; 6] = [
-        Effort::Off,
-        Effort::Low,
-        Effort::Medium,
-        Effort::High,
-        Effort::Xhigh,
-        Effort::Max,
-    ];
-    row()
-        .w_full()
-        .gap(S6)
-        .center_y()
-        .children(TIERS.into_iter().map(|tier| {
-            let mut chip = row()
-                .px(S6)
-                .h(22.0)
-                .gap(S4)
-                .center_y()
-                .radius(RADIUS_SM)
-                .fill(if on_accent {
-                    t.accent
-                } else {
-                    t.surface_recessed
-                })
-                .child(ui::effort_glyph(tier, on_accent, t))
-                .child(text(tier.label()).font(t.micro_medium).color(if on_accent {
-                    t.on_accent
-                } else {
-                    t.text
-                }));
-            if !on_accent {
-                chip = chip.border(HAIRLINE, t.hairline);
-            }
-            chip
-        }))
 }

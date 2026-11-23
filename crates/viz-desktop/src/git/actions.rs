@@ -164,7 +164,7 @@ pub fn view(s: &Desktop, status: &GitStatus, t: &Theme, overlays: &mut Vec<El>) 
     .build(&t.overlay)
     .key(ANCHOR);
     if open {
-        let menu = col().padding(4.0).children(
+        let menu = col().padding(ui::MENU_INSET).children(
             [
                 Action::Commit,
                 Action::Push,

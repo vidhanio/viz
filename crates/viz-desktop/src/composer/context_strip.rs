@@ -213,7 +213,11 @@ fn env_selector(s: &Desktop, compact: bool, t: &Theme, layer: &mut Vec<El>) -> E
             }
             item.build(t)
         });
-        let content = col().w_full().padding(S4).gap(S2).children(rows);
+        let content = col()
+            .w_full()
+            .padding(ui::MENU_INSET)
+            .gap(S2)
+            .children(rows);
         layer.push(scrim("home-env-scrim", close_picker));
         layer.push(
             ui::anchored_popover(
@@ -321,7 +325,11 @@ fn worktree_mode_selector(
                 ));
             }
         }
-        let body = col().w_full().padding(S4).gap(S2).children(items);
+        let body = col()
+            .w_full()
+            .padding(ui::MENU_INSET)
+            .gap(S2)
+            .children(items);
         layer.push(scrim("draft-checkout-scrim", close_picker));
         layer.push(
             ui::anchored_popover(

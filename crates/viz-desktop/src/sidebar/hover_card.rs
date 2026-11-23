@@ -211,7 +211,7 @@ fn pr_meta_row(pr: &GitHubPull, t: &Theme) -> El {
 }
 
 fn model_summary(thread: &ThreadSummary) -> String {
-    let thinking = thread.thinking.as_deref().map(ui::thinking_label);
+    let thinking = thread.thinking.as_deref().map(crate::model::thinking_label);
     match (thread.model.as_deref(), thinking) {
         (Some(model), Some(thinking)) => format!("{model} · {thinking}"),
         (Some(model), None) => model.to_owned(),

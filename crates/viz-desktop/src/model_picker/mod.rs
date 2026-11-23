@@ -134,12 +134,11 @@ pub fn trigger_button(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El>
                 .help_when_truncated(name)
                 .a11y_hidden(),
         );
-    if let Some((_, value, level, index, total)) = picker
+    if let Some((_, level)) = picker
         .as_ref()
         .and_then(crate::model::ModelPicker::level_selection)
     {
-        let tier = ui::Effort::classify(value, &level, index, total);
-        trigger = trigger.child(ui::effort_glyph(tier, false, t)).child(
+        trigger = trigger.child(
             text(level)
                 .font(t.ui)
                 .color(t.muted)
