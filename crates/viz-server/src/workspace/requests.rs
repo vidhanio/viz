@@ -21,7 +21,7 @@ use viz_core::{
 };
 use viz_protocol::{
     AccessMode, AnswerRequest, AnsweredBy, OptionValue, RequestAnswer, RequestBody, RequestId,
-    RunId, RunRequest, SetProjectAccess, ThreadId, Withdrawal,
+    RequestState, RunId, RunRequest, SetProjectAccess, ThreadId, Withdrawal,
 };
 
 use super::{Workspace, sessions, store};
@@ -199,8 +199,21 @@ impl Workspace {
         Ok(Admitted::Wait(request.id, receiver))
     }
 
-    /// Resolves a pending request for the user or the delegating agent.
+    /// Resolves a pending request even if the RPC caller disconnects while
+    /// the decision is being saved.
     pub(crate) async fn answer(
+        self: &Arc<Self>,
+        input: AnswerRequest,
+        by: AnsweredBy,
+    ) -> Result<RunRequest, Error> {
+        let workspace = Arc::clone(self);
+        self.jobs
+            .spawn(async move { workspace.apply_answer(input, by).await })
+            .await
+            .map_err(|error| Error::unavailable(format!("answering request: {error}")))?
+    }
+
+    async fn apply_answer(
         &self,
         input: AnswerRequest,
         by: AnsweredBy,
@@ -230,21 +243,33 @@ impl Workspace {
             },
             store::now(),
         )?;
+        let waiting = self
+            .requests
+            .waiters()
+            .get(&id)
+            .is_some_and(|waiter| !waiter.answer.is_closed());
+        if waiting {
+            store::save_request(&mut db, &request).await?;
+        }
         let delivered = self
             .requests
             .waiters()
             .remove(&id)
-            .is_some_and(|waiter| waiter.answer.send(answer).is_ok());
+            .is_some_and(|waiter| waiting && waiter.answer.send(answer).is_ok());
         if !delivered {
-            drop(db);
-            self.withdraw_one(thread, id, Withdrawal::Harness).await?;
+            request.state = RequestState::Withdrawn {
+                at: store::now(),
+                reason: Withdrawal::Harness,
+            };
+            store::save_request(&mut db, &request).await?;
+        }
+        drop(db);
+        self.relist(thread);
+        if !delivered {
             return Err(Error::unavailable(
                 "the harness no longer waits for this request",
             ));
         }
-        store::save_request(&mut db, &request).await?;
-        drop(db);
-        self.relist(thread);
         Ok(request)
     }
 
