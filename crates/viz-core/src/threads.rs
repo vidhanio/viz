@@ -40,21 +40,97 @@ pub const fn status(
     }
 }
 
+/// Why a thread's metadata cannot change.
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+pub enum Rejection {
+    #[error("thread title must not be empty")]
+    EmptyTitle,
+    #[error("move the thread out of its worktree before changing its project")]
+    InWorktree,
+    #[error("only a project thread can move to a worktree")]
+    NoProject,
+    #[error("the thread moved concurrently")]
+    Moved,
+    #[error("requestId must contain 1 to 256 characters")]
+    RequestId,
+}
+
 /// Validate an explicit title before recording it as user-owned.
 ///
 /// # Errors
 /// An explicitly supplied empty title is rejected.
-pub fn validate_title(title: Option<&str>) -> Result<(), EmptyTitle> {
+pub fn validate_title(title: Option<&str>) -> Result<(), Rejection> {
     if title == Some("") {
-        Err(EmptyTitle)
+        Err(Rejection::EmptyTitle)
     } else {
         Ok(())
     }
 }
 
-#[derive(Debug, thiserror::Error)]
-#[error("thread title must not be empty")]
-pub struct EmptyTitle;
+/// Validate a launch or send retry key.
+///
+/// # Errors
+/// Rejects empty and oversized keys.
+pub fn validate_request_id(request_id: Option<&str>) -> Result<(), Rejection> {
+    if request_id.is_some_and(|id| id.is_empty() || id.chars().count() > 256) {
+        Err(Rejection::RequestId)
+    } else {
+        Ok(())
+    }
+}
+
+/// A thread's title, and whose it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Title {
+    /// From the first prompt or the harness, which may replace it.
+    Derived(String),
+    User(String),
+}
+
+/// What the user can say about a thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Metadata {
+    pub title: Title,
+    /// Where the thread is filed. Filing a thread does not move it: its
+    /// directory changes only through a move (see [`crate::placement`]).
+    pub project: Option<String>,
+    pub archived: bool,
+    pub pinned: bool,
+    pub unread: bool,
+}
+
+/// Changes to [`Metadata`].
+#[derive(Debug, Default)]
+pub struct Changes {
+    pub title: Option<String>,
+    pub project: Patch<String>,
+    pub archived: Option<bool>,
+    pub pinned: Option<bool>,
+    pub unread: Option<bool>,
+}
+
+/// Apply `changes` to a thread that may run in a linked worktree.
+///
+/// # Errors
+/// Rejects an empty title, and filing a thread elsewhere than the project
+/// whose worktree it runs in.
+pub fn update(
+    current: Metadata,
+    in_worktree: bool,
+    changes: Changes,
+) -> Result<Metadata, Rejection> {
+    validate_title(changes.title.as_deref())?;
+    if in_worktree && !matches!(changes.project, Patch::Keep) {
+        return Err(Rejection::InWorktree);
+    }
+    Ok(Metadata {
+        title: changes.title.map_or(current.title, Title::User),
+        project: changes.project.apply(current.project),
+        archived: changes.archived.unwrap_or(current.archived),
+        pinned: changes.pinned.unwrap_or(current.pinned),
+        unread: changes.unread.unwrap_or(current.unread),
+    })
+}
 
 /// Keep the original directory through repeated moves until a prompt uses the
 /// handoff.

@@ -28,7 +28,7 @@ impl Workspace {
     /// created, before the thread is recorded, and removed again if the
     /// launch fails or repeats an earlier request.
     pub(super) async fn launch(self: &Arc<Self>, args: LaunchThread) -> Result<Launched, Error> {
-        validate_request_id(args.request_id.as_deref())?;
+        threads::validate_request_id(args.request_id.as_deref())?;
         let Some(target) = args.worktree.clone() else {
             return self
                 .launch_in(args, None)
@@ -134,7 +134,7 @@ impl Workspace {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         store::require(&mut tx, thread).await?;
-        validate_request_id(args.request_id.as_deref())?;
+        threads::validate_request_id(args.request_id.as_deref())?;
         let previous = match &args.request_id {
             Some(request_id) => runs::by_request(&mut tx, thread, request_id).await?,
             None => None,
@@ -219,41 +219,16 @@ impl Workspace {
     }
 
     pub(super) async fn update(&self, args: UpdateMetadata) -> Result<(), Error> {
-        let thread = args.thread;
+        let UpdateMetadata { thread, changes } = args;
         let mut db = self.db.lock().await;
-        let mut current = row(&mut db,
-            "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
-            [thread.into()]).await?.ok_or_else(|| Error::NoThread(thread))?;
-        threads::validate_title(args.title.as_deref())?;
-        if let Patch::Set(project) = &args.project {
-            store::project(&mut db, project).await?;
+        let mut tx = db.transaction().await?;
+        let (current, in_worktree) = store::metadata(&mut tx, thread).await?;
+        if let Patch::Set(project) = &changes.project {
+            store::project(&mut tx, project).await?;
         }
-        if !matches!(args.project, Patch::Keep) && current.opt_str(2)?.is_some() {
-            return Err(Error::invalid(
-                "move the thread out of its worktree before changing its project",
-            ));
-        }
-        let user_title = args.title.is_some() || current.flag(1)?;
-        let title = match args.title {
-            Some(title) => title,
-            None => current.str(0)?,
-        };
-        let project = args.project.apply(current.opt_str(3)?);
-        exec(
-            &mut db,
-            "UPDATE threads SET title = ?2, user_title = ?3, project = ?4,
-            archived = ?5, pinned = ?6, unread = ?7 WHERE id = ?1",
-            [
-                thread.into(),
-                title.into(),
-                user_title.into(),
-                project.into(),
-                args.archived.unwrap_or(current.flag(4)?).into(),
-                args.pinned.unwrap_or(current.flag(5)?).into(),
-                args.unread.unwrap_or(current.flag(6)?).into(),
-            ],
-        )
-        .await?;
+        let updated = threads::update(current, in_worktree, changes)?;
+        store::save_metadata(&mut tx, thread, &updated).await?;
+        tx.commit().await?;
         drop(db);
         self.relist(thread);
         Ok(())
@@ -343,11 +318,4 @@ async fn launched(
         })
     })
     .transpose()
-}
-
-pub(super) fn validate_request_id(request_id: Option<&str>) -> Result<(), Error> {
-    if request_id.is_some_and(|id| id.is_empty() || id.chars().count() > 256) {
-        return Err(Error::invalid("requestId must contain 1 to 256 characters"));
-    }
-    Ok(())
 }

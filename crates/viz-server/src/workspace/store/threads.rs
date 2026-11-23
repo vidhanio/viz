@@ -1,12 +1,15 @@
 //! Thread bindings, persisted session metadata, and projected summaries.
 
 use serde::{Deserialize, Serialize};
-use viz_core::{placement::Checkout, threads};
+use viz_core::{
+    placement::Checkout,
+    threads::{self, Metadata, Title},
+};
 
 use super::{
     super::{
         Workspace, runs,
-        sql::{Connection, Row, row, rows},
+        sql::{Connection, Row, exec, row, rows},
     },
     from_json, json, now, thread_worktree,
 };
@@ -62,6 +65,62 @@ pub(in crate::workspace) async fn binding(
         parent_environment: row.opt_str(5)?,
         session: from_json(&row.str(6)?)?,
     })
+}
+
+/// A thread's user metadata, and whether it runs in a linked worktree.
+pub(in crate::workspace) async fn metadata(
+    db: &mut Connection,
+    thread: ThreadId,
+) -> Result<(Metadata, bool), Error> {
+    let mut row = row(
+        db,
+        "SELECT title, user_title, worktree, project, archived, pinned, unread FROM threads WHERE id = ?1",
+        [thread.into()],
+    )
+    .await?
+    .ok_or(Error::NoThread(thread))?;
+    let title = row.str(0)?;
+    Ok((
+        Metadata {
+            title: if row.flag(1)? {
+                Title::User(title)
+            } else {
+                Title::Derived(title)
+            },
+            project: row.opt_str(3)?,
+            archived: row.flag(4)?,
+            pinned: row.flag(5)?,
+            unread: row.flag(6)?,
+        },
+        row.opt_str(2)?.is_some(),
+    ))
+}
+
+pub(in crate::workspace) async fn save_metadata(
+    db: &mut Connection,
+    thread: ThreadId,
+    metadata: &Metadata,
+) -> Result<(), Error> {
+    let (title, user) = match &metadata.title {
+        Title::Derived(title) => (title, false),
+        Title::User(title) => (title, true),
+    };
+    exec(
+        db,
+        "UPDATE threads SET title = ?2, user_title = ?3, project = ?4,
+            archived = ?5, pinned = ?6, unread = ?7 WHERE id = ?1",
+        [
+            thread.into(),
+            title.as_str().into(),
+            user.into(),
+            metadata.project.as_deref().into(),
+            metadata.archived.into(),
+            metadata.pinned.into(),
+            metadata.unread.into(),
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 pub(in crate::workspace) async fn require(

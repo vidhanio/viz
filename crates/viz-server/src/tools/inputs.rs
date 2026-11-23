@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use viz_core::threads::Patch;
+use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
     Empty, LaunchThread, ListEntries, MoveThread, ReadThreadState, SendInput, SendMode, StopThread,
     ThreadId, WaitThread,
@@ -111,11 +111,13 @@ impl From<ThreadUpdate> for UpdateMetadata {
     fn from(input: ThreadUpdate) -> Self {
         Self {
             thread: input.thread,
-            title: input.title,
-            archived: input.archived,
-            pinned: input.pinned,
-            unread: input.unread,
-            project: Patch::Keep,
+            changes: Changes {
+                title: input.title,
+                archived: input.archived,
+                pinned: input.pinned,
+                unread: input.unread,
+                project: Patch::Keep,
+            },
         }
     }
 }

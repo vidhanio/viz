@@ -11,7 +11,8 @@ use serde::{Serialize, de::DeserializeOwned};
 pub(super) use self::{
     projects::{directory, path_text, project, project_at, projects, thread_worktree},
     threads::{
-        Binding, NewThread, SavedSession, binding, create_thread, list_threads, require, state,
+        Binding, NewThread, SavedSession, binding, create_thread, list_threads, metadata, require,
+        save_metadata, state,
     },
     transcript::{append, entries, entries_after, publish, search},
 };

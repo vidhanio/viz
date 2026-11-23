@@ -3,7 +3,7 @@
 //! Callers branch on [`Error::kind`] or on a variant; only `crate::wire` knows
 //! JSON-RPC codes.
 
-use viz_core::{placement, runs::QueueRejection, threads::EmptyTitle};
+use viz_core::{placement, runs::QueueRejection, threads};
 use viz_protocol::{RunId, TaskId, ThreadId};
 
 #[derive(Debug, thiserror::Error)]
@@ -21,7 +21,7 @@ pub(crate) enum Error {
     #[error(transparent)]
     Queue(#[from] QueueRejection),
     #[error(transparent)]
-    Title(#[from] EmptyTitle),
+    Thread(#[from] threads::Rejection),
     #[error(transparent)]
     Placement(#[from] placement::Rejection),
     /// Input that violates a documented constraint.
@@ -102,7 +102,7 @@ impl Error {
             | Self::NoProject(_)
             | Self::NotFound(_) => Kind::NotFound,
             Self::Queue(_)
-            | Self::Title(_)
+            | Self::Thread(_)
             | Self::Placement(_)
             | Self::Invalid(_)
             | Self::Request(_) => Kind::Invalid,

@@ -4,7 +4,7 @@ use std::{path::Path, sync::Arc, time::Duration};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
-use viz_core::threads::Patch;
+use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileList, HarnessList,
     HarnessOptions, HarnessOptionsResult, ListBranches, ListEntries, ListProjects, ListWorktrees,
@@ -238,14 +238,36 @@ pub(crate) struct ProjectUpdate {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(from = "RawUpdate")]
 pub(crate) struct UpdateMetadata {
     pub(crate) thread: ThreadId,
-    pub(crate) title: Option<String>,
-    pub(crate) archived: Option<bool>,
-    pub(crate) pinned: Option<bool>,
-    pub(crate) unread: Option<bool>,
+    pub(crate) changes: Changes,
+}
+
+#[derive(Deserialize)]
+struct RawUpdate {
+    thread: ThreadId,
+    title: Option<String>,
+    archived: Option<bool>,
+    pinned: Option<bool>,
+    unread: Option<bool>,
     #[serde(default, deserialize_with = "nullable")]
-    pub(crate) project: Patch<String>,
+    project: Patch<String>,
+}
+
+impl From<RawUpdate> for UpdateMetadata {
+    fn from(raw: RawUpdate) -> Self {
+        Self {
+            thread: raw.thread,
+            changes: Changes {
+                title: raw.title,
+                project: raw.project,
+                archived: raw.archived,
+                pinned: raw.pinned,
+                unread: raw.unread,
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]

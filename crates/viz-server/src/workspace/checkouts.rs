@@ -7,7 +7,10 @@
 
 use std::{path::Path, sync::Arc};
 
-use viz_core::placement::{self, Checkout, Placed, Site};
+use viz_core::{
+    placement::{self, Checkout, Placed, Site},
+    threads,
+};
 use viz_protocol::{MoveThread, Moved, ThreadId, Worktree, WorktreeList, WorktreeTarget};
 
 use super::{
@@ -162,7 +165,7 @@ impl Workspace {
         let project = binding
             .project
             .clone()
-            .ok_or_else(|| Error::invalid("only a project thread can move to a worktree"))?;
+            .ok_or(threads::Rejection::NoProject)?;
         let source = Placed {
             project: Some(&project),
             checkout: &binding.checkout,
@@ -212,7 +215,7 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         let current = store::binding(&mut tx, thread).await?;
         if current.checkout != before.checkout {
-            return Err(Error::invalid("the thread moved concurrently"));
+            return Err(threads::Rejection::Moved.into());
         }
         idle(&mut tx, thread).await?;
         let prompted = row(
@@ -222,7 +225,7 @@ impl Workspace {
         )
         .await?
         .is_some();
-        let handoff = viz_core::threads::handoff_from(
+        let handoff = threads::handoff_from(
             prompted,
             current.session.handoff.as_deref(),
             &current.checkout.cwd,
