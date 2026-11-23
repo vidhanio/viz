@@ -1,6 +1,6 @@
 //! Apply triage decisions, and let time pass for threads nobody touches.
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use tokio::time;
 use viz_core::{
@@ -102,7 +102,19 @@ impl Workspace {
         }
     }
 
+    /// Finished pull requests are checked against each checkout's `HEAD`
+    /// before the write lease; the decisions use the standings read under it.
     async fn pass_time(&self) -> Result<Duration, Error> {
+        let candidates = {
+            let mut db = self.db.lock().await;
+            store::standings(&mut db).await?
+        };
+        let mut pulls = HashMap::new();
+        for thread in candidates {
+            if let Some(pull) = self.finished_pull(thread.thread, &thread.cwd).await {
+                pulls.insert(thread.thread, (thread.cwd, pull));
+            }
+        }
         let now = store::now();
         let mut wait = LOOK;
         let mut changed = Vec::new();
@@ -112,7 +124,10 @@ impl Workspace {
             for mut thread in store::standings(&mut tx).await? {
                 let policy = lifecycle::project_policy(thread.auto_settle);
                 let current = &thread.lifecycle;
-                thread.activity.pull_request = self.finished_pull(thread.thread, &thread.cwd).await;
+                thread.activity.pull_request = pulls
+                    .remove(&thread.thread)
+                    .filter(|(cwd, _)| *cwd == thread.cwd)
+                    .map(|(_, pull)| pull);
                 if let Some(next) = lifecycle::on_time(current, &thread.activity, policy, now) {
                     store::save_lifecycle(&mut tx, thread.thread, &next).await?;
                     changed.push(thread.thread);

@@ -20,7 +20,8 @@ use crate::error::Error;
 
 impl Workspace {
     /// A worktree is created before the fork is recorded, and removed again if
-    /// the fork fails or repeats an earlier request.
+    /// the fork fails or repeats an earlier request, in a tracked job that
+    /// outlives a caller who stops waiting.
     pub(super) async fn fork(self: &Arc<Self>, args: ForkThread) -> Result<Forked, Error> {
         threads::validate_request_id(args.request_id.as_deref())?;
         threads::validate_title(args.title.as_deref())?;
@@ -52,14 +53,20 @@ impl Workspace {
         .source(&project)
         .to_owned();
         let title = args.title.clone().unwrap_or(title);
-        let placement = self
-            .place(&project, Path::new(&source), &target, &title)
-            .await?;
-        let result = self.fork_in(args, Some(&placement)).await;
-        if !matches!(result, Ok((_, true))) {
-            worktree::discard(&self.worktrees, Path::new(&project), &placement).await;
-        }
-        result.map(|(forked, _)| forked)
+        let workspace = Arc::clone(self);
+        self.jobs
+            .spawn(async move {
+                let placement = workspace
+                    .place(&project, Path::new(&source), &target, &title)
+                    .await?;
+                let result = workspace.fork_in(args, Some(&placement)).await;
+                if !matches!(result, Ok((_, true))) {
+                    worktree::discard(&workspace.worktrees, Path::new(&project), &placement).await;
+                }
+                result.map(|(forked, _)| forked)
+            })
+            .await
+            .map_err(viz_git::Error::from)?
     }
 
     /// Record the fork, or return the one an earlier request with the same ID

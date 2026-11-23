@@ -23,7 +23,8 @@ use super::{
 use crate::{acp::Selection, error::Error};
 
 impl Workspace {
-    /// Resolve a worktree target before taking the write lease.
+    /// Resolve a worktree target before taking the write lease, in a tracked
+    /// job so a new worktree is either recorded or discarded.
     pub(crate) async fn receive(self: &Arc<Self>, args: ReceiveTask) -> Result<Received, Error> {
         let Some(target) = args.target.worktree.clone() else {
             return self
@@ -51,19 +52,25 @@ impl Workspace {
         )?;
         store::project(&mut *self.db.lock().await, project).await?;
         let (project, source) = (project.to_owned(), source.to_owned());
-        let placement = self
-            .place(
-                &project,
-                Path::new(&source),
-                &target,
-                &titles::from_prompt(&args.text),
-            )
-            .await?;
-        let result = self.receive_in(args, Some(&placement)).await;
-        if !matches!(result, Ok((_, true))) {
-            worktree::discard(&self.worktrees, Path::new(&project), &placement).await;
-        }
-        result.map(|(received, _)| received)
+        let workspace = Arc::clone(self);
+        self.jobs
+            .spawn(async move {
+                let placement = workspace
+                    .place(
+                        &project,
+                        Path::new(&source),
+                        &target,
+                        &titles::from_prompt(&args.text),
+                    )
+                    .await?;
+                let result = workspace.receive_in(args, Some(&placement)).await;
+                if !matches!(result, Ok((_, true))) {
+                    worktree::discard(&workspace.worktrees, Path::new(&project), &placement).await;
+                }
+                result.map(|(received, _)| received)
+            })
+            .await
+            .map_err(viz_git::Error::from)?
     }
 
     async fn receive_in(

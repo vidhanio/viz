@@ -86,7 +86,7 @@ pub(crate) struct Workspace {
     workers: Workers,
     icons: icons::Icons,
     clones: clones::Clones,
-    git_actions: git::GitActions,
+    reservations: git::Reservations,
     pulls: pulls::Pulls,
     pull_due: Notify,
     github: Mutex<BTreeMap<String, viz_github::GitHub>>,
@@ -158,7 +158,7 @@ impl Workspace {
             workers: Workers::default(),
             icons: icons::Icons::default(),
             clones: clones::Clones::default(),
-            git_actions: git::GitActions::default(),
+            reservations: git::Reservations::default(),
             pulls: pulls::Pulls::default(),
             pull_due: Notify::new(),
             github: Mutex::default(),
@@ -204,14 +204,36 @@ impl Workspace {
         store::entries(&mut db, thread, before, limit.clamp(1, 200)).await
     }
 
-    pub(crate) async fn entries_after(
+    /// Captures the initial transcript page and its live baseline together.
+    pub(crate) async fn watch_snapshot(
+        &self,
+        thread: ThreadId,
+        limit: usize,
+    ) -> Result<(EntryPage, ThreadState), Error> {
+        let mut db = self.db.lock().await;
+        let page = store::entries(&mut db, thread, None, limit).await?;
+        let mut state = store::state(&mut db, thread).await?;
+        state.live = self.updates.latest(thread);
+        drop(db);
+        Ok((page, state))
+    }
+
+    /// Reads the next append batch and captures its baseline once caught up.
+    pub(crate) async fn watch_changes(
         &self,
         thread: ThreadId,
         after: Option<EntryId>,
         limit: usize,
-    ) -> Result<Vec<Entry>, Error> {
+    ) -> Result<(Vec<Entry>, Option<ThreadState>), Error> {
         let mut db = self.db.lock().await;
-        store::entries_after(&mut db, thread, after, limit.clamp(1, 200)).await
+        let entries = store::entries_after(&mut db, thread, after, limit).await?;
+        if entries.len() == limit {
+            return Ok((entries, None));
+        }
+        let mut state = store::state(&mut db, thread).await?;
+        state.live = self.updates.latest(thread);
+        drop(db);
+        Ok((entries, Some(state)))
     }
 
     pub(crate) async fn run_origin(

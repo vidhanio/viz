@@ -139,36 +139,38 @@ impl Workspace {
             .map_err(viz_git::Error::from)?
     }
 
+    /// Reads both snapshots, reserves the checkout against turns and other
+    /// actions, and restores with the database free.
     async fn apply_checkpoint(&self, request: RestoreCheckpoint) -> Result<(), Error> {
-        let mut db = self.db.lock().await;
-        let binding = store::binding(&mut db, request.thread).await?;
-        let repo = Repository::discover(Path::new(&binding.checkout.cwd), &self.closing).await?;
+        let repo = self.git_repository(request.thread).await?;
         let checkout = git::checkout_path(&repo)?;
-        self.guard_git_checkout(&mut db, checkout).await?;
-        if self.git_actions.lock().await.contains_key(checkout) {
-            return Err(viz_git::Error::Busy.into());
-        }
         let git_dir = store::path_text(&repo.identity().git_dir)?;
-        let target = snapshot(&mut db, request.thread, request.run, request.edge, git_dir).await?;
-        let expected = snapshot(
-            &mut db,
-            request.thread,
-            request.expected_run,
-            CheckpointEdge::After,
-            git_dir,
-        )
-        .await?;
-        self.git_actions.lock().await.insert(
-            checkout.to_owned(),
-            git::CheckoutAction::Git("restore_checkpoint"),
-        );
-        self.git_activity();
+        let (target, expected) = {
+            let mut db = self.db.lock().await;
+            let target =
+                snapshot(&mut db, request.thread, request.run, request.edge, git_dir).await?;
+            let expected = snapshot(
+                &mut db,
+                request.thread,
+                request.expected_run,
+                CheckpointEdge::After,
+                git_dir,
+            )
+            .await?;
+            drop(db);
+            (target, expected)
+        };
+        let reservation = self.reserve(
+            checkout,
+            git::CheckoutAction::Git {
+                label: "restore_checkpoint",
+                exclusive: true,
+            },
+        )?;
         let result = repo
             .restore_checkpoint(target, expected, CheckoutActivity::Idle, &self.closing)
             .await;
-        self.git_actions.lock().await.remove(checkout);
-        self.git_activity();
-        drop(db);
+        drop(reservation);
         Ok(result?)
     }
 }

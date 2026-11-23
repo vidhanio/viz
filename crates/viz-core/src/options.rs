@@ -1,6 +1,6 @@
 //! Reconcile thread summary labels with the options reported by ACP.
 
-use viz_protocol::{ConfigOption, OptionValue};
+use viz_protocol::{ConfigOption, OptionKind, OptionValue};
 
 /// The model and thinking labels come from the selected choices in the latest
 /// snapshot.
@@ -20,6 +20,22 @@ impl<'a> Labels<'a> {
             thinking: option_label(options, "thought_level"),
         }
     }
+}
+
+/// Whether `options` has `id` and `value` suits it: one of its choices, or
+/// any boolean for a boolean option.
+#[must_use]
+pub fn offers(options: &[ConfigOption], id: &str, value: &OptionValue) -> bool {
+    options.iter().any(|option| {
+        option.id == id
+            && match (option.kind, value) {
+                (OptionKind::Boolean, OptionValue::Boolean(_)) => true,
+                (OptionKind::Select, OptionValue::Select(value)) => {
+                    option.choices.iter().any(|choice| choice.value == *value)
+                }
+                _ => false,
+            }
+    })
 }
 
 fn option_label<'a>(options: &'a [ConfigOption], category: &str) -> Option<&'a str> {

@@ -364,6 +364,42 @@ fn slash_command(command: viz_acp::Command) -> viz_protocol::SlashCommand {
     }
 }
 
+/// Saves `value` as the thread's choice for `option` while a turn holds the
+/// session, showing it in the thread's options until the harness reports
+/// otherwise. Returns whether the thread's summary labels changed.
+pub(super) async fn defer_option(
+    db: &mut Connection,
+    thread: ThreadId,
+    option: &str,
+    value: OptionValue,
+) -> Result<bool, Error> {
+    let mut session = store::binding(db, thread).await?.session;
+    let before = Labels::from_options(&session.options);
+    let (model, thinking) = (
+        before.model.map(str::to_owned),
+        before.thinking.map(str::to_owned),
+    );
+    if let Some(shown) = session.options.iter_mut().find(|shown| shown.id == option) {
+        shown.value = value.clone();
+    }
+    session.desired.insert(option.to_owned(), value);
+    let after = Labels::from_options(&session.options);
+    exec(
+        db,
+        "UPDATE threads SET session = json_set(session, '$.options', json(?2), '$.desired', json(?3)),
+            model = ?4, thinking = ?5 WHERE id = ?1",
+        [
+            thread.into(),
+            store::json(&session.options)?.into(),
+            store::json(&session.desired)?.into(),
+            after.model.into(),
+            after.thinking.into(),
+        ],
+    )
+    .await?;
+    Ok(after.model != model.as_deref() || after.thinking != thinking.as_deref())
+}
+
 pub(super) async fn persist_snapshot(
     db: &mut Connection,
     thread: ThreadId,

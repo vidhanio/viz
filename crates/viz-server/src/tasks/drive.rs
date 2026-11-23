@@ -3,18 +3,21 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use tokio::{task::JoinHandle, time};
+use tokio::{sync::broadcast, task::JoinHandle, time};
 use viz_core::{
     runs::is_open,
     tasks::{self as decisions, Command, Step},
 };
 use viz_protocol::{
-    TaskId,
+    TaskId, ThreadId,
     peer::{ProgressRequest, ReceiveTask, Received, RetractTask},
 };
 
 use super::{Job, LOCAL_POLL, POLL, Tasks, store};
-use crate::{error::Error, workspace::sql};
+use crate::{
+    error::Error,
+    workspace::{Change, sql},
+};
 
 impl Tasks {
     pub(super) async fn supervise(self: Arc<Self>) {
@@ -129,6 +132,7 @@ impl Tasks {
                 Ok(Advance::Done) => return,
                 Ok(Advance::Immediate) => {}
                 Ok(Advance::LocalPoll) => time::sleep(LOCAL_POLL).await,
+                Ok(Advance::Settling(settling)) => settling.wait().await,
                 Ok(Advance::PeerPoll) => time::sleep(POLL).await,
                 Err(error) => {
                     tracing::error!(task = %id, %error, "advancing durable task");
@@ -225,6 +229,11 @@ impl Tasks {
             run: receipt.run,
             cancel,
         };
+        let settling = self.is_local(target).then(|| Settling {
+            thread: receipt.thread,
+            runs: self.workspace.subscribe(),
+            tasks: self.changed.subscribe(),
+        });
         let reply = if self.is_local(target) {
             self.progress(request).await?
         } else {
@@ -242,7 +251,7 @@ impl Tasks {
             Some(run) if (run.thread, run.id) == (receipt.thread, receipt.run) => {
                 self.apply(id, Command::Progressed(&run)).await?;
                 if is_open(run.status) {
-                    return Ok(self.pause(target));
+                    return Ok(settling.map_or_else(|| self.pause(target), Advance::Settling));
                 }
             }
             Some(_) => {
@@ -287,10 +296,50 @@ impl Tasks {
     }
 }
 
-#[derive(Clone, Copy)]
 enum Advance {
     Done,
     Immediate,
     LocalPoll,
     PeerPoll,
+    /// A local run is still open: look again once it settles.
+    Settling(Settling),
+}
+
+/// Waits for a local delegated run to settle, for any task to change (such
+/// as a cancellation), or for [`POLL`] to pass, whichever comes first. The
+/// receivers are subscribed before the run's progress is read, so a settlement
+/// in between is not missed.
+struct Settling {
+    thread: ThreadId,
+    runs: broadcast::Receiver<Change>,
+    tasks: broadcast::Receiver<()>,
+}
+
+impl Settling {
+    async fn wait(mut self) {
+        let thread = self.thread;
+        let settled = async {
+            loop {
+                match self.runs.recv().await {
+                    Ok(Change::Settled(settled)) if settled == thread => return,
+                    Ok(_) => {}
+                    Err(broadcast::error::RecvError::Lagged(_)) => return,
+                    Err(broadcast::error::RecvError::Closed) => {
+                        std::future::pending::<()>().await;
+                    }
+                }
+            }
+        };
+        let changed = async {
+            match self.tasks.recv().await {
+                Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                Err(broadcast::error::RecvError::Closed) => std::future::pending().await,
+            }
+        };
+        tokio::select! {
+            () = settled => {},
+            () = changed => {},
+            () = time::sleep(POLL) => {},
+        }
+    }
 }

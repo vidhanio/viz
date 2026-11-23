@@ -13,11 +13,7 @@ use viz_protocol::{
     GitDiffRequest, GitDiffTarget, GitFileKind, GitHunk, GitLineStats, GitStatus, ThreadId,
 };
 
-use super::{
-    Workspace,
-    sql::{Connection, rows},
-    store,
-};
+use super::{Workspace, store};
 use crate::error::Error;
 
 impl Workspace {
@@ -45,9 +41,9 @@ impl Workspace {
             (Some(tracking.upstream), tracking.ahead, tracking.behind)
         });
         let operation = self
-            .git_actions
+            .reservations
             .lock()
-            .await
+            .actions
             .get(checkout)
             .map(|action| action.label().to_owned())
             .or(operation);
@@ -78,65 +74,100 @@ impl Workspace {
             .map_err(viz_git::Error::from)?
     }
 
+    /// Reserves the thread's checkout, then runs the action with the database
+    /// free. Actions that move `HEAD` or rewrite the working tree also exclude
+    /// turns in that checkout; see [`Reservations`].
     async fn apply_git_action(&self, request: GitActionRequest) -> Result<GitActionResult, Error> {
         let GitActionRequest { thread, action } = request;
-        let mut db = self.db.lock().await;
-        let binding = store::binding(&mut db, thread).await?;
-        let repo = Repository::discover(Path::new(&binding.checkout.cwd), &self.closing).await?;
+        let repo = self.git_repository(thread).await?;
         let checkout = checkout_path(&repo)?.to_owned();
-        let guarded = matches!(action, GitAction::SwitchBranch { .. } | GitAction::Pull);
-        if guarded {
-            self.guard_git_checkout(&mut db, &checkout).await?;
-        }
-        {
-            let mut actions = self.git_actions.lock().await;
-            let std::collections::hash_map::Entry::Vacant(entry) = actions.entry(checkout.clone())
-            else {
-                return Err(viz_git::Error::Busy.into());
-            };
-            entry.insert(CheckoutAction::Git(action_name(&action)));
-            drop(actions);
-        }
-        self.git_activity();
-        let result = if guarded {
-            let result = run_action(&repo, action, &self.closing).await;
-            drop(db);
-            result
-        } else {
-            drop(db);
-            run_action(&repo, action, &self.closing).await
-        };
-        self.git_actions.lock().await.remove(&checkout);
-        self.git_activity();
-        if guarded && result.is_ok() {
+        let exclusive = matches!(action, GitAction::SwitchBranch { .. } | GitAction::Pull);
+        let reservation = self.reserve(
+            &checkout,
+            CheckoutAction::Git {
+                label: action_name(&action),
+                exclusive,
+            },
+        )?;
+        let result = run_action(&repo, action, &self.closing).await;
+        drop(reservation);
+        if exclusive && result.is_ok() {
             self.invalidate_checkout_pulls(&checkout);
         }
         result.map(|commit| GitActionResult { commit })
     }
 
-    pub(super) async fn guard_git_checkout(
+    /// Claims `root` for `action`, failing with [`viz_git::Error::Busy`] while
+    /// another action holds it or, for an exclusive action, while a turn runs
+    /// in it. The claim lasts until the returned guard drops.
+    pub(super) fn reserve(
         &self,
-        db: &mut Connection,
-        checkout: &Path,
-    ) -> Result<(), Error> {
-        let active = rows(
-            db,
-            "SELECT DISTINCT threads.cwd FROM threads JOIN runs ON runs.thread = threads.id WHERE runs.status = 'running'",
-            [],
-        ).await?.map(|mut row| row.str(0)).collect::<Result<Vec<_>, _>>()?;
-        for cwd in active {
-            let cwd = tokio::fs::canonicalize(&cwd)
-                .await
-                .unwrap_or_else(|_| PathBuf::from(cwd));
-            if cwd.starts_with(checkout)
-                && Repository::discover(&cwd, &self.closing)
-                    .await
-                    .is_ok_and(|repo| repo.identity().checkout.as_deref() == Some(checkout))
-            {
-                return Err(viz_git::Error::Busy.into());
-            }
+        root: &Path,
+        action: CheckoutAction,
+    ) -> Result<Reservation<'_>, Error> {
+        let mut held = self.reservations.lock();
+        let covers = |other: &Path| match action {
+            CheckoutAction::RemoveWorktree => other.starts_with(root),
+            CheckoutAction::Git { .. } => other == root,
+        };
+        let busy = held.actions.contains_key(root)
+            || held.actions.iter().any(|(other, held)| {
+                matches!(held, CheckoutAction::RemoveWorktree) && root.starts_with(other)
+            })
+            || (action.excludes_turns() && held.turns.keys().any(|turn| covers(turn)));
+        if busy {
+            return Err(viz_git::Error::Busy.into());
         }
-        Ok(())
+        let exclusive = action.excludes_turns();
+        held.actions.insert(root.to_owned(), action);
+        drop(held);
+        self.git_activity();
+        Ok(Reservation {
+            workspace: self,
+            root: root.to_owned(),
+            exclusive,
+        })
+    }
+
+    /// Registers a turn in `root`, or returns `None` while an exclusive action
+    /// holds it. A turn outside any repository always proceeds.
+    pub(super) fn occupy(&self, root: Option<&Path>) -> Option<Occupancy<'_>> {
+        let Some(root) = root else {
+            return Some(Occupancy {
+                workspace: self,
+                root: None,
+            });
+        };
+        let mut held = self.reservations.lock();
+        if held.excludes(root) {
+            return None;
+        }
+        *held.turns.entry(root.to_owned()).or_default() += 1;
+        drop(held);
+        Some(Occupancy {
+            workspace: self,
+            root: Some(root.to_owned()),
+        })
+    }
+
+    /// Whether `path` lies in a worktree being removed.
+    pub(super) fn removing(&self, path: &Path) -> bool {
+        self.reservations
+            .lock()
+            .actions
+            .iter()
+            .any(|(root, action)| {
+                matches!(action, CheckoutAction::RemoveWorktree) && path.starts_with(root)
+            })
+    }
+
+    /// The checkout root a thread's turns occupy, if it runs in a repository.
+    pub(super) async fn turn_root(&self, thread: ThreadId) -> Result<Option<PathBuf>, Error> {
+        match self.git_repository(thread).await {
+            Ok(repo) => Ok(repo.identity().checkout.clone()),
+            Err(Error::Git(_) | Error::NoThread(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     pub(super) async fn git_diff(&self, request: GitDiffRequest) -> Result<GitDiff, Error> {
@@ -159,19 +190,102 @@ impl Workspace {
     }
 }
 
-pub(super) type GitActions = tokio::sync::Mutex<HashMap<PathBuf, CheckoutAction>>;
+/// Exclusive operations on checkouts and the turns running in them.
+///
+/// Git work runs with the database free, so this registry, not the write
+/// lease, keeps a pull, branch switch, checkpoint restore, or worktree removal
+/// from overlapping a turn in the same checkout. Workers register a turn
+/// under the write lease as they claim it and skip the claim while an
+/// exclusive action holds the checkout; releasing that action wakes them.
+#[derive(Default)]
+pub(super) struct Reservations(std::sync::Mutex<Held>);
 
-/// Exclusive operations on a checkout, including removal with no bound thread.
+#[derive(Default)]
+pub(super) struct Held {
+    actions: HashMap<PathBuf, CheckoutAction>,
+    /// Turns under way per checkout root.
+    turns: HashMap<PathBuf, usize>,
+}
+
+impl Reservations {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Held> {
+        self.0.lock().expect("checkout reservations poisoned")
+    }
+}
+
+impl Held {
+    fn excludes(&self, root: &Path) -> bool {
+        self.actions.iter().any(|(held, action)| match action {
+            CheckoutAction::RemoveWorktree => root.starts_with(held),
+            CheckoutAction::Git { exclusive, .. } => *exclusive && held == root,
+        })
+    }
+}
+
+/// An operation holding a checkout.
 pub(super) enum CheckoutAction {
-    Git(&'static str),
+    Git {
+        label: &'static str,
+        /// Moves `HEAD` or rewrites the working tree, so no turn may run.
+        exclusive: bool,
+    },
     RemoveWorktree,
 }
 
 impl CheckoutAction {
     const fn label(&self) -> &'static str {
         match self {
-            Self::Git(label) => label,
+            Self::Git { label, .. } => label,
             Self::RemoveWorktree => "remove_worktree",
+        }
+    }
+
+    const fn excludes_turns(&self) -> bool {
+        match self {
+            Self::Git { exclusive, .. } => *exclusive,
+            Self::RemoveWorktree => true,
+        }
+    }
+}
+
+/// Holds a checkout for an action until dropped.
+pub(super) struct Reservation<'a> {
+    workspace: &'a Workspace,
+    root: PathBuf,
+    exclusive: bool,
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        self.workspace
+            .reservations
+            .lock()
+            .actions
+            .remove(&self.root);
+        self.workspace.git_activity();
+        if self.exclusive {
+            self.workspace.workers.wake_all();
+        }
+    }
+}
+
+/// A turn's hold on its checkout root until dropped.
+pub(super) struct Occupancy<'a> {
+    workspace: &'a Workspace,
+    root: Option<PathBuf>,
+}
+
+impl Drop for Occupancy<'_> {
+    fn drop(&mut self) {
+        let Some(root) = &self.root else {
+            return;
+        };
+        let mut held = self.workspace.reservations.lock();
+        if let Some(count) = held.turns.get_mut(root) {
+            *count -= 1;
+            if *count == 0 {
+                held.turns.remove(root);
+            }
         }
     }
 }

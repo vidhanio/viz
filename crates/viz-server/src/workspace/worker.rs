@@ -21,7 +21,11 @@ use viz_core::lifecycle::on_run_end;
 use viz_protocol::{OptionValue, RunId, RunStatus, ThreadId};
 
 use super::{
-    Workspace, runs, runtime::turn_end, sessions::SessionSlot, sql::exec, store,
+    Workspace, runs,
+    runtime::turn_end,
+    sessions::{self, SessionSlot},
+    sql::exec,
+    store,
     worktree::Placement,
 };
 use crate::error::Error;
@@ -40,6 +44,13 @@ impl Workers {
             .expect("worker registry poisoned")
             .get(&thread)
             .cloned()
+    }
+
+    /// Asks every worker to look at its queue again.
+    pub(super) fn wake_all(&self) {
+        for driver in self.0.lock().expect("worker registry poisoned").values() {
+            driver.wake(false);
+        }
     }
 
     pub(super) fn remove(&self, thread: ThreadId) -> Option<Arc<Driver>> {
@@ -294,26 +305,56 @@ impl Workspace {
             .clear();
     }
 
+    /// Applies an option at once when the worker is free. A turn under way
+    /// holds the session, so a request made during one, or overtaken by one,
+    /// is saved as the thread's choice and applied when the turn ends; the
+    /// caller, often answering or changing access for that very turn, does not
+    /// wait for it.
     pub(super) async fn configure(
         self: &Arc<Self>,
         thread: ThreadId,
         option: String,
         value: OptionValue,
     ) -> Result<(), Error> {
-        let driver = {
+        let (driver, options) = {
             let mut db = self.db.lock().await;
-            store::require(&mut db, thread).await?;
+            let options = store::binding(&mut db, thread).await?.session.options;
             let driver = self.driver(thread)?;
             drop(db);
-            driver
+            (driver, options)
         };
+        if !options.is_empty() && !viz_core::options::offers(&options, &option, &value) {
+            return Err(Error::invalid(format!("invalid value for option {option}")));
+        }
+        let (reply, result) = oneshot::channel();
         driver
-            .request(move |reply| Request::Configure {
-                option,
-                value,
+            .inbox
+            .send(Request::Configure {
+                option: option.clone(),
+                value: value.clone(),
                 reply,
             })
-            .await
+            .map_err(|_| worker_closed())?;
+        let mut active = driver.active.subscribe();
+        tokio::select! {
+            biased;
+            result = result => result.map_err(|_| worker_closed())?,
+            true = async { active.wait_for(Option::is_some).await.is_ok() } => {
+                let relist = sessions::defer_option(
+                    &mut *self.db.lock().await,
+                    thread,
+                    &option,
+                    value,
+                )
+                .await?;
+                if relist {
+                    self.relist(thread);
+                } else {
+                    self.changed(Some(thread));
+                }
+                Ok(())
+            }
+        }
     }
 
     async fn worker(&self, thread: ThreadId, driver: &Driver, mut worker: Worker) {
@@ -380,12 +421,15 @@ impl Workspace {
                 value,
                 reply,
             } => {
-                if !reply.is_closed() {
-                    let result = self
-                        .configure_session(thread, slot, &driver.lifetime, &option, value)
-                        .await;
-                    let _ = reply.send(result);
+                let result = self
+                    .configure_session(thread, slot, &driver.lifetime, &option, value)
+                    .await;
+                if let Err(error) = &result
+                    && reply.is_closed()
+                {
+                    tracing::warn!(%thread, %option, %error, "applying a deferred option");
                 }
+                let _ = reply.send(result);
             }
             Request::Rebind {
                 before,
@@ -415,25 +459,30 @@ impl Workspace {
         if let Some(session) = slot.current.as_mut() {
             self.continue_idle(thread, driver, session).await?;
         }
+        let root = self.turn_root(thread).await?;
         let claim = {
             let mut db = self.db.lock().await;
             if driver.lifetime.is_cancelled() {
                 return Ok(false);
             }
+            let occupancy = self.occupy(root.as_deref());
             let mut tx = db.transaction().await?;
-            let found = runs::claim(&mut tx, thread).await?;
+            let found = match &occupancy {
+                Some(_) => runs::claim(&mut tx, thread).await?,
+                None => runs::Found::default(),
+            };
             tx.commit().await?;
             if found.recovered {
                 self.settled(thread);
             }
-            let claim = found.claimed.map(|claim| {
+            let claim = found.claimed.zip(occupancy).map(|(claim, occupancy)| {
                 let turn = driver.begin(claim.id);
-                (claim, turn)
+                (claim, turn, occupancy)
             });
             drop(db);
             claim
         };
-        if let Some((claim, turn)) = claim {
+        if let Some((claim, turn, _occupancy)) = claim {
             self.changed(Some(thread));
             self.checkpoint(thread, turn.run, viz_protocol::CheckpointEdge::Before)
                 .await;

@@ -6,7 +6,6 @@
 //! checkout and never removes the one left behind.
 
 use std::{
-    collections::hash_map::Entry,
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -33,9 +32,7 @@ impl Workspace {
     pub(super) async fn admit_checkout(&self, checkout: &Checkout) -> Result<(), Error> {
         let path = Path::new(checkout.worktree.as_deref().unwrap_or(&checkout.cwd));
         let canonical = tokio::fs::canonicalize(path).await?;
-        if self.git_actions.lock().await.iter().any(|(root, action)| {
-            matches!(action, CheckoutAction::RemoveWorktree) && canonical.starts_with(root)
-        }) {
+        if self.removing(&canonical) {
             return Err(viz_git::Error::Busy.into());
         }
         Ok(())
@@ -194,22 +191,15 @@ impl Workspace {
                     return Err(placement::Rejection::Unmanaged(path).into());
                 }
                 let root = PathBuf::from(&path);
-                {
+                let reservation = {
                     let mut db = workspace.db.lock().await;
                     Self::require_unused(&mut db, &path, None).await?;
-                    let mut actions = workspace.git_actions.lock().await;
-                    let Entry::Vacant(slot) = actions.entry(root.clone()) else {
-                        return Err(viz_git::Error::Busy.into());
-                    };
-                    slot.insert(CheckoutAction::RemoveWorktree);
-                    drop(actions);
-                }
-                let result = worktree::remove(&workspace.worktrees, &path, force).await;
-                {
-                    let db = workspace.db.lock().await;
-                    workspace.git_actions.lock().await.remove(&root);
+                    let reservation = workspace.reserve(&root, CheckoutAction::RemoveWorktree)?;
                     drop(db);
-                }
+                    reservation
+                };
+                let result = worktree::remove(&workspace.worktrees, &path, force).await;
+                drop(reservation);
                 result?;
                 workspace.changed(None);
                 Ok(())
@@ -220,6 +210,8 @@ impl Workspace {
 
     /// Moves an idle thread. Its harness stops; the next run starts a new
     /// session in the new directory (see [`store::SavedSession::handoff`]).
+    /// Placement and rebinding run as a tracked job so a new worktree is
+    /// either bound or discarded even if the caller stops waiting.
     pub(super) async fn move_thread(self: &Arc<Self>, args: MoveThread) -> Result<Moved, Error> {
         let thread = args.thread;
         let (binding, title) = {
@@ -249,19 +241,25 @@ impl Workspace {
         }
         .source(&project)
         .to_owned();
-        let placement = self
-            .place(&project, Path::new(&source), &args.worktree, &title)
-            .await?;
-        if placement.checkout == binding.checkout {
-            return Ok(moved(placement.checkout).await);
-        }
-        let result = self.rebind(thread, binding, placement.clone()).await;
-        if result.is_err() {
-            worktree::discard(&self.worktrees, Path::new(&project), &placement).await;
-        }
-        result?;
-        self.relist(thread);
-        Ok(moved(placement.checkout).await)
+        let workspace = Arc::clone(self);
+        self.jobs
+            .spawn(async move {
+                let placement = workspace
+                    .place(&project, Path::new(&source), &args.worktree, &title)
+                    .await?;
+                if placement.checkout == binding.checkout {
+                    return Ok(moved(placement.checkout).await);
+                }
+                let result = workspace.rebind(thread, binding, placement.clone()).await;
+                if result.is_err() {
+                    worktree::discard(&workspace.worktrees, Path::new(&project), &placement).await;
+                }
+                result?;
+                workspace.relist(thread);
+                Ok(moved(placement.checkout).await)
+            })
+            .await
+            .map_err(viz_git::Error::from)?
     }
 
     async fn rebind(

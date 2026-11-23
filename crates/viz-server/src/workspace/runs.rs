@@ -264,6 +264,7 @@ pub(super) struct Claimed {
 }
 
 /// What a worker found to do.
+#[derive(Default)]
 pub(super) struct Found {
     pub(super) claimed: Option<Claimed>,
     /// A run nobody was on was settled.

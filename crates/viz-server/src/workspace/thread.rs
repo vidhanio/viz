@@ -28,7 +28,8 @@ use crate::{acp::Housekeeping, error::Error, tasks};
 impl Workspace {
     /// Launches a thread; a worktree target is resolved, and a new worktree
     /// created, before the thread is recorded, and removed again if the
-    /// launch fails or repeats an earlier request.
+    /// launch fails or repeats an earlier request. That work runs as a tracked
+    /// job, so a caller that stops waiting cannot strand a new worktree.
     pub(super) async fn launch(
         self: &Arc<Self>,
         mut args: LaunchThread,
@@ -61,14 +62,20 @@ impl Workspace {
             .title
             .clone()
             .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()));
-        let placement = self
-            .place(&project, Path::new(&project), &target, &title)
-            .await?;
-        let result = self.launch_in(args, Some(&placement)).await;
-        if !matches!(result, Ok((_, true))) {
-            worktree::discard(&self.worktrees, Path::new(&project), &placement).await;
-        }
-        result.map(|(launched, _)| launched)
+        let workspace = Arc::clone(self);
+        self.jobs
+            .spawn(async move {
+                let placement = workspace
+                    .place(&project, Path::new(&project), &target, &title)
+                    .await?;
+                let result = workspace.launch_in(args, Some(&placement)).await;
+                if !matches!(result, Ok((_, true))) {
+                    worktree::discard(&workspace.worktrees, Path::new(&project), &placement).await;
+                }
+                result.map(|(launched, _)| launched)
+            })
+            .await
+            .map_err(viz_git::Error::from)?
     }
 
     /// Records a launched thread, or returns the thread an earlier request
@@ -281,8 +288,21 @@ impl Workspace {
     }
 
     /// Deletes a thread, and with `remove_worktree` the clean worktree viz
-    /// created for it once its harness has stopped.
+    /// created for it once its harness has stopped. Runs as a tracked job so
+    /// a committed deletion always goes on to remove the worktree.
     pub(super) async fn delete(
+        self: &Arc<Self>,
+        thread: ThreadId,
+        remove_worktree: bool,
+    ) -> Result<(), Error> {
+        let workspace = Arc::clone(self);
+        self.jobs
+            .spawn(async move { workspace.delete_now(thread, remove_worktree).await })
+            .await
+            .map_err(viz_git::Error::from)?
+    }
+
+    async fn delete_now(
         self: &Arc<Self>,
         thread: ThreadId,
         remove_worktree: bool,

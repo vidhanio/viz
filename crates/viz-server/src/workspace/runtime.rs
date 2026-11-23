@@ -7,7 +7,7 @@ use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::time::{Instant, sleep_until};
 use viz_core::{
     handoff::{self, Reason},
-    runs::{self as decisions, Signals, Stop, TurnEnd},
+    runs::{self as decisions, Settlement, Signals, Stop, TurnEnd},
 };
 use viz_protocol::{CheckpointEdge, ThreadId, Withdrawal};
 
@@ -36,6 +36,8 @@ impl Workspace {
     /// a continuation is running, queued input takes priority once open tools
     /// finish. Content racing the next prompt is folded into that prompt's
     /// transcript, with patches still applied to the original tool entries.
+    /// The harness acts on its own, so the continuation occupies its checkout
+    /// only when no exclusive Git action already holds it.
     pub(super) async fn continue_idle(
         &self,
         thread: ThreadId,
@@ -46,17 +48,19 @@ impl Workspace {
         if pending.is_empty() || driver.lifetime.is_cancelled() {
             return Ok(());
         }
-        let (turn, entry) = {
+        let root = self.turn_root(thread).await?;
+        let (turn, entry, _occupancy) = {
             let mut db = self.db.lock().await;
             if driver.lifetime.is_cancelled() {
                 return Ok(());
             }
+            let occupancy = self.occupy(root.as_deref());
             let mut tx = db.transaction().await?;
             let (run, entry) = runs::begin_unprompted(&mut tx, thread).await?;
             tx.commit().await?;
             let turn = driver.begin(run);
             drop(db);
-            (turn, entry)
+            (turn, entry, occupancy)
         };
         let run = turn.run;
         self.checkpoint(thread, run, CheckpointEdge::Before).await;
@@ -133,7 +137,8 @@ impl Workspace {
         result
     }
 
-    /// Settle the turn's run unless something else already has.
+    /// Settle the turn's run unless something else already has. Either way
+    /// the turn's live view and request waiters end with it.
     pub(super) async fn finish(
         &self,
         thread: ThreadId,
@@ -145,6 +150,10 @@ impl Workspace {
         self.checkpoint(thread, run, CheckpointEdge::After).await;
         let mut db = self.db.lock().await;
         if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
+            self.requests.release_run(run);
+            self.updates.live(thread, None);
+            drop(db);
+            self.settled(thread);
             return Ok(());
         }
         let signals = Signals {
@@ -163,33 +172,58 @@ impl Workspace {
         Ok(())
     }
 
-    /// Best-effort fallback when [`Self::finish`] fails: a run left `running`
-    /// would make every later `claim` on the thread violate the `runs_active`
-    /// index, so mark it failed with a bare update that appends no entry.
+    /// Fallback when [`Self::finish`] fails: a run left `running` would make
+    /// every later `claim` on the thread violate the `runs_active` index.
+    /// Settles it as orphaned, with its end entry, lifecycle, and follow-ups,
+    /// like any other run; only if that fails too is it marked failed with a
+    /// bare update.
     pub(super) async fn abandon(&self, thread: ThreadId, run: RunId, error: &Error) {
         self.requests.release_run(run);
         let mut db = self.db.lock().await;
-        let failed = exec(
-            &mut db,
-            "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
-            [
-                run.into(),
-                format!("settling the run failed: {error}").into(),
-            ],
-        )
+        let settled = async {
+            if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
+                return Ok(());
+            }
+            let mut tx = db.transaction().await?;
+            runs::settle(
+                &mut tx,
+                thread,
+                run,
+                Settlement::orphaned(),
+                self.is_watched(thread),
+            )
+            .await?;
+            tx.commit().await
+        }
         .await;
-        let failed = match failed {
-            Ok(_) => store::withdraw_requests(&mut db, Some(run), Withdrawal::TurnEnded)
-                .await
-                .map(drop),
-            Err(error) => Err(error),
+        let failed = match settled {
+            Ok(()) => Ok(()),
+            Err(settling) => {
+                tracing::warn!(%thread, %run, %settling, "settling an abandoned run");
+                let failed = exec(
+                    &mut db,
+                    "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
+                    [
+                        run.into(),
+                        format!("settling the run failed: {error}").into(),
+                    ],
+                )
+                .await;
+                match failed {
+                    Ok(_) => store::withdraw_requests(&mut db, Some(run), Withdrawal::TurnEnded)
+                        .await
+                        .map(drop),
+                    Err(error) => Err(error),
+                }
+            }
         };
+        self.updates.live(thread, None);
         drop(db);
         if let Err(error) = failed {
             tracing::error!(%thread, %run, %error, "could not fail an unsettled run");
         }
-        self.updates.live(thread, None);
         self.settled(thread);
+        self.relist(thread);
     }
 
     pub(super) async fn prompt(

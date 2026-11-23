@@ -122,19 +122,21 @@ async fn watch_thread(
     outgoing: &mpsc::Sender<Message>,
     app: bool,
 ) -> Result<WatchCursor, Error> {
-    let page = server.workspace.entries(thread, None, PAGE).await?;
-    let state = server.workspace.state(thread).await?;
+    let (page, state) = server.workspace.watch_snapshot(thread, PAGE).await?;
     let last = page.entries.last().map(|entry| entry.id);
     if app {
         server.workspace.watched(thread, WatchChange::Open).await?;
     }
-    let view = Notification::ThreadView {
-        thread,
-        reset: true,
-        entries: page.entries,
-        before: page.before,
-    };
-    let _ = send_note(outgoing, view).await;
+    let _ = send_note(
+        outgoing,
+        Notification::ThreadView {
+            thread,
+            reset: true,
+            entries: page.entries,
+            before: page.before,
+        },
+    )
+    .await;
     let _ = send_note(
         outgoing,
         Notification::ThreadState {
@@ -162,56 +164,52 @@ async fn refresh_watch(
     let Some(watch) = watches.get_mut(&thread) else {
         return Ok(());
     };
-    let mut state = match server.workspace.state(thread).await {
-        Ok(state) => state,
-        Err(Error::NoThread(_)) => return Ok(()),
-        Err(error) => return Err(error.into()),
-    };
     loop {
-        let entries = server
+        let (entries, state) = match server
             .workspace
-            .entries_after(thread, watch.last, PAGE)
-            .await?;
-        let Some(last) = entries.last().map(|entry| entry.id) else {
-            break;
+            .watch_changes(thread, watch.last, PAGE)
+            .await
+        {
+            Ok(changes) => changes,
+            Err(Error::NoThread(_)) => return Ok(()),
+            Err(error) => return Err(error.into()),
         };
-        let more = entries.len() == PAGE;
-        send_note(
-            outgoing,
-            Notification::ThreadView {
-                thread,
-                entries,
-                reset: false,
-                before: None,
-            },
-        )
-        .await?;
-        watch.last = Some(last);
-        if !more {
-            break;
+        let last = entries.last().map(|entry| entry.id).or(watch.last);
+        let has_entries = !entries.is_empty();
+        if has_entries {
+            send_note(
+                outgoing,
+                Notification::ThreadView {
+                    thread,
+                    entries,
+                    reset: false,
+                    before: None,
+                },
+            )
+            .await?;
         }
-    }
-    let next_live = state.live.take();
-    let previous_live = watch.state.live.take();
-    if watch.state == state {
-        if previous_live != next_live {
-            let delta =
-                viz_protocol::LiveDelta::between(previous_live.as_ref(), next_live.as_ref());
-            send_note(outgoing, Notification::ThreadLive { thread, delta }).await?;
+        watch.last = last;
+        let Some(state) = state else { continue };
+        if state != watch.state {
+            let mut previous = watch.state.clone();
+            let previous_live = previous.live.take();
+            let mut next = state.clone();
+            let next_live = next.live.take();
+            let note = if previous == next {
+                let delta =
+                    viz_protocol::LiveDelta::between(previous_live.as_ref(), next_live.as_ref());
+                Notification::ThreadLive { thread, delta }
+            } else {
+                Notification::ThreadState {
+                    thread,
+                    state: Box::new(state.clone()),
+                }
+            };
+            send_note(outgoing, note).await?;
         }
-        state.live = next_live;
-    } else {
-        state.live = next_live;
-        send_note(
-            outgoing,
-            Notification::ThreadState {
-                thread,
-                state: Box::new(state.clone()),
-            },
-        )
-        .await?;
+        watch.state = state;
+        break;
     }
-    watch.state = state;
     Ok(())
 }
 
@@ -333,6 +331,7 @@ async fn handle_workspace_event(
             }
             if app {
                 send_note(outgoing, Notification::ThreadsChanged(Empty {})).await?;
+                send_note(outgoing, Notification::HarnessesChanged(Empty {})).await?;
             }
         }
         Err(broadcast::error::RecvError::Closed) => return Ok(false),
