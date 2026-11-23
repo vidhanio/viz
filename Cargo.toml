@@ -79,8 +79,8 @@ viz-github = { path = "crates/viz-github" }
 viz-core = { path = "crates/viz-core" }
 viz-protocol = { path = "crates/viz-protocol" }
 
-rune = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
-rune-kit = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
+rune = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+rune-kit = { git = "https://github.com/anomalyco/rune", branch = "dev" }
 
 [workspace.lints.clippy]
 cargo = { level = "warn", priority = -1 }
@@ -95,9 +95,9 @@ missing_debug_implementations = "warn"
 unsafe_code = "deny"
 
 [patch.crates-io]
-accesskit_macos = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
-accesskit_windows = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
-parley_engine = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
-sctk-adwaita = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
-wgpu-hal = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
-winit = { git = "https://github.com/anomalyco/rune", rev = "1ef6fc205b604ddee667bbae1e0b0e52b7d1f6aa" }
+accesskit_macos = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+accesskit_windows = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+parley_engine = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+sctk-adwaita = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+wgpu-hal = { git = "https://github.com/anomalyco/rune", branch = "dev" }
+winit = { git = "https://github.com/anomalyco/rune", branch = "dev" }

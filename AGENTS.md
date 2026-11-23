@@ -44,5 +44,5 @@ nix build .#server .#desktop
 - Crate boundaries and architecture: root `Cargo.toml` and each crate's `src/lib.rs` or `src/main.rs` (`//!` docs).
 - Configuration keys and `Secret` syntax: `config.example.toml` and `crates/viz-config`.
 - Desktop UI conventions, tokens, motion, and components: `crates/viz-desktop/src/main.rs`, `theme`, `motion`, and `ui`.
-- Updating Rune: bump `workspace.dependencies.rune` and every `[patch.crates-io]` rev in root `Cargo.toml` together.
+- Updating Rune: every Rune dependency and `[patch.crates-io]` entry follows its `dev` branch; `cargo update` moves them together and `Cargo.lock` pins the commit.
 - Packaging and Home Manager: `flake.nix` and `nix/home-module.nix`.
