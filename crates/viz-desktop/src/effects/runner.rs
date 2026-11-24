@@ -278,12 +278,14 @@ impl Desktop {
                 trailing_space,
             } => {
                 let draft = &mut self.widgets.draft;
-                draft.replace_with_pill(start..end, id, &label);
-                if trailing_space {
-                    draft.insert(" ");
-                } else if let Some(separator) = draft.text[draft.focus..].chars().next() {
-                    draft.set_caret(draft.focus + separator.len_utf8());
-                }
+                draft.undo_group(|edit| {
+                    edit.replace_with_pill(start..end, id, &label);
+                    if trailing_space {
+                        edit.insert(" ");
+                    } else if let Some(separator) = edit.text[edit.focus..].chars().next() {
+                        edit.set_caret(edit.focus + separator.len_utf8());
+                    }
+                });
                 self.sync_draft_text();
             }
         }

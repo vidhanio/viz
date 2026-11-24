@@ -100,12 +100,9 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         .pt(S24)
         .pb(S32);
 
-    let page = match (m.selection.selected, &m.selection.new_thread) {
-        (Some(id), _) => format!("page-{id}"),
-        (None, Some(draft)) => format!("page-draft-{}", draft.id),
-        (None, None) => "page-none".to_owned(),
-    };
+    let page = m.timeline_page_key();
     let switch = motion_switch(m.selection.switch);
+    let scroll_pos = s.widgets.timeline_scroll.clone();
 
     let scroll = col()
         .key(page)
@@ -116,6 +113,9 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         .scroll(ScrollSpec { stick_bottom: true })
         .scroll_fade(ScrollFade::strength(S24).linear())
         .scroll_anchor()
+        .on_scroll_offset(move |pos| {
+            scroll_pos.set([pos.offset[1], pos.max[1]]);
+        })
         .on_far_from_bottom_if(FAR_FROM_BOTTOM_PX, None, |s: &mut Desktop, far: bool| {
             if s.model.timeline.far_from_bottom == far {
                 return false;
@@ -264,10 +264,10 @@ fn bare_working(t: &Theme) -> El {
         ))
 }
 
-/// Flat floating jump-to-latest pill (`t.surface_raised` + `1px
-/// t.border_overlay`, zero drop shadow) displayed when scrolled > `120pt` above
+/// Frosted floating jump-to-latest pill displayed when scrolled > `120pt` above
 /// the bottom.
 fn scroll_to_end_button(unseen: bool, t: &Theme) -> El {
+    let frost = t.surface_raised.alpha(if t.k.dark { 0.82 } else { 0.88 });
     let mut pill = row()
         .key("scroll-to-end")
         .role("button")
@@ -277,9 +277,14 @@ fn scroll_to_end_button(unseen: bool, t: &Theme) -> El {
         .gap(S6)
         .center_y()
         .radius(RADIUS_PILL)
-        .fill(t.surface_raised)
+        .backdrop_blur(10.0)
+        .fill(frost)
         .hover(t.hover_wash)
-        .border(HAIRLINE, t.border_overlay)
+        .shadow(
+            4.0,
+            16.0,
+            rune::Color::BLACK.alpha(if t.k.dark { 0.36 } else { 0.14 }),
+        )
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
         .transition(motion::popover(motion::TRAVEL_SMALL))
@@ -311,13 +316,24 @@ fn scroll_to_end_button(unseen: bool, t: &Theme) -> El {
         .child(pill)
 }
 
-/// Older history, between two rules.
+/// Quiet top-of-history auto-loading indicator with manual fallback.
 fn load_earlier(s: &Desktop, t: &Theme) -> El {
     let m = &s.model;
-    let label = if m.is_history_loading() {
-        "Loading earlier messages…"
+    let center = if m.is_history_loading() {
+        row().gap(S6).center_y().child(ui::spinner(t)).child(
+            text("Loading earlier messages…")
+                .font(t.small)
+                .color(t.muted),
+        )
     } else {
-        "Load earlier messages"
+        rune_kit::Button::new("Load earlier messages")
+            .variant(ButtonVariant::GhostMuted)
+            .control_size(Size::Small.kit())
+            .disabled(!m.connected())
+            .on_press_tx(|s: &mut Desktop, tx| {
+                s.dispatch(Msg::Timeline(TimelineMsg::LoadEarlier), tx);
+            })
+            .build(&t.k)
     };
     row()
         .key("load-earlier")
@@ -325,15 +341,6 @@ fn load_earlier(s: &Desktop, t: &Theme) -> El {
         .gap(S8)
         .center_y()
         .child(ui::rule(t).grow(1.0).w(0.0))
-        .child(
-            rune_kit::Button::new(label)
-                .variant(ButtonVariant::GhostMuted)
-                .control_size(Size::Small.kit())
-                .disabled(m.is_history_loading() || !m.connected())
-                .on_press_tx(|s: &mut Desktop, tx| {
-                    s.dispatch(Msg::Timeline(TimelineMsg::LoadEarlier), tx);
-                })
-                .build(&t.k),
-        )
+        .child(center)
         .child(ui::rule(t).grow(1.0).w(0.0))
 }

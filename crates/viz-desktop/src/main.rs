@@ -222,6 +222,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     let math = s.widgets.math.changed();
     let completion = poll_completion(s, clock, tx);
     let palette = poll_palette(s, clock, tx);
+    let history = poll_earlier_history(s, tx);
     let has_tool_timeout = s.model.transcript().acp_partial.iter().any(|item| {
         matches!(item, model::Item::Tool(tool) if tool.status == model::ToolStatus::Running
             && tool.started_at.is_some() && tool.timeout_ms.is_some())
@@ -254,7 +255,31 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
         || math
         || completion
         || palette
+        || history
         || tool_timer
+}
+
+/// Automatically loads the previous transcript page as the user scrolls near
+/// the top of a thread with older history.
+fn poll_earlier_history(s: &mut Desktop, tx: &mut Tx) -> bool {
+    const AUTO_LOAD_TOP_PX: f32 = 280.0;
+    let page = s.model.timeline_page_key();
+    if s.widgets.timeline_scroll_page != page {
+        s.widgets.timeline_scroll_page = page;
+        s.widgets.timeline_scroll.set([f32::MAX, 0.0]);
+        return false;
+    }
+    let [offset_y, max_y] = s.widgets.timeline_scroll.get();
+    if s.model.connected()
+        && s.model.transcript().before.is_some()
+        && !s.model.is_history_loading()
+        && max_y > 1.0
+        && offset_y <= AUTO_LOAD_TOP_PX
+    {
+        s.dispatch(Msg::Timeline(TimelineMsg::LoadEarlier), tx);
+        return true;
+    }
+    false
 }
 
 fn sync_sidebar_pane(s: &mut Desktop, tx: &mut Tx) -> bool {

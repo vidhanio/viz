@@ -99,7 +99,7 @@ pub enum Effect {
         when_shown: bool,
     },
     /// Scroll a scrollable container to its bottom edge.
-    ScrollToBottom(&'static str),
+    ScrollToBottom(String),
     /// Jump a scrollable container immediately to `(x, y)`.
     ScrollToInstant {
         /// Scroll container element key.

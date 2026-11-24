@@ -10,6 +10,7 @@ mod draft;
 mod editor;
 mod menus;
 mod queued;
+pub mod rich;
 mod toolbar;
 
 use rune::{El, col};

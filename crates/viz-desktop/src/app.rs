@@ -42,6 +42,8 @@ pub struct ShellWidgets {
     pub subagent_hover: Option<String>,
     /// Main composer text editor.
     pub draft: TextEdit,
+    /// Whether the composer's rich-text formatting toolbar is expanded.
+    pub format_bar_open: bool,
     /// Project filter combobox search input.
     pub project_filter_query: TextEdit,
     /// Sidebar inline thread title rename input.
@@ -76,6 +78,10 @@ pub struct ShellWidgets {
     pub project_icons: HashMap<String, Image>,
     /// Decoded images for the active draft, in attachment order.
     pub attachment_images: crate::attachments::DraftImages,
+    /// Latest `[offset_y, max_y]` of the active timeline scroll viewport.
+    pub timeline_scroll: rune::Live<[f32; 2]>,
+    /// Timeline page key that [`Self::timeline_scroll`] was last observed on.
+    pub timeline_scroll_page: String,
 }
 
 impl std::fmt::Debug for ShellWidgets {
@@ -91,7 +97,7 @@ impl std::fmt::Debug for ShellWidgets {
 
 impl Default for ShellWidgets {
     fn default() -> Self {
-        let mut draft = TextEdit::new("");
+        let mut draft = crate::composer::rich::new_edit();
         draft.focused = true;
         Self {
             request_edit: TextEdit::new(""),
@@ -105,6 +111,7 @@ impl Default for ShellWidgets {
             git_tree_open: false,
             subagent_hover: None,
             draft,
+            format_bar_open: false,
             project_filter_query: TextEdit::new(""),
             inline_rename: TextEdit::new(""),
             sidebar_dialog: TextEdit::new(""),
@@ -124,6 +131,8 @@ impl Default for ShellWidgets {
             math: rune_kit::math::Client::default(),
             project_icons: HashMap::new(),
             attachment_images: crate::attachments::DraftImages::default(),
+            timeline_scroll: rune::Live::new([f32::MAX, 0.0]),
+            timeline_scroll_page: String::new(),
         }
     }
 }

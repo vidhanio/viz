@@ -245,6 +245,16 @@ impl Model {
         self.open_thread().is_some_and(|open| open.history_loading)
     }
 
+    /// Stable element key of the active timeline scroll viewport.
+    #[must_use]
+    pub fn timeline_page_key(&self) -> String {
+        match (self.selection.selected, &self.selection.new_thread) {
+            (Some(id), _) => format!("page-{id}"),
+            (None, Some(draft)) => format!("page-draft-{}", draft.id),
+            (None, None) => "page-none".to_owned(),
+        }
+    }
+
     /// Summary of `thread` in the active environment, once listed.
     #[must_use]
     pub fn summary(&self, thread: ThreadId) -> Option<&ThreadSummary> {

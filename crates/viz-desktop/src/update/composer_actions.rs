@@ -33,7 +33,7 @@ pub(super) fn send_input(
     }
     if let Some(run) = model.composer.editing_queued.take() {
         if let Some(thread) = model.selection.selected {
-            let text = model.composer.draft.text.clone();
+            let text = model.composer.draft.outbound_text();
             let restored = model.composer.editing_stash.take().unwrap_or_default();
             let restore_text = restored.text.clone();
             let restore_pills = restored.pills.clone();
@@ -59,7 +59,7 @@ pub(super) fn send_input(
     }
     let submitted = mem::take(&mut model.composer.draft);
     let context = submitted.prompt_context();
-    let text = submitted.text.clone();
+    let text = submitted.outbound_text();
     let attachments = (*submitted.attachments).clone();
     let command = if let Some(thread) = &mut model.selection.new_thread {
         thread.sending = true;
@@ -110,7 +110,7 @@ pub(super) fn send_input(
     model.composer.history_stash = None;
     model.composer.compact_before_send = false;
     effects.push(Effect::SyncEdit(EditSync::Clear(EditTarget::Draft)));
-    effects.push(Effect::ScrollToBottom("timeline"));
+    effects.push(Effect::ScrollToBottom(model.timeline_page_key()));
     effects.push(Effect::Server(command));
     effects.push(Effect::SavePrefs(model.to_prefs()));
 }

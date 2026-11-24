@@ -160,7 +160,7 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         TimelineMsg::ScrollToEnd => {
             model.timeline.far_from_bottom = false;
             model.timeline.unseen_activity = false;
-            effects.push(Effect::ScrollToBottom("timeline"));
+            effects.push(Effect::ScrollToBottom(model.timeline_page_key()));
         }
         TimelineMsg::LoadEarlier => {
             if !model.is_history_loading()
