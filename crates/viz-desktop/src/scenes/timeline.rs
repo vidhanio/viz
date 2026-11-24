@@ -71,14 +71,13 @@ pub(super) fn entry_output(s: &mut Desktop) {
         request: 1,
         path: "Command output".into(),
         lines: None,
-        open_url: None,
+        source: None,
         body: crate::model::FilePreviewBody::entry_text(output),
     });
     s.sync_widgets_from_model();
 }
 
-/// Centered file preview modal showing syntax-highlighted Rust source with a
-/// highlighted `#L8-L13` range badge and gutter accent.
+/// Virtualized large Rust file preview with a highlighted line range.
 pub(super) fn file_preview(s: &mut Desktop) {
     seed_populated(&mut s.model);
     let sample = r"//! Prompt assembly helpers for ACP harnesses.
@@ -100,16 +99,21 @@ pub fn build_prompt(
     blocks
 }
 ";
+    let window = sample.repeat(10);
     s.model.timeline.file_preview = Some(crate::model::FilePreview {
         request: 1,
         path: "/work/workbench/crates/viz-acp/src/prompt.rs".into(),
         lines: Some((6, 13)),
-        open_url: Some("file:///work/workbench/crates/viz-acp/src/prompt.rs#L6-L13".into()),
+        source: Some(crate::model::PreviewFile {
+            root: viz_client::protocol::FileRoot::Project {
+                project: "/work/workbench".into(),
+            },
+            session: s.model.connection.live.id,
+            local_root: None,
+        }),
         body: crate::model::FilePreviewBody::Text {
-            text: sample.into(),
-            start_line: 1,
-            truncated: false,
-            size: sample.len() as u64,
+            lines: crate::model::PreviewLines::new("prompt.rs", &window, 0, 120_000),
+            size: (sample.len() * 6_000) as u64,
         },
     });
     s.sync_widgets_from_model();

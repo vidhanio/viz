@@ -26,7 +26,7 @@ use serde_json::{Value, json, value::RawValue};
 use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, UnixListener};
 use tokio_util::sync::CancellationToken;
-use viz_protocol::{EnvironmentList, ListEnvironments, Method};
+use viz_protocol::{EnvironmentList, HostId, ListEnvironments, Method};
 
 use crate::{
     config::Config,
@@ -49,6 +49,7 @@ pub(crate) struct Server {
     peers: Arc<Peers>,
     tasks: Arc<Tasks>,
     environment: String,
+    host: HostId,
     stop: CancellationToken,
 }
 
@@ -181,6 +182,7 @@ impl Server {
             peers,
             tasks,
             environment: config.environment.clone(),
+            host: HostId::local().unwrap_or_else(|| HostId(uuid::Uuid::new_v4().to_string())),
             stop,
         }
     }
@@ -261,6 +263,7 @@ impl Server {
             protocol: PROTOCOL_VERSION,
             version: VERSION.into(),
             environment: self.environment.clone(),
+            host: self.host.clone(),
         })
     }
 }

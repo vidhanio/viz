@@ -41,6 +41,9 @@ pub enum Error {
         /// The underlying error.
         source: serde_json::Error,
     },
+    /// A local content destination could not be written.
+    #[error("writing downloaded content: {0}")]
+    WriteContent(#[source] std::io::Error),
     /// The connection closed.
     #[error("connection to the server closed")]
     Closed,

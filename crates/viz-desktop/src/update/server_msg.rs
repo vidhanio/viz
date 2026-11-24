@@ -29,6 +29,8 @@ pub enum ServerMsg {
         version: String,
         /// Active environment id reported by `hello`.
         environment: String,
+        /// Whether workspace paths belong to the desktop host.
+        local_host: bool,
         /// Monotonic workspace revision of the initial snapshot.
         rev: u64,
         /// Available environments.

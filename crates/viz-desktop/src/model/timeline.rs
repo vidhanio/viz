@@ -4,9 +4,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use viz_client::protocol::{EntryId, ThreadId};
+use viz_client::protocol::{EntryId, FileRoot, ThreadId};
 
-use super::{Model, Tool, is_command};
+use super::{Model, Tool, is_command, state::SessionId};
 
 /// Active file or attachment preview overlay state.
 #[derive(Debug, Clone)]
@@ -18,10 +18,93 @@ pub struct FilePreview {
     /// Optional 1-based inclusive line range (`start..=end`) highlighted and
     /// scrolled into view.
     pub lines: Option<(usize, usize)>,
-    /// Optional external `file://` URL offered for opening in the OS handler.
-    pub open_url: Option<String>,
+    /// Workspace source for paging and file actions.
+    pub source: Option<PreviewFile>,
     /// Loaded content or pending/error status.
     pub body: FilePreviewBody,
+}
+
+/// Workspace location and connection that supplied the preview.
+#[derive(Debug, Clone)]
+pub struct PreviewFile {
+    pub root: FileRoot,
+    pub session: SessionId,
+    pub local_root: Option<std::path::PathBuf>,
+}
+
+/// A bounded set of highlighted lines and the virtual document extent.
+#[derive(Debug, Clone)]
+pub struct PreviewLines {
+    pub start: usize,
+    pub rows: Vec<PreviewLine>,
+    pub count: usize,
+    pub pending: bool,
+    pub visible_while_pending: Option<std::ops::Range<usize>>,
+}
+
+/// Text and syntax spans for one line of the loaded window.
+#[derive(Debug, Clone)]
+pub struct PreviewLine {
+    pub text: String,
+    pub highlights: Vec<rune_kit::syntax::Highlight>,
+}
+
+impl PreviewLines {
+    /// Tokenizes a received window and assigns theme-independent spans to
+    /// lines.
+    pub fn new(path: &str, text: &str, start: usize, count: usize) -> Self {
+        let language = crate::timeline::file_preview::language_for_path(path);
+        let highlights = rune_kit::syntax::builtin(language, text);
+        let mut highlights = highlights.iter().peekable();
+        let mut offset = 0;
+        let rows = text
+            .split_terminator('\n')
+            .map(|line| {
+                let start = offset;
+                offset += line.len() + 1;
+                let text = line.strip_suffix('\r').unwrap_or(line);
+                let end = start + text.len();
+                let mut spans = Vec::new();
+                while let Some((range, paint)) = highlights.peek() {
+                    if range.start >= end {
+                        break;
+                    }
+                    let low = range.start.max(start);
+                    let high = range.end.min(end);
+                    if low < high {
+                        spans.push((low - start..high - start, *paint));
+                    }
+                    if range.end > end {
+                        break;
+                    }
+                    highlights.next();
+                }
+                PreviewLine {
+                    text: text.to_owned(),
+                    highlights: spans,
+                }
+            })
+            .collect();
+        Self {
+            start,
+            rows,
+            count,
+            pending: false,
+            visible_while_pending: None,
+        }
+    }
+
+    /// Start of the next window needed to cover the visible rows.
+    pub const fn next_start(&self, visible: &std::ops::Range<usize>) -> Option<usize> {
+        let end = self.start + self.rows.len();
+        if visible.start < self.start {
+            Some(visible.start.saturating_sub(96))
+        } else if visible.end > end && visible.start > self.start {
+            Some(visible.start)
+        } else {
+            None
+        }
+    }
 }
 
 /// Content state of [`FilePreview`].
@@ -30,12 +113,7 @@ pub enum FilePreviewBody {
     /// Waiting for `files.read` or a content-channel download.
     Loading,
     /// UTF-8 text or source code.
-    Text {
-        text: String,
-        start_line: usize,
-        truncated: bool,
-        size: u64,
-    },
+    Text { lines: PreviewLines, size: u64 },
     /// Raster or vector image decoded into `ShellWidgets::preview_image`.
     Image { size: u64 },
     /// Full tool output or prompt with byte ranges for the virtual viewport.

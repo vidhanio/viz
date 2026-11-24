@@ -4,16 +4,15 @@
 
 use std::path::Path;
 
-use rune::{Color, El, ScrollFade, ScrollSpec, Tx, col, el, icon, rich, row, text};
-use rune_kit::{
-    IconButtonVariant, Preview, ScrollBar, ScrollBarStyle, file_icon, syntax::highlight,
-};
+use rune::{Color, El, ScrollSpec, Tx, col, el, icon, rich, row, text};
+use rune_kit::{IconButtonVariant, Preview, ScrollBar, ScrollBarStyle, file_icon};
 use viz_client::protocol::ThreadId;
 
 use crate::{
     app::Desktop,
     attachments::compact_bytes,
-    model::{FilePreview, FilePreviewBody, relative_path, split_path},
+    effects::Effect,
+    model::{FilePreview, FilePreviewBody, PreviewLines, relative_path, split_path},
     motion,
     theme::{
         HAIRLINE, ICON, ICON_MD, ICON_SMALL, RADIUS_CARD, RADIUS_SM, S2, S4, S6, S8, S12, S16,
@@ -107,8 +106,7 @@ pub fn parse_attachment_link(raw: &str) -> Option<(ThreadId, String)> {
     (!id.is_empty()).then_some((ThreadId(thread), id.to_owned()))
 }
 
-/// Formats a `file://` URI for an absolute local path, or returns `None` for
-/// relative paths.
+/// Formats a file URI for use in timeline links.
 #[must_use]
 pub fn path_to_file_url(path: &str) -> Option<String> {
     url::Url::from_file_path(path).ok().map(String::from)
@@ -205,12 +203,9 @@ pub fn modal(s: &Desktop, reduced: bool, t: &Theme, layer: &mut Vec<El>) {
     let body_max_h = (card_h - 48.0).max(160.0);
     let body = match &preview.body {
         FilePreviewBody::Loading => loading_body(t),
-        FilePreviewBody::Text {
-            text: source,
-            start_line,
-            truncated,
-            ..
-        } => code_body(preview, source, *start_line, *truncated, body_max_h, t),
+        FilePreviewBody::Text { lines, .. } => {
+            code_body(preview, lines, body_max_h, Theme::get(t.k.dark))
+        }
         FilePreviewBody::EntryText { rows, .. } => entry_body(
             preview.request,
             rows.len(),
@@ -226,7 +221,7 @@ pub fn modal(s: &Desktop, reduced: bool, t: &Theme, layer: &mut Vec<El>) {
         .overlay
         .elevate(
             col()
-                .key("file-preview-sheet")
+                .key(format!("file-preview-sheet-{}", preview.request))
                 .role("dialog")
                 .label(format!("Preview {}", preview.path))
                 .w(card_w)
@@ -350,7 +345,14 @@ fn mount_image_lightbox(
         s.dispatch(Msg::Timeline(TimelineMsg::CloseFilePreview), tx);
     })
     .build(&s.widgets.image_zoom, &t.overlay, window, reduced);
-    layer.push(viewer);
+    layer.push(viewer.children(file_action(s, preview, t).map(|button| {
+        row()
+            .pin(None, Some(S16), Some(S16), None)
+            .padding(S4)
+            .radius(RADIUS_SM)
+            .fill(t.surface_raised)
+            .child(button)
+    })));
 }
 
 #[expect(
@@ -465,23 +467,7 @@ fn header(s: &Desktop, preview: &FilePreview, t: &Theme) -> El {
             .key("copy-path"),
     );
 
-    if let Some(url) = &preview.open_url {
-        let external = url.clone();
-        bar = bar.child(
-            rune_kit::IconButton::new(&ui::EXTERNAL_LINK)
-                .help("Open externally")
-                .variant(IconButtonVariant::GhostMuted)
-                .control_size(Size::Compact.kit())
-                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                    s.dispatch(
-                        Msg::Timeline(TimelineMsg::OpenExternalUrl(external.clone())),
-                        tx,
-                    );
-                })
-                .build(&t.k)
-                .key("open-external"),
-        );
-    }
+    bar = bar.children(file_action(s, preview, t));
 
     bar.child(
         rune_kit::IconButton::new(&ui::CLOSE)
@@ -496,131 +482,87 @@ fn header(s: &Desktop, preview: &FilePreview, t: &Theme) -> El {
     )
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "line-by-line syntax span slicing, line gutter, and highlight band layout"
-)]
-fn code_body(
-    preview: &FilePreview,
-    source: &str,
-    start_line: usize,
-    truncated: bool,
-    max_h: f32,
-    t: &Theme,
-) -> El {
-    let lang = language_for_path(&preview.path);
-    let highlights = highlight(lang, source);
-    let all_spans = t.syntax.spans(&highlights, 0);
-
-    let trimmed_source = source.strip_suffix('\n').unwrap_or(source);
-    let line_count = trimmed_source.split('\n').count().max(1);
-    let max_line_no = start_line.saturating_add(line_count).saturating_sub(1);
-    let gutter_digits = max_line_no.to_string().len().max(3);
-    #[expect(clippy::cast_precision_loss, reason = "gutter digit count is tiny")]
-    let gutter_w = (gutter_digits as f32).mul_add(7.5, 16.0);
-    let highlight_bg = t.accent.alpha(if t.k.dark { 0.15 } else { 0.10 });
-
-    let mut rows = col().key("preview-lines").w_full().py(S8);
-    let mut span_cursor = 0usize;
-    let mut offset = 0usize;
-
-    for (idx, raw_line) in trimmed_source.split('\n').enumerate() {
-        let line_no = start_line + idx;
-        let line_start = offset;
-        let line_end = offset + raw_line.len();
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-        let content_end = line_start + line.len();
-        offset = (line_end + 1).min(source.len());
-
-        while span_cursor < all_spans.len() && (all_spans[span_cursor].end as usize) <= line_start {
-            span_cursor += 1;
-        }
-        let mut line_spans = Vec::new();
-        let mut k = span_cursor;
-        while k < all_spans.len() && (all_spans[k].start as usize) < content_end {
-            let sp = &all_spans[k];
-            let s = (sp.start as usize).max(line_start) - line_start;
-            let e = (sp.end as usize).min(content_end) - line_start;
-            if s < e {
-                let mut cloned = sp.clone();
-                cloned.start = u32::try_from(s).unwrap_or(u32::MAX);
-                cloned.end = u32::try_from(e).unwrap_or(u32::MAX);
-                line_spans.push(cloned);
-            }
-            k += 1;
-        }
-
-        let is_highlighted = preview
-            .lines
-            .is_some_and(|(a, b)| line_no >= a && line_no <= b);
-        let display = if line.is_empty() { " " } else { line };
-        let code_el = if line_spans.is_empty() {
-            text(display)
-                .font(t.mono_small)
-                .color(t.text)
-                .wrap_anywhere()
-                .selectable(true)
-                .selection_color(t.k.selection())
-        } else {
-            rich(display, line_spans)
-                .font(t.mono_small)
-                .color(t.text)
-                .wrap_anywhere()
-                .selectable(true)
-                .selection_color(t.k.selection())
-        };
-
-        let line_row =
-            row()
-                .key(format!("preview-line-{line_no}"))
-                .w_full()
-                .pr(S12)
-                .gap(S8)
-                .items_stretch()
-                .fill(if is_highlighted {
-                    highlight_bg
+fn file_action(s: &Desktop, preview: &FilePreview, t: &Theme) -> Option<El> {
+    let file = preview.source.as_ref()?;
+    if !s.model.connected()
+        || file.session != s.model.connection.live.id
+        || matches!(
+            preview.body,
+            FilePreviewBody::Loading | FilePreviewBody::Error(_)
+        )
+    {
+        return None;
+    }
+    let local = file.local_root.is_some();
+    let (glyph, label) = if local {
+        (&ui::EXTERNAL_LINK, "Open local file")
+    } else {
+        (&ui::DOWNLOAD, "Download file")
+    };
+    let request = preview.request;
+    Some(
+        rune_kit::IconButton::new(glyph)
+            .help(label)
+            .variant(IconButtonVariant::GhostMuted)
+            .control_size(Size::Compact.kit())
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                let msg = if local {
+                    TimelineMsg::OpenLocalFile(request)
                 } else {
-                    Color::TRANSPARENT
-                })
-                .child(
-                    el().w(S2)
-                        .fill(if is_highlighted {
-                            t.accent
-                        } else {
-                            Color::TRANSPARENT
-                        })
-                        .a11y_hidden(),
-                )
-                .child(
-                    row()
-                        .w(gutter_w)
-                        .justify_end()
-                        .pr(S4)
-                        .py(1.0)
-                        .a11y_hidden()
-                        .child(text(line_no.to_string()).font(t.mono_micro).color(
-                            if is_highlighted {
-                                t.accent_text
-                            } else {
-                                t.faint
-                            },
-                        )),
-                )
-                .child(code_el.py(1.0).grow(1.0).shrink().min_w(0.0));
+                    TimelineMsg::DownloadFile(request)
+                };
+                s.dispatch(Msg::Timeline(msg), tx);
+            })
+            .build(&t.k)
+            .key("preview-file-action"),
+    )
+}
 
-        rows = rows.child(line_row);
+const LINE_HEIGHT: f32 = 20.0;
+
+/// Positions a newly loaded line window at the top of the viewport.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "scroll layout uses f32 coordinates"
+)]
+pub fn scroll_to_line(index: usize) -> Effect {
+    Effect::ScrollToInstant {
+        key: PREVIEW_SCROLL_KEY,
+        x: 0.0,
+        y: index as f32 * LINE_HEIGHT,
     }
+}
 
-    if truncated {
-        rows = rows.child(
-            row().w_full().px(S16).pt(S8).child(
-                text("Preview truncated at 512 KB — open externally to view the full file.")
-                    .font(t.micro)
-                    .color(t.faint),
-            ),
-        );
-    }
-
+fn code_body(preview: &FilePreview, lines: &PreviewLines, max_h: f32, t: &'static Theme) -> El {
+    let request = preview.request;
+    let range = preview.lines;
+    let digits = lines.count.to_string().len().max(3);
+    #[expect(clippy::cast_precision_loss, reason = "gutter digit count is tiny")]
+    let gutter = (digits as f32).mul_add(7.5, 16.0);
+    let rows = motion::fold_container(col().key("preview-lines").w_full())
+        .virtual_rows(
+            lines.count,
+            LINE_HEIGHT,
+            |_: &Desktop, index| format!("preview-line-{}", index + 1).into(),
+            move |s: &Desktop, index| code_line(s, request, index, range, gutter, t),
+        )
+        .virtual_rows_version((request, lines.start, lines.rows.len(), digits))
+        .on_visible_rows(move |s: &mut Desktop, rows| {
+            let Some(preview) = s.model.timeline.file_preview.as_ref() else {
+                return false;
+            };
+            if preview.request == request
+                && preview.source.is_some()
+                && let FilePreviewBody::Text { lines, .. } = &preview.body
+                && (lines.pending || lines.next_start(&rows).is_some())
+            {
+                s.dispatch_local(Msg::Timeline(TimelineMsg::FilePreviewVisible {
+                    request,
+                    rows,
+                }));
+            }
+            false
+        });
     col()
         .key(PREVIEW_SCROLL_KEY)
         .w_full()
@@ -629,9 +571,66 @@ fn code_body(
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
-        .scroll_fade(ScrollFade::strength(S16).linear())
         .child(rows)
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
+}
+
+fn code_line(
+    s: &Desktop,
+    request: u64,
+    index: usize,
+    range: Option<(usize, usize)>,
+    gutter: f32,
+    t: &Theme,
+) -> El {
+    let line_no = index + 1;
+    let selected = range.is_some_and(|(start, end)| (start..=end).contains(&line_no));
+    let line = s
+        .model
+        .timeline
+        .file_preview
+        .as_ref()
+        .filter(|preview| preview.request == request)
+        .and_then(|preview| match &preview.body {
+            FilePreviewBody::Text { lines, .. } => lines.rows.get(index.checked_sub(lines.start)?),
+            _ => None,
+        });
+    row()
+        .w_full()
+        .min_h(LINE_HEIGHT)
+        .pr(S12)
+        .gap(S8)
+        .items_stretch()
+        .fill(if selected {
+            t.accent.alpha(if t.k.dark { 0.15 } else { 0.10 })
+        } else {
+            Color::TRANSPARENT
+        })
+        .child(el().w(S2).fill(if selected {
+            t.accent
+        } else {
+            Color::TRANSPARENT
+        }))
+        .child(
+            row().w(gutter).justify_end().pr(S4).a11y_hidden().child(
+                text(line_no.to_string())
+                    .py(2.0)
+                    .font(t.mono_micro)
+                    .color(if selected { t.accent_text } else { t.faint }),
+            ),
+        )
+        .children(line.map(|line| {
+            rich(&line.text, t.syntax.spans(&line.highlights, 0))
+                .font(t.mono_small)
+                .py(2.0)
+                .color(t.text)
+                .grow(1.0)
+                .shrink()
+                .min_w(0.0)
+                .wrap_anywhere()
+                .selectable(true)
+                .selection_color(t.k.selection())
+        }))
 }
 
 fn loading_body(t: &Theme) -> El {
@@ -698,7 +697,7 @@ fn error_body(message: &str, t: &Theme) -> El {
         )
 }
 
-fn language_for_path(path: &str) -> Option<&'static str> {
+pub fn language_for_path(path: &str) -> Option<&'static str> {
     let ext = Path::new(path)
         .extension()
         .and_then(|e| e.to_str())

@@ -193,3 +193,68 @@ pub(super) fn pick_project_icon() -> io::Result<Option<DraftAttachment>> {
     };
     read_file(&path, ICON_LIMIT, "exceeds 1 MiB").map(Some)
 }
+
+/// Checks that a preview path still points to a regular file in the workspace
+/// before passing its absolute path to the system handler.
+pub(super) fn open_local_file(directory: &Path, path: &str) -> Result<(), String> {
+    let relative = viz_fs::RelPath::parse(path).map_err(|error| error.to_string())?;
+    let directory = directory
+        .canonicalize()
+        .map_err(|error| error.to_string())?;
+    let path = directory.join(relative.as_path());
+    let resolved = path.canonicalize().map_err(|error| error.to_string())?;
+    if !resolved.starts_with(&directory) || !resolved.is_file() {
+        return Err("File is outside the workspace or is no longer a regular file.".into());
+    }
+    open_with_system(&resolved)
+}
+
+#[cfg(unix)]
+fn open_with_system(path: &Path) -> Result<(), String> {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    let status = std::process::Command::new(program)
+        .arg(path)
+        .status()
+        .map_err(|error| error.to_string())?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{program} exited with {status}"))
+    }
+}
+
+/// Both wide strings are NUL-terminated and outlive the shell call.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn open_with_system(path: &Path) -> Result<(), String> {
+    use std::{os::windows::ffi::OsStrExt as _, ptr::null};
+
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+
+    let verb: Vec<u16> = "open".encode_utf16().chain([0]).collect();
+    let path: Vec<u16> = path.as_os_str().encode_wide().chain([0]).collect();
+    let status = unsafe {
+        ShellExecuteW(
+            std::ptr::null_mut(),
+            verb.as_ptr(),
+            path.as_ptr(),
+            null(),
+            null(),
+            SW_SHOWNORMAL,
+        )
+    };
+    if status as usize > 32 {
+        Ok(())
+    } else {
+        Err(format!("ShellExecute returned {status:p}"))
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn open_with_system(_: &Path) -> Result<(), String> {
+    Err("This platform has no file opener.".into())
+}

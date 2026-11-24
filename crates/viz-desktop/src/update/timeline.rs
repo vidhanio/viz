@@ -10,7 +10,7 @@ use viz_client::protocol::{
 use super::selection::{focus_draft, open_in_environment, open_thread, select_thread};
 use crate::{
     effects::{EditSync, EditTarget, Effect, ServerEffect},
-    model::{EntryAction, FilePreview, FilePreviewBody, Item, Model},
+    model::{EntryAction, FilePreview, FilePreviewBody, Item, Model, PreviewFile, PreviewLines},
 };
 
 /// Messages emitted by timeline rows, folds, inspectors, and cards.
@@ -97,8 +97,15 @@ pub enum TimelineMsg {
     /// Open a link URL (`file://` and `viz-attachment://` open the in-app
     /// preview modal; web URLs open externally).
     OpenUrl(String),
-    /// Always open a URL in the OS external handler.
-    OpenExternalUrl(String),
+    /// Open the active workspace file in the OS handler.
+    OpenLocalFile(u64),
+    /// Save the active workspace file from the remote server.
+    DownloadFile(u64),
+    /// Visible document rows in the active file preview.
+    FilePreviewVisible {
+        request: u64,
+        rows: std::ops::Range<usize>,
+    },
     /// Open a workspace or absolute file in the in-app file/image preview
     /// modal, optionally highlighting an inclusive 1-based line range.
     OpenFilePreview {
@@ -347,7 +354,7 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         }
         TimelineMsg::OpenUrl(url) => {
             if let Some((path, lines)) = crate::timeline::file_preview::parse_file_link(&url) {
-                open_file_preview(model, path, lines, Some(url), &mut effects);
+                open_file_preview(model, path, lines, &mut effects);
             } else if let Some((thread, id)) =
                 crate::timeline::file_preview::parse_attachment_link(&url)
             {
@@ -357,10 +364,35 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
                 effects.push(Effect::OpenUrl(url));
             }
         }
-        TimelineMsg::OpenExternalUrl(url) => effects.push(Effect::OpenUrl(url)),
+        TimelineMsg::OpenLocalFile(request) => {
+            if let Some(preview) = active_preview_file(model, request)
+                && let Some(path) = preview
+                    .source
+                    .as_ref()
+                    .and_then(|file| file.local_root.clone())
+            {
+                effects.push(Effect::Server(ServerEffect::OpenLocalFile {
+                    directory: path,
+                    path: preview.path.clone(),
+                }));
+            }
+        }
+        TimelineMsg::DownloadFile(request) => {
+            if let Some(preview) = active_preview_file(model, request)
+                && let Some(file) = &preview.source
+                && file.local_root.is_none()
+            {
+                effects.push(Effect::Server(ServerEffect::DownloadFile {
+                    root: file.root.clone(),
+                    path: preview.path.clone(),
+                }));
+            }
+        }
+        TimelineMsg::FilePreviewVisible { request, rows } => {
+            file_preview_visible(model, request, rows, &mut effects);
+        }
         TimelineMsg::OpenFilePreview { path, lines } => {
-            let open_url = crate::timeline::file_preview::path_to_file_url(&path);
-            open_file_preview(model, path, lines, open_url, &mut effects);
+            open_file_preview(model, path, lines, &mut effects);
         }
         TimelineMsg::OpenAttachmentPreview {
             thread,
@@ -583,7 +615,7 @@ fn open_entry_preview(
         request,
         path: title,
         lines: None,
-        open_url: None,
+        source: None,
         body: FilePreviewBody::Loading,
     });
     model
@@ -629,94 +661,117 @@ fn entry_preview_text(entry: &EntryData) -> Option<String> {
     })
 }
 
+const FILE_PREVIEW_WINDOW: u32 = 192;
+
 fn open_file_preview(
     model: &mut Model,
     path: String,
     lines: Option<(usize, usize)>,
-    open_url: Option<String>,
     effects: &mut Vec<Effect>,
 ) {
     model.timeline.file_preview_seq = model.timeline.file_preview_seq.wrapping_add(1);
     let request = model.timeline.file_preview_seq;
     effects.push(Effect::ClearPreviewImage);
+    let mut preview = FilePreview {
+        request,
+        path,
+        lines,
+        source: None,
+        body: FilePreviewBody::Loading,
+    };
+    match resolve_preview_file(model, &preview.path) {
+        Ok((path, source)) => {
+            preview.path = path;
+            preview.source = Some(source);
+            let start = lines.map_or(0, |(start, _)| start.saturating_sub(13));
+            read_preview_window(&preview, start, effects);
+        }
+        Err(error) => preview.body = FilePreviewBody::Error(error.into()),
+    }
+    model.timeline.file_preview = Some(preview);
+}
+
+fn resolve_preview_file(model: &Model, path: &str) -> Result<(String, PreviewFile), &'static str> {
     if !model.connected() {
-        model.timeline.file_preview = Some(crate::model::FilePreview {
-            request,
-            path,
-            lines,
-            open_url,
-            body: crate::model::FilePreviewBody::Error("Server is offline.".into()),
-        });
+        return Err("Server is offline.");
+    }
+    let (root, base) = if let Some(thread) = model.selection.selected {
+        (
+            FileRoot::Thread { thread },
+            model.thread_state().map(|state| state.cwd.as_str()),
+        )
+    } else {
+        let project = model
+            .project_path()
+            .ok_or("Select a thread or project to preview files.")?;
+        (
+            FileRoot::Project {
+                project: project.to_owned(),
+            },
+            Some(project),
+        )
+    };
+    let relative = workspace_relative_path(base, path)
+        .and_then(|path| viz_fs::RelPath::parse(&path).ok())
+        .ok_or("File is outside the active workspace.")?;
+    let local_root = base
+        .filter(|_| model.connection.live.local_host)
+        .map(std::path::PathBuf::from);
+    Ok((
+        relative.to_string(),
+        PreviewFile {
+            root,
+            session: model.connection.live.id,
+            local_root,
+        },
+    ))
+}
+
+fn active_preview_file(model: &Model, request: u64) -> Option<&FilePreview> {
+    model.timeline.file_preview.as_ref().filter(|preview| {
+        model.connected()
+            && preview.request == request
+            && preview
+                .source
+                .as_ref()
+                .is_some_and(|file| file.session == model.connection.live.id)
+    })
+}
+
+pub(super) fn read_preview_window(preview: &FilePreview, start: usize, effects: &mut Vec<Effect>) {
+    if let Some(file) = &preview.source {
+        effects.push(Effect::Server(ServerEffect::ReadFile {
+            request: preview.request,
+            root: file.root.clone(),
+            path: preview.path.clone(),
+            window: LineWindow {
+                start: u32::try_from(start.saturating_add(1)).unwrap_or(u32::MAX),
+                count: FILE_PREVIEW_WINDOW,
+            },
+        }));
+    }
+}
+
+pub(super) fn file_preview_visible(
+    model: &mut Model,
+    request: u64,
+    rows: std::ops::Range<usize>,
+    effects: &mut Vec<Effect>,
+) {
+    if rows.is_empty() || active_preview_file(model, request).is_none() {
         return;
     }
-    let root_and_base = model.selection.selected.map_or_else(
-        || {
-            model.project_path().map(|project| {
-                (
-                    FileRoot::Project {
-                        project: project.to_owned(),
-                    },
-                    Some(project),
-                )
-            })
-        },
-        |thread| {
-            let base = model.thread_state().map(|st| st.cwd.as_str());
-            Some((FileRoot::Thread { thread }, base))
-        },
-    );
-    let Some((root, base)) = root_and_base else {
-        model.timeline.file_preview = Some(crate::model::FilePreview {
-            request,
-            path,
-            lines,
-            open_url,
-            body: crate::model::FilePreviewBody::Error(
-                "Select a thread or project to preview files.".into(),
-            ),
-        });
+    let Some(preview) = model.timeline.file_preview.as_mut() else {
         return;
     };
-    let Some(rel_path) = workspace_relative_path(base, &path) else {
-        model.timeline.file_preview = Some(crate::model::FilePreview {
-            request,
-            path,
-            lines,
-            open_url,
-            body: crate::model::FilePreviewBody::Error(
-                "File is outside the active workspace.".into(),
-            ),
-        });
-        return;
-    };
-    let open_url = open_url.or_else(|| {
-        base.and_then(|dir| {
-            let full = std::path::Path::new(dir).join(&rel_path);
-            crate::timeline::file_preview::path_to_file_url(&full.to_string_lossy())
-        })
-    });
-    let window = lines.map(|(start, end)| LineWindow {
-        start: u32::try_from(start.saturating_sub(200).max(1)).unwrap_or(1),
-        count: u32::try_from(
-            end.saturating_sub(start)
-                .saturating_add(400)
-                .clamp(400, 1_200),
-        )
-        .unwrap_or(600),
-    });
-    model.timeline.file_preview = Some(crate::model::FilePreview {
-        request,
-        path: rel_path.clone(),
-        lines,
-        open_url,
-        body: crate::model::FilePreviewBody::Loading,
-    });
-    effects.push(Effect::Server(ServerEffect::ReadFile {
-        request,
-        root,
-        path: rel_path,
-        window,
-    }));
+    if let FilePreviewBody::Text { lines, .. } = &mut preview.body {
+        if lines.pending {
+            lines.visible_while_pending = Some(rows);
+        } else if let Some(start) = lines.next_start(&rows) {
+            lines.pending = true;
+            read_preview_window(preview, start, effects);
+        }
+    }
 }
 
 fn workspace_relative_path(base: Option<&str>, raw: &str) -> Option<String> {
@@ -751,7 +806,7 @@ fn open_attachment_preview(
         request,
         path: name,
         lines: None,
-        open_url: None,
+        source: None,
         body: if mime.starts_with("image/") {
             crate::model::FilePreviewBody::Image { size: 0 }
         } else {
@@ -793,9 +848,7 @@ pub(super) fn apply_loaded_attachment_to_preview(
         });
     } else if let Ok(text) = String::from_utf8(bytes) {
         preview.body = crate::model::FilePreviewBody::Text {
-            text,
-            start_line: 1,
-            truncated: false,
+            lines: PreviewLines::new(&preview.path, &text, 0, text.split_terminator('\n').count()),
             size,
         };
     } else {

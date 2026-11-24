@@ -13,7 +13,7 @@ use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt, stream::FuturesOrdered};
 use serde::Deserialize;
 use tokio::{
-    io::{AsyncRead, AsyncWrite},
+    io::{AsyncRead, AsyncWrite, AsyncWriteExt as _},
     sync::{mpsc, oneshot},
 };
 use tokio_tungstenite::{
@@ -271,6 +271,41 @@ impl ContentClient {
         .await
     }
 
+    /// Streams original workspace file bytes into a writer with bounded memory.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the transfer fails, is incomplete, or the writer
+    /// fails.
+    pub async fn download_file(
+        &self,
+        root: FileRoot,
+        path: &str,
+        destination: &mut (impl AsyncWrite + Unpin),
+    ) -> Result<()> {
+        let (_, total, written) = self
+            .pull_stream_to(u64::MAX, destination, |id, offset, len| {
+                ContentRequest::GetFile {
+                    id,
+                    root: root.clone(),
+                    path: path.to_owned(),
+                    variant: ContentVariant::Original,
+                    offset,
+                    len,
+                }
+            })
+            .await?;
+        if written != total {
+            return Err(Error::Rpc {
+                method: "content.get_file",
+                code: -32603,
+                message: "file size changed during download".into(),
+                git_failure: None,
+            });
+        }
+        destination.flush().await.map_err(Error::WriteContent)
+    }
+
     /// Pulls a stored transcript entry's complete raw JSON bytes over the
     /// content plane in pipelined 256 KiB binary chunks, restarting cleanly if
     /// the entry's revision changes mid-transfer.
@@ -351,7 +386,7 @@ impl ContentClient {
                 .pull_remaining(
                     "content.get_entry",
                     total_size,
-                    max_bytes,
+                    (max_bytes as u64, bytes.len() as u64),
                     &mut bytes,
                     |id, offset, len| ContentRequest::GetEntry {
                         id,
@@ -364,7 +399,7 @@ impl ContentClient {
                 )
                 .await
             {
-                Ok(()) => return Ok(bytes),
+                Ok(_) => return Ok(bytes),
                 Err(Error::Rpc { code: -32002, .. }) if attempt + 1 < MAX_RETRIES => {}
                 Err(error) => return Err(error),
             }
@@ -504,7 +539,7 @@ impl ContentClient {
             self.pull_remaining(
                 "content.get_project_icon",
                 total_size,
-                max_bytes,
+                (max_bytes as u64, bytes.len() as u64),
                 &mut bytes,
                 |id, offset, len| ContentRequest::GetProjectIcon {
                     id,
@@ -585,8 +620,25 @@ impl ContentClient {
     async fn pull_stream(
         &self,
         max_bytes: usize,
-        mut build: impl FnMut(u64, u64, u32) -> ContentRequest,
+        build: impl FnMut(u64, u64, u32) -> ContentRequest,
     ) -> Result<DownloadedContent> {
+        let mut bytes = Vec::new();
+        let (mime, total_size, _) = self
+            .pull_stream_to(max_bytes as u64, &mut bytes, build)
+            .await?;
+        Ok(DownloadedContent {
+            bytes,
+            mime,
+            total_size,
+        })
+    }
+
+    async fn pull_stream_to(
+        &self,
+        max_bytes: u64,
+        destination: &mut (impl AsyncWrite + Unpin),
+        mut build: impl FnMut(u64, u64, u32) -> ContentRequest,
+    ) -> Result<(String, u64, u64)> {
         let chunk_len = u32::try_from(limits::CONTENT_CHUNK_BYTES).unwrap_or(u32::MAX);
         let first_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let first_req = build(first_id, 0, chunk_len);
@@ -607,7 +659,7 @@ impl ContentClient {
                         git_failure: None,
                     });
                 }
-                if total_size > max_bytes as u64 || payload.len() > max_bytes {
+                if total_size > max_bytes || payload.len() as u64 > total_size {
                     return Err(Error::Rpc {
                         method: "content.get",
                         code: -32602,
@@ -634,31 +686,36 @@ impl ContentClient {
                 });
             }
         };
-        let reserve = usize::try_from(total_size).unwrap_or(0).min(max_bytes);
-        let mut bytes = Vec::with_capacity(reserve);
-        bytes.extend_from_slice(&payload);
-        if !eof && !payload.is_empty() && (bytes.len() as u64) < total_size {
-            self.pull_remaining("content.get", total_size, max_bytes, &mut bytes, build)
+        destination
+            .write_all(&payload)
+            .await
+            .map_err(Error::WriteContent)?;
+        let mut written = payload.len() as u64;
+        if !eof && written != 0 && written < total_size {
+            written = self
+                .pull_remaining(
+                    "content.get",
+                    total_size,
+                    (total_size, written),
+                    destination,
+                    build,
+                )
                 .await?;
         }
-        Ok(DownloadedContent {
-            bytes,
-            mime,
-            total_size,
-        })
+        Ok((mime, total_size, written))
     }
 
     async fn pull_remaining(
         &self,
         method: &'static str,
         total_size: u64,
-        max_bytes: usize,
-        bytes: &mut Vec<u8>,
+        (max_bytes, mut written): (u64, u64),
+        destination: &mut (impl AsyncWrite + Unpin),
         mut build: impl FnMut(u64, u64, u32) -> ContentRequest,
-    ) -> Result<()> {
+    ) -> Result<u64> {
         let chunk_len = u32::try_from(limits::CONTENT_CHUNK_BYTES).unwrap_or(u32::MAX);
         let chunk_step = u64::from(chunk_len);
-        let mut next_offset = bytes.len() as u64;
+        let mut next_offset = written;
         let mut in_flight = FuturesOrdered::new();
         while in_flight.len() < PULL_PIPELINE && next_offset < total_size {
             let expected = next_offset;
@@ -675,7 +732,7 @@ impl ContentClient {
                     eof,
                     ..
                 } => {
-                    if reported_offset != expected || expected != bytes.len() as u64 {
+                    if reported_offset != expected || expected != written {
                         return Err(Error::Rpc {
                             method,
                             code: -32603,
@@ -683,7 +740,8 @@ impl ContentClient {
                             git_failure: None,
                         });
                     }
-                    if bytes.len().saturating_add(payload.len()) > max_bytes {
+                    let end = written.saturating_add(payload.len() as u64);
+                    if end > max_bytes {
                         return Err(Error::Rpc {
                             method,
                             code: -32602,
@@ -691,7 +749,11 @@ impl ContentClient {
                             git_failure: None,
                         });
                     }
-                    bytes.extend_from_slice(&payload);
+                    destination
+                        .write_all(&payload)
+                        .await
+                        .map_err(Error::WriteContent)?;
+                    written = end;
                     if eof || payload.is_empty() {
                         break;
                     }
@@ -721,7 +783,7 @@ impl ContentClient {
                 }
             }
         }
-        Ok(())
+        Ok(written)
     }
 
     async fn fetch_chunk(

@@ -66,3 +66,74 @@ impl fmt::Display for TaskId {
         self.0.fmt(f)
     }
 }
+
+/// An application-specific fingerprint of a machine.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(transparent)]
+pub struct HostId(pub String);
+
+impl HostId {
+    /// Reads the platform machine identifier and hashes it for the wire.
+    /// A missing identifier cannot establish that two processes share a host.
+    #[must_use]
+    pub fn local() -> Option<Self> {
+        use std::fmt::Write as _;
+
+        use sha2::{Digest as _, Sha256};
+
+        let id = local_machine_id()?;
+        let id = id.trim();
+        if id.is_empty() {
+            return None;
+        }
+        let mut digest = Sha256::new();
+        digest.update(b"viz host identity\0");
+        digest.update(std::env::consts::OS);
+        digest.update(id);
+        let mut encoded = String::with_capacity(64);
+        for byte in digest.finalize() {
+            write!(encoded, "{byte:02x}").ok()?;
+        }
+        Some(Self(encoded))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn local_machine_id() -> Option<String> {
+    std::fs::read_to_string("/etc/machine-id")
+        .or_else(|_| std::fs::read_to_string("/var/lib/dbus/machine-id"))
+        .ok()
+}
+
+#[cfg(target_os = "macos")]
+fn local_machine_id() -> Option<String> {
+    let output = std::process::Command::new("/usr/sbin/ioreg")
+        .args(["-rd1", "-c", "IOPlatformExpertDevice"])
+        .output()
+        .ok()?;
+    let properties = std::str::from_utf8(&output.stdout).ok()?;
+    let (_, value) = properties.split_once("\"IOPlatformUUID\" = \"")?;
+    Some(value.split_once('"')?.0.to_owned())
+}
+
+#[cfg(target_os = "windows")]
+fn local_machine_id() -> Option<String> {
+    let output = std::process::Command::new("reg.exe")
+        .args([
+            "query",
+            r"HKLM\SOFTWARE\Microsoft\Cryptography",
+            "/v",
+            "MachineGuid",
+            "/reg:64",
+        ])
+        .output()
+        .ok()?;
+    let properties = String::from_utf8_lossy(&output.stdout);
+    let (_, value) = properties.split_once("REG_SZ")?;
+    Some(value.trim().to_owned())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+fn local_machine_id() -> Option<String> {
+    None
+}

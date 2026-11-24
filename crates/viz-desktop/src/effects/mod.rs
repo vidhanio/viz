@@ -468,8 +468,18 @@ pub enum ServerEffect {
         root: viz_client::protocol::FileRoot,
         /// Relative file path within `root`.
         path: String,
-        /// Optional 1-based line window for text previews.
-        window: Option<viz_client::protocol::LineWindow>,
+        /// 1-based line window for text previews.
+        window: viz_client::protocol::LineWindow,
+    },
+    /// Open a validated file on the desktop host.
+    OpenLocalFile {
+        directory: std::path::PathBuf,
+        path: String,
+    },
+    /// Save a workspace file streamed from a remote host.
+    DownloadFile {
+        root: viz_client::protocol::FileRoot,
+        path: String,
     },
     /// Read a stored thread attachment over the content channel for preview or
     /// inline image rendering.

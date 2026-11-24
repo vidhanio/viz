@@ -381,6 +381,7 @@ impl Session<'_> {
                 session: self.id,
                 version: hello.version,
                 environment: hello.environment,
+                local_host: viz_client::protocol::HostId::local().as_ref() == Some(&hello.host),
                 rev,
                 environments: environments.environments,
                 harnesses,
@@ -540,6 +541,14 @@ impl Session<'_> {
                 window,
             } => {
                 self.read_file_preview(request, root, path, window);
+                Ok(())
+            }
+            ServerEffect::OpenLocalFile { directory, path } => {
+                self.open_local_file(directory, path);
+                Ok(())
+            }
+            ServerEffect::DownloadFile { root, path } => {
+                self.download_file(root, path);
                 Ok(())
             }
             ServerEffect::ReadAttachment {

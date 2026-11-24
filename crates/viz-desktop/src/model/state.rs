@@ -80,6 +80,8 @@ pub const MAX_CONCURRENT_ENTRY_FETCHES: usize = 2;
 pub struct LiveSession {
     /// Active connection session id (`SessionId(0)` when disconnected).
     pub id: SessionId,
+    /// Whether the local desktop shares the active server's machine.
+    pub local_host: bool,
     /// In-flight content-plane entry hydrations keyed by `(thread, entry)`.
     pub pending_entries: HashMap<(ThreadId, EntryId), String>,
     /// Queued entry hydrations waiting for a concurrency slot.

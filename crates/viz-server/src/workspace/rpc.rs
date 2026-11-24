@@ -297,7 +297,6 @@ impl Workspace {
     async fn read_file_preview(&self, args: ReadFile) -> Result<FileContent, Error> {
         const TEXT_LIMIT: usize = viz_protocol::limits::PREVIEW_TEXT_BYTES;
         const IMAGE_LIMIT: usize = viz_protocol::limits::PREVIEW_IMAGE_BYTES;
-        const MAX_SCAN_BYTES: usize = 8 * viz_protocol::limits::MIB;
         const DEFAULT_WINDOW_LINES: u32 = 600;
         const MAX_WINDOW_LINES: u32 = 2_000;
 
@@ -355,7 +354,7 @@ impl Workspace {
                     body,
                 });
             }
-            match file.read_line_window(spec, TEXT_LIMIT, MAX_SCAN_BYTES) {
+            match file.read_line_window(spec, TEXT_LIMIT) {
                 Ok(window) => {
                     let mime = if guessed == "application/octet-stream" {
                         "text/plain"

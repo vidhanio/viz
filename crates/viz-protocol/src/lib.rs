@@ -63,7 +63,7 @@ pub use history::{
     TurnUsage, UpdateQueuedInput, UsageCost, attachment_inline_md, attachment_ref_labels,
     text_references_label,
 };
-pub use ids::{EntryId, RequestId, RunId, TaskId, ThreadId};
+pub use ids::{EntryId, HostId, RequestId, RunId, TaskId, ThreadId};
 pub use interactions::{
     Access, AccessKind, AccessMode, AccessSource, AnswerRequest, AnsweredBy, FormValue,
     NativeAccess, PermissionKind, PermissionOption, RequestAnswer, RequestBody, RequestState,
@@ -101,7 +101,7 @@ pub use transcript::{
 };
 
 /// The protocol version this crate speaks.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Capability bitmask declaring which authenticated caller classes may invoke
 /// a protocol method.
@@ -335,4 +335,6 @@ pub struct Hello {
     pub version: String,
     /// The selected environment.
     pub environment: String,
+    /// Identity of the machine serving workspace paths.
+    pub host: HostId,
 }

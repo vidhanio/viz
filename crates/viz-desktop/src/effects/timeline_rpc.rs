@@ -41,7 +41,7 @@ impl Session<'_> {
         request: u64,
         root: FileRoot,
         path: String,
-        window: Option<LineWindow>,
+        window: LineWindow,
     ) {
         let client: Client = self.client.clone();
         let content_client: ContentClient = self.content.clone();
@@ -51,7 +51,7 @@ impl Session<'_> {
                     .request(&ReadFile {
                         root: root.clone(),
                         path: path.clone(),
-                        window,
+                        window: Some(window),
                     })
                     .await
                     .map_err(|error| error.to_string())?;
@@ -72,6 +72,34 @@ impl Session<'_> {
             }
             .await;
             ServerMsg::FilePreviewLoaded { request, result }
+        });
+    }
+
+    pub(super) fn open_local_file(&mut self, directory: std::path::PathBuf, path: String) {
+        self.spawn_opt_msg(async move {
+            let result = tokio::task::spawn_blocking(move || {
+                super::platform::open_local_file(&directory, &path)
+            })
+            .await
+            .map_err(|error| error.to_string())
+            .and_then(|result| result);
+            result.err().map(|detail| ServerMsg::RequestFailed {
+                title: "Couldn’t open file".into(),
+                detail,
+            })
+        });
+    }
+
+    pub(super) fn download_file(&mut self, root: FileRoot, path: String) {
+        let content = self.content.clone();
+        self.spawn_opt_msg(async move {
+            save_file(&content, root, &path)
+                .await
+                .err()
+                .map(|detail| ServerMsg::RequestFailed {
+                    title: "Couldn’t download file".into(),
+                    detail,
+                })
         });
     }
 
@@ -101,6 +129,35 @@ impl Session<'_> {
             }
         });
     }
+}
+
+async fn save_file(content: &ContentClient, root: FileRoot, path: &str) -> Result<(), String> {
+    let name = path.rsplit(['/', '\\']).next().unwrap_or(path).to_owned();
+    let destination = tokio::task::spawn_blocking(move || {
+        rfd::FileDialog::new()
+            .set_title("Save file")
+            .set_file_name(name)
+            .save_file()
+    })
+    .await
+    .map_err(|error| error.to_string())?;
+    let Some(destination) = destination else {
+        return Ok(());
+    };
+    let directory = destination.parent().ok_or("Choose a file destination.")?;
+    let (file, temporary_path) = tempfile::NamedTempFile::new_in(directory)
+        .map_err(|error| error.to_string())?
+        .into_parts();
+    let mut file = tokio::fs::File::from_std(file);
+    content
+        .download_file(root, path, &mut file)
+        .await
+        .map_err(|error| error.to_string())?;
+    drop(file);
+    temporary_path
+        .persist(&destination)
+        .map_err(|error| error.error.to_string())?;
+    Ok(())
 }
 
 async fn fetch_entry(

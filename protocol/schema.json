@@ -1,5 +1,5 @@
 {
-  "protocol": 2,
+  "protocol": 3,
   "methods": {
     "hello": {
       "scopes": [
@@ -111,13 +111,24 @@
           "environment": {
             "description": "The selected environment.",
             "type": "string"
+          },
+          "host": {
+            "description": "Identity of the machine serving workspace paths.",
+            "$ref": "#/$defs/HostId"
           }
         },
         "required": [
           "protocol",
           "version",
-          "environment"
-        ]
+          "environment",
+          "host"
+        ],
+        "$defs": {
+          "HostId": {
+            "description": "An application-specific fingerprint of a machine.",
+            "type": "string"
+          }
+        }
       }
     },
     "environments.list": {
@@ -9277,7 +9288,7 @@
                     "minimum": 0
                   },
                   "total_lines": {
-                    "description": "Total line count when EOF was reached within scan bounds.",
+                    "description": "Total line count when the window reaches EOF.",
                     "type": [
                       "integer",
                       "null"
@@ -9286,7 +9297,7 @@
                     "minimum": 0
                   },
                   "truncated": {
-                    "description": "Whether the returned content was capped by window, byte, or scan\nlimits.",
+                    "description": "Whether the returned content excludes part of the file.",
                     "type": "boolean",
                     "default": false
                   },

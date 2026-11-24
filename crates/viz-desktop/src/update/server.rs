@@ -41,6 +41,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             session,
             version,
             environment,
+            local_host,
             rev,
             environments,
             harnesses,
@@ -58,6 +59,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                 return effects;
             }
             model.connection.reset_session(session);
+            model.connection.live.local_host = local_host;
             model.connection.status = Status::Connected { version };
             model.connection.environment = Some(environment);
             model.connection.environments = environments;
@@ -382,21 +384,39 @@ fn apply_file_preview_loaded(
                 viz_client::protocol::FileBody::Text {
                     text,
                     start_line,
-                    truncated,
+                    line_count,
+                    total_lines,
                     ..
                 } => {
-                    let target_line = preview.lines.map(|(start, _)| start);
+                    let start = start_line.saturating_sub(1) as usize;
+                    let (known_count, visible) = match &mut preview.body {
+                        crate::model::FilePreviewBody::Text { lines, .. } => {
+                            (lines.count, lines.visible_while_pending.take())
+                        }
+                        _ => (0, None),
+                    };
+                    let count = total_lines.map_or_else(
+                        || known_count.max(start + line_count as usize + 64),
+                        |total| total as usize,
+                    );
+                    if line_count == 0 && count > 0 && start >= count {
+                        super::timeline::read_preview_window(
+                            preview,
+                            count.saturating_sub(32),
+                            effects,
+                        );
+                        return;
+                    }
+                    let initial = matches!(preview.body, crate::model::FilePreviewBody::Loading);
                     preview.body = crate::model::FilePreviewBody::Text {
-                        text,
-                        start_line: usize::try_from(start_line).unwrap_or(1).max(1),
-                        truncated,
+                        lines: crate::model::PreviewLines::new(&preview.path, &text, start, count),
                         size: content.size,
                     };
-                    if let Some(start) = target_line {
-                        effects.push(Effect::ScrollCenterInstant {
-                            list: crate::timeline::file_preview::PREVIEW_SCROLL_KEY,
-                            item: format!("preview-line-{start}"),
-                        });
+                    if initial && start > 0 {
+                        effects.push(crate::timeline::file_preview::scroll_to_line(start));
+                    }
+                    if let Some(visible) = visible {
+                        super::timeline::file_preview_visible(model, request, visible, effects);
                     }
                 }
                 viz_client::protocol::FileBody::Image {} => {

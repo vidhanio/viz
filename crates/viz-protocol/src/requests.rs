@@ -402,11 +402,10 @@ pub enum FileBody {
         start_line: u32,
         /// Number of lines in `text`.
         line_count: u32,
-        /// Total line count when EOF was reached within scan bounds.
+        /// Total line count when the window reaches EOF.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         total_lines: Option<u32>,
-        /// Whether the returned content was capped by window, byte, or scan
-        /// limits.
+        /// Whether the returned content excludes part of the file.
         #[serde(default)]
         truncated: bool,
         /// Whether additional lines follow this window.

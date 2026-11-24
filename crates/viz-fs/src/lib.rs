@@ -352,9 +352,9 @@ pub struct TextWindow {
     pub start_line: u32,
     /// Number of lines contained in `text`.
     pub line_count: u32,
-    /// Total lines in the file when EOF was reached within the scan cap.
+    /// Total lines in the file when the window reaches EOF.
     pub total_lines: Option<u32>,
-    /// Whether the returned content was capped by window, byte, or scan limits.
+    /// Whether the returned content excludes part of the file.
     pub truncated: bool,
     /// Whether more lines exist after the returned window.
     pub has_more: bool,
@@ -462,25 +462,20 @@ impl RegularFile {
         Ok(())
     }
 
-    /// Reads a bounded 1-based line window from a UTF-8 text file, sniffing for
-    /// binary bytes up front and capping both returned bytes and total scanned
-    /// bytes.
+    /// Reads a 1-based line window, bounding the response bytes and stopping
+    /// the scan at the end of the requested window or at EOF.
     ///
     /// # Errors
     ///
-    /// Returns [`FsError::InvalidUtf8`] if the file contains NUL bytes or
-    /// invalid UTF-8 sequences, or [`FsError::Io`] on read failure.
+    /// Returns [`FsError::InvalidUtf8`] if the file starts with binary data or
+    /// the returned text is invalid UTF-8, or [`FsError::Io`] on read failure.
     pub fn read_line_window(
         self,
         window: LineWindowSpec,
         max_bytes: usize,
-        max_scan_bytes: usize,
     ) -> Result<TextWindow, FsError> {
         let size = self.size;
         let start_line = window.start.max(1);
-        let max_lines = window.count.max(1);
-        let end_exclusive = start_line.saturating_add(max_lines);
-
         let mut reader = BufReader::with_capacity(16 * 1024, self.file);
         let initial = reader.fill_buf()?;
         let initial_truncated = u64::try_from(initial.len()).is_ok_and(|len| size > len);
@@ -488,75 +483,48 @@ impl RegularFile {
             return Err(FsError::InvalidUtf8);
         }
 
-        let mut out = Vec::new();
-        let mut line_buf = Vec::new();
         let mut current_line = 0u32;
-        let mut collected_lines = 0u32;
-        let mut scanned_bytes = 0usize;
-        let mut byte_capped = false;
-        let mut scan_capped = false;
-        let mut has_more = false;
-        let mut eof = false;
-
-        loop {
-            line_buf.clear();
-            let remaining_scan = max_scan_bytes.saturating_sub(scanned_bytes);
-            if remaining_scan == 0 {
-                scan_capped = true;
-                has_more = true;
-                break;
-            }
-            let read_len = read_line_bounded(&mut reader, &mut line_buf, remaining_scan)?;
-            if read_len == 0 {
-                eof = true;
-                break;
-            }
-            scanned_bytes = scanned_bytes.saturating_add(read_len);
-            let hit_scan_mid_line = read_len == remaining_scan && !line_buf.ends_with(b"\n");
-            current_line = current_line.saturating_add(1);
-
-            if current_line < start_line {
-                if hit_scan_mid_line {
-                    scan_capped = true;
-                    has_more = true;
-                    break;
-                }
-                continue;
-            }
-
-            if current_line < end_exclusive && !byte_capped {
-                if out.len().saturating_add(line_buf.len()) > max_bytes {
-                    let take = max_bytes.saturating_sub(out.len());
-                    if take > 0 {
-                        out.extend_from_slice(&line_buf[..take]);
-                        collected_lines = collected_lines.saturating_add(1);
-                    }
-                    byte_capped = true;
-                    has_more = true;
-                } else {
-                    out.extend_from_slice(&line_buf);
-                    collected_lines = collected_lines.saturating_add(1);
-                }
-            } else {
-                has_more = true;
-            }
-
-            if hit_scan_mid_line {
-                scan_capped = true;
-                has_more = true;
-                break;
-            }
+        while current_line < start_line - 1 && reader.skip_until(b'\n')? != 0 {
+            current_line += 1;
         }
 
-        let truncated = byte_capped || scan_capped || start_line > 1 || has_more;
-        let text =
-            decode_utf8_prefix(&out, byte_capped || scan_capped).ok_or(FsError::InvalidUtf8)?;
+        let mut out = Vec::new();
+        let mut line_count = 0;
+        let mut byte_capped = false;
+        let mut deferred_line = false;
+        while line_count < window.count.max(1) {
+            let remaining = max_bytes.saturating_sub(out.len());
+            let before = out.len();
+            let read = read_line_bounded(&mut reader, &mut out, remaining.saturating_add(1))?;
+            if read == 0 {
+                break;
+            }
+            if read > remaining {
+                byte_capped = true;
+                if line_count == 0 {
+                    let complete = out.ends_with(b"\n");
+                    out.truncate(max_bytes);
+                    line_count = 1;
+                    if !complete {
+                        reader.skip_until(b'\n')?;
+                    }
+                } else {
+                    out.truncate(before);
+                    deferred_line = true;
+                }
+                break;
+            }
+            line_count += 1;
+        }
+        let has_more = deferred_line || !reader.fill_buf()?.is_empty();
+        let total_lines = (!has_more).then_some(current_line.saturating_add(line_count));
+        let text = decode_utf8_prefix(&out, byte_capped).ok_or(FsError::InvalidUtf8)?;
         Ok(TextWindow {
             text,
             start_line,
-            line_count: collected_lines,
-            total_lines: eof.then_some(current_line),
-            truncated,
+            line_count,
+            total_lines,
+            truncated: byte_capped || start_line > 1 || has_more,
             has_more,
             size,
         })

@@ -182,7 +182,9 @@ pub(super) fn derive(command: ServerEffect, active_env: &str) -> Offline {
         | ServerEffect::SteerQueued { .. }
         | ServerEffect::UpdateQueued { .. }
         | ServerEffect::RemoveQueued { .. }
-        | ServerEffect::Fork { .. } => Offline::Toast,
+        | ServerEffect::Fork { .. }
+        | ServerEffect::OpenLocalFile { .. }
+        | ServerEffect::DownloadFile { .. } => Offline::Toast,
     }
 }
 
