@@ -62,9 +62,18 @@ pub fn sidebar(s: &Desktop, titlebar_inset: f32, t: &Theme, layer: &mut Vec<El>)
     root.child(body).child(settled).child(bottom)
 }
 
-/// Mounts sidebar confirmation and rename dialogs independently of whether the
-/// sidebar is visible.
+/// Mounts sidebar confirmation, rename dialogs, and header-triggered thread
+/// context menus independently of whether the sidebar is visible.
 pub fn overlays(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
+    if let Some(context) = &s.model.sidebar.menu
+        && let Some(raw_id) = context.key.strip_prefix("header-thread-")
+        && let Ok(raw) = raw_id.parse::<u64>()
+        && let Some(thread) = s.model.summary(viz_client::protocol::ThreadId(raw))
+    {
+        let now = theme::now_ms();
+        let shelf = crate::model::sidebar::effective_shelf(thread, now);
+        menu::thread_context_menu(s, thread, &context.key, shelf, now, t, layer);
+    }
     actions::dialog(s, t, layer);
 }
 

@@ -11,7 +11,7 @@ use crate::{
     sidebar,
     theme::{HAIRLINE, ICON_SMALL, READING_INSET, S2, S8, Size, TOOLBAR_PAD, Theme},
     ui,
-    update::{Msg, TimelineMsg},
+    update::{Msg, SidebarMsg, TimelineMsg},
 };
 
 /// The widest the parent's title gets in a subagent's breadcrumb.
@@ -168,6 +168,20 @@ fn title(s: &Desktop, t: &Theme) -> El {
         t,
     );
     let title = title_text(m.title(id), t);
+    let menu_key = format!("header-thread-{}", id.0);
+    let with_menu = |el: El| {
+        if m.connected() {
+            el.on_secondary_press(move |s: &mut Desktop, at, _| {
+                s.dispatch_local(Msg::Sidebar(SidebarMsg::OpenRowMenuAt {
+                    key: menu_key.clone(),
+                    x: at.x,
+                    y: at.y,
+                }));
+            })
+        } else {
+            el
+        }
+    };
     let Some((parent, environment)) = thread
         .and_then(|thread| {
             thread
@@ -178,14 +192,16 @@ fn title(s: &Desktop, t: &Theme) -> El {
             *parent != id || env.is_some_and(|env| Some(env) != m.connection.environment.as_deref())
         })
     else {
-        return group.children(mark).child(harness).child(title);
+        return with_menu(group.children(mark).child(harness).child(title));
     };
-    group
-        .child(breadcrumb(s, parent, environment, t))
-        .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint).a11y_hidden())
-        .children(mark)
-        .child(harness)
-        .child(title)
+    with_menu(
+        group
+            .child(breadcrumb(s, parent, environment, t))
+            .child(icon(&ui::CHEVRON, ICON_SMALL).color(t.faint).a11y_hidden())
+            .children(mark)
+            .child(harness)
+            .child(title),
+    )
 }
 
 /// The link back to a subagent's parent: its harness mark and title, or the

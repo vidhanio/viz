@@ -94,6 +94,9 @@ pub enum SidebarMsg {
     CloseRowMenu,
     /// Expand or collapse a submenu inside the open thread context menu.
     ToggleSubmenu(ContextSubmenu),
+    /// Set the active hover-expanded submenu inside the open thread context
+    /// menu.
+    SetSubmenu(Option<ContextSubmenu>),
     /// Apply a lifecycle triage action optimistically with optional 5s undo
     /// toast.
     Triage {
@@ -315,6 +318,13 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
                 } else {
                     Some(sub)
                 };
+            }
+        }
+        SidebarMsg::SetSubmenu(sub) => {
+            if let Some(menu) = &mut model.sidebar.menu
+                && menu.submenu != sub
+            {
+                menu.submenu = sub;
             }
         }
         SidebarMsg::Triage {
