@@ -14,10 +14,7 @@ use crate::{
 };
 
 pub(crate) trait Handler<M: Method> {
-    type Input: DeserializeOwned + Send;
-
-    fn handle(&self, input: Self::Input)
-    -> impl Future<Output = Result<M::Response, Error>> + Send;
+    fn handle(&self, input: M) -> impl Future<Output = Result<M::Response, Error>> + Send;
 }
 
 type Dispatch<C> = for<'a> fn(&'a C, &'a str) -> BoxFuture<'a, Result<Value, Error>>;
@@ -63,20 +60,18 @@ pub(crate) fn unknown(method: &str) -> Error {
     RequestError::UnknownMethod(format!("unknown method {method}")).into()
 }
 
-/// Declare each procedure once, with its transport input and typed
-/// implementation.
+/// Declare each procedure once, binding its canonical `viz_protocol::Method`
+/// directly to its typed implementation.
 macro_rules! handlers {
     ($routes:ident for $context:ty {
-        $($method:ty, $input:ty, |$receiver:ident, $pattern:pat_param| $body:block)+
+        $($method:ty, |$receiver:ident, $pattern:pat_param| $body:block)+
     }) => {
         pub(crate) const $routes: &[crate::rpc::Route<$context>] =
             &[$(crate::rpc::Route::new::<$method>()),+];
 
         $(
             impl crate::rpc::Handler<$method> for $context {
-                type Input = $input;
-
-                async fn handle(&self, input: Self::Input) -> Result<
+                async fn handle(&self, input: $method) -> Result<
                     <$method as viz_protocol::Method>::Response,
                     crate::error::Error,
                 > {

@@ -9,14 +9,14 @@ use viz_core::{
     titles,
 };
 use viz_protocol::{
-    LaunchThread, Launched, RunId, SendInput, SendMode, Sent, ThreadId, ThreadUpdated, Withdrawal,
+    LaunchThread, Launched, RunId, SendInput, SendMode, Sent, ThreadId, ThreadUpdated,
+    UpdateThread, Withdrawal,
 };
 
 use super::{
     Workspace,
     admission::selection,
     attachments,
-    rpc::UpdateMetadata,
     runs::{self, NewRun},
     sql::{Connection, exec, row},
     store::{self, NewThread, SavedSession},
@@ -265,8 +265,13 @@ impl Workspace {
         Ok(())
     }
 
-    pub(super) async fn update(&self, args: UpdateMetadata) -> Result<ThreadUpdated, Error> {
-        let UpdateMetadata { thread, changes } = args;
+    pub(super) async fn update(&self, args: UpdateThread) -> Result<ThreadUpdated, Error> {
+        let UpdateThread {
+            thread,
+            title,
+            project,
+        } = args;
+        let changes = threads::Changes { title, project };
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let (current, in_worktree) = store::metadata(&mut tx, thread).await?;

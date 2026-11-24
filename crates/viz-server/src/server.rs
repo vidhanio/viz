@@ -19,7 +19,7 @@ use subtle::ConstantTimeEq;
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 use viz_protocol::{
-    Empty, EnvironmentList, ListEnvironments, Method, Unwatch, UnwatchGit, Watch, WatchGit,
+    EnvironmentList, ListEnvironments, Method, Unwatch, UnwatchGit, Watch, WatchGit,
 };
 
 use crate::{
@@ -140,7 +140,7 @@ impl Server {
 
 handlers! {
     ROUTES for Server {
-        ListEnvironments, Empty, |server, _| {
+        ListEnvironments, |server, _| {
             Ok(EnvironmentList { environments: server.peers.list().await })
         }
     }

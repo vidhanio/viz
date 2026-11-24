@@ -1,39 +1,100 @@
 //! Requests for updating threads, projects, worktrees, and queued inputs.
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
+
+use schemars::{JsonSchema, Schema, SchemaGenerator};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
     Attachment, ConfigOption, Harness, OptionValue, Origin, Project, RunId, ThreadId,
     ThreadWorktree, WorktreeTarget,
 };
 
+/// A tri-state field patch: omit to keep, `null` to clear, or a value to set.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub enum Patch<T> {
+    /// Leave the existing value unchanged (omitted on the wire).
+    #[default]
+    Keep,
+    /// Clear the existing value (`null` on the wire).
+    Clear,
+    /// Replace the existing value.
+    Set(T),
+}
+
+impl<T> Patch<T> {
+    /// Whether this patch leaves the field unchanged.
+    #[must_use]
+    pub const fn is_keep(&self) -> bool {
+        matches!(self, Self::Keep)
+    }
+
+    /// Apply this patch to an optional field.
+    #[must_use]
+    pub fn apply(self, previous: Option<T>) -> Option<T> {
+        match self {
+            Self::Keep => previous,
+            Self::Clear => None,
+            Self::Set(value) => Some(value),
+        }
+    }
+}
+
+impl<T: Serialize> Serialize for Patch<T> {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Keep | Self::Clear => serializer.serialize_none(),
+            Self::Set(value) => serializer.serialize_some(value),
+        }
+    }
+}
+
+impl<'de, T: Deserialize<'de>> Deserialize<'de> for Patch<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Option::<T>::deserialize(deserializer).map(|value| value.map_or(Self::Clear, Self::Set))
+    }
+}
+
+impl<T: JsonSchema> JsonSchema for Patch<T> {
+    fn schema_name() -> Cow<'static, str> {
+        Option::<T>::schema_name()
+    }
+
+    fn schema_id() -> Cow<'static, str> {
+        Option::<T>::schema_id()
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        Option::<T>::json_schema(generator)
+    }
+}
+
 /// Empty successful response or notification params.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Empty {}
 
 /// Rename a thread, or file it under another project.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct UpdateThread<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateThread {
     /// The thread to change.
     pub thread: ThreadId,
     /// A new title, if changing it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<&'a str>,
-    /// `None` leaves the project alone; `Some(None)` clears it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<Option<&'a str>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Omit to leave the project alone; `null` clears it.
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub project: Patch<String>,
 }
 
 /// Set a thread's configuration option.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct ConfigureThread<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ConfigureThread {
     /// The thread to configure.
     pub thread: ThreadId,
     /// The option id.
-    pub option: &'a str,
+    pub option: String,
     /// The new option value.
-    pub value: &'a OptionValue,
+    pub value: OptionValue,
 }
 
 /// Stop a thread's active turn.
@@ -86,18 +147,18 @@ pub struct Moved {
 }
 
 /// List a project's local and remote-tracking branches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct ListBranches<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListBranches {
     /// Project path.
-    pub project: &'a str,
+    pub project: String,
     /// Case-insensitive substring to match.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub query: Option<String>,
     /// Offset within the filtered branch list.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub offset: Option<usize>,
     /// Maximum number of branches to return.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
 }
 
@@ -124,10 +185,10 @@ pub struct GitBranch {
 }
 
 /// List the worktrees of a project's repository.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct ListWorktrees<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListWorktrees {
     /// Project path.
-    pub project: &'a str,
+    pub project: String,
 }
 
 /// `worktrees.list` result.
@@ -153,17 +214,17 @@ pub struct Worktree {
 }
 
 /// Remove a clean, unused worktree that viz created. Its branch is kept.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct RemoveWorktree<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoveWorktree {
     /// Absolute path of the worktree root.
-    pub path: &'a str,
+    pub path: String,
     /// Discard uncommitted changes and untracked files in it.
-    #[serde(skip_serializing_if = "is_false")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub force: bool,
 }
 
 /// List projects.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ListProjects {}
 
 /// Projects returned by `projects.list`.
@@ -174,26 +235,26 @@ pub struct ProjectList {
 }
 
 /// Add a project directory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct CreateProject<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct CreateProject {
     /// Existing directory; `~` expands to the server's home directory.
-    pub path: &'a str,
+    pub path: String,
     /// Display name; omit to use the directory name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// Update a project's display name.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct UpdateProject<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateProject {
     /// Preferences to merge into the project settings.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changes: Option<crate::ProjectSettingsPatch>,
     /// Project id.
-    pub project: &'a str,
+    pub project: String,
     /// New display name.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub name: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 /// The project returned after creation or an update.
@@ -204,14 +265,14 @@ pub struct ProjectResult {
 }
 
 /// Remove a project directory from the project list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct RemoveProject<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct RemoveProject {
     /// Project id.
-    pub project: &'a str,
+    pub project: String,
 }
 
 /// List configured ACP runners.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ListHarnesses {}
 
 /// ACP runners returned by `harnesses.list`.
@@ -238,18 +299,18 @@ pub struct HarnessOptionsResult {
 }
 
 /// Search a thread's working directory or a registered project for files.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct SearchFiles<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchFiles {
     /// Thread whose working directory is searched. Supply exactly one target.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadId>,
     /// Registered project directory searched for a draft.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
     /// Fuzzy path query.
-    pub query: &'a str,
+    pub query: String,
     /// Limit from 1 to 200; omit to use the server default.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
 }
 

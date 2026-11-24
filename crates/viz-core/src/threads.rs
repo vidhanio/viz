@@ -1,29 +1,9 @@
 //! Thread state derived from committed runs, user metadata, and harness setup.
 
+pub use viz_protocol::Patch;
 use viz_protocol::{RunStatus, ThreadStatus};
 
 use crate::titles;
-
-/// A patch can omit a value, clear it, or set it explicitly.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub enum Patch<T> {
-    #[default]
-    Keep,
-    Clear,
-    Set(T),
-}
-
-impl<T> Patch<T> {
-    /// Apply a patch to an optional field.
-    #[must_use]
-    pub fn apply(self, previous: Option<T>) -> Option<T> {
-        match self {
-            Self::Keep => previous,
-            Self::Clear => None,
-            Self::Set(value) => Some(value),
-        }
-    }
-}
 
 /// A queued or running input takes precedence over setup and prior run
 /// failures.

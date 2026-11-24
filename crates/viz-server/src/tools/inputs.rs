@@ -5,17 +5,14 @@ use std::time::Duration;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
-use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
-    Empty, ForkThread, LaunchThread, ListEntries, MoveThread, ReadThreadState, RetitleThread,
-    RunId, SendInput, SendMode, StopThread, ThreadId, TriageThread, WaitThread,
+    CreateProject, ForkThread, LaunchThread, ListBranches, ListEntries, ListProjects, ListThreads,
+    ListWorktrees, MoveThread, Patch, ReadThreadState, RemoveProject, RemoveWorktree,
+    RetitleThread, RunId, SearchThreads, SendInput, SendMode, StopThread, ThreadId, TriageThread,
+    UpdateProject, UpdateThread, WaitThread,
 };
 
 use super::{DEFAULT_WAIT, MAX_WAIT};
-use crate::workspace::rpc::{
-    BranchQuery, ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search,
-    UpdateMetadata, WorktreeRemove,
-};
 
 #[derive(Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -52,15 +49,16 @@ macro_rules! tool_inputs {
 }
 
 tool_inputs!(
-    Empty,
-    ThreadList,
-    BranchQuery,
-    Search,
+    ListProjects,
+    ListThreads,
+    ListBranches,
+    SearchThreads,
     LaunchThread,
-    ProjectKey,
-    ProjectCreate,
-    ProjectUpdate,
-    WorktreeRemove
+    CreateProject,
+    UpdateProject,
+    RemoveProject,
+    ListWorktrees,
+    RemoveWorktree,
 );
 
 macro_rules! thread_inputs {
@@ -140,14 +138,12 @@ impl From<SendText> for SendInput {
     }
 }
 
-impl From<ThreadUpdate> for UpdateMetadata {
+impl From<ThreadUpdate> for UpdateThread {
     fn from(input: ThreadUpdate) -> Self {
         Self {
             thread: input.thread,
-            changes: Changes {
-                title: input.title,
-                project: Patch::Keep,
-            },
+            title: input.title,
+            project: Patch::Keep,
         }
     }
 }

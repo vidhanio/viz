@@ -9,12 +9,12 @@ use super::{
 };
 
 /// `threads.list` params.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct ListThreads<'a> {
-    #[serde(skip_serializing_if = "Option::is_none")]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ListThreads {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<&'a str>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
 }
 
 /// `threads.list` result.

@@ -191,8 +191,8 @@ async fn session(
                 let result = client
                     .configure_thread(&ConfigureThread {
                         thread,
-                        option: &option,
-                        value: &value,
+                        option,
+                        value,
                     })
                     .await;
                 BackgroundReply::Configured(result)
@@ -321,7 +321,11 @@ impl Session<'_> {
                 recovery,
             } => self.launch(draft, *params, recovery).await,
             ServerEffect::CancelTask(task) => {
-                self.client.request(&CancelTask { task: &task }).await?;
+                self.client
+                    .request(&CancelTask {
+                        task: viz_client::protocol::TaskId(task),
+                    })
+                    .await?;
                 self.refresh_tasks().await
             }
             ServerEffect::Environment { .. } => {

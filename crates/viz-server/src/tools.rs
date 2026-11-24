@@ -11,12 +11,12 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use viz_protocol::{
-    AnswerRequest, AnsweredBy, Cleared, CreateProject, Empty, EntryId, EnvironmentList, ForkThread,
-    Forked, HarnessList, HarnessOptions, LaunchThread, Launched, ListBranches, ListEntries,
-    ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method, MoveThread, ReadThreadState,
-    RemoveProject, RemoveWorktree, RequestAnswer, RequestId, RetitleThread, SearchThreads,
-    SendInput, Shelf, StopThread, TaskId, TaskResult, ThreadId, ThreadStateResult, TriageThread,
-    UpdateProject, UpdateThread, WaitThread,
+    AnswerRequest, AnsweredBy, Cleared, CreateProject, DelegateInput, Empty, EntryId,
+    EnvironmentList, ForkThread, Forked, HarnessList, HarnessOptions, LaunchThread, Launched,
+    ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method,
+    MoveThread, ReadThreadState, RemoveProject, RemoveWorktree, RequestAnswer, RequestId,
+    RetitleThread, SearchThreads, SendInput, Shelf, StopThread, TaskId, TaskResult, ThreadId,
+    ThreadStateResult, TriageThread, UpdateProject, UpdateThread, WaitThread,
 };
 
 use self::inputs::{SendText, ThreadUpdate, ToolInput, WaitRun};
@@ -25,15 +25,9 @@ use crate::{
     environments::Peers,
     error::Error,
     rpc::Handler,
-    tasks::{Delegate, Tasks},
+    tasks::Tasks,
     wire::decode,
-    workspace::{
-        Workspace,
-        rpc::{
-            ListThreads as ThreadList, ProjectCreate, ProjectKey, ProjectUpdate, Search,
-            WorktreeRemove,
-        },
-    },
+    workspace::Workspace,
 };
 
 const LISTED_MODELS: usize = 24;
@@ -81,7 +75,7 @@ const fn no_link<T>(_: &T) -> Option<ThreadId> {
 rpc_tools! {
     "thread_state", ReadThreadState, ReadThreadState, no_link, |result: ThreadStateResult| views::state(result.state),
         "Read what a thread is doing now: status, directory, selected options, queued inputs, and the end of its live output.";
-    "thread_search", SearchThreads<'static>, Search, no_link, identity,
+    "thread_search", SearchThreads, SearchThreads, no_link, identity,
         "Search all thread transcripts in an environment. Read a hit with thread_read.";
     "thread_launch", LaunchThread, LaunchThread, |response: &Launched| Some(response.thread), identity,
         "Start an independent thread for the user. Use delegate_task instead when you need its result.";
@@ -93,7 +87,7 @@ rpc_tools! {
         "Wait up to 45 seconds for a thread's run to end. Pass run to wait for one input, or omit it for the latest. When timedOut is set, call again.";
     "thread_stop", StopThread, StopThread, no_link, identity,
         "Stop one run of a thread, or its active run and everything queued if run is omitted.";
-    "thread_update", UpdateThread<'static>, ThreadUpdate, no_link, identity,
+    "thread_update", UpdateThread, ThreadUpdate, no_link, identity,
         "Rename a thread.";
     "thread_retitle", RetitleThread, RetitleThread, no_link, identity,
         "Replace a thread's title by one from its harness or latest prompt.";
@@ -101,19 +95,19 @@ rpc_tools! {
         "Change where a thread stands in the user's list: settle finished work, reopen it, snooze it until a time in Unix milliseconds, pin, arrange, archive, or mark it read. Returns the state before, which the restore action puts back.";
     "thread_move", MoveThread, MoveThread, no_link, identity,
         "Move an idle project thread to a new worktree ({\"mode\":\"new\"}), an existing one, or back to the project checkout ({\"mode\":\"local\"}). Its conversation continues there.";
-    "project_list", ListProjects, Empty, no_link, identity,
+    "project_list", ListProjects, ListProjects, no_link, identity,
         "List an environment's projects, with their paths and branches.";
-    "project_create", CreateProject<'static>, ProjectCreate, no_link, identity,
+    "project_create", CreateProject, CreateProject, no_link, identity,
         "Register an existing directory as a project.";
-    "project_update", UpdateProject<'static>, ProjectUpdate, no_link, identity,
+    "project_update", UpdateProject, UpdateProject, no_link, identity,
         "Rename a project, given by its absolute path.";
-    "project_remove", RemoveProject<'static>, ProjectKey, no_link, identity,
+    "project_remove", RemoveProject, RemoveProject, no_link, identity,
         "Remove a project from the list. Its files and threads stay.";
-    "project_branches", ListBranches<'static>, crate::workspace::rpc::BranchQuery, no_link, identity,
+    "project_branches", ListBranches, ListBranches, no_link, identity,
         "List a project's local and remote-tracking branches, usable as a worktree base.";
-    "worktree_list", ListWorktrees<'static>, ProjectKey, no_link, identity,
+    "worktree_list", ListWorktrees, ListWorktrees, no_link, identity,
         "List the checkouts of a project's repository, with their branches and the threads running in each.";
-    "worktree_remove", RemoveWorktree<'static>, WorktreeRemove, no_link, identity,
+    "worktree_remove", RemoveWorktree, RemoveWorktree, no_link, identity,
         "Remove a worktree viz created once no thread runs in it. Refuses uncommitted changes unless force is set; the branch is kept.";
 }
 
@@ -124,7 +118,7 @@ pub(crate) fn definitions() -> Vec<ToolDefinition> {
         definition::<Target<SpawnOptions>>("harness_list", "List the harnesses threads can run. Pass a harness and search to find its models, or a harness and model for its thinking levels."),
         definition::<Target<FindThreads>>("thread_list", "List threads, the ones that matter most first. Filter by project or shelf."),
         definition::<Target<ReadEntries>>("thread_read", "Read a thread's transcript, newest page first. Long texts and tool outputs are shortened; pass entry to read one whole, or before for earlier ones."),
-        definition::<Delegate>("delegate_task", "Delegate a self-contained task to a new child thread, which sees only what you write in text. Pass worktree {\"mode\":\"new\"} to isolate its changes, thread to give a child of yours another task, or environment to run it elsewhere. The result arrives as a new input here, so end your turn instead of polling unless you must wait."),
+        definition::<DelegateInput>("delegate_task", "Delegate a self-contained task to a new child thread, which sees only what you write in text. Pass worktree {\"mode\":\"new\"} to isolate its changes, thread to give a child of yours another task, or environment to run it elsewhere. The result arrives as a new input here, so end your turn instead of polling unless you must wait."),
         definition::<Empty>("task_list", "List the tasks this thread delegated, without their results."),
         definition::<TaskStatus>("task_status", "Read one of this thread's tasks with its result. Set wait to wait up to 45 seconds for it to end; when timedOut is set, call again."),
         definition::<TaskKey>("task_cancel", "Cancel one of this thread's tasks and everything delegated from it. An unreachable task stays until it can be told."),
@@ -264,7 +258,7 @@ impl Tools {
     ) -> BoxFuture<'a, Result<M::Response, Error>>
     where
         M: Method + 'static,
-        T: Serialize + Send + Sync + Into<<Arc<Workspace> as Handler<M>>::Input> + 'static,
+        T: Serialize + Send + Sync + Into<M> + 'static,
         Arc<Workspace>: Handler<M>,
     {
         Box::pin(async move {
@@ -284,7 +278,7 @@ impl Tools {
     ) -> Result<ToolResult, Error>
     where
         M: Method + 'static,
-        T: ToolInput + Into<<Arc<Workspace> as Handler<M>>::Input>,
+        T: ToolInput + Into<M>,
         V: Serialize,
         Arc<Workspace>: Handler<M>,
     {
@@ -303,13 +297,13 @@ impl Tools {
         environment: Option<&str>,
         input: FindThreads,
     ) -> Result<ToolResult, Error> {
-        let request = ThreadList {
+        let request = ListThreads {
             archived: None,
             project: input.project,
         };
         let environment = environment.unwrap_or(&self.peers.local);
         let mut found = self
-            .dispatch::<ListThreads<'static>, _>(environment, request, Duration::ZERO)
+            .dispatch::<ListThreads, _>(environment, request, Duration::ZERO)
             .await?
             .threads;
         found.retain(|thread| {
@@ -363,7 +357,7 @@ impl Tools {
     ) -> Result<ToolResult, Error> {
         let environment = environment.unwrap_or(&self.peers.local);
         let HarnessList { harnesses } = self
-            .dispatch::<ListHarnesses, _>(environment, Empty {}, Duration::ZERO)
+            .dispatch::<ListHarnesses, _>(environment, ListHarnesses {}, Duration::ZERO)
             .await?;
         let parent_harness = if input.harness.is_none() && environment == self.peers.local {
             let ThreadStateResult { state } =

@@ -11,8 +11,6 @@ use std::{
     time::Duration,
 };
 
-use schemars::JsonSchema;
-use serde::Deserialize;
 use tokio::{
     sync::{Mutex as AsyncMutex, Notify, broadcast},
     task::JoinHandle,
@@ -22,8 +20,8 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 use viz_core::tasks::{self as decisions, Command, Delegator, Rejection, is_settled};
 use viz_protocol::{
-    CancelTask, ClearTasks, Cleared, DelegateTask, DeleteTask, Empty, ListTasks, TaskId, TaskList,
-    TaskResult, TaskStatusRequest, TaskStatusResult, WorktreeTarget,
+    CancelTask, ClearTasks, Cleared, DelegateInput, DelegateTask, DeleteTask, Empty, ListTasks,
+    TaskId, TaskList, TaskResult, TaskStatusRequest, TaskStatusResult,
     peer::{ReceiveTask, TaskTarget},
 };
 
@@ -32,7 +30,7 @@ use crate::{
     environments::Peers,
     error::Error,
     rpc::handlers,
-    wire::{Attachment, RunId, Task, ThreadId},
+    wire::{RunId, Task, ThreadId},
     workspace::{Workspace, active_run_from},
 };
 
@@ -79,84 +77,25 @@ impl std::fmt::Debug for Tasks {
     }
 }
 
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct Delegate {
-    environment: Option<String>,
-    project: Option<String>,
-    /// Checkout of the project to run in: `{"mode": "new"}` isolates the
-    /// child on a new branch. Omit to use `project`'s checkout, or the
-    /// parent's checkout when `project` is omitted too.
-    worktree: Option<WorktreeTarget>,
-    harness: Option<String>,
-    model: Option<String>,
-    thinking: Option<String>,
-    thread: Option<ThreadId>,
-    #[schemars(length(min = 1))]
-    text: String,
-    #[serde(default)]
-    attachments: Vec<Attachment>,
-    #[serde(default)]
-    attachment_ids: Vec<String>,
-    #[schemars(length(min = 1, max = 256))]
-    request_id: Option<String>,
-    /// A short name for the task and its new thread. Defaults to the start of
-    /// `text`.
-    #[schemars(length(min = 1, max = 200))]
-    title: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct ListRequest {
-    parent: Option<ThreadId>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub(crate) struct StatusRequest {
-    #[schemars(length(min = 1))]
-    task: TaskId,
-    #[serde(default)]
-    wait: bool,
-    #[schemars(range(max = 120_000))]
-    timeout_ms: Option<u64>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct TaskRequest {
-    #[schemars(length(min = 1))]
-    task: TaskId,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct DelegateFromThread {
-    parent: ThreadId,
-    #[serde(flatten)]
-    input: Delegate,
-}
-
 handlers! {
     ROUTES for Tasks {
-        ListTasks, ListRequest, |tasks, ListRequest { parent }| {
+        ListTasks, |tasks, ListTasks { parent }| {
             Ok(TaskList { tasks: tasks.list(parent).await? })
         }
-        DelegateTask<'static>, DelegateFromThread, |tasks, DelegateFromThread { parent, input }| {
+        DelegateTask, |tasks, DelegateTask { parent, input }| {
             Ok(TaskResult { task: tasks.delegate(parent, None, input).await? })
         }
-        TaskStatusRequest<'static>, StatusRequest, |tasks, StatusRequest { task, wait, timeout_ms }| {
+        TaskStatusRequest, |tasks, TaskStatusRequest { task, wait, timeout_ms }| {
             tasks.status(&task, None, wait, timeout_ms).await
         }
-        CancelTask<'static>, TaskRequest, |tasks, TaskRequest { task }| {
+        CancelTask, |tasks, CancelTask { task }| {
             Ok(TaskResult { task: tasks.cancel(&task, None).await? })
         }
-        DeleteTask<'static>, TaskRequest, |tasks, TaskRequest { task }| {
+        DeleteTask, |tasks, DeleteTask { task }| {
             tasks.delete(&task, None).await?;
             Ok(Empty {})
         }
-        ClearTasks, ClearTasks, |tasks, ClearTasks { parent }| {
+        ClearTasks, |tasks, ClearTasks { parent }| {
             Ok(Cleared { count: tasks.clear(parent).await? })
         }
     }
@@ -226,7 +165,7 @@ impl Tasks {
         &self,
         parent: ThreadId,
         turn: Option<RunId>,
-        mut input: Delegate,
+        mut input: DelegateInput,
     ) -> Result<Task, Error> {
         let environment = input.environment.as_deref().unwrap_or(&self.peers.local);
         if environment != self.peers.local && self.peers.get(environment).is_none() {

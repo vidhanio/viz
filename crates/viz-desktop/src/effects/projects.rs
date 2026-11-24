@@ -86,10 +86,7 @@ async fn execute(client: &Client, command: ProjectRequest) -> anyhow::Result<Pro
         }
         ProjectRequest::Add(path) => ProjectReply::Added(
             client
-                .create_project(&CreateProject {
-                    path: &path,
-                    name: None,
-                })
+                .create_project(&CreateProject { path, name: None })
                 .await?,
         ),
         ProjectRequest::Save {
@@ -99,7 +96,9 @@ async fn execute(client: &Client, command: ProjectRequest) -> anyhow::Result<Pro
         } => save(client, &project, name.as_deref(), *patch).await?,
         ProjectRequest::Remove(project) => {
             client
-                .remove_project(&RemoveProject { project: &project })
+                .remove_project(&RemoveProject {
+                    project: project.clone(),
+                })
                 .await?;
             ProjectReply::Removed(project)
         }
@@ -132,7 +131,11 @@ async fn execute(client: &Client, command: ProjectRequest) -> anyhow::Result<Pro
     if let ProjectReply::Clone(status) = &reply
         && let CloneState::Completed { project } = &status.state
     {
-        let result = client.request(&ReadProject { project }).await?;
+        let result = client
+            .request(&ReadProject {
+                project: project.clone(),
+            })
+            .await?;
         return Ok(ProjectReply::Added(result.project));
     }
     Ok(reply)
@@ -146,13 +149,18 @@ async fn save(
 ) -> anyhow::Result<ProjectReply> {
     client
         .update_project(&UpdateProject {
-            project,
-            name,
+            project: project.to_owned(),
+            name: name.map(str::to_owned),
             changes: Some(patch),
         })
         .await?;
     Ok(ProjectReply::Updated(
-        client.request(&ReadProject { project }).await?.project,
+        client
+            .request(&ReadProject {
+                project: project.to_owned(),
+            })
+            .await?
+            .project,
     ))
 }
 
@@ -178,7 +186,7 @@ async fn create_git_project(client: &Client, path: String) -> anyhow::Result<Pro
         })?;
     let result = client
         .create_project(&CreateProject {
-            path: &folder.path,
+            path: folder.path.clone(),
             name: None,
         })
         .await

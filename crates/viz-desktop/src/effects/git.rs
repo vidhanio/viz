@@ -119,8 +119,8 @@ async fn git_request(
         } => Reply::Branches {
             page: client
                 .request(&ListBranches {
-                    project: &project,
-                    query: Some(&query),
+                    project,
+                    query: Some(query),
                     offset,
                     limit: Some(50),
                 })

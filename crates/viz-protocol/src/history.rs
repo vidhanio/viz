@@ -5,7 +5,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{EntryId, Origin, RunId, ThreadId, ToolCall, TranscriptEntry};
+use super::{EntryId, Origin, Patch, RunId, ThreadId, ToolCall, TranscriptEntry};
 
 /// A file attached to an input.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -103,10 +103,11 @@ pub struct RemoveQueuedInput {
 }
 
 /// Search across transcripts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct SearchThreads<'a> {
-    pub query: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SearchThreads {
+    pub query: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 1, max = 200))]
     pub limit: Option<u16>,
 }
 
@@ -171,14 +172,14 @@ pub struct EntryChunk {
 }
 
 /// Reorder a queued run or change its text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct UpdateQueuedInput<'a> {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct UpdateQueuedInput {
     pub thread: ThreadId,
     pub run: RunId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub before: Option<Option<RunId>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    #[serde(default, skip_serializing_if = "Patch::is_keep")]
+    pub before: Patch<RunId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]

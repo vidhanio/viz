@@ -4,8 +4,8 @@
 use viz_client::{
     Result,
     protocol::{
-        GitHubItemKind, GitHubSearch, RemoveQueuedInput, RunId, SearchFiles, SteerQueuedInput,
-        ThreadId, UpdateQueuedInput,
+        GitHubItemKind, GitHubSearch, Patch, RemoveQueuedInput, RunId, SearchFiles,
+        SteerQueuedInput, ThreadId, UpdateQueuedInput,
     },
 };
 
@@ -28,8 +28,8 @@ impl Session<'_> {
             let result = client
                 .search_files(&SearchFiles {
                     thread,
-                    project: project.as_deref(),
-                    query: &query,
+                    project,
+                    query,
                     limit: Some(40),
                 })
                 .await
@@ -99,8 +99,8 @@ impl Session<'_> {
             .request(&UpdateQueuedInput {
                 thread,
                 run,
-                text: Some(text),
-                before: None,
+                text: Some(text.to_owned()),
+                before: Patch::Keep,
             })
             .await
             .map(drop)

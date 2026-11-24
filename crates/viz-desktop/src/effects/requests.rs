@@ -9,8 +9,8 @@ use viz_client::{
     Client, Error, Result,
     protocol::{
         EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks, ListWorktrees,
-        ProjectIconResult, ProjectSettingsPatch, ReadProjectIcon, RetitleThread, SearchThreads,
-        SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
+        Patch, ProjectIconResult, ProjectSettingsPatch, ReadProjectIcon, RetitleThread,
+        SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
@@ -148,8 +148,8 @@ impl Session<'_> {
             ThreadChange::Title(title) => {
                 let params = UpdateThread {
                     thread,
-                    title: Some(title),
-                    project: None,
+                    title: Some(title.clone()),
+                    project: Patch::Keep,
                 };
                 match self.client.update_thread(&params).await {
                     Ok(()) => {
@@ -163,7 +163,7 @@ impl Session<'_> {
                 let params = UpdateThread {
                     thread,
                     title: None,
-                    project: Some(project.as_deref()),
+                    project: project.clone().map_or(Patch::Clear, Patch::Set),
                 };
                 match self.client.update_thread(&params).await {
                     Ok(()) => {
@@ -247,7 +247,7 @@ impl Session<'_> {
                             pinned: Some(*pinned),
                             ..ProjectSettingsPatch::default()
                         }),
-                        project: id,
+                        project: id.clone(),
                         name: None,
                     })
                     .await
@@ -308,7 +308,7 @@ impl Session<'_> {
                 loop {
                     let page = client
                         .request(&ListBranches {
-                            project: &project,
+                            project: project.clone(),
                             query: None,
                             offset,
                             limit: None,
@@ -320,7 +320,11 @@ impl Session<'_> {
                         break;
                     }
                 }
-                let worktrees = client.request(&ListWorktrees { project: &project }).await?;
+                let worktrees = client
+                    .request(&ListWorktrees {
+                        project: project.clone(),
+                    })
+                    .await?;
                 Ok::<_, Error>(Checkouts {
                     branches,
                     worktrees: worktrees.worktrees,
@@ -381,7 +385,7 @@ pub(super) fn search_threads(
     tokio::spawn(async move {
         let result = client
             .search_threads(&SearchThreads {
-                query: &query,
+                query,
                 limit: Some(24),
             })
             .await

@@ -26,10 +26,11 @@ pub use catalog::{
     ListHarnessSessions, Project, ThreadWorktree, WorktreeTarget,
 };
 pub use connections::{
-    CancelTask, ClearTasks, Cleared, DelegateTask, DeleteTask, Environment, EnvironmentList,
-    EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject, ReadThreadState,
-    Run, RunKind, RunStatus, Task, TaskList, TaskResult, TaskStatus, TaskStatusRequest,
-    TaskStatusResult, ThreadStateResult, Unwatch, WaitResult, WaitThread, Watch, Watching,
+    CancelTask, ClearTasks, Cleared, DelegateInput, DelegateTask, DeleteTask, Environment,
+    EnvironmentList, EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject,
+    ReadThreadState, Run, RunKind, RunStatus, Task, TaskList, TaskResult, TaskStatus,
+    TaskStatusRequest, TaskStatusResult, ThreadStateResult, Unwatch, WaitResult, WaitThread, Watch,
+    Watching,
 };
 pub use folders::{
     BrowseFolders, CancelClone, CloneId, ClonePhase, CloneState, CloneStatus, CreateFolder,
@@ -72,10 +73,10 @@ pub use project_settings::{
 pub use requests::{
     BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileContent, FileList,
     FileSearchKind, FileSearchMatch, GitBranch, HarnessList, HarnessOptions, HarnessOptionsResult,
-    ListBranches, ListHarnesses, ListProjects, ListWorktrees, MoveThread, Moved, ProjectList,
-    ProjectResult, PromoteThread, PromotedThread, ReadAttachment, ReadFile, RemoveProject,
-    RemoveWorktree, SearchFiles, SendInput, SendMode, Sent, StopThread, UpdateProject,
-    UpdateThread, Worktree, WorktreeList,
+    ListBranches, ListHarnesses, ListProjects, ListWorktrees, MoveThread, Moved, Patch,
+    ProjectList, ProjectResult, PromoteThread, PromotedThread, ReadAttachment, ReadFile,
+    RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode, Sent, StopThread,
+    UpdateProject, UpdateThread, Worktree, WorktreeList,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -97,7 +98,7 @@ pub const PROTOCOL_VERSION: u32 = 2;
 
 /// A request method: its params type, its name on the wire, and its result
 /// type. Sealed: the protocol defines every method.
-pub trait Method: Serialize + Sync + private::Sealed {
+pub trait Method: Serialize + DeserializeOwned + Send + Sync + private::Sealed {
     /// The JSON-RPC method name.
     const NAME: &'static str;
     /// The `result` of a successful call.
@@ -135,26 +136,26 @@ methods! {
     HelloParams => "hello", Hello;
     ListEnvironments => "environments.list", EnvironmentList;
     ListTasks => "tasks.list", TaskList;
-    TaskStatusRequest<'_> => "task.status", TaskStatusResult;
-    CancelTask<'_> => "task.cancel", TaskResult;
-    DelegateTask<'_> => "task.delegate", TaskResult;
-    DeleteTask<'_> => "task.delete", Empty;
+    TaskStatusRequest => "task.status", TaskStatusResult;
+    CancelTask => "task.cancel", TaskResult;
+    DelegateTask => "task.delegate", TaskResult;
+    DeleteTask => "task.delete", Empty;
     ClearTasks => "tasks.clear", Cleared;
     WaitThread => "thread.wait", WaitResult;
     ReadThreadState => "thread.state", ThreadStateResult;
-    ReadProject<'_> => "project.read", ProjectResult;
+    ReadProject => "project.read", ProjectResult;
     SteerQueuedInput => "queue.steer", Empty;
-    UpdateQueuedInput<'_> => "queue.update", Empty;
-    ListThreads<'_> => "threads.list", ThreadList;
-    UpdateThread<'_> => "thread.update", ThreadUpdated;
+    UpdateQueuedInput => "queue.update", Empty;
+    ListThreads => "threads.list", ThreadList;
+    UpdateThread => "thread.update", ThreadUpdated;
     RetitleThread => "thread.retitle", ThreadUpdated;
     TriageThread => "thread.triage", Triaged;
-    ConfigureThread<'_> => "thread.configure", Empty;
+    ConfigureThread => "thread.configure", Empty;
     StopThread => "thread.stop", Empty;
     DeleteThread => "thread.delete", Empty;
     ListProjects => "projects.list", ProjectList;
-    CreateProject<'_> => "project.create", ProjectResult;
-    UpdateProject<'_> => "project.update", Empty;
+    CreateProject => "project.create", ProjectResult;
+    UpdateProject => "project.update", Empty;
     ReadProjectIcon => "project.icon", ProjectIconResult;
     BrowseFolders => "folders.browse", FolderEntries;
     CreateFolder => "folder.create", FolderCreated;
@@ -175,12 +176,12 @@ methods! {
     GitHubCreatePull => "github.createPull", GitHubItem;
     GitHubLaunch => "github.launch", Launched;
     GitHubRepositories => "github.repositories", GitHubRepositoryList;
-    RemoveProject<'_> => "project.remove", Empty;
+    RemoveProject => "project.remove", Empty;
     ListHarnesses => "harnesses.list", HarnessList;
     HarnessOptions => "harnesses.options", HarnessOptionsResult;
     ListHarnessSessions => "harness.sessions", HarnessSessions;
     ImportSession => "thread.import", Launched;
-    SearchFiles<'_> => "files.search", FileList;
+    SearchFiles => "files.search", FileList;
     ReadFile => "files.read", FileContent;
     ReadAttachment => "thread.attachment", Attachment;
     LaunchThread => "thread.launch", Launched;
@@ -188,16 +189,16 @@ methods! {
     SendInput => "thread.send", Sent;
     Watch => "thread.watch", Watching;
     Unwatch => "thread.unwatch", Watching;
-    SearchThreads<'_> => "threads.search", SearchHits;
+    SearchThreads => "threads.search", SearchHits;
     ListEntries => "thread.entries", EntryPage;
     ReadEntryChunk => "thread.entry_chunk", EntryChunk;
     AnswerRequest => "thread.answer", RunRequest;
     SetThreadAccess => "thread.access", Empty;
     SetProjectAccess => "project.access", Empty;
     RemoveQueuedInput => "queue.remove", Empty;
-    ListBranches<'_> => "project.branches", BranchList;
-    ListWorktrees<'_> => "worktrees.list", WorktreeList;
-    RemoveWorktree<'_> => "worktree.remove", Empty;
+    ListBranches => "project.branches", BranchList;
+    ListWorktrees => "worktrees.list", WorktreeList;
+    RemoveWorktree => "worktree.remove", Empty;
     MoveThread => "thread.move", Moved;
     PromoteThread => "thread.promoteProject", PromotedThread;
 }

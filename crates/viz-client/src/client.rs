@@ -150,7 +150,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::send`].
-    pub async fn update_thread(&self, params: &UpdateThread<'_>) -> Result<()> {
+    pub async fn update_thread(&self, params: &UpdateThread) -> Result<()> {
         self.request(params).await.map(drop)
     }
 
@@ -159,7 +159,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::send`].
-    pub async fn configure_thread(&self, params: &ConfigureThread<'_>) -> Result<()> {
+    pub async fn configure_thread(&self, params: &ConfigureThread) -> Result<()> {
         self.request(params).await.map(drop)
     }
 
@@ -197,7 +197,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::send`].
-    pub async fn create_project(&self, params: &CreateProject<'_>) -> Result<Project> {
+    pub async fn create_project(&self, params: &CreateProject) -> Result<Project> {
         Ok(self.request(params).await?.project)
     }
 
@@ -306,7 +306,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::send`].
-    pub async fn update_project(&self, params: &UpdateProject<'_>) -> Result<()> {
+    pub async fn update_project(&self, params: &UpdateProject) -> Result<()> {
         self.request(params).await.map(drop)
     }
 
@@ -315,7 +315,7 @@ impl Client {
     /// # Errors
     ///
     /// See [`Client::send`].
-    pub async fn remove_project(&self, params: &RemoveProject<'_>) -> Result<()> {
+    pub async fn remove_project(&self, params: &RemoveProject) -> Result<()> {
         self.request(params).await.map(drop)
     }
 
@@ -345,7 +345,7 @@ impl Client {
     /// See [`Client::send`].
     pub async fn search_files(
         &self,
-        params: &SearchFiles<'_>,
+        params: &SearchFiles,
     ) -> Result<Vec<viz_protocol::FileSearchMatch>> {
         Ok(self.request(params).await?.files)
     }
@@ -354,7 +354,7 @@ impl Client {
     ///
     /// # Errors
     /// See [`Client::send`].
-    pub async fn search_threads(&self, params: &SearchThreads<'_>) -> Result<Vec<SearchHit>> {
+    pub async fn search_threads(&self, params: &SearchThreads) -> Result<Vec<SearchHit>> {
         Ok(self.request(params).await?.hits)
     }
 

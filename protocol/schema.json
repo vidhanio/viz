@@ -169,6 +169,7 @@
             ]
           }
         },
+        "additionalProperties": false,
         "$defs": {
           "ThreadId": {
             "description": "A thread id.",
@@ -289,13 +290,10 @@
         "type": "object",
         "properties": {
           "task": {
-            "type": "string"
+            "$ref": "#/$defs/TaskId"
           },
           "wait": {
-            "type": [
-              "boolean",
-              "null"
-            ]
+            "type": "boolean"
           },
           "timeoutMs": {
             "type": [
@@ -303,12 +301,20 @@
               "null"
             ],
             "format": "uint64",
-            "minimum": 0
+            "minimum": 0,
+            "maximum": 120000
           }
         },
+        "additionalProperties": false,
         "required": [
           "task"
-        ]
+        ],
+        "$defs": {
+          "TaskId": {
+            "description": "A delegated task's id, allocated by the environment that owns the parent\nthread.",
+            "type": "string"
+          }
+        }
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -422,12 +428,19 @@
         "type": "object",
         "properties": {
           "task": {
-            "type": "string"
+            "$ref": "#/$defs/TaskId"
           }
         },
+        "additionalProperties": false,
         "required": [
           "task"
-        ]
+        ],
+        "$defs": {
+          "TaskId": {
+            "description": "A delegated task's id, allocated by the environment that owns the parent\nthread.",
+            "type": "string"
+          }
+        }
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -534,6 +547,7 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "DelegateTask",
+        "description": "Parameters for delegating a task from a parent thread.",
         "type": "object",
         "properties": {
           "parent": {
@@ -549,6 +563,17 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "worktree": {
+            "description": "Checkout of the project to run in: `{\"mode\": \"new\"}` isolates the\nchild on a new branch. Omit to use `project`'s checkout, or the\nparent's checkout when `project` is omitted too.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/WorktreeTarget"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "harness": {
@@ -579,25 +604,9 @@
               }
             ]
           },
-          "worktree": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/WorktreeTarget"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "title": {
-            "description": "Names the task and its new thread; defaults to the start of `text`.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "text": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           },
           "attachments": {
             "type": "array",
@@ -615,14 +624,23 @@
             "type": [
               "string",
               "null"
-            ]
+            ],
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "title": {
+            "description": "A short name for the task and its new thread. Defaults to the start of\n`text`.",
+            "type": [
+              "string",
+              "null"
+            ],
+            "minLength": 1,
+            "maxLength": 200
           }
         },
         "required": [
           "parent",
-          "text",
-          "attachments",
-          "attachmentIds"
+          "text"
         ],
         "$defs": {
           "ThreadId": {
@@ -828,12 +846,19 @@
         "type": "object",
         "properties": {
           "task": {
-            "type": "string"
+            "$ref": "#/$defs/TaskId"
           }
         },
+        "additionalProperties": false,
         "required": [
           "task"
-        ]
+        ],
+        "$defs": {
+          "TaskId": {
+            "description": "A delegated task's id, allocated by the environment that owns the parent\nthread.",
+            "type": "string"
+          }
+        }
       },
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -3266,14 +3291,7 @@
             ]
           },
           "before": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/RunId"
-              },
-              {
-                "type": "null"
-              }
-            ]
+            "$ref": "#/$defs/Nullable_RunId"
           }
         },
         "required": [
@@ -3292,6 +3310,16 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 1
+          },
+          "Nullable_RunId": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         }
       },
@@ -3844,11 +3872,8 @@
             ]
           },
           "project": {
-            "description": "`None` leaves the project alone; `Some(None)` clears it.",
-            "type": [
-              "string",
-              "null"
-            ]
+            "description": "Omit to leave the project alone; `null` clears it.",
+            "$ref": "#/$defs/Nullable_string"
           }
         },
         "required": [
@@ -3860,6 +3885,12 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 1
+          },
+          "Nullable_string": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -8984,7 +9015,7 @@
             ]
           },
           "data": {
-            "description": "Base64-encoded bytes when the file is an image or supported binary media.",
+            "description": "Base64-encoded bytes when the file is an image or supported binary\nmedia.",
             "type": [
               "string",
               "null"
@@ -10052,8 +10083,8 @@
               "null"
             ],
             "format": "uint16",
-            "minimum": 0,
-            "maximum": 65535
+            "minimum": 1,
+            "maximum": 200
           }
         },
         "required": [
@@ -12482,8 +12513,7 @@
           }
         },
         "required": [
-          "path",
-          "force"
+          "path"
         ]
       },
       "result": {

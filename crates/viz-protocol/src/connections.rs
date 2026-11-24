@@ -4,7 +4,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Attachment, Empty, Entry, EntryId, Origin, RunId, ThreadId, ThreadState, WorktreeTarget,
+    Attachment, Empty, Entry, EntryId, Origin, RunId, TaskId, ThreadId, ThreadState, WorktreeTarget,
 };
 
 /// `thread.watch` params: start receiving
@@ -75,7 +75,7 @@ pub enum Notification {
     HarnessesChanged(Empty),
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, JsonSchema)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ListEnvironments {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
@@ -161,14 +161,15 @@ pub struct ThreadStateResult {
     pub state: ThreadState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct ReadProject<'a> {
-    pub project: &'a str,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReadProject {
+    pub project: String,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct ListTasks {
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<ThreadId>,
 }
 
@@ -201,13 +202,15 @@ pub enum TaskStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskStatusRequest<'a> {
-    pub task: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub wait: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskStatusRequest {
+    #[schemars(length(min = 1))]
+    pub task: TaskId,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub wait: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(max = 120_000))]
     pub timeout_ms: Option<u64>,
 }
 
@@ -218,16 +221,20 @@ pub struct TaskStatusResult {
     pub timed_out: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct CancelTask<'a> {
-    pub task: &'a str,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CancelTask {
+    #[schemars(length(min = 1))]
+    pub task: TaskId,
 }
 
 /// Remove a task from its parent's list once it is over and its result
 /// delivered. Its thread stays.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, JsonSchema)]
-pub struct DeleteTask<'a> {
-    pub task: &'a str,
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeleteTask {
+    #[schemars(length(min = 1))]
+    pub task: TaskId,
 }
 
 /// Remove every task of a thread that is over and whose result was delivered.
@@ -248,36 +255,55 @@ pub struct TaskResult {
     pub task: Task,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct DelegateTask<'a> {
-    pub parent: ThreadId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub environment: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub harness: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub model: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+/// Parameters for delegating a task from a parent thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DelegateInput {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Checkout of the project to run in: `{"mode": "new"}` isolates the
+    /// child on a new branch. Omit to use `project`'s checkout, or the
+    /// parent's checkout when `project` is omitted too.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree: Option<WorktreeTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thread: Option<ThreadId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub worktree: Option<&'a WorktreeTarget>,
-    /// Names the task and its new thread; defaults to the start of `text`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<&'a str>,
-    pub text: &'a str,
-    #[serde(skip_serializing_if = "slice_is_empty")]
-    pub attachments: &'a [Attachment],
-    #[serde(skip_serializing_if = "slice_is_empty")]
-    pub attachment_ids: &'a [String],
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<&'a str>,
+    #[schemars(length(min = 1))]
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachment_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 256))]
+    pub request_id: Option<String>,
+    /// A short name for the task and its new thread. Defaults to the start of
+    /// `text`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 200))]
+    pub title: Option<String>,
 }
 
-const fn slice_is_empty<T>(slice: &&[T]) -> bool {
-    slice.is_empty()
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DelegateTask {
+    pub parent: ThreadId,
+    #[serde(flatten)]
+    pub input: DelegateInput,
+}
+
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde's skip_serializing_if passes a reference"
+)]
+const fn is_false(value: &bool) -> bool {
+    !*value
 }

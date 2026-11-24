@@ -31,7 +31,7 @@ fn dispatch<'a, M: PeerMethod>(
     source: &'a str,
 ) -> BoxFuture<'a, Result<Value, PeerError>>
 where
-    Server: Handler<M, Input = M>,
+    Server: Handler<M>,
 {
     Box::pin(async move {
         let input: M = rpc::parse(raw)?;
@@ -50,9 +50,7 @@ macro_rules! peer_handlers {
 
         $(
             impl Handler<$method> for Server {
-                type Input = $method;
-
-                async fn handle(&self, input: Self::Input) -> Result<
+                async fn handle(&self, input: $method) -> Result<
                     <$method as viz_protocol::Method>::Response,
                     Error,
                 > {
