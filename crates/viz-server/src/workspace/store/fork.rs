@@ -150,10 +150,11 @@ pub(in crate::workspace) async fn copy_history(
     }
     exec(
         db,
-        "INSERT INTO attachments (thread, id, name, mime, data)
-         SELECT ?1, id, name, mime, data FROM attachments WHERE thread = ?2 AND id IN
+        "INSERT INTO thread_attachments (thread, id, blob, name, mime)
+         SELECT ?1, id, blob, name, mime FROM thread_attachments WHERE thread = ?2 AND id IN
             (SELECT a.value ->> 'id' FROM runs AS r, json_each(r.attachments) AS a
-             WHERE r.thread = ?1 AND r.attachments IS NOT NULL)",
+             WHERE r.thread = ?1 AND r.attachments IS NOT NULL)
+         ON CONFLICT DO NOTHING",
         [fork.into(), source.into()],
     )
     .await?;

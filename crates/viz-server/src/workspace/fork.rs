@@ -247,9 +247,10 @@ async fn copy_prompt_attachments(
     for attachment in attachments {
         exec(
             tx,
-            "INSERT INTO attachments (thread, id, name, mime, data)
-            SELECT ?1, id, name, mime, data FROM attachments WHERE thread = ?2 AND id = ?3
-            ON CONFLICT DO NOTHING",
+            "INSERT INTO thread_attachments (thread, id, blob, name, mime)
+             SELECT ?1, id, blob, name, mime
+             FROM thread_attachments WHERE thread = ?2 AND id = ?3
+             ON CONFLICT DO NOTHING",
             [target.into(), source.into(), attachment.id.as_str().into()],
         )
         .await?;

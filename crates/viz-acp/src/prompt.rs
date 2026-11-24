@@ -1,6 +1,6 @@
 //! Prompt content assembly and attachment I/O.
 
-use std::{fmt::Write as _, path::Path};
+use std::{collections::HashSet, fmt::Write as _, path::Path};
 
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use url::Url;
@@ -83,8 +83,11 @@ pub fn build_prompt(
     let mut blocks = vec![ContentBlock::Text(TextContent::new(description))];
     validate_context(context, capabilities)?;
     blocks.extend_from_slice(context);
+    let mut emitted_media = HashSet::new();
     for (attachment, bytes) in attachments {
-        if let Some(bytes) = bytes {
+        if let Some(bytes) = bytes
+            && emitted_media.insert(attachment.id.as_str())
+        {
             if capabilities.image && attachment.mime.starts_with("image/") {
                 blocks.push(ContentBlock::Image(ImageContent::new(
                     BASE64_STANDARD.encode(bytes),
@@ -127,22 +130,26 @@ pub async fn load_attachments(
     attachments: &[StoredAttachment],
     capabilities: &Capabilities,
 ) -> Result<Vec<Option<Vec<u8>>>> {
+    let mut loaded = HashSet::new();
+    let mut remaining = viz_protocol::limits::ATTACHMENT_TOTAL_BYTES;
     let mut bytes = Vec::with_capacity(attachments.len());
     for attachment in attachments {
         let inline = (capabilities.image && attachment.mime.starts_with("image/"))
             || (capabilities.audio && attachment.mime.starts_with("audio/"));
-        bytes.push(if inline {
-            Some(
-                tokio::fs::read(&attachment.path)
-                    .await
-                    .map_err(|source| Error::Io {
-                        operation: "reading prompt attachment",
-                        source,
-                    })?,
-            )
+        if inline && loaded.insert(attachment.id.as_str()) {
+            let data = tokio::fs::read(&attachment.path)
+                .await
+                .map_err(|source| Error::Io {
+                    operation: "reading prompt attachment",
+                    source,
+                })?;
+            remaining = remaining
+                .checked_sub(data.len())
+                .ok_or_else(|| Error::Unsupported("prompt attachments exceed media byte limit"))?;
+            bytes.push(Some(data));
         } else {
-            None
-        });
+            bytes.push(None);
+        }
     }
     Ok(bytes)
 }

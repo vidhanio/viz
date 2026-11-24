@@ -429,8 +429,32 @@ pub enum FileBody {
 pub struct ReadAttachment {
     /// Thread owning the attachment.
     pub thread: ThreadId,
-    /// SHA-256 attachment identifier.
+    /// Attachment identifier within the thread.
     pub id: String,
+}
+
+/// Read metadata for one stored attachment belonging to a thread (`blob.stat`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct StatBlob {
+    /// Thread owning the attachment.
+    pub thread: ThreadId,
+    /// Attachment identifier within the thread.
+    pub id: String,
+}
+
+/// Metadata for one content-addressed attachment visible to a thread.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BlobInfo {
+    /// Attachment identifier within the thread.
+    pub id: String,
+    /// Lowercase SHA-256 hex digest of the stored content bytes.
+    pub blob: String,
+    /// Original filename.
+    pub name: String,
+    /// MIME media type.
+    pub mime: String,
+    /// Decoded byte length on disk.
+    pub size: u64,
 }
 
 /// `thread.send` params.

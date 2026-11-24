@@ -19,8 +19,8 @@ use viz_protocol::{
     ReadClone, ReadEntryChunk, ReadFile, ReadProject, ReadProjectIcon, ReadThreadState,
     RemoveProject, RemoveQueuedInput, RemoveWorktree, RestoreCheckpoint, RetitleThread,
     SearchFiles, SearchHits, SearchThreads, SendInput, SetProjectAccess, SetThreadAccess,
-    StartClone, SteerQueuedInput, StopThread, ThreadList, ThreadStateResult, TriageThread,
-    UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
+    StartClone, StatBlob, SteerQueuedInput, StopThread, ThreadList, ThreadStateResult,
+    TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
 };
 
 use super::{Workspace, runs, sql::row, store};
@@ -77,6 +77,9 @@ handlers! {
             items
                 .pop()
                 .ok_or_else(|| Error::invalid("attachment not found"))
+        }
+        StatBlob, |workspace, StatBlob { thread, id }| {
+            workspace.stat_blob(thread, &id).await
         }
         ListProjects, |workspace, _| {
             let projects = store::projects(&mut *workspace.db.lock().await).await?;

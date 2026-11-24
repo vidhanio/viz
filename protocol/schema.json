@@ -9193,7 +9193,7 @@
             "$ref": "#/$defs/ThreadId"
           },
           "id": {
-            "description": "SHA-256 attachment identifier.",
+            "description": "Attachment identifier within the thread.",
             "type": "string"
           }
         },
@@ -9233,6 +9233,73 @@
           "name",
           "mime",
           "data"
+        ]
+      }
+    },
+    "blob.stat": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "StatBlob",
+        "description": "Read metadata for one stored attachment belonging to a thread (`blob.stat`).",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "Thread owning the attachment.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "id": {
+            "description": "Attachment identifier within the thread.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread",
+          "id"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "BlobInfo",
+        "description": "Metadata for one content-addressed attachment visible to a thread.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Attachment identifier within the thread.",
+            "type": "string"
+          },
+          "blob": {
+            "description": "Lowercase SHA-256 hex digest of the stored content bytes.",
+            "type": "string"
+          },
+          "name": {
+            "description": "Original filename.",
+            "type": "string"
+          },
+          "mime": {
+            "description": "MIME media type.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Decoded byte length on disk.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "blob",
+          "name",
+          "mime",
+          "size"
         ]
       }
     },

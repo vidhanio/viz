@@ -221,6 +221,43 @@ impl Root {
     /// Returns [`FsError::Io`] if creating parent directories, writing,
     /// syncing, or renaming fails.
     pub fn write_atomic(&self, rel: &RelPath, bytes: &[u8]) -> Result<(), FsError> {
+        self.write_atomic_inner(rel, bytes, false)
+    }
+
+    /// Atomically writes `bytes` to `rel` inside this root with owner-only
+    /// (`0600`) permissions on Unix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::Io`] if creating parent directories, writing,
+    /// syncing, or renaming fails.
+    pub fn write_atomic_private(&self, rel: &RelPath, bytes: &[u8]) -> Result<(), FsError> {
+        self.write_atomic_inner(rel, bytes, true)
+    }
+
+    /// Returns whether `rel` exists within this root without following a
+    /// trailing symlink.
+    #[must_use]
+    pub fn exists(&self, rel: &RelPath) -> bool {
+        self.dir.symlink_metadata(rel.as_path()).is_ok()
+    }
+
+    /// Removes the file at `rel` confined within this root.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::Io`] if unlinking fails.
+    pub fn remove_file(&self, rel: &RelPath) -> Result<(), FsError> {
+        self.dir.remove_file(rel.as_path())?;
+        Ok(())
+    }
+
+    fn write_atomic_inner(
+        &self,
+        rel: &RelPath,
+        bytes: &[u8],
+        private: bool,
+    ) -> Result<(), FsError> {
         let (parent, leaf) = rel.split_parent_leaf();
         let parent_dir = match parent {
             Some(parent_rel) => {
@@ -235,6 +272,9 @@ impl Root {
         let mut options = OpenOptions::new();
         options.write(true).create_new(true);
         apply_nonblock(&mut options, true);
+        if private {
+            apply_mode(&mut options, 0o600);
+        }
         let mut file = parent_dir.open_with(&tmp_name, &options)?;
         let write_result = (|| -> io::Result<()> {
             file.write_all(bytes)?;
@@ -589,6 +629,16 @@ fn apply_nonblock(options: &mut OpenOptions, nofollow: bool) {
 
 #[cfg(not(unix))]
 fn apply_nonblock(_options: &mut OpenOptions, _nofollow: bool) {}
+
+#[cfg(unix)]
+fn apply_mode(options: &mut OpenOptions, mode: u32) {
+    use cap_std::fs::OpenOptionsExt as _;
+
+    options.mode(mode);
+}
+
+#[cfg(not(unix))]
+fn apply_mode(_options: &mut OpenOptions, _mode: u32) {}
 
 #[cfg(unix)]
 fn map_nofollow_err(error: io::Error) -> FsError {

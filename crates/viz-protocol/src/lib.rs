@@ -72,12 +72,13 @@ pub use project_settings::{
     ProjectSettings, ProjectSettingsPatch, ReadProjectIcon, Setting,
 };
 pub use requests::{
-    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileBody, FileContent,
-    FileList, FileRoot, FileSearchKind, FileSearchMatch, GitBranch, HarnessList, HarnessOptions,
-    HarnessOptionsResult, LineWindow, ListBranches, ListHarnesses, ListProjects, ListWorktrees,
-    MoveThread, Moved, Patch, ProjectList, ProjectResult, PromoteThread, PromotedThread,
-    ReadAttachment, ReadFile, RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode,
-    Sent, StopThread, UpdateProject, UpdateThread, Worktree, WorktreeList,
+    BlobInfo, BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileBody,
+    FileContent, FileList, FileRoot, FileSearchKind, FileSearchMatch, GitBranch, HarnessList,
+    HarnessOptions, HarnessOptionsResult, LineWindow, ListBranches, ListHarnesses, ListProjects,
+    ListWorktrees, MoveThread, Moved, Patch, ProjectList, ProjectResult, PromoteThread,
+    PromotedThread, ReadAttachment, ReadFile, RemoveProject, RemoveWorktree, SearchFiles,
+    SendInput, SendMode, Sent, StatBlob, StopThread, UpdateProject, UpdateThread, Worktree,
+    WorktreeList,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -185,6 +186,7 @@ methods! {
     SearchFiles => "files.search", FileList;
     ReadFile => "files.read", FileContent;
     ReadAttachment => "thread.attachment", Attachment;
+    StatBlob => "blob.stat", BlobInfo;
     LaunchThread => "thread.launch", Launched;
     ForkThread => "thread.fork", Forked;
     SendInput => "thread.send", Sent;

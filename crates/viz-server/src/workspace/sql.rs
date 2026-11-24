@@ -165,7 +165,6 @@ sql_values! {
     i64 => Integer, std::convert::identity;
     String => Text, std::convert::identity;
     &str => Text, str::to_owned;
-    Vec<u8> => Blob, std::convert::identity;
 }
 
 impl From<u64> for Value {
@@ -281,13 +280,6 @@ impl Row {
         match self.take(col) {
             SqlValue::Text(value) => Ok(Some(value)),
             SqlValue::Null => Ok(None),
-            _ => Err(invalid_column(col)),
-        }
-    }
-
-    pub(crate) fn bytes(&mut self, col: usize) -> Result<Vec<u8>, Error> {
-        match self.take(col) {
-            SqlValue::Blob(value) => Ok(value),
             _ => Err(invalid_column(col)),
         }
     }

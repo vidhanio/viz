@@ -127,6 +127,7 @@ impl Workspace {
         parent: Option<&Parent>,
         scratch: Option<&super::scratch::PreparedScratch>,
     ) -> Result<(Received, bool), Error> {
+        let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let key = (args.origin_environment.as_str(), &args.task);
@@ -149,11 +150,10 @@ impl Workspace {
         if args.text.is_empty() {
             return Err(Rejection::EmptyText.into());
         }
-        let decoded = attachments::decode(std::mem::take(&mut args.attachments))?;
         let thread = self
             .task_thread(&mut tx, &args, placement, parent, scratch)
             .await?;
-        let attachments = attachments::save(&mut tx, thread, decoded).await?;
+        let attachments = attachments::commit(&mut tx, thread, &staged, &[]).await?;
         let run = runs::enqueue(
             &mut tx,
             thread,
@@ -175,6 +175,7 @@ impl Workspace {
         )
         .await?;
         tx.commit().await?;
+        drop(staged);
         self.kick(thread, false);
         drop(db);
         self.relist(thread);

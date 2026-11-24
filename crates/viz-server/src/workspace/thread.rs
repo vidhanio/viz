@@ -105,10 +105,11 @@ impl Workspace {
 
     async fn launch_tx(
         self: &Arc<Self>,
-        args: LaunchThread,
+        mut args: LaunchThread,
         placement: Option<&Placement>,
         scratch: Option<&super::scratch::PreparedScratch>,
     ) -> Result<(Launched, bool), Error> {
+        let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
@@ -134,7 +135,6 @@ impl Workspace {
             },
             (None, None) => self.checkout_for(&mut tx, args.project.as_deref()).await?,
         };
-        let attachments = attachments::decode(args.attachments)?;
         let session = SavedSession {
             desired: args.options,
             selection: selection(args.model, args.thinking),
@@ -157,8 +157,8 @@ impl Workspace {
         if let Some(access) = &access {
             store::save_thread_access(&mut tx, thread, Some(access)).await?;
         }
-        let run = if args.text.is_some() || !attachments.is_empty() {
-            let attachments = attachments::save(&mut tx, thread, attachments).await?;
+        let run = if args.text.is_some() || !staged.is_empty() {
+            let attachments = attachments::commit(&mut tx, thread, &staged, &[]).await?;
             Some(
                 runs::enqueue(
                     &mut tx,
@@ -183,18 +183,20 @@ impl Workspace {
             .await?;
         }
         tx.commit().await?;
+        drop(staged);
         self.kick(thread, run.is_none());
         drop(db);
         self.relist(thread);
         Ok((Launched { thread, run }, true))
     }
 
-    pub(crate) async fn send(self: &Arc<Self>, args: SendInput) -> Result<Sent, Error> {
+    pub(crate) async fn send(self: &Arc<Self>, mut args: SendInput) -> Result<Sent, Error> {
         let thread = args.thread;
+        threads::validate_request_id(args.request_id.as_deref())?;
+        let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         store::require(&mut tx, thread).await?;
-        threads::validate_request_id(args.request_id.as_deref())?;
         let previous = match &args.request_id {
             Some(request_id) => runs::by_request(&mut tx, thread, request_id).await?,
             None => None,
@@ -211,9 +213,7 @@ impl Workspace {
             decisions::Submission::Replay(run) => return Ok(Sent { run }),
             decisions::Submission::Enqueue { place, steer } => (place, steer),
         };
-        let mut attachments =
-            attachments::save(&mut tx, thread, attachments::decode(args.attachments)?).await?;
-        attachments.extend(attachments::stored(&mut tx, thread, &args.stored).await?);
+        let attachments = attachments::commit(&mut tx, thread, &staged, &args.stored).await?;
         let run = runs::enqueue(
             &mut tx,
             thread,
@@ -231,6 +231,7 @@ impl Workspace {
             store::withdraw_requests(&mut tx, Some(active), Withdrawal::Steered).await?;
         }
         tx.commit().await?;
+        drop(staged);
         if let Some(active) = steer {
             self.steer_active(thread, active);
         }

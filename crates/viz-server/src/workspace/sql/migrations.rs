@@ -6,12 +6,18 @@
 //! rebuild it would otherwise delete the rows referring to it. They are
 //! checked before the commit instead.
 
-use std::{collections::HashSet, path::Path, time::Duration};
+use std::{
+    collections::HashSet,
+    path::Path,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use anyhow::{Context as _, bail, ensure};
 use rusqlite::{
-    Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, backup::Backup,
+    Connection, OpenFlags, OptionalExtension as _, TransactionBehavior, backup::Backup, params,
 };
+
+use crate::workspace::blobs;
 
 const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0001_baseline.sql"),
@@ -26,6 +32,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0010_harness_status.sql"),
     include_str!("../../../migrations/0011_prompts.sql"),
     include_str!("../../../migrations/0012_tool_index.sql"),
+    include_str!("../../../migrations/0013_blobs.sql"),
 ];
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -66,6 +73,9 @@ fn migrate(db: &mut Connection, path: &Path) -> anyhow::Result<()> {
             .with_context(|| format!("applying workspace migration {version:04}"))?;
         if populated && version == 1 {
             ensure_baseline(&tx)?;
+        }
+        if version == 13 {
+            migrate_blobs(&tx, path)?;
         }
         tx.pragma_update(None, "user_version", i32::try_from(version)?)?;
     }
@@ -110,5 +120,58 @@ fn backup(path: &Path, version: usize) -> anyhow::Result<()> {
     Backup::new(&source, &mut destination)?
         .run_to_completion(128, Duration::from_millis(10), None)
         .with_context(|| format!("backing up workspace to {}", backup.display()))?;
+    Ok(())
+}
+
+/// Moves inline SQLite attachment BLOBs into the content-addressed on-disk
+/// blob store (`blobs/sha256/<ab>/<hex>`) and replaces `attachments` with
+/// `blobs` + `thread_attachments`.
+fn migrate_blobs(tx: &Connection, db_path: &Path) -> anyhow::Result<()> {
+    let has_legacy: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'attachments')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_legacy {
+        return Ok(());
+    }
+    let workspace_dir = db_path
+        .parent()
+        .context("workspace database path has no parent directory")?;
+    let blobs_dir = workspace_dir.join("blobs");
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis(),
+    )
+    .unwrap_or(i64::MAX);
+    let mut select = tx.prepare("SELECT thread, id, name, mime, data FROM attachments")?;
+    let mut insert_blob = tx.prepare(
+        "INSERT INTO blobs (id, size, mime, created_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT DO NOTHING",
+    )?;
+    let mut insert_ref = tx.prepare(
+        "INSERT INTO thread_attachments (thread, id, blob, name, mime)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT DO NOTHING",
+    )?;
+    let mut rows = select.query([])?;
+    while let Some(row) = rows.next()? {
+        let thread: i64 = row.get(0)?;
+        let id: String = row.get(1)?;
+        let name: String = row.get(2)?;
+        let mime: String = row.get(3)?;
+        let data: Vec<u8> = row.get(4)?;
+        let size = i64::try_from(data.len()).context("attachment exceeds SQLite integer range")?;
+        let blob_id = blobs::write_blob_sync(&blobs_dir, &data)?;
+        insert_blob.execute(params![blob_id, size, mime, now])?;
+        insert_ref.execute(params![thread, id, blob_id, name, mime])?;
+    }
+    drop(rows);
+    drop(select);
+    drop(insert_blob);
+    drop(insert_ref);
+    tx.execute_batch("DROP TABLE attachments;")?;
     Ok(())
 }

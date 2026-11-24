@@ -3,6 +3,7 @@
 
 mod admission;
 mod attachments;
+mod blobs;
 mod checkouts;
 mod checkpoints;
 mod clones;
@@ -75,6 +76,7 @@ pub(crate) struct Workspace {
     pub(crate) environment: String,
     cwd: PathBuf,
     dir: PathBuf,
+    blobs: blobs::BlobStore,
     /// Canonical parent of the worktrees viz creates. A checkout below it
     /// also needs a matching ownership marker before viz can remove it.
     worktrees: PathBuf,
@@ -141,7 +143,9 @@ impl Workspace {
             .await
             .with_context(|| format!("creating worktree directory {}", worktrees.display()))?;
         let worktrees = tokio::fs::canonicalize(&worktrees).await?;
+        let blobs = blobs::BlobStore::open(&dir)?;
         let mut db = Connection::open(dir.join("workspace.sqlite3")).await?;
+        blobs.reconcile_startup(&mut db).await?;
         let mut tx = db.transaction().await?;
         runs::recover(&mut tx).await?;
         tx.commit().await?;
@@ -150,6 +154,7 @@ impl Workspace {
             environment: config.environment.clone(),
             cwd: config.cwd.clone(),
             dir,
+            blobs,
             worktrees,
             default_harness: config.default_harness.clone(),
             harnesses: config.harnesses.clone(),
@@ -307,9 +312,16 @@ impl Workspace {
         thread: ThreadId,
         ids: &[String],
     ) -> Result<Vec<Attachment>, Error> {
+        attachments::load_inputs(self, thread, ids).await
+    }
+
+    pub(crate) async fn stat_blob(
+        &self,
+        thread: ThreadId,
+        id: &str,
+    ) -> Result<viz_protocol::BlobInfo, Error> {
         let mut db = self.db.lock().await;
-        store::require(&mut db, thread).await?;
-        attachments::inputs(&mut db, thread, ids).await
+        attachments::stat(&mut db, thread, id).await
     }
 
     fn attachment_dir(&self, thread: ThreadId) -> PathBuf {

@@ -1,145 +1,196 @@
-use std::{fmt::Write as _, path::Path};
+//! Attachment decoding, staging into [`super::blobs::BlobStore`], thread
+//! membership checks, unified prompt byte budgeting, and read-only harness
+//! materialization.
+
+use std::collections::HashSet;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use sha2::{Digest, Sha256};
-use tokio::io::AsyncWriteExt as _;
-use viz_protocol::{RunId, ThreadId};
+use viz_protocol::{BlobInfo, RunId, ThreadId};
 
 use super::{
     Workspace,
-    sql::{self, exec, row},
+    blobs::WritePermit,
+    sql::{Connection, exec, row},
+    store,
 };
 use crate::{
     error::Error,
     wire::{Attachment, PromptAttachment, StoredAttachment},
-    workspace::sql::Connection,
 };
 
 const TOTAL_LIMIT: usize = viz_protocol::limits::ATTACHMENT_TOTAL_BYTES;
 
-pub(super) struct Upload {
+/// Attachment bytes already persisted in [`super::blobs::BlobStore`] outside
+/// the SQLite lock, carrying GC-blocking permits until the referencing
+/// transaction commits.
+#[derive(Debug, Default)]
+pub(super) struct StagedUploads {
+    items: Vec<StagedUpload>,
+    total_bytes: usize,
+}
+
+#[derive(Debug)]
+struct StagedUpload {
     reference: PromptAttachment,
-    bytes: Vec<u8>,
+    size: u64,
+    _permit: WritePermit,
 }
 
-pub(super) fn decode(attachments: Vec<Attachment>) -> Result<Vec<Upload>, Error> {
+impl StagedUploads {
+    pub(super) const fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+}
+
+/// Validates filenames, decodes base64 payloads, enforces the per-prompt byte
+/// cap on new uploads, and writes each blob to disk outside any SQLite lock.
+pub(super) async fn stage(
+    workspace: &Workspace,
+    attachments: Vec<Attachment>,
+) -> Result<StagedUploads, Error> {
     let mut remaining = TOTAL_LIMIT;
-    attachments
-        .into_iter()
-        .map(|Attachment { name, mime, data }| {
-            if name.is_empty()
-                || name == "."
-                || name == ".."
-                || name.len() > 255
-                || name
-                    .bytes()
-                    .any(|ch| matches!(ch, b'/' | b'\\' | 0..=31 | 127))
-            {
-                return Err(Error::invalid("invalid attachment name"));
-            }
-            let decoded_len = data.len() / 4 * 3
-                - data
-                    .bytes()
-                    .rev()
-                    .take(2)
-                    .take_while(|&ch| ch == b'=')
-                    .count()
-                    .min(data.len() / 4 * 3);
-            if decoded_len > remaining {
-                return Err(too_large());
-            }
-            let bytes = STANDARD
-                .decode(data)
-                .map_err(|_| Error::invalid("invalid attachment base64"))?;
-            remaining = remaining.checked_sub(bytes.len()).ok_or_else(too_large)?;
-            let mut digest = Sha256::new();
-            for field in [name.as_bytes(), mime.as_bytes(), bytes.as_slice()] {
-                digest.update(field.len().to_le_bytes());
-                digest.update(field);
-            }
-            let id = digest
-                .finalize()
-                .iter()
-                .fold(String::new(), |mut hex, byte| {
-                    _ = write!(hex, "{byte:02x}");
-                    hex
-                });
-            Ok(Upload {
-                reference: PromptAttachment { id, name, mime },
-                bytes,
-            })
-        })
-        .collect()
+    let mut total_bytes = 0usize;
+    let mut items = Vec::with_capacity(attachments.len());
+    for Attachment { name, mime, data } in attachments {
+        validate_name(&name)?;
+        let decoded_len = data.len() / 4 * 3
+            - data
+                .bytes()
+                .rev()
+                .take(2)
+                .take_while(|&ch| ch == b'=')
+                .count()
+                .min(data.len() / 4 * 3);
+        if decoded_len > remaining {
+            return Err(too_large());
+        }
+        let bytes = STANDARD
+            .decode(data)
+            .map_err(|_| Error::invalid("invalid attachment base64"))?;
+        remaining = remaining.checked_sub(bytes.len()).ok_or_else(too_large)?;
+        total_bytes = total_bytes.saturating_add(bytes.len());
+        let (blob_id, size, permit) = workspace.blobs.put(bytes).await?;
+        items.push(StagedUpload {
+            reference: PromptAttachment {
+                id: blob_id,
+                name,
+                mime,
+            },
+            size,
+            _permit: permit,
+        });
+    }
+    Ok(StagedUploads { items, total_bytes })
 }
 
-fn too_large() -> Error {
-    Error::invalid("attachments exceed 20 MiB total")
-}
-
-pub(super) async fn save(
+/// Records staged uploads and resolves thread-owned stored attachment ids
+/// under one unified `TOTAL_LIMIT` byte budget for the prompt.
+pub(super) async fn commit(
     db: &mut Connection,
     thread: ThreadId,
-    uploads: Vec<Upload>,
+    staged: &StagedUploads,
+    stored_ids: &[String],
 ) -> Result<Vec<PromptAttachment>, Error> {
-    let mut attachments = Vec::with_capacity(uploads.len());
-    for Upload { reference, bytes } in uploads {
-        exec(db, "INSERT INTO attachments (thread, id, name, mime, data) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT DO NOTHING",
-            [thread.into(), reference.id.as_str().into(), reference.name.as_str().into(), reference.mime.as_str().into(), bytes.into()]).await?;
-        attachments.push(reference);
+    let now = store::now();
+    let mut remaining = TOTAL_LIMIT
+        .checked_sub(staged.total_bytes)
+        .ok_or_else(too_large)?;
+    let mut attachments = Vec::with_capacity(staged.items.len() + stored_ids.len());
+    for upload in &staged.items {
+        exec(
+            db,
+            "INSERT INTO blobs (id, size, mime, created_at) VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT DO NOTHING",
+            [
+                upload.reference.id.as_str().into(),
+                upload.size.into(),
+                upload.reference.mime.as_str().into(),
+                now.into(),
+            ],
+        )
+        .await?;
+        exec(
+            db,
+            "INSERT INTO thread_attachments (thread, id, blob, name, mime)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(thread, id) DO UPDATE SET name = excluded.name, mime = excluded.mime",
+            [
+                thread.into(),
+                upload.reference.id.as_str().into(),
+                upload.reference.id.as_str().into(),
+                upload.reference.name.as_str().into(),
+                upload.reference.mime.as_str().into(),
+            ],
+        )
+        .await?;
+        attachments.push(upload.reference.clone());
+    }
+    for id in stored_ids {
+        let info = owned(db, thread, id).await?;
+        let size = usize::try_from(info.size).map_err(|_| too_large())?;
+        remaining = remaining.checked_sub(size).ok_or_else(too_large)?;
+        attachments.push(PromptAttachment {
+            id: info.id,
+            name: info.name,
+            mime: info.mime,
+        });
     }
     Ok(attachments)
 }
 
-async fn owned(
+/// Returns thread-scoped attachment metadata without leaking whether a blob
+/// exists on any other thread.
+pub(super) async fn stat(
     db: &mut Connection,
     thread: ThreadId,
     id: &str,
-    budget: usize,
-) -> Result<sql::Row, Error> {
-    row(db, "SELECT name, mime, CASE WHEN length(data) <= ?3 THEN data END, length(data) FROM attachments WHERE thread = ?1 AND id = ?2",
-        [thread.into(), id.into(), budget.into()]).await?.ok_or_else(|| {
-        Error::invalid(format!("attachment {id} does not belong to thread {thread}"))
+) -> Result<BlobInfo, Error> {
+    store::require(db, thread).await?;
+    lookup(db, thread, id).await?.ok_or_else(|| {
+        Error::not_found(format!(
+            "attachment {id} does not belong to thread {thread}"
+        ))
     })
 }
 
-/// References to attachments the thread already stores, to attach again.
-pub(super) async fn stored(
-    db: &mut Connection,
-    thread: ThreadId,
-    ids: &[String],
-) -> Result<Vec<PromptAttachment>, Error> {
-    let mut found = Vec::with_capacity(ids.len());
-    for id in ids {
-        let mut row = owned(db, thread, id, 0).await?;
-        found.push(PromptAttachment {
-            id: id.clone(),
-            name: row.str(0)?,
-            mime: row.str(1)?,
-        });
-    }
-    Ok(found)
-}
-
-pub(super) async fn inputs(
-    db: &mut Connection,
+/// Loads thread-owned attachments into wire [`Attachment`] values, enforcing
+/// membership under a brief SQLite lock and reading bytes from disk outside it.
+pub(super) async fn load_inputs(
+    workspace: &Workspace,
     thread: ThreadId,
     ids: &[String],
 ) -> Result<Vec<Attachment>, Error> {
-    let mut remaining = TOTAL_LIMIT;
-    let mut attachments = Vec::with_capacity(ids.len());
-    for id in ids {
-        let mut row = owned(db, thread, id, remaining).await?;
-        let size = usize::try_from(row.u64(3)?).map_err(|_| too_large())?;
-        remaining = remaining.checked_sub(size).ok_or_else(too_large)?;
+    let entries = {
+        let mut db = workspace.db.lock().await;
+        store::require(&mut db, thread).await?;
+        let mut remaining = TOTAL_LIMIT;
+        let mut found = Vec::with_capacity(ids.len());
+        for id in ids {
+            let info = owned(&mut db, thread, id).await?;
+            let size = usize::try_from(info.size).map_err(|_| too_large())?;
+            remaining = remaining.checked_sub(size).ok_or_else(too_large)?;
+            found.push(info);
+        }
+        drop(db);
+        found
+    };
+    let mut attachments = Vec::with_capacity(entries.len());
+    for info in entries {
+        let bytes = workspace
+            .blobs
+            .read(&info.blob, info.size.min(TOTAL_LIMIT as u64))
+            .await?;
         attachments.push(Attachment {
-            name: row.str(0)?,
-            mime: row.str(1)?,
-            data: STANDARD.encode(row.bytes(2)?),
+            name: info.name,
+            mime: info.mime,
+            data: STANDARD.encode(bytes),
         });
     }
     Ok(attachments)
 }
 
+/// Materializes isolated read-only copies of a run's attachments on disk for
+/// an external ACP harness without holding the SQLite lock during file I/O.
 pub(super) async fn materialize(
     workspace: &Workspace,
     thread: ThreadId,
@@ -149,18 +200,30 @@ pub(super) async fn materialize(
     if refs.is_empty() {
         return Ok(Vec::new());
     }
-    let parent = workspace.attachment_dir(thread).join(run.to_string());
-    let mut saved = Vec::with_capacity(refs.len());
-    for PromptAttachment { id, name, mime } in refs {
-        let directory = parent.join(&id);
-        let path = directory.join(&name);
-        if !saved.iter().any(|file: &StoredAttachment| file.id == id) {
-            let data = {
-                let mut db = workspace.db.lock().await;
-                owned(&mut db, thread, &id, TOTAL_LIMIT).await?.bytes(2)?
-            };
-            write_file(&directory, &path, &data).await?;
+    let resolved = {
+        let mut db = workspace.db.lock().await;
+        let mut resolved = Vec::with_capacity(refs.len());
+        for item in refs {
+            let info = owned(&mut db, thread, &item.id).await?;
+            resolved.push((item, info.blob, info.size));
         }
+        drop(db);
+        resolved
+    };
+    let parent = workspace.attachment_dir(thread).join(run.to_string());
+    let mut written = HashSet::new();
+    let mut saved = Vec::with_capacity(resolved.len());
+    for (PromptAttachment { id, name, mime }, blob, size) in resolved {
+        validate_name(&name)?;
+        let directory = parent.join(&id);
+        let path = if written.insert((id.clone(), name.clone())) {
+            workspace
+                .blobs
+                .materialize_copy(&blob, &directory, &name, size.min(TOTAL_LIMIT as u64))
+                .await?
+        } else {
+            directory.join(&name)
+        };
         saved.push(StoredAttachment {
             id,
             name,
@@ -171,14 +234,54 @@ pub(super) async fn materialize(
     Ok(saved)
 }
 
-async fn write_file(directory: &Path, path: &Path, data: &[u8]) -> std::io::Result<()> {
-    tokio::fs::create_dir_all(directory).await?;
-    let mut file = tokio::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(path)
-        .await?;
-    file.write_all(data).await?;
-    file.flush().await
+async fn owned(db: &mut Connection, thread: ThreadId, id: &str) -> Result<BlobInfo, Error> {
+    lookup(db, thread, id).await?.ok_or_else(|| {
+        Error::invalid(format!(
+            "attachment {id} does not belong to thread {thread}"
+        ))
+    })
+}
+
+async fn lookup(
+    db: &mut Connection,
+    thread: ThreadId,
+    id: &str,
+) -> Result<Option<BlobInfo>, Error> {
+    let Some(mut row) = row(
+        db,
+        "SELECT ta.id, ta.blob, ta.name, ta.mime, b.size
+         FROM thread_attachments AS ta
+         JOIN blobs AS b ON b.id = ta.blob
+         WHERE ta.thread = ?1 AND ta.id = ?2",
+        [thread.into(), id.into()],
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(BlobInfo {
+        id: row.str(0)?,
+        blob: row.str(1)?,
+        name: row.str(2)?,
+        mime: row.str(3)?,
+        size: row.u64(4)?,
+    }))
+}
+
+fn validate_name(name: &str) -> Result<(), Error> {
+    if name.is_empty()
+        || name == "."
+        || name == ".."
+        || name.len() > 255
+        || name
+            .bytes()
+            .any(|ch| matches!(ch, b'/' | b'\\' | 0..=31 | 127))
+    {
+        return Err(Error::invalid("invalid attachment name"));
+    }
+    Ok(())
+}
+
+fn too_large() -> Error {
+    Error::invalid("attachments exceed 20 MiB total")
 }
