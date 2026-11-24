@@ -12,12 +12,12 @@ use crate::{
     update::{Msg, TimelineMsg},
 };
 
-/// Configures `md` with clickable `file://` / `viz-file://` file pills
-/// (matching the composer's `@file` pill aesthetic) and `viz-attachment://`
-/// attachment pills, routing every link click to [`TimelineMsg::OpenUrl`].
+/// Configures `md` with clickable `file://` / `viz-file://` file pills and
+/// `viz-attachment://` attachment pills in viz's flat neutral chip style,
+/// routing every link click to [`TimelineMsg::OpenUrl`].
 pub fn with_file_pills(md: Markdown, cwd: Option<&str>, t: &Theme) -> Markdown {
-    let info = t.info;
-    let accent = t.accent;
+    let text = t.text;
+    let text_strong = t.text_strong;
     let accent_text = t.accent_text;
     let dark = t.k.dark;
     let cwd_owned = cwd.map(|p| p.trim_end_matches('/').to_owned());
@@ -25,52 +25,29 @@ pub fn with_file_pills(md: Markdown, cwd: Option<&str>, t: &Theme) -> Markdown {
     md.on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
         s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
     })
-    .link_style(move |url| pill_style(url, info, accent, accent_text, dark))
-    .link_ring(move |url| pill_ring(url, info, accent, dark))
+    .link_style(move |url| pill_style(url, text, text_strong, accent_text, dark))
     .link_help(move |url| pill_help(url, cwd_owned.as_deref()))
 }
 
 fn pill_style(
     url: &str,
-    info: Color,
-    accent: Color,
+    text: Color,
+    text_strong: Color,
     accent_text: Color,
     dark: bool,
 ) -> Option<(Span, LinkPaint)> {
-    if url.starts_with("file://") || url.starts_with("viz-file://") {
-        let rest_bg = info.alpha(if dark { 0.14 } else { 0.10 });
-        let hover_bg = info.alpha(if dark { 0.24 } else { 0.18 });
-        let hover_ring = info.alpha(if dark { 0.48 } else { 0.40 });
-        let span = Span::new(0, 0).color(info).weight(500.0).bg(rest_bg, 3.0);
-        let paint = LinkPaint::new()
-            .color(info)
-            .bg(hover_bg)
-            .ring(hover_ring, 1.0);
-        return Some((span, paint));
-    }
-    if url.starts_with("viz-attachment://") {
-        let rest_bg = accent.alpha(if dark { 0.15 } else { 0.10 });
-        let hover_bg = accent.alpha(if dark { 0.25 } else { 0.18 });
-        let hover_ring = accent.alpha(if dark { 0.48 } else { 0.40 });
+    if url.starts_with("file://")
+        || url.starts_with("viz-file://")
+        || url.starts_with("viz-attachment://")
+    {
+        let rest_bg = text.alpha(if dark { 0.08 } else { 0.06 });
+        let hover_bg = text.alpha(if dark { 0.14 } else { 0.11 });
         let span = Span::new(0, 0)
-            .color(accent_text)
+            .color(text_strong)
             .weight(500.0)
-            .bg(rest_bg, 3.0);
-        let paint = LinkPaint::new()
-            .color(accent_text)
-            .bg(hover_bg)
-            .ring(hover_ring, 1.0);
+            .bg(rest_bg, 2.0);
+        let paint = LinkPaint::new().color(accent_text).bg(hover_bg);
         return Some((span, paint));
-    }
-    None
-}
-
-fn pill_ring(url: &str, info: Color, accent: Color, dark: bool) -> Option<(Color, f32)> {
-    if url.starts_with("file://") || url.starts_with("viz-file://") {
-        return Some((info.alpha(if dark { 0.28 } else { 0.22 }), 1.0));
-    }
-    if url.starts_with("viz-attachment://") {
-        return Some((accent.alpha(if dark { 0.30 } else { 0.24 }), 1.0));
     }
     None
 }

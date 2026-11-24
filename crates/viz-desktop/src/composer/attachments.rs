@@ -239,14 +239,15 @@ fn file_row(s: &Desktop, index: usize, attachment: &Attachment, ref_label: &str,
                 .px(S4)
                 .py(1.0)
                 .radius(RADIUS_SM)
-                .fill(t.accent.alpha(if t.k.dark { 0.16 } else { 0.10 }))
+                .fill(t.surface)
+                .border(HAIRLINE, t.hairline)
                 .hover(t.hover_wash)
                 .focusable(true)
                 .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
                 .on_press_tx(move |s: &mut Desktop, tx| {
                     s.dispatch(Msg::Composer(ComposerMsg::InsertAttachmentRef(index)), tx);
                 })
-                .child(text(ref_label).font(t.mono_micro).color(t.accent_text)),
+                .child(text(ref_label).font(t.mono_micro).color(t.text_secondary)),
         );
     }
 

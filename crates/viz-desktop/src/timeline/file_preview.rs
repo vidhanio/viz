@@ -16,7 +16,7 @@ use crate::{
     model::{FilePreview, FilePreviewBody, relative_path, split_path},
     motion,
     theme::{
-        ICON, ICON_MD, ICON_SMALL, RADIUS_CARD, RADIUS_PILL, RADIUS_SM, S2, S4, S6, S8, S12, S16,
+        HAIRLINE, ICON, ICON_MD, ICON_SMALL, RADIUS_CARD, RADIUS_SM, S2, S4, S6, S8, S12, S16,
         Size, Theme,
     },
     ui,
@@ -359,9 +359,10 @@ fn header(s: &Desktop, preview: &FilePreview, t: &Theme) -> El {
                 .key("line-badge")
                 .px(S6)
                 .py(S2)
-                .radius(RADIUS_PILL)
-                .fill(t.accent.alpha(if t.k.dark { 0.18 } else { 0.12 }))
-                .child(text(label).font(t.mono_micro).color(t.accent_text)),
+                .radius(RADIUS_SM)
+                .fill(t.chip_fill)
+                .border(HAIRLINE, t.hairline)
+                .child(text(label).font(t.mono_micro).color(t.text_secondary)),
         );
     }
 

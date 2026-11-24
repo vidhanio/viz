@@ -220,73 +220,67 @@ fn circle_action(
 /// zero-alloc.
 #[derive(Clone, Copy)]
 pub(super) struct PillPalette {
-    info: Color,
-    accent: Color,
-    accent_text: Color,
+    pill_bg: Color,
+    text: Color,
+    text_secondary: Color,
     delegated: Color,
-    steer: Color,
     success: Color,
     muted: Color,
     danger: Color,
-    chip_fill: Color,
-    text_secondary: Color,
 }
 
 impl PillPalette {
-    /// Extracts base16 semantic pill tokens from the active [`Theme`].
-    pub(super) const fn from_theme(t: &Theme) -> Self {
+    /// Extracts flat base16 pill tokens from the active [`Theme`].
+    pub(super) fn from_theme(t: &Theme) -> Self {
         Self {
-            info: t.info,
-            accent: t.accent,
-            accent_text: t.accent_text,
+            pill_bg: t.text.alpha(if t.k.dark { 0.08 } else { 0.06 }),
+            text: t.text,
+            text_secondary: t.text_secondary,
             delegated: t.delegated,
-            steer: t.steer,
             success: t.success,
             muted: t.muted,
             danger: t.danger,
-            chip_fill: t.chip_fill,
-            text_secondary: t.text_secondary,
         }
     }
 
     /// Maps a typed pill id (`file:`, `dir:`, `thread:`, `env:`, `model:`,
-    /// `skill:`, `pr:`, `issue:`) to its inline `Mark::Pill` fill, text ink,
-    /// and leading icon.
+    /// `skill:`, `pr:`, `issue:`) to its inline `Mark::Pill` flat neutral fill,
+    /// text ink, and leading icon.
     pub(super) fn style(&self, id: &str) -> PillStyle {
         if let Some(path) = id.strip_prefix("file:") {
             return PillStyle::default()
-                .bg(self.info.alpha(0.12))
-                .fg(self.info)
+                .bg(self.pill_bg)
+                .fg(self.text)
                 .icon(rune_kit::file_icon(path));
         }
         if id.starts_with("dir:") {
             return PillStyle::default()
-                .bg(self.info.alpha(0.12))
-                .fg(self.info)
+                .bg(self.pill_bg)
+                .fg(self.text)
                 .icon(&ui::FOLDER);
         }
         if id.starts_with("thread:") {
             return PillStyle::default()
-                .bg(self.accent.alpha(0.12))
-                .fg(self.accent_text)
+                .bg(self.pill_bg)
+                .fg(self.text)
                 .icon(&ui::THREAD);
         }
         if id.starts_with("env:") {
             return PillStyle::default()
-                .bg(self.accent.alpha(0.12))
-                .fg(self.accent_text)
+                .bg(self.pill_bg)
+                .fg(self.text)
                 .icon(&ui::SERVER);
         }
         if id.starts_with("model:") {
             return PillStyle::default()
-                .bg(self.delegated.alpha(0.12))
-                .fg(self.delegated)
+                .bg(self.pill_bg)
+                .fg(self.text)
                 .icon(&ui::CPU);
         }
         if id.starts_with("skill:") {
             return PillStyle::default()
-                .bg(self.steer.alpha(0.12))
-                .fg(self.steer)
+                .bg(self.pill_bg)
+                .fg(self.text)
                 .icon(&ui::SPARKLES);
         }
         if let Some(rest) = id.strip_prefix("pr:").or_else(|| id.strip_prefix("issue:")) {
@@ -300,10 +294,10 @@ impl PillPalette {
                 (true, "closed") => (self.delegated, &ui::CIRCLE_CHECK),
                 (true, _) => (self.success, &ui::CIRCLE_DOT),
             };
-            return PillStyle::default().bg(fg.alpha(0.12)).fg(fg).icon(glyph);
+            return PillStyle::default().bg(self.pill_bg).fg(fg).icon(glyph);
         }
         PillStyle::default()
-            .bg(self.chip_fill)
+            .bg(self.pill_bg)
             .fg(self.text_secondary)
     }
 }

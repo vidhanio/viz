@@ -309,7 +309,7 @@ fn user_markdown_style(t: &Theme) -> MarkdownStyle {
     let code_bg = if t.k.dark {
         t.canvas.alpha(0.55)
     } else {
-        t.surface_recessed
+        t.text.alpha(0.06)
     };
     let code_border = if t.k.dark {
         t.hairline
@@ -545,6 +545,7 @@ fn context_chips(
                 .key("origin"),
         );
     }
+    let chip_bg = t.text.alpha(if t.k.dark { 0.07 } else { 0.05 });
     for (idx, ctx) in context.iter().enumerate() {
         let chip = match ctx {
             PromptContext::File { path } => {
@@ -560,9 +561,9 @@ fn context_chips(
                     .gap(S4)
                     .center_y()
                     .radius(RADIUS_SM)
-                    .fill(t.info.alpha(if t.k.dark { 0.14 } else { 0.10 }))
-                    .border(HAIRLINE, t.info.alpha(if t.k.dark { 0.28 } else { 0.22 }))
-                    .hover(t.info.alpha(if t.k.dark { 0.24 } else { 0.18 }))
+                    .fill(chip_bg)
+                    .border(HAIRLINE, t.hairline)
+                    .hover(t.hover_wash)
                     .focusable(true)
                     .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
                     .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
@@ -576,13 +577,13 @@ fn context_chips(
                     })
                     .child(
                         icon(rune_kit::file_icon(path), ICON_SMALL)
-                            .color(t.info)
+                            .color(t.muted)
                             .a11y_hidden(),
                     )
                     .child(
                         text(format!("@{display}"))
                             .font(t.small_medium)
-                            .color(t.info),
+                            .color(t.text),
                     )
             }
             PromptContext::Link { uri, name, title } => {
@@ -596,7 +597,7 @@ fn context_chips(
                     .gap(S4)
                     .center_y()
                     .radius(RADIUS_SM)
-                    .fill(t.chip_fill)
+                    .fill(chip_bg)
                     .border(HAIRLINE, t.hairline)
                     .hover(t.hover_wash)
                     .focusable(true)

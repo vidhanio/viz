@@ -375,25 +375,17 @@ fn style_link(
         let label_start = range.start + 1;
         let label_end = range.start + close_bracket;
         if is_file || is_ref {
-            let pill_bg = if is_file {
-                t.info.alpha(if editing { 0.18 } else { 0.12 })
-            } else {
-                t.accent.alpha(if editing { 0.18 } else { 0.12 })
-            };
+            let pill_bg = flat_pill_bg(editing, t);
             out.spans
-                .push(Span::new(range.start, range.end).bg(pill_bg, 3.0));
+                .push(Span::new(range.start, range.end).bg(pill_bg, 2.0));
         }
         out.spans
             .push(Span::new(range.start, label_start).color(syntax_ink));
         if label_start < label_end {
-            let span = if is_file {
+            let span = if is_file || is_ref {
                 Span::new(label_start, label_end)
                     .weight(500.0)
-                    .color(t.info)
-            } else if is_ref {
-                Span::new(label_start, label_end)
-                    .weight(500.0)
-                    .color(t.accent_text)
+                    .color(t.text_strong)
             } else {
                 Span::new(label_start, label_end)
                     .color(t.accent_text)
@@ -407,8 +399,16 @@ fn style_link(
     }
     out.spans.push(
         Span::new(range.start, range.end)
-            .color(if is_file { t.info } else { t.accent_text })
-            .underline(t.accent_text.alpha(0.55)),
+            .color(if is_file {
+                t.text_strong
+            } else {
+                t.accent_text
+            })
+            .underline(if is_file {
+                t.text.alpha(0.35)
+            } else {
+                t.accent_text.alpha(0.55)
+            }),
     );
 }
 
@@ -416,15 +416,9 @@ fn style_image(text: &str, range: Range<usize>, caret: usize, t: &Theme, out: &m
     let slice = &text[range.clone()];
     let editing = caret >= range.start && caret <= range.end;
     let syntax_ink = if editing { t.muted } else { t.faint };
-    let chip_bg = t.accent.alpha(if editing {
-        0.20
-    } else if t.k.dark {
-        0.14
-    } else {
-        0.10
-    });
+    let chip_bg = flat_pill_bg(editing, t);
     out.spans
-        .push(Span::new(range.start, range.end).bg(chip_bg, 3.0));
+        .push(Span::new(range.start, range.end).bg(chip_bg, 2.0));
     if slice.starts_with("![")
         && let Some(close_bracket) = find_closing_bracket(&slice[1..])
     {
@@ -437,15 +431,25 @@ fn style_image(text: &str, range: Range<usize>, caret: usize, t: &Theme, out: &m
             out.spans.push(
                 Span::new(alt_start, alt_end)
                     .weight(500.0)
-                    .color(t.accent_text),
+                    .color(t.text_strong),
             );
         }
         out.spans
             .push(Span::new(alt_end, range.end).mono().color(syntax_ink));
     } else {
         out.spans
-            .push(Span::new(range.start, range.end).color(t.accent_text));
+            .push(Span::new(range.start, range.end).color(t.text_strong));
     }
+}
+
+fn flat_pill_bg(editing: bool, t: &Theme) -> rune::Color {
+    let alpha = match (editing, t.k.dark) {
+        (true, true) => 0.14,
+        (true, false) => 0.11,
+        (false, true) => 0.08,
+        (false, false) => 0.06,
+    };
+    t.text.alpha(alpha)
 }
 
 fn style_code_block(
