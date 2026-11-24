@@ -18,7 +18,7 @@ use viz_protocol::{HarnessStatus, ThreadId};
 
 use super::{
     Workspace, sessions,
-    sql::{Connection, exec, row},
+    sql::{Conn, exec, row},
     store,
 };
 use crate::{
@@ -40,12 +40,26 @@ impl Workspace {
     /// Every configured harness as last checked. Starts checks for the stale.
     pub(super) async fn list_harnesses(self: &Arc<Self>) -> Result<Vec<Harness>, Error> {
         let now = store::now();
-        let mut harnesses = Vec::with_capacity(self.harnesses.len());
-        let mut db = self.db.lock().await;
-        for (name, config) in &self.harnesses {
-            let catalog = sessions::catalog(&mut db, name).await?;
-            let (status, checked_at) = status(&mut db, name)
-                .await?
+        let names: Vec<String> = self.harnesses.keys().cloned().collect();
+        let stored = self
+            .db
+            .read_snapshot(move |tx| {
+                let mut rows = Vec::with_capacity(names.len());
+                for name in names {
+                    let catalog = sessions::catalog(tx, &name)?;
+                    let status = status(tx, &name)?;
+                    let commands = sessions::harness_commands(tx, &name)?;
+                    rows.push((name, catalog, status, commands));
+                }
+                Ok(rows)
+            })
+            .await?;
+        let mut harnesses = Vec::with_capacity(stored.len());
+        for (name, catalog, saved_status, commands) in stored {
+            let Some(config) = self.harnesses.get(&name) else {
+                continue;
+            };
+            let (status, checked_at) = saved_status
                 .map_or((HarnessStatus::Unchecked, None), |(status, at)| {
                     (status, Some(at))
                 });
@@ -55,15 +69,14 @@ impl Workspace {
                 PROBLEM_FOR
             };
             if checked_at.is_none_or(|at| now - at > stale_after) {
-                self.check(name);
+                self.check(&name);
             }
             let options = catalog.map_or_else(Vec::new, |catalog| catalog.options(config, None));
-            let commands = sessions::harness_commands(&mut db, name).await?;
             harnesses.push(Harness {
-                id: name.clone(),
-                name: self.harness_name(name).to_owned(),
-                default: self.default_harness.as_deref() == Some(name),
+                name: self.harness_name(&name).to_owned(),
+                default: self.default_harness.as_deref() == Some(name.as_str()),
                 icon: icon(&config.command).to_owned(),
+                id: name,
                 status,
                 checked_at,
                 access: requests::access_modes(&options),
@@ -71,7 +84,6 @@ impl Workspace {
                 commands,
             });
         }
-        drop(db);
         harnesses.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.id.cmp(&b.id)));
         Ok(harnesses)
     }
@@ -104,20 +116,29 @@ impl Workspace {
 
     async fn run_check(&self, name: &str) -> Result<(), Error> {
         let (_, config) = self.harness(Some(name))?;
-        let stored = sessions::catalog(&mut *self.db.lock().await, name).await?;
+        let name_owned = name.to_owned();
+        let stored = self
+            .db
+            .read(move |conn| sessions::catalog(conn, &name_owned))
+            .await?;
         let checked = acp::refresh(config, self.default_cwd(), stored.as_ref()).await;
-        let mut db = self.db.lock().await;
-        let status = match checked {
-            Ok(catalog) => {
-                sessions::save_catalog(&mut db, name, &catalog).await?;
-                HarnessStatus::Ready
-            }
-            Err(error) => acp::availability(&error).unwrap_or_else(|| HarnessStatus::Failed {
-                message: error.to_string(),
-            }),
-        };
-        save_status(&mut db, name, &status).await?;
-        drop(db);
+        let name_owned = name.to_owned();
+        self.db
+            .write_tx(move |tx| {
+                let status = match checked {
+                    Ok(catalog) => {
+                        sessions::save_catalog(tx, &name_owned, &catalog)?;
+                        HarnessStatus::Ready
+                    }
+                    Err(error) => {
+                        acp::availability(&error).unwrap_or_else(|| HarnessStatus::Failed {
+                            message: error.to_string(),
+                        })
+                    }
+                };
+                save_status(tx, &name_owned, &status)
+            })
+            .await?;
         self.harnesses_changed();
         Ok(())
     }
@@ -127,11 +148,10 @@ impl Workspace {
         let Error::Harness(error) = error else {
             return;
         };
-        let name = match store::binding(&mut *self.db.lock().await, thread).await {
+        let name = match self.db.read(move |conn| store::binding(conn, thread)).await {
             Ok(binding) => binding.harness,
             Err(_) => return,
         };
-        let name = name.as_str();
         let Some(
             status @ (HarnessStatus::NotInstalled { .. }
             | HarnessStatus::SignedOut { .. }
@@ -140,7 +160,12 @@ impl Workspace {
         else {
             return;
         };
-        if let Err(error) = save_status(&mut *self.db.lock().await, name, &status).await {
+        let name_for_write = name.clone();
+        if let Err(error) = self
+            .db
+            .write(move |conn| save_status(conn, &name_for_write, &status))
+            .await
+        {
             tracing::warn!(harness = %name, %error, "recording an ACP harness status");
         }
         self.harnesses_changed();
@@ -154,14 +179,18 @@ impl Workspace {
         model: Option<&str>,
     ) -> Result<Vec<ConfigOption>, Error> {
         let (_, config) = self.harness(Some(name))?;
-        let stored = {
-            let mut db = self.db.lock().await;
-            sessions::catalog(&mut db, name).await?
-        };
+        let name_owned = name.to_owned();
+        let stored = self
+            .db
+            .read(move |conn| sessions::catalog(conn, &name_owned))
+            .await?;
         let (options, updated) =
             acp::catalog(config, self.default_cwd(), stored.as_ref(), model).await?;
         if let Some(updated) = updated {
-            sessions::save_catalog(&mut *self.db.lock().await, name, &updated).await?;
+            let name_owned = name.to_owned();
+            self.db
+                .write(move |conn| sessions::save_catalog(conn, &name_owned, &updated))
+                .await?;
         }
         Ok(options)
     }
@@ -183,24 +212,22 @@ fn icon(command: &str) -> &'static str {
     }
 }
 
-async fn status(db: &mut Connection, name: &str) -> Result<Option<(HarnessStatus, i64)>, Error> {
+fn status(db: &Conn, name: &str) -> Result<Option<(HarnessStatus, i64)>, Error> {
     row(
         db,
         "SELECT status, checked_at FROM harness_status WHERE name = ?1",
         [name.into()],
-    )
-    .await?
+    )?
     .map(|mut row| Ok((store::from_json(&row.str(0)?)?, row.i64(1)?)))
     .transpose()
 }
 
-async fn save_status(db: &mut Connection, name: &str, status: &HarnessStatus) -> Result<(), Error> {
+fn save_status(db: &Conn, name: &str, status: &HarnessStatus) -> Result<(), Error> {
     exec(
         db,
         "INSERT INTO harness_status (name, status, checked_at) VALUES (?1, ?2, ?3)
         ON CONFLICT (name) DO UPDATE SET status = excluded.status, checked_at = excluded.checked_at",
         [name.into(), store::json(status)?.into(), store::now().into()],
-    )
-    .await?;
+    )?;
     Ok(())
 }

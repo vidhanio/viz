@@ -54,43 +54,40 @@ impl Tasks {
     }
 
     async fn pending_jobs(&self) -> Result<Vec<Job>, Error> {
-        let mut db = self.workspace.db.lock().await;
-        let mut jobs = sql::rows(
-            &mut db,
-            "SELECT id FROM agent_tasks WHERE delivery != 'delivered'",
-            [],
-        )
-        .await?
-        .map(|mut row| Ok(Job::Task(TaskId(row.str(0)?))))
-        .collect::<Result<Vec<_>, Error>>()?;
-        for row in sql::rows(
-            &mut db,
-            "SELECT thread, run FROM stopped_task_runs WHERE handled = 0",
-            [],
-        )
-        .await?
-        {
-            jobs.push(Job::Stop {
-                thread: row.id(0)?,
-                run: row.id(1)?,
-            });
-        }
-        for row in sql::rows(
-            &mut db,
-            "SELECT environment, task, min(run) FROM task_follow_ups GROUP BY environment, task",
-            [],
-        )
-        .await?
-        {
-            let mut row = row;
-            jobs.push(Job::FollowUp {
-                environment: row.str(0)?,
-                task: TaskId(row.str(1)?),
-                run: row.id(2)?,
-            });
-        }
-        drop(db);
-        Ok(jobs)
+        self.workspace
+            .db
+            .read_snapshot(|tx| {
+                let mut jobs = sql::rows(
+                    tx,
+                    "SELECT id FROM agent_tasks WHERE delivery != 'delivered'",
+                    [],
+                )?
+                .map(|mut row| Ok(Job::Task(TaskId(row.str(0)?))))
+                .collect::<Result<Vec<_>, Error>>()?;
+                for row in sql::rows(
+                    tx,
+                    "SELECT thread, run FROM stopped_task_runs WHERE handled = 0",
+                    [],
+                )? {
+                    jobs.push(Job::Stop {
+                        thread: row.id(0)?,
+                        run: row.id(1)?,
+                    });
+                }
+                for mut row in sql::rows(
+                    tx,
+                    "SELECT environment, task, min(run) FROM task_follow_ups GROUP BY environment, task",
+                    [],
+                )? {
+                    jobs.push(Job::FollowUp {
+                        environment: row.str(0)?,
+                        task: TaskId(row.str(1)?),
+                        run: row.id(2)?,
+                    });
+                }
+                Ok(jobs)
+            })
+            .await
     }
 
     fn start_job(self: &Arc<Self>, job: &Job) -> JoinHandle<()> {
@@ -155,7 +152,13 @@ impl Tasks {
 
     /// Take the persisted task's next step, and record what came of it.
     async fn advance(&self, id: &TaskId) -> Result<Advance, Error> {
-        let task = match store::read(&mut *self.workspace.db.lock().await, id, None).await {
+        let id_owned = id.clone();
+        let task = match self
+            .workspace
+            .db
+            .read(move |conn| store::read(conn, &id_owned, None))
+            .await
+        {
             Ok(task) => task,
             Err(Error::NoTask(_)) => return Ok(Advance::Done),
             Err(error) => return Err(error),
@@ -186,7 +189,12 @@ impl Tasks {
     /// An answer that never arrives decides nothing: the offer is repeated
     /// until the receiver admits or refuses it, or it is retracted.
     async fn offer(&self, id: &TaskId, target: &str) -> Result<Advance, Error> {
-        let payload = store::payload(&mut *self.workspace.db.lock().await, id).await?;
+        let id_owned = id.clone();
+        let payload = self
+            .workspace
+            .db
+            .read(move |conn| store::payload(conn, &id_owned))
+            .await?;
         let Some(payload) = payload else {
             return Ok(Advance::Immediate);
         };
@@ -314,22 +322,71 @@ impl Tasks {
     /// Decide and store what `command` does to the task as it is now, which
     /// may differ from when the step was chosen.
     pub(super) async fn apply(&self, id: &TaskId, command: Command<'_>) -> Result<(), Error> {
-        let changed = {
-            let mut db = self.workspace.db.lock().await;
-            let mut tx = db.transaction().await?;
-            let task = store::read(&mut tx, id, None).await?;
-            let next = decisions::decide(&task.state, command);
-            if let Some(next) = &next {
-                store::save(&mut tx, id, next).await?;
-            }
-            tx.commit().await?;
-            drop(db);
-            next.is_some()
-        };
+        let id = id.clone();
+        let owned = OwnedCommand::from(command);
+        let changed = self
+            .workspace
+            .db
+            .write_tx(move |tx| {
+                let task = store::read(tx, &id, None)?;
+                let next = decisions::decide(&task.state, owned.as_command());
+                if let Some(next) = &next {
+                    store::save(tx, &id, next)?;
+                }
+                Ok(next.is_some())
+            })
+            .await?;
         if changed {
             self.signal();
         }
         Ok(())
+    }
+}
+
+enum OwnedCommand {
+    Offer,
+    Admitted(Received),
+    Refused(String),
+    Seen,
+    Cancel,
+    Retracted,
+    Progressed(viz_protocol::Run),
+    Vanished,
+    Suppress,
+    Delivered(Option<viz_protocol::RunId>),
+}
+
+impl From<Command<'_>> for OwnedCommand {
+    fn from(command: Command<'_>) -> Self {
+        match command {
+            Command::Offer => Self::Offer,
+            Command::Admitted(receipt) => Self::Admitted(receipt),
+            Command::Refused(reason) => Self::Refused(reason.to_owned()),
+            Command::Seen => Self::Seen,
+            Command::Cancel => Self::Cancel,
+            Command::Retracted => Self::Retracted,
+            Command::Progressed(run) => Self::Progressed(run.clone()),
+            Command::Vanished => Self::Vanished,
+            Command::Suppress => Self::Suppress,
+            Command::Delivered(run) => Self::Delivered(run),
+        }
+    }
+}
+
+impl OwnedCommand {
+    fn as_command(&self) -> Command<'_> {
+        match self {
+            Self::Offer => Command::Offer,
+            Self::Admitted(receipt) => Command::Admitted(*receipt),
+            Self::Refused(reason) => Command::Refused(reason),
+            Self::Seen => Command::Seen,
+            Self::Cancel => Command::Cancel,
+            Self::Retracted => Command::Retracted,
+            Self::Progressed(run) => Command::Progressed(run),
+            Self::Vanished => Command::Vanished,
+            Self::Suppress => Command::Suppress,
+            Self::Delivered(run) => Command::Delivered(*run),
+        }
     }
 }
 

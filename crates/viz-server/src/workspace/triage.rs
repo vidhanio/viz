@@ -13,7 +13,7 @@ use viz_protocol::{
 
 use super::{
     Workspace,
-    sql::{Connection, exec, row},
+    sql::{Conn, exec, row},
     store,
 };
 use crate::{acp::Housekeeping, error::Error};
@@ -25,26 +25,28 @@ const LOOK: Duration = Duration::from_mins(1);
 impl Workspace {
     pub(super) async fn triage(&self, request: TriageThread) -> Result<Triaged, Error> {
         let TriageThread { thread, action } = request;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let (prior, activity) = store::lifecycle(&mut tx, thread).await?;
-        let decided = lifecycle::triage(&prior, action, activity.working, store::now())?;
-        store::save_lifecycle(&mut tx, thread, &decided.lifecycle).await?;
-        if let Some((list, position)) = decided.position {
-            let (others, arranged) = others(&mut tx, thread, list).await?;
-            let places = lifecycle::place(others, arranged, thread, position)?;
-            let statement = match list {
-                List::Pinned => "UPDATE threads SET pin = ?2 WHERE id = ?1",
-                List::Active => "UPDATE threads SET sort_order = ?2 WHERE id = ?1",
-            };
-            for (thread, place) in places {
-                exec(&mut tx, statement, [thread.into(), place.into()]).await?;
-            }
-        }
-        let (lifecycle, _) = store::lifecycle(&mut tx, thread).await?;
-        let binding = store::binding(&mut tx, thread).await?;
-        tx.commit().await?;
-        drop(db);
+        let (prior, lifecycle, binding) = self
+            .db
+            .write_tx(move |tx| {
+                let (prior, activity) = store::lifecycle(tx, thread)?;
+                let decided = lifecycle::triage(&prior, action, activity.working, store::now())?;
+                store::save_lifecycle(tx, thread, &decided.lifecycle)?;
+                if let Some((list, position)) = decided.position {
+                    let (others, arranged) = others(tx, thread, list)?;
+                    let places = lifecycle::place(others, arranged, thread, position)?;
+                    let statement = match list {
+                        List::Pinned => "UPDATE threads SET pin = ?2 WHERE id = ?1",
+                        List::Active => "UPDATE threads SET sort_order = ?2 WHERE id = ?1",
+                    };
+                    for (thread, place) in places {
+                        exec(tx, statement, [thread.into(), place.into()])?;
+                    }
+                }
+                let (lifecycle, _) = store::lifecycle(tx, thread)?;
+                let binding = store::binding(tx, thread)?;
+                Ok((prior, lifecycle, binding))
+            })
+            .await?;
         if lifecycle.archived != prior.archived {
             let command = if lifecycle.archived {
                 Housekeeping::Archive
@@ -60,36 +62,34 @@ impl Workspace {
 
     pub(super) async fn retitle(&self, request: RetitleThread) -> Result<ThreadUpdated, Error> {
         let RetitleThread { thread } = request;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let (prior, _) = store::metadata(&mut tx, thread).await?;
-        let mut sources = row(
-            &mut tx,
-            "SELECT json_extract(session, '$.title'), (SELECT text FROM runs
-                WHERE thread = t.id AND kind = 'prompt' AND text <> '' ORDER BY id DESC LIMIT 1)
-             FROM threads AS t WHERE id = ?1",
-            [thread.into()],
-        )
-        .await?
-        .ok_or(Error::NoThread(thread))?;
-        let (harness, prompt) = (sources.opt_str(0)?, sources.opt_str(1)?);
-        let next = threads::retitle(prior.clone(), harness.as_deref(), prompt.as_deref());
-        store::save_metadata(&mut tx, thread, &next).await?;
-        tx.commit().await?;
-        drop(db);
+        let updated = self
+            .db
+            .write_tx(move |tx| {
+                let (prior, _) = store::metadata(tx, thread)?;
+                let mut sources = row(
+                    tx,
+                    "SELECT json_extract(session, '$.title'), (SELECT text FROM runs
+                        WHERE thread = t.id AND kind = 'prompt' AND text <> '' ORDER BY id DESC LIMIT 1)
+                     FROM threads AS t WHERE id = ?1",
+                    [thread.into()],
+                )?
+                .ok_or(Error::NoThread(thread))?;
+                let (harness, prompt) = (sources.opt_str(0)?, sources.opt_str(1)?);
+                let next = threads::retitle(prior.clone(), harness.as_deref(), prompt.as_deref());
+                store::save_metadata(tx, thread, &next)?;
+                Ok(store::updated(&prior, &next))
+            })
+            .await?;
         self.relist(thread);
-        Ok(store::updated(&prior, &next))
+        Ok(updated)
     }
 
-    /// Wake and settle threads as their time comes.
+    /// Wake and settle threads as their time comes, running convergent
+    /// reconciliation for checkpoints, blobs, and orphaned directories each
+    /// cycle.
     pub(super) async fn keep_time(self: Arc<Self>) {
         loop {
-            if let Err(error) = self.release_checkpoints().await {
-                tracing::warn!(%error, "releasing deleted thread checkpoints");
-            }
-            if let Err(error) = self.blobs.gc(&self.db).await {
-                tracing::warn!(%error, "collecting unreferenced attachment blobs");
-            }
+            self.reconcile_periodic().await;
             let wait = match self.pass_time().await {
                 Ok(wait) => wait,
                 Err(error) => {
@@ -106,42 +106,40 @@ impl Workspace {
     }
 
     /// Finished pull requests are checked against each checkout's `HEAD`
-    /// before the write lease; the decisions use the standings read under it.
+    /// before entering the SQLite writer; the decisions use the standings read
+    /// inside the write transaction.
     async fn pass_time(&self) -> Result<Duration, Error> {
-        let candidates = {
-            let mut db = self.db.lock().await;
-            store::standings(&mut db).await?
-        };
+        let candidates = self.db.read(|conn| store::standings(conn)).await?;
         let mut pulls = HashMap::new();
         for thread in candidates {
             if let Some(pull) = self.finished_pull(thread.thread, &thread.cwd).await {
                 pulls.insert(thread.thread, (thread.cwd, pull));
             }
         }
-        let now = store::now();
-        let mut wait = LOOK;
-        let mut changed = Vec::new();
-        {
-            let mut db = self.db.lock().await;
-            let mut tx = db.transaction().await?;
-            for mut thread in store::standings(&mut tx).await? {
-                let policy = lifecycle::project_policy(thread.auto_settle);
-                let current = &thread.lifecycle;
-                thread.activity.pull_request = pulls
-                    .remove(&thread.thread)
-                    .filter(|(cwd, _)| *cwd == thread.cwd)
-                    .map(|(_, pull)| pull);
-                if let Some(next) = lifecycle::on_time(current, &thread.activity, policy, now) {
-                    store::save_lifecycle(&mut tx, thread.thread, &next).await?;
-                    changed.push(thread.thread);
-                } else if let Some(until) = current.snoozed_until {
-                    let left = u64::try_from(until - now).unwrap_or_default();
-                    wait = wait.min(Duration::from_millis(left));
+        let (wait, changed) = self
+            .db
+            .write_tx(move |tx| {
+                let now = store::now();
+                let mut wait = LOOK;
+                let mut changed = Vec::new();
+                for mut thread in store::standings(tx)? {
+                    let policy = lifecycle::project_policy(thread.auto_settle);
+                    let current = &thread.lifecycle;
+                    thread.activity.pull_request = pulls
+                        .remove(&thread.thread)
+                        .filter(|(cwd, _)| *cwd == thread.cwd)
+                        .map(|(_, pull)| pull);
+                    if let Some(next) = lifecycle::on_time(current, &thread.activity, policy, now) {
+                        store::save_lifecycle(tx, thread.thread, &next)?;
+                        changed.push(thread.thread);
+                    } else if let Some(until) = current.snoozed_until {
+                        let left = u64::try_from(until - now).unwrap_or_default();
+                        wait = wait.min(Duration::from_millis(left));
+                    }
                 }
-            }
-            tx.commit().await?;
-            drop(db);
-        }
+                Ok((wait, changed))
+            })
+            .await?;
         for thread in changed {
             self.relist(thread);
         }
@@ -151,12 +149,8 @@ impl Workspace {
 
 /// The threads of a list from top to bottom, without `thread`, and how many of
 /// them at the end have a position.
-async fn others(
-    db: &mut Connection,
-    thread: ThreadId,
-    list: List,
-) -> Result<(Vec<ThreadId>, usize), Error> {
-    let mut others = store::standings(db).await?;
+fn others(db: &Conn, thread: ThreadId, list: List) -> Result<(Vec<ThreadId>, usize), Error> {
+    let mut others = store::standings(db)?;
     let shelf = match list {
         List::Pinned => Shelf::Pinned,
         List::Active => Shelf::Active,

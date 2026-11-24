@@ -101,19 +101,22 @@ impl Workspace {
         &self,
         backoff: &mut BTreeMap<RemoteRepository, Backoff>,
     ) -> Result<(), Error> {
-        let candidates = rows(&mut *self.db.lock().await,
-            "SELECT id, cwd, archived, settled_at IS NOT NULL FROM threads WHERE project IS NOT NULL",
-            []).await?;
+        let candidates: Vec<(ThreadId, String, bool, bool)> = self
+            .db
+            .read(|conn| {
+                rows(
+                    conn,
+                    "SELECT id, cwd, archived, settled_at IS NOT NULL FROM threads WHERE project IS NOT NULL",
+                    [],
+                )?
+                .map(|mut row| Ok((row.id(0)?, row.str(1)?, row.flag(2)?, row.flag(3)?)))
+                .collect()
+            })
+            .await?;
         let mut known = HashMap::new();
         let mut checkouts: BTreeMap<String, Vec<ThreadId>> = BTreeMap::new();
-        for mut row in candidates {
-            let thread = row.id(0)?;
-            let cwd = row.str(1)?;
-            if viz_core::lifecycle::poll_pull_request(
-                self.is_watched(thread),
-                row.flag(2)?,
-                row.flag(3)?,
-            ) {
+        for (thread, cwd, archived, settled) in candidates {
+            if viz_core::lifecycle::poll_pull_request(self.is_watched(thread), archived, settled) {
                 checkouts.entry(cwd.clone()).or_default().push(thread);
             }
             known.insert(thread, cwd);

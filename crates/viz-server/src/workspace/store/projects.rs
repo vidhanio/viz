@@ -9,7 +9,7 @@ use viz_core::projects::Preferences;
 use viz_protocol::ProjectSettings;
 
 use super::super::{
-    sql::{Connection, row, rows},
+    sql::{Conn, row, rows},
     store::from_json,
     worktree,
 };
@@ -43,8 +43,8 @@ pub(in crate::workspace) fn path_text(path: &Path) -> Result<&str, Error> {
         .ok_or_else(|| Error::invalid("working directory is not UTF-8"))
 }
 
-/// Persisted project row fetched under the SQLite lock before async Git
-/// enrichment runs outside the lock.
+/// Persisted project row fetched synchronously from SQLite before async Git
+/// enrichment runs outside any database lock.
 #[derive(Debug)]
 pub(in crate::workspace) struct ProjectRow {
     pub(in crate::workspace) path: String,
@@ -53,27 +53,20 @@ pub(in crate::workspace) struct ProjectRow {
     pub(in crate::workspace) settings: ProjectSettings,
 }
 
-pub(in crate::workspace) async fn require_project(
-    db: &mut Connection,
-    path: &str,
-) -> Result<String, Error> {
+pub(in crate::workspace) fn require_project(db: &Conn, path: &str) -> Result<String, Error> {
     let Some(mut found) = row(
         db,
         "SELECT path FROM projects WHERE path = ?1",
         [path.into()],
-    )
-    .await?
+    )?
     else {
         return Err(Error::NoProject(path.to_owned()));
     };
     found.str(0)
 }
 
-pub(in crate::workspace) async fn project_row(
-    db: &mut Connection,
-    path: &str,
-) -> Result<ProjectRow, Error> {
-    let (name, created_at, prefs) = preferences(db, path).await?;
+pub(in crate::workspace) fn project_row(db: &Conn, path: &str) -> Result<ProjectRow, Error> {
+    let (name, created_at, prefs) = preferences(db, path)?;
     Ok(ProjectRow {
         path: path.to_owned(),
         name,
@@ -82,21 +75,20 @@ pub(in crate::workspace) async fn project_row(
     })
 }
 
-pub(in crate::workspace) async fn preferences(
-    db: &mut Connection,
+pub(in crate::workspace) fn preferences(
+    db: &Conn,
     path: &str,
 ) -> Result<(String, i64, Preferences), Error> {
     let mut row = row(
         db,
         "SELECT name, created_at, settings FROM projects WHERE path = ?1",
         [path.into()],
-    )
-    .await?
+    )?
     .ok_or_else(|| Error::NoProject(path.to_owned()))?;
     Ok((row.str(0)?, row.i64(1)?, from_json(&row.str(2)?)?))
 }
 
-/// A project with its checkout's Git state (must run outside any SQLite lock).
+/// A project with its checkout's Git state (runs outside any SQLite closure).
 pub(in crate::workspace) async fn project_at(
     path: String,
     name: String,
@@ -114,8 +106,8 @@ pub(in crate::workspace) async fn project_at(
     }
 }
 
-/// A thread's worktree, with its branch read from disk (must run outside any
-/// SQLite lock).
+/// A thread's worktree, with its branch read from disk (runs outside any
+/// SQLite closure).
 pub(in crate::workspace) async fn thread_worktree(path: Option<String>) -> Option<ThreadWorktree> {
     let path = path?;
     Some(ThreadWorktree {
@@ -124,15 +116,12 @@ pub(in crate::workspace) async fn thread_worktree(path: Option<String>) -> Optio
     })
 }
 
-pub(in crate::workspace) async fn project_rows(
-    db: &mut Connection,
-) -> Result<Vec<ProjectRow>, Error> {
+pub(in crate::workspace) fn project_rows(db: &Conn) -> Result<Vec<ProjectRow>, Error> {
     let records = rows(
         db,
         "SELECT path, name, created_at, settings FROM projects ORDER BY name, path",
         [],
-    )
-    .await?;
+    )?;
     let mut out = Vec::new();
     for mut record in records {
         let prefs: Preferences = from_json(&record.str(3)?)?;

@@ -16,10 +16,14 @@ use crate::error::Error;
 
 impl Workspace {
     pub(super) async fn browse_folders(&self, args: BrowseFolders) -> Result<FolderEntries, Error> {
-        let projects = rows(&mut *self.db.lock().await, "SELECT path FROM projects", [])
-            .await?
-            .map(|mut row| row.str(0))
-            .collect::<Result<HashSet<_>, _>>()?;
+        let projects = self
+            .db
+            .read(|conn| {
+                rows(conn, "SELECT path FROM projects", [])?
+                    .map(|mut row| row.str(0))
+                    .collect::<Result<HashSet<_>, _>>()
+            })
+            .await?;
         let home = home_dir();
         let base = if let Some(project) = &args.project {
             if !projects.contains(project) {

@@ -24,7 +24,7 @@ use viz_protocol::{
     RequestState, RunId, RunRequest, SetProjectAccess, ThreadId, Withdrawal,
 };
 
-use super::{Workspace, sessions, store};
+use super::{Workspace, sessions, sql, store};
 use crate::error::Error;
 
 type Incoming = (ThreadId, ClientRequest);
@@ -128,7 +128,7 @@ impl Workspace {
         else {
             return;
         };
-        let admitted = match self.admit(thread, &body).await {
+        let admitted = match self.admit(thread, body).await {
             Ok(admitted) => admitted,
             Err(error) => {
                 tracing::error!(%thread, %error, "recording a harness request");
@@ -164,7 +164,7 @@ impl Workspace {
 
     /// Answers at once under full access; otherwise records the request for
     /// the thread's active run. Requests outside a run are refused.
-    async fn admit(&self, thread: ThreadId, body: &RequestBody) -> Result<Admitted, Error> {
+    async fn admit(&self, thread: ThreadId, body: RequestBody) -> Result<Admitted, Error> {
         let Some(run) = self
             .workers
             .get(thread)
@@ -172,31 +172,38 @@ impl Workspace {
         else {
             return Ok(Admitted::Refuse);
         };
-        let mut db = self.db.lock().await;
-        let options = store::binding(&mut db, thread).await?.session.options;
-        let access = store::access(&mut db, thread, &options).await?;
-        if let Admission::Answer(answer) = requests::admit(access.current.kind, body) {
-            return Ok(Admitted::Answer(answer));
+        let updates = Arc::clone(&self.updates);
+        let requests = Arc::clone(&self.requests);
+        let admitted = self
+            .db
+            .write(move |conn| {
+                let options = store::binding(conn, thread)?.session.options;
+                let access = store::access(conn, thread, &options)?;
+                if let Admission::Answer(answer) = requests::admit(access.current.kind, &body) {
+                    return Ok(Admitted::Answer(answer));
+                }
+                let watched = updates.is_watched(thread);
+                let tx = sql::immediate(conn)?;
+                let request = store::insert_request(&tx, thread, run, &body)?;
+                store::touch(&tx, thread, |current| {
+                    lifecycle::on_request(current, watched)
+                })?;
+                tx.commit()?;
+                let (sender, receiver) = oneshot::channel();
+                requests.waiters().insert(
+                    request.id,
+                    Waiter {
+                        run,
+                        answer: sender,
+                    },
+                );
+                Ok(Admitted::Wait(request.id, receiver))
+            })
+            .await?;
+        if matches!(admitted, Admitted::Wait(_, _)) {
+            self.relist(thread);
         }
-        let watched = self.is_watched(thread);
-        let mut tx = db.transaction().await?;
-        let request = store::insert_request(&mut tx, thread, run, body).await?;
-        store::touch(&mut tx, thread, |current| {
-            lifecycle::on_request(current, watched)
-        })
-        .await?;
-        tx.commit().await?;
-        let (sender, receiver) = oneshot::channel();
-        self.requests.waiters().insert(
-            request.id,
-            Waiter {
-                run,
-                answer: sender,
-            },
-        );
-        drop(db);
-        self.relist(thread);
-        Ok(Admitted::Wait(request.id, receiver))
+        Ok(admitted)
     }
 
     /// Resolves a pending request even if the RPC caller disconnects while
@@ -223,47 +230,50 @@ impl Workspace {
             request: id,
             answer,
         } = input;
-        let mut db = self.db.lock().await;
-        let mut request = store::request(&mut db, thread, id)
-            .await?
-            .ok_or_else(|| Error::not_found(format!("no request {id} in thread {thread}")))?;
-        let binding = store::binding(&mut db, thread).await?;
-        let asker = Asker {
-            parent: binding
-                .parent
-                .filter(|_| binding.parent_environment.is_none()),
-        };
-        request.state = requests::decide(
-            &request.state,
-            &request.body,
-            asker,
-            Command::Answer {
-                by,
-                answer: answer.clone(),
-            },
-            store::now(),
-        )?;
-        let waiting = self
-            .requests
-            .waiters()
-            .get(&id)
-            .is_some_and(|waiter| !waiter.answer.is_closed());
-        if waiting {
-            store::save_request(&mut db, &request).await?;
-        }
-        let delivered = self
-            .requests
-            .waiters()
-            .remove(&id)
-            .is_some_and(|waiter| waiting && waiter.answer.send(answer).is_ok());
-        if !delivered {
-            request.state = RequestState::Withdrawn {
-                at: store::now(),
-                reason: Withdrawal::Harness,
-            };
-            store::save_request(&mut db, &request).await?;
-        }
-        drop(db);
+        let requests = Arc::clone(&self.requests);
+        let (request, delivered) = self
+            .db
+            .write(move |conn| {
+                let mut request = store::request(conn, thread, id)?.ok_or_else(|| {
+                    Error::not_found(format!("no request {id} in thread {thread}"))
+                })?;
+                let binding = store::binding(conn, thread)?;
+                let asker = Asker {
+                    parent: binding
+                        .parent
+                        .filter(|_| binding.parent_environment.is_none()),
+                };
+                request.state = requests::decide(
+                    &request.state,
+                    &request.body,
+                    asker,
+                    Command::Answer {
+                        by,
+                        answer: answer.clone(),
+                    },
+                    store::now(),
+                )?;
+                let waiting = requests
+                    .waiters()
+                    .get(&id)
+                    .is_some_and(|waiter| !waiter.answer.is_closed());
+                if waiting {
+                    store::save_request(conn, &request)?;
+                }
+                let delivered = requests
+                    .waiters()
+                    .remove(&id)
+                    .is_some_and(|waiter| waiting && waiter.answer.send(answer).is_ok());
+                if !delivered {
+                    request.state = RequestState::Withdrawn {
+                        at: store::now(),
+                        reason: Withdrawal::Harness,
+                    };
+                    store::save_request(conn, &request)?;
+                }
+                Ok((request, delivered))
+            })
+            .await?;
         self.relist(thread);
         if !delivered {
             return Err(Error::unavailable(
@@ -279,24 +289,30 @@ impl Workspace {
         id: RequestId,
         reason: Withdrawal,
     ) -> Result<(), Error> {
-        let mut db = self.db.lock().await;
-        let Some(mut request) = store::request(&mut db, thread, id).await? else {
-            return Ok(());
-        };
-        let asker = Asker { parent: None };
-        let Ok(state) = requests::decide(
-            &request.state,
-            &request.body,
-            asker,
-            Command::Withdraw(reason),
-            store::now(),
-        ) else {
-            return Ok(());
-        };
-        request.state = state;
-        store::save_request(&mut db, &request).await?;
-        drop(db);
-        self.relist(thread);
+        let changed = self
+            .db
+            .write(move |conn| {
+                let Some(mut request) = store::request(conn, thread, id)? else {
+                    return Ok(false);
+                };
+                let asker = Asker { parent: None };
+                let Ok(state) = requests::decide(
+                    &request.state,
+                    &request.body,
+                    asker,
+                    Command::Withdraw(reason),
+                    store::now(),
+                ) else {
+                    return Ok(false);
+                };
+                request.state = state;
+                store::save_request(conn, &request)?;
+                Ok(true)
+            })
+            .await?;
+        if changed {
+            self.relist(thread);
+        }
         Ok(())
     }
 
@@ -307,22 +323,25 @@ impl Workspace {
         thread: ThreadId,
         mode: Option<AccessMode>,
     ) -> Result<(), Error> {
-        let (mode, target) = {
-            let mut db = self.db.lock().await;
-            let options = store::binding(&mut db, thread).await?.session.options;
-            let mode = mode
-                .map(|mode| requests::choose(&options, &mode))
-                .transpose()?;
-            let (_, project) = store::chosen_access(&mut db, thread).await?;
-            let target = mode.clone().or(project);
-            drop(db);
-            (mode, target)
-        };
+        let (mode, target) = self
+            .db
+            .read_snapshot(move |tx| {
+                let options = store::binding(tx, thread)?.session.options;
+                let mode = mode
+                    .map(|mode| requests::choose(&options, &mode))
+                    .transpose()?;
+                let (_, project) = store::chosen_access(tx, thread)?;
+                let target = mode.clone().or(project);
+                Ok((mode, target))
+            })
+            .await?;
         if let Some(native) = target.and_then(|target| target.native) {
             self.configure(thread, native.option, OptionValue::Select(native.value))
                 .await?;
         }
-        store::save_thread_access(&mut *self.db.lock().await, thread, mode.as_ref()).await?;
+        self.db
+            .write(move |conn| store::save_thread_access(conn, thread, mode.as_ref()))
+            .await?;
         self.relist(thread);
         Ok(())
     }
@@ -336,19 +355,21 @@ impl Workspace {
             access,
         } = input;
         let (_, config) = self.harness(Some(&harness))?;
-        let mut db = self.db.lock().await;
-        store::require_project(&mut db, &project).await?;
-        let access = match access {
-            Some(mode) => {
-                let options = sessions::catalog(&mut db, &harness)
-                    .await?
-                    .map_or_else(Vec::new, |catalog| catalog.options(config, None));
-                Some(requests::choose(&options, &mode)?)
-            }
-            None => None,
-        };
-        store::save_project_access(&mut db, &project, &harness, access.as_ref()).await?;
-        drop(db);
+        let config = config.clone();
+        self.db
+            .write_tx(move |tx| {
+                store::require_project(tx, &project)?;
+                let access = match access {
+                    Some(mode) => {
+                        let options = sessions::catalog(tx, &harness)?
+                            .map_or_else(Vec::new, |catalog| catalog.options(&config, None));
+                        Some(requests::choose(&options, &mode)?)
+                    }
+                    None => None,
+                };
+                store::save_project_access(tx, &project, &harness, access.as_ref())
+            })
+            .await?;
         self.changed(None);
         Ok(())
     }

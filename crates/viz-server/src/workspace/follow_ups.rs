@@ -6,12 +6,12 @@ use viz_protocol::{RunId, RunKind, TaskId, ThreadId};
 
 use super::{
     runs,
-    sql::{Connection, exec, row, rows},
+    sql::{Conn, exec, row, rows},
 };
 use crate::error::Error;
 
-pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) -> Result<(), Error> {
-    let Some(continuation) = runs::run_from(db, thread, run).await? else {
+pub(super) fn record(db: &Conn, thread: ThreadId, run: RunId) -> Result<(), Error> {
+    let Some(continuation) = runs::run_from(db, thread, run)? else {
         return Ok(());
     };
     if continuation.kind != RunKind::Unprompted {
@@ -23,8 +23,7 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
          WHERE u.id = ?1 AND p.kind = 'prompt' AND p.end_entry < u.prompt_entry
          ORDER BY p.end_entry DESC LIMIT 1",
         [run.into()],
-    )
-    .await?
+    )?
     .map(|mut row| Ok::<_, Error>((row.id(0)?, runs::decode_status(&row.str(1)?)?)))
     .transpose()?;
     let edges = rows(
@@ -33,8 +32,7 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
          JOIN agent_tasks a ON a.id = w.task AND a.parent = w.thread
          WHERE w.thread = ?1 AND w.run IS NOT NULL AND a.parent_run IS NOT NULL",
         [thread.into()],
-    )
-    .await?
+    )?
     .map(|row| {
         Ok(WakeEdge {
             parent: row.id(0)?,
@@ -48,8 +46,7 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
             EXISTS(SELECT 1 FROM stopped_task_runs s WHERE s.thread = tr.thread AND s.run = tr.run)
          FROM task_receipts tr WHERE tr.thread = ?1",
         [thread.into()],
-    )
-    .await?
+    )?
     .map(|mut row| {
         Ok(Receipt {
             environment: row.str(0)?,
@@ -74,8 +71,7 @@ pub(super) async fn record(db: &mut Connection, thread: ThreadId, run: RunId) ->
                 thread.into(),
                 text.into(),
             ],
-        )
-        .await?;
+        )?;
     }
     Ok(())
 }

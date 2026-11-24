@@ -110,7 +110,11 @@ impl Workspace {
         &self,
         args: ReadProjectIcon,
     ) -> Result<ProjectIconResult, Error> {
-        let (_, _, prefs) = store::preferences(&mut *self.db.lock().await, &args.project).await?;
+        let project = args.project.clone();
+        let (_, _, prefs) = self
+            .db
+            .read(move |conn| store::preferences(conn, &project))
+            .await?;
         let icon = prefs.settings.icon;
         let image = match &icon {
             ProjectIcon::Uploaded { media_type } => prefs

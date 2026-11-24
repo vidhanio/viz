@@ -1,8 +1,11 @@
 //! Thread watches and live transcript projections. Durable changes are
 //! published after commit. Watch and live state updates that must agree with
-//! persisted rows happen under the workspace write lease.
+//! persisted rows run on the SQLite writer thread immediately after commit.
 
-use std::{collections::HashMap, sync::Mutex};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 use tokio::sync::broadcast;
 
@@ -75,6 +78,28 @@ impl Updates {
         views.live.remove(&thread);
         views.watches.remove(&thread);
     }
+
+    pub(super) fn open_watch(&self, thread: ThreadId) {
+        *self
+            .views
+            .lock()
+            .expect("thread views poisoned")
+            .watches
+            .entry(thread)
+            .or_default() += 1;
+    }
+
+    pub(super) fn is_watched(&self, thread: ThreadId) -> bool {
+        self.views
+            .lock()
+            .expect("thread views poisoned")
+            .watches
+            .contains_key(&thread)
+    }
+
+    pub(super) fn git_activity(&self) {
+        let _ = self.changes.send(Change::GitActivity);
+    }
 }
 
 impl Workspace {
@@ -102,10 +127,6 @@ impl Workspace {
         self.changed(None);
     }
 
-    pub(super) fn git_activity(&self) {
-        let _ = self.updates.changes.send(Change::GitActivity);
-    }
-
     pub(super) fn settled(&self, thread: ThreadId) {
         let _ = self.updates.changes.send(Change::Settled(thread));
         self.changed(None);
@@ -114,25 +135,22 @@ impl Workspace {
     pub(crate) async fn watched(&self, thread: ThreadId, mode: WatchChange) -> Result<(), Error> {
         match mode {
             WatchChange::Open => {
-                let mut db = self.db.lock().await;
-                store::require(&mut db, thread).await?;
-                let updated = exec(
-                    &mut db,
-                    "UPDATE threads SET unread = 0 WHERE id = ?1 AND unread = 1",
-                    [thread.into()],
-                )
-                .await?;
-                *self
-                    .updates
-                    .views
-                    .lock()
-                    .expect("thread views poisoned")
-                    .watches
-                    .entry(thread)
-                    .or_default() += 1;
-                drop(db);
+                let updates = Arc::clone(&self.updates);
+                let cleared = self
+                    .db
+                    .write(move |conn| {
+                        store::require(conn, thread)?;
+                        let cleared = exec(
+                            conn,
+                            "UPDATE threads SET unread = 0 WHERE id = ?1 AND unread = 1",
+                            [thread.into()],
+                        )?;
+                        updates.open_watch(thread);
+                        Ok(cleared)
+                    })
+                    .await?;
                 self.pull_due.notify_one();
-                if updated != 0 {
+                if cleared != 0 {
                     self.relist(thread);
                 }
             }
@@ -150,11 +168,6 @@ impl Workspace {
     }
 
     pub(super) fn is_watched(&self, thread: ThreadId) -> bool {
-        self.updates
-            .views
-            .lock()
-            .expect("thread views poisoned")
-            .watches
-            .contains_key(&thread)
+        self.updates.is_watched(thread)
     }
 }

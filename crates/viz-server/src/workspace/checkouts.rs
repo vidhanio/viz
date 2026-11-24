@@ -5,10 +5,7 @@
 //! whichever checkout root it runs in. Moving never touches files in either
 //! checkout and never removes the one left behind.
 
-use std::{
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{path::Path, sync::Arc};
 
 use viz_core::{
     placement::{self, Checkout, Placed, Site},
@@ -20,24 +17,13 @@ use super::{
     Workspace,
     git::CheckoutAction,
     runs,
-    sql::{exec, row, rows},
+    sql::{Conn, exec, row, rows},
     store::{self, Handoff},
     worktree::{self, Placement},
 };
 use crate::error::Error;
 
 impl Workspace {
-    /// Validates a thread's destination under the database lock without
-    /// filesystem I/O. Stored project, worktree, scratch, and default paths
-    /// are canonicalized before taking the lock.
-    pub(super) fn admit_checkout(&self, checkout: &Checkout) -> Result<(), Error> {
-        let path = Path::new(checkout.worktree.as_deref().unwrap_or(&checkout.cwd));
-        if self.removing(path) {
-            return Err(viz_git::Error::Busy.into());
-        }
-        Ok(())
-    }
-
     /// Whether a thread's checkout is a place in the project it is filed
     /// under.
     pub(super) async fn within(&self, binding: &store::Binding) -> bool {
@@ -80,8 +66,11 @@ impl Workspace {
             }),
             WorktreeTarget::Existing { path } => worktree::existing(source, path).await,
             WorktreeTarget::New { base, branch } => {
-                let (_, _, preferences) =
-                    store::preferences(&mut *self.db.lock().await, project).await?;
+                let project_owned = project.to_owned();
+                let (_, _, preferences) = self
+                    .db
+                    .read(move |conn| store::preferences(conn, &project_owned))
+                    .await?;
                 worktree::create(
                     &self.worktrees,
                     source,
@@ -97,18 +86,28 @@ impl Workspace {
     }
 
     pub(super) async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, Error> {
-        let project = store::require_project(&mut *self.db.lock().await, project).await?;
+        let project_owned = project.to_owned();
+        let project = self
+            .db
+            .read(move |conn| store::require_project(conn, &project_owned))
+            .await?;
         let listed = worktree::list(Path::new(&project)).await?;
-        let filed = rows(
-            &mut *self.db.lock().await,
-            "SELECT id, cwd FROM threads WHERE project = ?1 OR worktree IS NOT NULL ORDER BY id",
-            [project.as_str().into()],
-        )
-        .await?;
+        let project_for_query = project.clone();
+        let filed: Vec<(ThreadId, String)> = self
+            .db
+            .read(move |conn| {
+                rows(
+                    conn,
+                    "SELECT id, cwd FROM threads WHERE project = ?1 OR worktree IS NOT NULL ORDER BY id",
+                    [project_for_query.as_str().into()],
+                )?
+                .map(|mut row| Ok((row.id(0)?, row.str(1)?)))
+                .collect()
+            })
+            .await?;
         let mut by_checkout = std::collections::HashMap::<String, Vec<ThreadId>>::new();
         let mut resolved = std::collections::HashMap::new();
-        for mut row in filed {
-            let cwd = row.str(1)?;
+        for (thread, cwd) in filed {
             let root = match resolved.entry(cwd) {
                 std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
                 std::collections::hash_map::Entry::Vacant(entry) => {
@@ -125,10 +124,7 @@ impl Workspace {
                 }
             };
             if let Some(path) = root {
-                by_checkout
-                    .entry(path.clone())
-                    .or_default()
-                    .push(row.id(0)?);
+                by_checkout.entry(path.clone()).or_default().push(thread);
             }
         }
         let mut worktrees = Vec::with_capacity(listed.len());
@@ -146,8 +142,8 @@ impl Workspace {
     }
 
     /// Checks that no thread other than `except` runs in `path`.
-    pub(super) async fn require_unused(
-        db: &mut crate::workspace::sql::Connection,
+    pub(super) fn require_unused(
+        db: &Conn,
         path: &str,
         except: Option<ThreadId>,
     ) -> Result<(), Error> {
@@ -158,8 +154,7 @@ impl Workspace {
                  worktree = ?1 OR cwd = ?1 OR substr(cwd, 1, length(?1) + 1) = ?1 || '/'
              ) LIMIT 1",
             [path.into(), except.into()],
-        )
-        .await?
+        )?
         .map(|row| row.id(0))
         .transpose()?;
         Ok(placement::removable(path, true, user)?)
@@ -177,14 +172,15 @@ impl Workspace {
                 if !worktree::managed(&workspace.worktrees, &path).await {
                     return Err(placement::Rejection::Unmanaged(path).into());
                 }
-                let root = PathBuf::from(&path);
-                let reservation = {
-                    let mut db = workspace.db.lock().await;
-                    Self::require_unused(&mut db, &path, None).await?;
-                    let reservation = workspace.reserve(&root, CheckoutAction::RemoveWorktree)?;
-                    drop(db);
-                    reservation
-                };
+                let path_for_write = path.clone();
+                let ws = Arc::clone(&workspace);
+                let reservation = workspace
+                    .db
+                    .write(move |conn| {
+                        Self::require_unused(conn, &path_for_write, None)?;
+                        ws.reserve(Path::new(&path_for_write), CheckoutAction::RemoveWorktree)
+                    })
+                    .await?;
                 let result = worktree::remove(&workspace.worktrees, &path, force).await;
                 drop(reservation);
                 result?;
@@ -201,14 +197,15 @@ impl Workspace {
     /// either bound or discarded even if the caller stops waiting.
     pub(super) async fn move_thread(self: &Arc<Self>, args: MoveThread) -> Result<Moved, Error> {
         let thread = args.thread;
-        let (binding, title) = {
-            let mut db = self.db.lock().await;
-            let binding = store::binding(&mut db, thread).await?;
-            runs::idle(&mut db, thread).await?;
-            let title = store::thread_title(&mut db, thread).await?;
-            drop(db);
-            (binding, title)
-        };
+        let (binding, title) = self
+            .db
+            .read_snapshot(move |tx| {
+                let binding = store::binding(tx, thread)?;
+                runs::idle(tx, thread)?;
+                let title = store::thread_title(tx, thread)?;
+                Ok((binding, title))
+            })
+            .await?;
         let project = binding
             .project
             .clone()
@@ -247,13 +244,14 @@ impl Workspace {
         before: store::Binding,
         placement: Placement,
     ) -> Result<(), Error> {
-        let driver = {
-            let mut db = self.db.lock().await;
-            store::require(&mut db, thread).await?;
-            let driver = self.driver(thread)?;
-            drop(db);
-            driver
-        };
+        let ws = Arc::clone(self);
+        let driver = self
+            .db
+            .write(move |conn| {
+                store::require(conn, thread)?;
+                ws.driver(thread)
+            })
+            .await?;
         driver.rebind(before, placement).await
     }
 
@@ -272,43 +270,45 @@ impl Workspace {
                 .unwrap_or(&placement.checkout.cwd),
         );
         let canonical = tokio::fs::canonicalize(dest).await?;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let current = store::binding(&mut tx, thread).await?;
-        if current.checkout != before.checkout {
-            return Err(threads::Rejection::Moved.into());
-        }
-        runs::idle(&mut tx, thread).await?;
-        if self.removing(&canonical) {
-            return Err(viz_git::Error::Busy.into());
-        }
-        self.admit_checkout(&placement.checkout)?;
-        let prompted = row(
-            &mut tx,
-            "SELECT 1 FROM runs WHERE thread = ?1 LIMIT 1",
-            [thread.into()],
-        )
-        .await?
-        .is_some();
-        let handoff = threads::handoff(prompted, current.session.handoff, || Handoff::Moved {
-            from: current.checkout.cwd,
-        });
-        exec(
-            &mut tx,
-            "UPDATE threads SET cwd = ?2, worktree = ?3, setup_failed = 0,
-                session = json_set(session, '$.session_id', NULL, '$.handoff', json(?4))
-             WHERE id = ?1",
-            [
-                thread.into(),
-                placement.checkout.cwd.as_str().into(),
-                placement.checkout.worktree.as_deref().into(),
-                store::json(&handoff)?.into(),
-            ],
-        )
-        .await?;
-        tx.commit().await?;
-        drop(db);
-        Ok(())
+        let expected_checkout = before.checkout.clone();
+        let next_checkout = placement.checkout.clone();
+        let reservations = Arc::clone(&self.reservations);
+        self.db
+            .write_tx(move |tx| {
+                let current = store::binding(tx, thread)?;
+                if current.checkout != expected_checkout {
+                    return Err(threads::Rejection::Moved.into());
+                }
+                runs::idle(tx, thread)?;
+                if reservations.removing(&canonical) {
+                    return Err(viz_git::Error::Busy.into());
+                }
+                reservations.admit_checkout(&next_checkout)?;
+                let prompted = row(
+                    tx,
+                    "SELECT 1 FROM runs WHERE thread = ?1 LIMIT 1",
+                    [thread.into()],
+                )?
+                .is_some();
+                let handoff =
+                    threads::handoff(prompted, current.session.handoff, || Handoff::Moved {
+                        from: current.checkout.cwd,
+                    });
+                exec(
+                    tx,
+                    "UPDATE threads SET cwd = ?2, worktree = ?3, setup_failed = 0,
+                        session = json_set(session, '$.session_id', NULL, '$.handoff', json(?4))
+                     WHERE id = ?1",
+                    [
+                        thread.into(),
+                        next_checkout.cwd.as_str().into(),
+                        next_checkout.worktree.as_deref().into(),
+                        store::json(&handoff)?.into(),
+                    ],
+                )?;
+                Ok(())
+            })
+            .await
     }
 }
 

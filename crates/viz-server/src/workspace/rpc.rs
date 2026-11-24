@@ -42,13 +42,21 @@ handlers! {
             Ok(ThreadStateResult { state: workspace.state(thread).await? })
         }
         SearchThreads, |workspace, SearchThreads { query, limit }| {
-            let hits = store::search(&mut *workspace.db.lock().await, &query, page_limit(limit, 50)?).await?;
+            let limit = page_limit(limit, 50)?;
+            let hits = workspace
+                .db
+                .read(move |conn| store::search(conn, &query, limit))
+                .await?;
             Ok(SearchHits { hits })
         }
         SearchFiles, |workspace, SearchFiles { thread, project, query, limit }| {
             let cwd = match (thread, project) {
-                (Some(thread), None) => store::thread_cwd(&mut *workspace.db.lock().await, thread).await?,
-                (None, Some(project)) => store::require_project(&mut *workspace.db.lock().await, &project).await?,
+                (Some(thread), None) => {
+                    workspace.db.read(move |conn| store::thread_cwd(conn, thread)).await?
+                }
+                (None, Some(project)) => {
+                    workspace.db.read(move |conn| store::require_project(conn, &project)).await?
+                }
                 _ => return Err(Error::invalid("choose one file search target")),
             };
             let files = viz_git::find_files(
@@ -127,7 +135,10 @@ handlers! {
             Ok(Empty {})
         }
         ListBranches, |workspace, ListBranches { project, query, offset, limit }| {
-            let project = store::require_project(&mut *workspace.db.lock().await, &project).await?;
+            let project = workspace
+                .db
+                .read(move |conn| store::require_project(conn, &project))
+                .await?;
             let query = query.unwrap_or_default().to_lowercase();
             let offset = offset.unwrap_or_default();
             let limit = page_limit(limit, 100)?;
@@ -194,12 +205,13 @@ handlers! {
             Ok(Empty {})
         }
         RemoveQueuedInput, |workspace, RemoveQueuedInput { thread, run }| {
-            let mut db = workspace.db.lock().await;
-            let mut tx = db.transaction().await?;
-            store::require(&mut tx, thread).await?;
-            runs::remove(&mut tx, thread, run).await?;
-            tx.commit().await?;
-            drop(db);
+            workspace
+                .db
+                .write_tx(move |tx| {
+                    store::require(tx, thread)?;
+                    runs::remove(tx, thread, run)
+                })
+                .await?;
             workspace.settled(thread);
             Ok(Empty {})
         }
@@ -246,33 +258,37 @@ impl Workspace {
             before,
             text,
         } = input;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        store::require(&mut tx, thread).await?;
-        runs::update_queue(&mut tx, thread, run, text.as_deref(), before).await?;
-        tx.commit().await?;
-        drop(db);
+        self.db
+            .write_tx(move |tx| {
+                store::require(tx, thread)?;
+                runs::update_queue(tx, thread, run, text.as_deref(), before)
+            })
+            .await?;
         self.changed(Some(thread));
         Ok(())
     }
 
     async fn steer_queue(self: &Arc<Self>, input: SteerQueuedInput) -> Result<(), Error> {
         let thread = input.thread;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        store::require(&mut tx, thread).await?;
-        let active = runs::active(&mut tx, thread).await?;
-        runs::promote(&mut tx, thread, input.run).await?;
-        if let Some(active) = active {
-            store::withdraw_requests(&mut tx, Some(active), viz_protocol::Withdrawal::Steered)
-                .await?;
-        }
-        tx.commit().await?;
-        if let Some(active) = active {
-            self.steer_active(thread, active);
-        }
-        self.kick(thread, false);
-        drop(db);
+        let run = input.run;
+        let ws = Arc::clone(self);
+        self.db
+            .write(move |conn| {
+                let tx = super::sql::immediate(conn)?;
+                store::require(&tx, thread)?;
+                let active = runs::active(&tx, thread)?;
+                runs::promote(&tx, thread, run)?;
+                if let Some(active) = active {
+                    store::withdraw_requests(&tx, Some(active), viz_protocol::Withdrawal::Steered)?;
+                }
+                tx.commit()?;
+                if let Some(active) = active {
+                    ws.steer_active(thread, active);
+                }
+                ws.kick(thread, false);
+                Ok(())
+            })
+            .await?;
         self.changed(Some(thread));
         Ok(())
     }
@@ -287,10 +303,14 @@ impl Workspace {
         let rel = RelPath::parse(&args.path).map_err(|error| Error::invalid(error.to_string()))?;
         let root_dir = match args.root {
             FileRoot::Thread { thread } => {
-                store::thread_cwd(&mut *self.db.lock().await, thread).await?
+                self.db
+                    .read(move |conn| store::thread_cwd(conn, thread))
+                    .await?
             }
             FileRoot::Project { project } => {
-                store::require_project(&mut *self.db.lock().await, &project).await?
+                self.db
+                    .read(move |conn| store::require_project(conn, &project))
+                    .await?
             }
         };
 

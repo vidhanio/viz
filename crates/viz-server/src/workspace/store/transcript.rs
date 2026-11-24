@@ -3,7 +3,7 @@
 use viz_protocol::{Body, ToolCall, TranscriptEntry};
 
 use super::{
-    super::sql::{Connection, Row, exec, row, rows},
+    super::sql::{Conn, Row, exec, row, rows},
     entry_wire::preview,
     from_json, json, require,
 };
@@ -13,8 +13,8 @@ use crate::{
     wire::{Entry, EntryId, EntryPage, NewEntry, SearchHit, ThreadId, ToolCallStatus},
 };
 
-pub(in crate::workspace) async fn publish(
-    db: &mut Connection,
+pub(in crate::workspace) fn publish(
+    db: &Conn,
     thread: ThreadId,
     session: &str,
     output: Output,
@@ -30,8 +30,7 @@ pub(in crate::workspace) async fn publish(
                 "SELECT id, data FROM entries WHERE thread = ?1 AND tool_session = ?2
                  AND json_extract(data, '$.data.body.data.id') = ?3 ORDER BY id DESC LIMIT 1",
                 [thread.into(), session.into(), report.id.as_str().into()],
-            )
-            .await?
+            )?
             .map(decode_entry)
             .transpose()?;
             if let Some(Entry {
@@ -51,17 +50,15 @@ pub(in crate::workspace) async fn publish(
                     db,
                     "UPDATE entries SET data = ?2 WHERE id = ?1",
                     [id.into(), json(&NewEntry::Transcript(original))?.into()],
-                )
-                .await?;
+                )?;
                 chunks.invalidate_stored(thread, id);
                 if title_changed {
                     exec(
                         db,
                         "DELETE FROM search_entries WHERE rowid = ?1",
                         [id.into()],
-                    )
-                    .await?;
-                    index(db, thread, id, &updated.title).await?;
+                    )?;
+                    index(db, thread, id, &updated.title)?;
                 }
                 (
                     NewEntry::ToolUpdate {
@@ -84,7 +81,7 @@ pub(in crate::workspace) async fn publish(
             }
         }
     };
-    let id = append(db, thread, &entry).await?;
+    let id = append(db, thread, &entry)?;
     if let NewEntry::Transcript(TranscriptEntry {
         body: Body::Tool(_),
         ..
@@ -94,14 +91,13 @@ pub(in crate::workspace) async fn publish(
             db,
             "UPDATE entries SET tool_session = ?2 WHERE id = ?1",
             [id.into(), session.into()],
-        )
-        .await?;
+        )?;
     }
     Ok(patch)
 }
 
-pub(in crate::workspace) async fn append(
-    db: &mut Connection,
+pub(in crate::workspace) fn append(
+    db: &Conn,
     thread: ThreadId,
     data: &NewEntry,
 ) -> Result<EntryId, Error> {
@@ -109,8 +105,7 @@ pub(in crate::workspace) async fn append(
         db,
         "INSERT INTO entries (thread, data) VALUES (?1, ?2) RETURNING id",
         [thread.into(), json(data)?.into()],
-    )
-    .await?
+    )?
     .expect("entry INSERT RETURNING yielded one row")
     .id(0)?;
     let text = match data {
@@ -123,16 +118,11 @@ pub(in crate::workspace) async fn append(
         },
         _ => return Ok(id),
     };
-    index(db, thread, id, text).await?;
+    index(db, thread, id, text)?;
     Ok(id)
 }
 
-async fn index(
-    db: &mut Connection,
-    thread: ThreadId,
-    id: EntryId,
-    text: &str,
-) -> Result<(), Error> {
+fn index(db: &Conn, thread: ThreadId, id: EntryId, text: &str) -> Result<(), Error> {
     if !text.trim().is_empty() {
         let text = if text.contains(['\0', '\u{1}', '\u{2}']) {
             text.replace(['\0', '\u{1}', '\u{2}'], " ").into()
@@ -143,37 +133,35 @@ async fn index(
             db,
             "INSERT INTO search_entries (rowid, thread, text) VALUES (?1, ?2, ?3)",
             [id.into(), thread.into(), text],
-        )
-        .await?;
+        )?;
     }
     Ok(())
 }
 
-pub(in crate::workspace) async fn latest_entry_id(
-    db: &mut Connection,
+pub(in crate::workspace) fn latest_entry_id(
+    db: &Conn,
     thread: ThreadId,
 ) -> Result<Option<EntryId>, Error> {
     let Some(found) = row(
         db,
         "SELECT id FROM entries WHERE thread = ?1 ORDER BY id DESC LIMIT 1",
         [thread.into()],
-    )
-    .await?
+    )?
     else {
         return Ok(None);
     };
     Ok(Some(found.id(0)?))
 }
 
-pub(in crate::workspace) async fn entries(
-    db: &mut Connection,
+pub(in crate::workspace) fn entries(
+    db: &Conn,
     thread: ThreadId,
     before: Option<EntryId>,
     limit: usize,
 ) -> Result<EntryPage, Error> {
     const PAGE_BUDGET: usize = viz_protocol::limits::PAGE_WIRE_BYTES;
 
-    require(db, thread).await?;
+    require(db, thread)?;
     let fetched = if let Some(before) = before {
         rows(
             db,
@@ -181,8 +169,7 @@ pub(in crate::workspace) async fn entries(
              WHERE thread = ?1 AND id < ?2 AND json_extract(data, '$.kind') != 'tool_update'
              ORDER BY id DESC LIMIT ?3",
             [thread.into(), before.into(), (limit + 1).into()],
-        )
-        .await?
+        )?
         .map(decode_entry)
         .collect::<Result<Vec<_>, _>>()?
     } else {
@@ -192,8 +179,7 @@ pub(in crate::workspace) async fn entries(
              WHERE thread = ?1 AND json_extract(data, '$.kind') != 'tool_update'
              ORDER BY id DESC LIMIT ?2",
             [thread.into(), (limit + 1).into()],
-        )
-        .await?
+        )?
         .map(decode_entry)
         .collect::<Result<Vec<_>, _>>()?
     };
@@ -220,21 +206,20 @@ pub(in crate::workspace) async fn entries(
 
 /// Reads incremental entries after `after`, stopping early when either `limit`
 /// or `PAGE_WIRE_BYTES` is reached. Returns `(entries, has_more)`.
-pub(in crate::workspace) async fn entries_after(
-    db: &mut Connection,
+pub(in crate::workspace) fn entries_after(
+    db: &Conn,
     thread: ThreadId,
     after: Option<EntryId>,
     limit: usize,
 ) -> Result<(Vec<Entry>, bool), Error> {
     const PAGE_BUDGET: usize = viz_protocol::limits::PAGE_WIRE_BYTES;
 
-    require(db, thread).await?;
+    require(db, thread)?;
     let fetched = rows(
         db,
         "SELECT id, data FROM entries WHERE thread = ?1 AND id > coalesce(?2, 0) ORDER BY id LIMIT ?3",
         [thread.into(), after.into(), (limit + 1).into()],
-    )
-    .await?
+    )?
     .map(decode_entry)
     .collect::<Result<Vec<_>, _>>()?;
     let mut entries = Vec::with_capacity(fetched.len().min(limit));
@@ -259,8 +244,8 @@ fn decode_entry(mut row: Row) -> Result<Entry, Error> {
     })
 }
 
-pub(in crate::workspace) async fn search(
-    db: &mut Connection,
+pub(in crate::workspace) fn search(
+    db: &Conn,
     query: &str,
     limit: usize,
 ) -> Result<Vec<SearchHit>, Error> {
@@ -285,8 +270,7 @@ pub(in crate::workspace) async fn search(
         FROM search_entries AS s
         WHERE search_entries MATCH ?1 ORDER BY bm25(search_entries), s.rowid DESC LIMIT ?2",
         [terms.into(), limit.into()],
-    )
-    .await?
+    )?
     .map(|mut row| {
         Ok(SearchHit {
             thread: row.id(0)?,

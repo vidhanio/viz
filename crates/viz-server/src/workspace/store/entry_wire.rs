@@ -245,15 +245,20 @@ pub(in crate::workspace) async fn chunk(
     } else {
         let raw = match source {
             EntrySource::Stored { entry } => {
-                let mut db = workspace.db.lock().await;
-                row(
-                    &mut db,
-                    "SELECT data FROM entries WHERE thread = ?1 AND id = ?2",
-                    [thread.into(), entry.into()],
-                )
-                .await?
-                .ok_or_else(|| Error::not_found(format!("no entry {entry} in thread {thread}")))?
-                .str(0)?
+                workspace
+                    .db
+                    .read(move |conn| {
+                        row(
+                            conn,
+                            "SELECT data FROM entries WHERE thread = ?1 AND id = ?2",
+                            [thread.into(), entry.into()],
+                        )?
+                        .ok_or_else(|| {
+                            Error::not_found(format!("no entry {entry} in thread {thread}"))
+                        })?
+                        .str(0)
+                    })
+                    .await?
             }
             EntrySource::Live { key } => {
                 let live = workspace.updates.raw_live(thread).ok_or_else(|| {

@@ -11,7 +11,7 @@ use viz_protocol::{ForkPoint, ForkThread, Forked};
 
 use super::{
     Workspace,
-    sql::exec,
+    sql::{self, Conn, exec},
     store::{self, Handoff, NewThread, SavedSession},
     thread::launched,
     worktree::{self, Placement},
@@ -28,18 +28,25 @@ impl Workspace {
         let Some(target) = args.worktree.clone() else {
             return self.fork_in(args, None).await.map(|(forked, _)| forked);
         };
-        let (binding, title) = {
-            let mut db = self.db.lock().await;
-            if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
-                return Ok(Forked {
-                    thread: found.thread,
-                    prompt: None,
-                });
-            }
-            let binding = store::binding(&mut db, args.thread).await?;
-            let (metadata, _) = store::metadata(&mut db, args.thread).await?;
-            drop(db);
-            (binding, metadata.title().to_owned())
+        let source_thread = args.thread;
+        let request_id = args.request_id.clone();
+        let precheck = self
+            .db
+            .read_snapshot(move |tx| {
+                if let Some(found) = launched(tx, request_id.as_deref())? {
+                    return Ok(Err(Forked {
+                        thread: found.thread,
+                        prompt: None,
+                    }));
+                }
+                let binding = store::binding(tx, source_thread)?;
+                let (metadata, _) = store::metadata(tx, source_thread)?;
+                Ok(Ok((binding, metadata.title().to_owned())))
+            })
+            .await?;
+        let (binding, title) = match precheck {
+            Ok(pair) => pair,
+            Err(forked) => return Ok(forked),
         };
         let project = binding
             .project
@@ -77,34 +84,32 @@ impl Workspace {
         placement: Option<&Placement>,
     ) -> Result<(Forked, bool), Error> {
         let scratch = if placement.is_none() {
-            let needs_scratch = {
-                let mut db = self.db.lock().await;
-                if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
-                    return Ok((
-                        Forked {
+            let source_thread = args.thread;
+            let request_id = args.request_id.clone();
+            let custom_title = args.title.clone();
+            let precheck = self
+                .db
+                .read_snapshot(move |tx| {
+                    if let Some(found) = launched(tx, request_id.as_deref())? {
+                        return Ok(Err(Forked {
                             thread: found.thread,
                             prompt: None,
-                        },
-                        false,
-                    ));
-                }
-                let binding = store::binding(&mut db, args.thread).await?;
-                let title = if binding.project.is_none() {
-                    let (metadata, _) = store::metadata(&mut db, args.thread).await?;
-                    Some(
-                        args.title
-                            .clone()
-                            .unwrap_or_else(|| metadata.title().to_owned()),
-                    )
-                } else {
-                    None
-                };
-                drop(db);
-                title
-            };
-            match needs_scratch {
-                Some(title) => Some(self.prepare_scratch(&title).await?),
-                None => None,
+                        }));
+                    }
+                    let binding = store::binding(tx, source_thread)?;
+                    let title = if binding.project.is_none() {
+                        let (metadata, _) = store::metadata(tx, source_thread)?;
+                        Some(custom_title.unwrap_or_else(|| metadata.title().to_owned()))
+                    } else {
+                        None
+                    };
+                    Ok(Ok(title))
+                })
+                .await?;
+            match precheck {
+                Err(forked) => return Ok((forked, false)),
+                Ok(Some(title)) => Some(self.prepare_scratch(&title).await?),
+                Ok(None) => None,
             }
         } else {
             None
@@ -129,117 +134,126 @@ impl Workspace {
         scratch: Option<&super::scratch::PreparedScratch>,
     ) -> Result<(Forked, bool), Error> {
         let source = args.thread;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
-            let forked = Forked {
-                thread: found.thread,
-                prompt: None,
-            };
-            return Ok((forked, false));
-        }
-        let binding = store::binding(&mut tx, source).await?;
-        let (metadata, _) = store::metadata(&mut tx, source).await?;
-        let prompt = match args.point {
-            ForkPoint::Before { entry } => Some(
-                store::fork_prompt(&mut tx, source, entry)
-                    .await?
-                    .ok_or(fork::Rejection::NotAPrompt(entry))?,
-            ),
-            ForkPoint::Head | ForkPoint::Through { .. } => None,
-        };
-        let (turns, last) = store::turns(&mut tx, source).await?;
-        let target_exists = match args.point {
-            ForkPoint::Through { entry } => store::has_entry(&mut tx, source, entry).await?,
-            ForkPoint::Head | ForkPoint::Before { .. } => true,
-        };
-        let cut = fork::cut(&turns, last, args.point, target_exists)?;
-        let (harness, _) =
-            self.harness(Some(args.harness.as_deref().unwrap_or(&binding.harness)))?;
-        let same_harness = harness == binding.harness;
-        let scratch_checkout = (binding.project.is_none() && placement.is_none())
-            .then(|| {
-                scratch.map(|s| viz_core::placement::Checkout {
-                    cwd: s.cwd.clone(),
-                    worktree: None,
-                })
+        let placement_checkout = placement.map(|p| p.checkout.clone());
+        let scratch_cwd = scratch.map(|s| s.cwd.clone());
+        let ws = Arc::clone(self);
+        let (forked, created) = self
+            .db
+            .write(move |conn| {
+                let tx = sql::immediate(conn)?;
+                if let Some(found) = launched(&tx, args.request_id.as_deref())? {
+                    let forked = Forked {
+                        thread: found.thread,
+                        prompt: None,
+                    };
+                    return Ok((forked, false));
+                }
+                let binding = store::binding(&tx, source)?;
+                let (metadata, _) = store::metadata(&tx, source)?;
+                let prompt = match args.point {
+                    ForkPoint::Before { entry } => Some(
+                        store::fork_prompt(&tx, source, entry)?
+                            .ok_or(fork::Rejection::NotAPrompt(entry))?,
+                    ),
+                    ForkPoint::Head | ForkPoint::Through { .. } => None,
+                };
+                let (turns, last) = store::turns(&tx, source)?;
+                let target_exists = match args.point {
+                    ForkPoint::Through { entry } => store::has_entry(&tx, source, entry)?,
+                    ForkPoint::Head | ForkPoint::Before { .. } => true,
+                };
+                let cut = fork::cut(&turns, last, args.point, target_exists)?;
+                let (harness, _) =
+                    ws.harness(Some(args.harness.as_deref().unwrap_or(&binding.harness)))?;
+                let same_harness = harness == binding.harness;
+                let scratch_checkout = (binding.project.is_none() && placement_checkout.is_none())
+                    .then(|| {
+                        scratch_cwd.map(|cwd| viz_core::placement::Checkout {
+                            cwd,
+                            worktree: None,
+                        })
+                    })
+                    .flatten();
+                if binding.project.is_none()
+                    && placement_checkout.is_none()
+                    && scratch_checkout.is_none()
+                {
+                    return Err(Error::unavailable(
+                        "source thread project changed during fork; retry",
+                    ));
+                }
+                let has_placement = placement_checkout.is_some();
+                let has_scratch = scratch_checkout.is_some();
+                let checkout = match (placement_checkout, scratch_checkout) {
+                    (Some(checkout), _) | (None, Some(checkout)) => checkout,
+                    (None, None) => binding.checkout,
+                };
+                let native = binding
+                    .session
+                    .session_id
+                    .clone()
+                    .filter(|_| same_harness && !has_placement && !has_scratch);
+                let session = SavedSession {
+                    desired: if same_harness {
+                        binding.session.desired
+                    } else {
+                        SavedSession::default().desired
+                    },
+                    handoff: match fork::transfer(&cut, native.is_some()) {
+                        Transfer::Native => Some(Handoff::Forked { session: native }),
+                        Transfer::Handoff => Some(Handoff::Forked { session: None }),
+                        Transfer::Nothing => None,
+                    },
+                    ..SavedSession::default()
+                };
+                let thread = store::create_thread(
+                    &ws.reservations,
+                    &tx,
+                    &NewThread {
+                        harness,
+                        checkout: &checkout,
+                        project: binding.project.as_deref(),
+                        parent: None,
+                        parent_environment: None,
+                        title: args.title.as_deref(),
+                        session,
+                    },
+                )?;
+                let shared = store::copy_history(&tx, source, thread, &cut)?;
+                if let Some(prompt) = &prompt {
+                    copy_prompt_attachments(&tx, source, thread, &prompt.attachments)?;
+                }
+                exec(
+                    &tx,
+                    "UPDATE threads SET forked_from = ?2, forked_at = ?3 WHERE id = ?1",
+                    [thread.into(), source.into(), shared.into()],
+                )?;
+                if args.title.is_none() {
+                    let title = Title::Derived(metadata.title().to_owned());
+                    let metadata = threads::Metadata { title, ..metadata };
+                    store::save_metadata(&tx, thread, &metadata)?;
+                }
+                if let Some(request_id) = args.request_id {
+                    exec(
+                        &tx,
+                        "INSERT INTO launch_requests (request_id, thread, run) VALUES (?1, ?2, NULL)",
+                        [request_id.into(), thread.into()],
+                    )?;
+                }
+                tx.commit()?;
+                ws.kick(thread, true);
+                Ok((Forked { thread, prompt }, true))
             })
-            .flatten();
-        if binding.project.is_none() && placement.is_none() && scratch_checkout.is_none() {
-            return Err(Error::unavailable(
-                "source thread project changed during fork; retry",
-            ));
-        }
-        let checkout = match (placement, scratch_checkout.as_ref()) {
-            (Some(placement), _) => &placement.checkout,
-            (None, Some(checkout)) => checkout,
-            (None, None) => &binding.checkout,
-        };
-        let native = binding
-            .session
-            .session_id
-            .clone()
-            .filter(|_| same_harness && placement.is_none() && scratch_checkout.is_none());
-        let session = SavedSession {
-            desired: if same_harness {
-                binding.session.desired
-            } else {
-                SavedSession::default().desired
-            },
-            handoff: match fork::transfer(&cut, native.is_some()) {
-                Transfer::Native => Some(Handoff::Forked { session: native }),
-                Transfer::Handoff => Some(Handoff::Forked { session: None }),
-                Transfer::Nothing => None,
-            },
-            ..SavedSession::default()
-        };
-        let thread = store::create_thread(
-            self,
-            &mut tx,
-            &NewThread {
-                harness,
-                checkout,
-                project: binding.project.as_deref(),
-                parent: None,
-                parent_environment: None,
-                title: args.title.as_deref(),
-                session,
-            },
-        )
-        .await?;
-        let shared = store::copy_history(&mut tx, source, thread, &cut).await?;
-        if let Some(prompt) = &prompt {
-            copy_prompt_attachments(&mut tx, source, thread, &prompt.attachments).await?;
-        }
-        exec(
-            &mut tx,
-            "UPDATE threads SET forked_from = ?2, forked_at = ?3 WHERE id = ?1",
-            [thread.into(), source.into(), shared.into()],
-        )
-        .await?;
-        if args.title.is_none() {
-            let title = Title::Derived(metadata.title().to_owned());
-            let metadata = threads::Metadata { title, ..metadata };
-            store::save_metadata(&mut tx, thread, &metadata).await?;
-        }
-        if let Some(request_id) = args.request_id {
-            exec(
-                &mut tx,
-                "INSERT INTO launch_requests (request_id, thread, run) VALUES (?1, ?2, NULL)",
-                [request_id.into(), thread.into()],
-            )
             .await?;
+        if created {
+            self.relist(forked.thread);
         }
-        tx.commit().await?;
-        self.kick(thread, true);
-        drop(db);
-        self.relist(thread);
-        Ok((Forked { thread, prompt }, true))
+        Ok((forked, created))
     }
 }
 
-async fn copy_prompt_attachments(
-    tx: &mut super::sql::Connection,
+fn copy_prompt_attachments(
+    tx: &Conn,
     source: viz_protocol::ThreadId,
     target: viz_protocol::ThreadId,
     attachments: &[viz_protocol::PromptAttachment],
@@ -252,8 +266,7 @@ async fn copy_prompt_attachments(
              FROM thread_attachments WHERE thread = ?2 AND id = ?3
              ON CONFLICT DO NOTHING",
             [target.into(), source.into(), attachment.id.as_str().into()],
-        )
-        .await?;
+        )?;
     }
     Ok(())
 }

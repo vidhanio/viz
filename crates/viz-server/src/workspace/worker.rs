@@ -24,7 +24,7 @@ use super::{
     Workspace, runs,
     runtime::turn_end,
     sessions::{self, SessionSlot},
-    sql::exec,
+    sql::{self, exec},
     store,
     worktree::Placement,
 };
@@ -316,13 +316,15 @@ impl Workspace {
         option: String,
         value: OptionValue,
     ) -> Result<(), Error> {
-        let (driver, options) = {
-            let mut db = self.db.lock().await;
-            let options = store::binding(&mut db, thread).await?.session.options;
-            let driver = self.driver(thread)?;
-            drop(db);
-            (driver, options)
-        };
+        let ws = Arc::clone(self);
+        let (driver, options) = self
+            .db
+            .write(move |conn| {
+                let options = store::binding(conn, thread)?.session.options;
+                let driver = ws.driver(thread)?;
+                Ok((driver, options))
+            })
+            .await?;
         if !options.is_empty() && !viz_core::options::offers(&options, &option, &value) {
             return Err(Error::invalid(format!("invalid value for option {option}")));
         }
@@ -340,13 +342,10 @@ impl Workspace {
             biased;
             result = result => result.map_err(|_| worker_closed())?,
             true = async { active.wait_for(Option::is_some).await.is_ok() } => {
-                let relist = sessions::defer_option(
-                    &mut *self.db.lock().await,
-                    thread,
-                    &option,
-                    value,
-                )
-                .await?;
+                let relist = self
+                    .db
+                    .write(move |conn| sessions::defer_option(conn, thread, &option, value))
+                    .await?;
                 if relist {
                     self.relist(thread);
                 } else {
@@ -357,7 +356,7 @@ impl Workspace {
         }
     }
 
-    async fn worker(&self, thread: ThreadId, driver: &Driver, mut worker: Worker) {
+    async fn worker(&self, thread: ThreadId, driver: &Arc<Driver>, mut worker: Worker) {
         let mut ready = false;
         let mut retry = Retry::default();
         let mut idle_at = Instant::now() + IDLE_SESSION;
@@ -452,7 +451,7 @@ impl Workspace {
     async fn step(
         &self,
         thread: ThreadId,
-        driver: &Driver,
+        driver: &Arc<Driver>,
         slot: &mut SessionSlot,
         prepare: bool,
     ) -> Result<bool, Error> {
@@ -460,28 +459,31 @@ impl Workspace {
             self.continue_idle(thread, driver, session).await?;
         }
         let root = self.turn_root(thread).await?;
-        let claim = {
-            let mut db = self.db.lock().await;
-            if driver.lifetime.is_cancelled() {
-                return Ok(false);
-            }
-            let occupancy = self.occupy(root.as_deref());
-            let mut tx = db.transaction().await?;
-            let found = match &occupancy {
-                Some(_) => runs::claim(&mut tx, thread).await?,
-                None => runs::Found::default(),
-            };
-            tx.commit().await?;
-            if found.recovered {
-                self.settled(thread);
-            }
-            let claim = found.claimed.zip(occupancy).map(|(claim, occupancy)| {
-                let turn = driver.begin(claim.id);
-                (claim, turn, occupancy)
-            });
-            drop(db);
-            claim
-        };
+        let driver_for_write = Arc::clone(driver);
+        let reservations = Arc::clone(&self.reservations);
+        let (claim, recovered) = self
+            .db
+            .write(move |conn| {
+                if driver_for_write.lifetime.is_cancelled() {
+                    return Ok((None, false));
+                }
+                let occupancy = reservations.occupy(root.as_deref());
+                let tx = sql::immediate(conn)?;
+                let found = match &occupancy {
+                    Some(_) => runs::claim(&tx, thread)?,
+                    None => runs::Found::default(),
+                };
+                tx.commit()?;
+                let claim = found.claimed.zip(occupancy).map(|(claim, occupancy)| {
+                    let turn = driver_for_write.begin(claim.id);
+                    (claim, turn, occupancy)
+                });
+                Ok((claim, found.recovered))
+            })
+            .await?;
+        if recovered {
+            self.settled(thread);
+        }
         if let Some((claim, turn, _occupancy)) = claim {
             self.changed(Some(thread));
             self.checkpoint(thread, turn.run, viz_protocol::CheckpointEdge::Before)
@@ -507,19 +509,19 @@ impl Workspace {
             && !driver.lifetime.is_cancelled()
         {
             tracing::warn!(%thread, %error, "ACP thread setup failed");
-            let mut db = self.db.lock().await;
-            let mut tx = db.transaction().await?;
-            exec(
-                &mut tx,
-                "UPDATE threads SET setup_failed = 1 WHERE id = ?1",
-                [thread.into()],
-            )
-            .await?;
-            let (current, _) = store::lifecycle(&mut tx, thread).await?;
-            let next = on_run_end(&current, RunStatus::Failed, self.is_watched(thread));
-            store::save_lifecycle(&mut tx, thread, &next).await?;
-            tx.commit().await?;
-            drop(db);
+            let updates = Arc::clone(&self.updates);
+            self.db
+                .write_tx(move |tx| {
+                    exec(
+                        tx,
+                        "UPDATE threads SET setup_failed = 1 WHERE id = ?1",
+                        [thread.into()],
+                    )?;
+                    let (current, _) = store::lifecycle(tx, thread)?;
+                    let next = on_run_end(&current, RunStatus::Failed, updates.is_watched(thread));
+                    store::save_lifecycle(tx, thread, &next)
+                })
+                .await?;
             self.relist(thread);
         }
         Ok(true)

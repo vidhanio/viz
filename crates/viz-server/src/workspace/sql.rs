@@ -1,44 +1,85 @@
-//! A dedicated writer thread owns the SQLite connection. The workspace leases
-//! this handle across each read/decide/write group. Dropping an uncommitted
-//! transaction queues rollback before the next lease can submit work.
+//! Synchronous SQLite writer actor paired with a bounded WAL read pool.
+//!
+//! One dedicated OS thread owns the sole read/write SQLite connection so every
+//! write closure runs synchronously to completion without ever holding a
+//! transaction across an `.await`. Concurrent read queries run on a small pool
+//! of `SQLITE_OPEN_READ_ONLY` WAL connections.
 
 mod migrations;
 
 use std::{
-    ops::{Deref, DerefMut},
     path::PathBuf,
+    sync::{Arc, Mutex},
     thread,
 };
 
 use rusqlite::{
-    Connection as Sqlite, params_from_iter,
+    Transaction, TransactionBehavior, params_from_iter,
     types::{ToSql, ToSqlOutput, Value as SqlValue},
 };
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc, oneshot};
 use viz_protocol::{EntryId, RequestId, RunId, TaskId, ThreadId};
 
 use crate::error::Error;
 
-type Job = Box<dyn FnOnce(&mut Sqlite) + Send>;
+/// Underlying synchronous `rusqlite` connection passed to read and write
+/// closures (and dereferenced from `rusqlite::Transaction`).
+pub(crate) type Conn = rusqlite::Connection;
 
-enum Message {
-    Work(Job),
-    Rollback,
-}
+const READ_POOL_SIZE: usize = 4;
+
+type WriteJob = Box<dyn FnOnce(&mut Conn) + Send>;
 
 #[derive(Debug)]
-pub(crate) struct Connection {
-    writer: mpsc::UnboundedSender<Message>,
+struct ReadPool {
+    semaphore: Semaphore,
+    connections: Mutex<Vec<Conn>>,
 }
 
-impl Connection {
+struct PooledReader {
+    pool: Arc<ReadPool>,
+    conn: Option<Conn>,
+}
+
+impl PooledReader {
+    const fn conn_mut(&mut self) -> &mut Conn {
+        self.conn
+            .as_mut()
+            .expect("pooled SQLite reader present until drop")
+    }
+}
+
+impl Drop for PooledReader {
+    fn drop(&mut self) {
+        if let Some(conn) = self.conn.take() {
+            let mut connections = self
+                .pool
+                .connections
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            connections.push(conn);
+        }
+    }
+}
+
+/// Concurrent WAL read pool + serialized synchronous writer actor.
+#[derive(Debug)]
+pub(crate) struct Database {
+    writer: mpsc::UnboundedSender<WriteJob>,
+    readers: Arc<ReadPool>,
+}
+
+impl Database {
     pub(super) async fn open(path: PathBuf) -> anyhow::Result<Self> {
-        let (writer, mut inbox) = mpsc::unbounded_channel();
+        let (writer, mut inbox) = mpsc::unbounded_channel::<WriteJob>();
         let (ready, initialized) = oneshot::channel();
+        let writer_path = path.clone();
+        let runtime = tokio::runtime::Handle::current();
         thread::Builder::new()
             .name("viz-sqlite".into())
             .spawn(move || {
-                let mut db = match migrations::open(&path) {
+                let _runtime = runtime.enter();
+                let mut db = match migrations::open(&writer_path) {
                     Ok(db) => {
                         if ready.send(Ok(())).is_err() {
                             return;
@@ -50,87 +91,110 @@ impl Connection {
                         return;
                     }
                 };
-                while let Some(message) = inbox.blocking_recv() {
-                    match message {
-                        Message::Work(job) => job(&mut db),
-                        Message::Rollback if !db.is_autocommit() => {
-                            if let Err(error) = db.execute_batch("ROLLBACK") {
-                                tracing::error!(%error, "rolling back workspace transaction");
-                                break;
-                            }
-                        }
-                        Message::Rollback => {}
+                while let Some(job) = inbox.blocking_recv() {
+                    job(&mut db);
+                    if !db.is_autocommit()
+                        && let Err(error) = db.execute_batch("ROLLBACK")
+                    {
+                        tracing::error!(%error, "rolling back leaked workspace transaction");
+                        break;
                     }
                 }
             })?;
         initialized.await??;
-        Ok(Self { writer })
+        let reader_conns = tokio::task::spawn_blocking(move || {
+            (0..READ_POOL_SIZE)
+                .map(|_| migrations::open_reader(&path))
+                .collect::<anyhow::Result<Vec<_>>>()
+        })
+        .await??;
+        Ok(Self {
+            writer,
+            readers: Arc::new(ReadPool {
+                semaphore: Semaphore::new(READ_POOL_SIZE),
+                connections: Mutex::new(reader_conns),
+            }),
+        })
     }
 
-    #[expect(
-        clippy::needless_pass_by_ref_mut,
-        reason = "the exclusive lease serializes transaction groups"
-    )]
-    async fn call<T: Send + 'static>(
-        &mut self,
-        operation: impl FnOnce(&mut Sqlite) -> rusqlite::Result<T> + Send + 'static,
+    /// Executes a synchronous read-only query closure on the WAL reader pool.
+    pub(crate) async fn read<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Conn) -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
+        let _permit = self
+            .readers
+            .semaphore
+            .acquire()
+            .await
+            .map_err(|_| Error::WriterStopped)?;
+        let conn = self
+            .readers
+            .connections
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop()
+            .ok_or(Error::WriterStopped)?;
+        let mut lease = PooledReader {
+            pool: Arc::clone(&self.readers),
+            conn: Some(conn),
+        };
+        tokio::task::spawn_blocking(move || operation(lease.conn_mut()))
+            .await
+            .map_err(|_| Error::WriterStopped)?
+    }
+
+    /// Executes a synchronous multi-query read snapshot inside a `DEFERRED`
+    /// read transaction on the WAL reader pool so every query sees the same
+    /// committed state.
+    pub(crate) async fn read_snapshot<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
+        self.read(move |conn| {
+            let tx = conn.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            operation(&tx)
+        })
+        .await
+    }
+
+    /// Executes a synchronous write closure on the dedicated SQLite writer
+    /// thread. Use this when a post-commit in-memory update must serialize
+    /// before the next write begins.
+    pub(crate) async fn write<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&mut Conn) -> Result<T, Error> + Send + 'static,
     ) -> Result<T, Error> {
         let (reply, result) = oneshot::channel();
         self.writer
-            .send(Message::Work(Box::new(move |db| {
+            .send(Box::new(move |db| {
                 let _ = reply.send(operation(db));
-            })))
+            }))
             .map_err(|_| Error::WriterStopped)?;
-        result
-            .await
-            .map_err(|_| Error::WriterStopped)?
-            .map_err(Error::Storage)
+        result.await.map_err(|_| Error::WriterStopped)?
     }
 
-    pub(crate) async fn transaction(&mut self) -> Result<Transaction<'_>, Error> {
-        let tx = Transaction {
-            db: self,
-            committed: false,
-        };
-        tx.db.call(|db| db.execute_batch("BEGIN IMMEDIATE")).await?;
-        Ok(tx)
-    }
-}
-
-#[derive(Debug)]
-pub(crate) struct Transaction<'a> {
-    db: &'a mut Connection,
-    committed: bool,
-}
-
-impl Transaction<'_> {
-    pub(crate) async fn commit(mut self) -> Result<(), Error> {
-        self.db.call(|db| db.execute_batch("COMMIT")).await?;
-        self.committed = true;
-        Ok(())
+    /// Executes a synchronous write closure inside an `IMMEDIATE` transaction
+    /// on the dedicated SQLite writer thread, committing on `Ok` and rolling
+    /// back automatically on `Err`.
+    pub(crate) async fn write_tx<T: Send + 'static>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> Result<T, Error> + Send + 'static,
+    ) -> Result<T, Error> {
+        self.write(move |conn| {
+            let tx = immediate(conn)?;
+            let value = operation(&tx)?;
+            tx.commit()?;
+            Ok(value)
+        })
+        .await
     }
 }
 
-impl Deref for Transaction<'_> {
-    type Target = Connection;
-
-    fn deref(&self) -> &Self::Target {
-        self.db
-    }
-}
-
-impl DerefMut for Transaction<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.db
-    }
-}
-
-impl Drop for Transaction<'_> {
-    fn drop(&mut self) {
-        if !self.committed {
-            let _ = self.db.writer.send(Message::Rollback);
-        }
-    }
+/// Starts an `IMMEDIATE` write transaction inside a [`Database::write`]
+/// closure.
+pub(crate) fn immediate(conn: &mut Conn) -> Result<Transaction<'_>, Error> {
+    Ok(conn.transaction_with_behavior(TransactionBehavior::Immediate)?)
 }
 
 #[derive(Debug)]
@@ -220,48 +284,40 @@ impl<T: Into<Self>> From<Option<T>> for Value {
     }
 }
 
-pub(crate) async fn exec<const N: usize>(
-    db: &mut Connection,
+pub(crate) fn exec<const N: usize>(
+    db: &Conn,
     statement: &str,
     args: [Value; N],
 ) -> Result<usize, Error> {
-    let statement = statement.to_owned();
-    db.call(move |db| {
-        db.prepare_cached(&statement)?
-            .execute(params_from_iter(args))
-    })
-    .await
+    Ok(db
+        .prepare_cached(statement)?
+        .execute(params_from_iter(args))?)
 }
 
-pub(crate) async fn rows<const N: usize>(
-    db: &mut Connection,
+pub(crate) fn rows<const N: usize>(
+    db: &Conn,
     query: &str,
     args: [Value; N],
-) -> Result<impl Iterator<Item = Row> + use<N>, Error> {
-    let query = query.to_owned();
-    let rows = db
-        .call(move |db| {
-            let mut statement = db.prepare_cached(&query)?;
-            let columns = statement.column_count();
-            statement
-                .query_map(params_from_iter(args), |row| {
-                    (0..columns)
-                        .map(|column| row.get(column))
-                        .collect::<rusqlite::Result<Vec<_>>>()
-                        .map(Row)
-                })?
+) -> Result<std::vec::IntoIter<Row>, Error> {
+    let mut statement = db.prepare_cached(query)?;
+    let columns = statement.column_count();
+    let collected = statement
+        .query_map(params_from_iter(args), |row| {
+            (0..columns)
+                .map(|column| row.get(column))
                 .collect::<rusqlite::Result<Vec<_>>>()
-        })
-        .await?;
-    Ok(rows.into_iter())
+                .map(Row)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(collected.into_iter())
 }
 
-pub(crate) async fn row<const N: usize>(
-    db: &mut Connection,
+pub(crate) fn row<const N: usize>(
+    db: &Conn,
     query: &str,
     args: [Value; N],
 ) -> Result<Option<Row>, Error> {
-    Ok(rows(db, query, args).await?.next())
+    Ok(rows(db, query, args)?.next())
 }
 
 #[derive(Debug)]

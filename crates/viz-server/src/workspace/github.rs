@@ -63,7 +63,11 @@ impl Workspace {
     }
 
     async fn github_project(&self, project: &str) -> Result<RemoteRepository, Error> {
-        let project = store::require_project(&mut *self.db.lock().await, project).await?;
+        let project = project.to_owned();
+        let project = self
+            .db
+            .read(move |conn| store::require_project(conn, &project))
+            .await?;
         let repo = Repository::discover(Path::new(&project), &self.closing).await?;
         self.github_remote(&repo).await
     }

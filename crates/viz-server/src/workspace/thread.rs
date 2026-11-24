@@ -18,7 +18,7 @@ use super::{
     admission::selection,
     attachments,
     runs::{self, NewRun},
-    sql::{Connection, exec, row},
+    sql::{self, Conn, exec, row},
     store::{self, NewThread, SavedSession},
     worker::Intent,
     worktree::{self, Placement},
@@ -35,9 +35,11 @@ impl Workspace {
         mut args: LaunchThread,
     ) -> Result<Launched, Error> {
         threads::validate_request_id(args.request_id.as_deref())?;
-        if let Some(project) = &args.project {
-            let (_, _, preferences) =
-                store::preferences(&mut *self.db.lock().await, project).await?;
+        if let Some(project) = args.project.clone() {
+            let (_, _, preferences) = self
+                .db
+                .read(move |conn| store::preferences(conn, &project))
+                .await?;
             viz_core::projects::launch_defaults(&mut args, preferences.settings);
         }
         let Some(target) = args.worktree.clone() else {
@@ -50,13 +52,20 @@ impl Workspace {
             .project
             .clone()
             .ok_or(placement::Rejection::NoProject)?;
+        let request_id = args.request_id.clone();
+        let project_for_read = project.clone();
+        if let Some(found) = self
+            .db
+            .read_snapshot(move |tx| {
+                if let Some(found) = launched(tx, request_id.as_deref())? {
+                    return Ok(Some(found));
+                }
+                store::require_project(tx, &project_for_read)?;
+                Ok(None)
+            })
+            .await?
         {
-            let mut db = self.db.lock().await;
-            if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
-                return Ok(found);
-            }
-            store::require_project(&mut db, &project).await?;
-            drop(db);
+            return Ok(found);
         }
         let title = args
             .title
@@ -110,135 +119,144 @@ impl Workspace {
         scratch: Option<&super::scratch::PreparedScratch>,
     ) -> Result<(Launched, bool), Error> {
         let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
-            return Ok((found, false));
-        }
-        threads::validate_title(args.title.as_deref())?;
-        let (harness, config) = self.harness(args.harness.as_deref())?;
-        let access = if let Some(mode) = args.access {
-            let options = super::sessions::catalog(&mut tx, harness)
-                .await?
-                .map_or_else(Vec::new, |catalog| {
-                    catalog.options(config, args.model.as_deref())
-                });
-            Some(requests::choose(&options, &mode)?)
-        } else {
-            None
-        };
-        let checkout = match (placement, scratch) {
-            (Some(placement), _) => placement.checkout.clone(),
-            (None, Some(scratch)) => placement::Checkout {
-                cwd: scratch.cwd.clone(),
-                worktree: None,
-            },
-            (None, None) => self.checkout_for(&mut tx, args.project.as_deref()).await?,
-        };
-        let session = SavedSession {
-            desired: args.options,
-            selection: selection(args.model, args.thinking),
-            ..SavedSession::default()
-        };
-        let thread = store::create_thread(
-            self,
-            &mut tx,
-            &NewThread {
-                harness,
-                checkout: &checkout,
-                project: args.project.as_deref(),
-                parent: None,
-                parent_environment: None,
-                title: args.title.as_deref(),
-                session,
-            },
-        )
-        .await?;
-        if let Some(access) = &access {
-            store::save_thread_access(&mut tx, thread, Some(access)).await?;
-        }
-        let run = if args.text.is_some() || !staged.is_empty() {
-            let attachments = attachments::commit(&mut tx, thread, &staged, &[]).await?;
-            Some(
-                runs::enqueue(
-                    &mut tx,
-                    thread,
-                    NewRun {
-                        attachments: &attachments,
-                        context: &args.context,
-                        ..NewRun::new(args.text.as_deref().unwrap_or_default())
+        let placement_checkout = placement.map(|p| p.checkout.clone());
+        let scratch_cwd = scratch.map(|s| s.cwd.clone());
+        let ws = Arc::clone(self);
+        let (launched, created) = self
+            .db
+            .write(move |conn| {
+                let tx = sql::immediate(conn)?;
+                if let Some(found) = launched(&tx, args.request_id.as_deref())? {
+                    return Ok((found, false));
+                }
+                threads::validate_title(args.title.as_deref())?;
+                let (harness, config) = ws.harness(args.harness.as_deref())?;
+                let access = if let Some(mode) = args.access {
+                    let options = super::sessions::catalog(&tx, harness)?
+                        .map_or_else(Vec::new, |catalog| {
+                            catalog.options(config, args.model.as_deref())
+                        });
+                    Some(requests::choose(&options, &mode)?)
+                } else {
+                    None
+                };
+                let checkout = match (placement_checkout, scratch_cwd) {
+                    (Some(checkout), _) => checkout,
+                    (None, Some(cwd)) => placement::Checkout {
+                        cwd,
+                        worktree: None,
                     },
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        if let Some(request_id) = args.request_id {
-            exec(
-                &mut tx,
-                "INSERT INTO launch_requests (request_id, thread, run) VALUES (?1, ?2, ?3)",
-                [request_id.into(), thread.into(), run.into()],
-            )
+                    (None, None) => ws.checkout_for(&tx, args.project.as_deref())?,
+                };
+                let session = SavedSession {
+                    desired: args.options,
+                    selection: selection(args.model, args.thinking),
+                    ..SavedSession::default()
+                };
+                let thread = store::create_thread(
+                    &ws.reservations,
+                    &tx,
+                    &NewThread {
+                        harness,
+                        checkout: &checkout,
+                        project: args.project.as_deref(),
+                        parent: None,
+                        parent_environment: None,
+                        title: args.title.as_deref(),
+                        session,
+                    },
+                )?;
+                if let Some(access) = &access {
+                    store::save_thread_access(&tx, thread, Some(access))?;
+                }
+                let run = if args.text.is_some() || !staged.is_empty() {
+                    let attachments = attachments::commit(&tx, thread, &staged, &[])?;
+                    Some(runs::enqueue(
+                        &tx,
+                        thread,
+                        NewRun {
+                            attachments: &attachments,
+                            context: &args.context,
+                            ..NewRun::new(args.text.as_deref().unwrap_or_default())
+                        },
+                    )?)
+                } else {
+                    None
+                };
+                if let Some(request_id) = args.request_id {
+                    exec(
+                        &tx,
+                        "INSERT INTO launch_requests (request_id, thread, run) VALUES (?1, ?2, ?3)",
+                        [request_id.into(), thread.into(), run.into()],
+                    )?;
+                }
+                tx.commit()?;
+                drop(staged);
+                ws.kick(thread, run.is_none());
+                Ok((Launched { thread, run }, true))
+            })
             .await?;
+        if created {
+            self.relist(launched.thread);
         }
-        tx.commit().await?;
-        drop(staged);
-        self.kick(thread, run.is_none());
-        drop(db);
-        self.relist(thread);
-        Ok((Launched { thread, run }, true))
+        Ok((launched, created))
     }
 
     pub(crate) async fn send(self: &Arc<Self>, mut args: SendInput) -> Result<Sent, Error> {
         let thread = args.thread;
         threads::validate_request_id(args.request_id.as_deref())?;
         let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        store::require(&mut tx, thread).await?;
-        let previous = match &args.request_id {
-            Some(request_id) => runs::by_request(&mut tx, thread, request_id).await?,
-            None => None,
-        };
-        let state = decisions::SubmissionState {
-            previous,
-            active: if args.mode == Some(SendMode::Steer) && previous.is_none() {
-                runs::active(&mut tx, thread).await?
-            } else {
-                None
-            },
-        };
-        let (place, steer) = match decisions::submit(state, args.mode) {
-            decisions::Submission::Replay(run) => return Ok(Sent { run }),
-            decisions::Submission::Enqueue { place, steer } => (place, steer),
-        };
-        let attachments = attachments::commit(&mut tx, thread, &staged, &args.stored).await?;
-        let run = runs::enqueue(
-            &mut tx,
-            thread,
-            NewRun {
-                origin: args.origin.as_ref(),
-                attachments: &attachments,
-                context: &args.context,
-                request_id: args.request_id.as_deref(),
-                place,
-                ..NewRun::new(&args.text)
-            },
-        )
-        .await?;
-        if let Some(active) = steer {
-            store::withdraw_requests(&mut tx, Some(active), Withdrawal::Steered).await?;
+        let ws = Arc::clone(self);
+        let (sent, created) = self
+            .db
+            .write(move |conn| {
+                let tx = sql::immediate(conn)?;
+                store::require(&tx, thread)?;
+                let previous = match &args.request_id {
+                    Some(request_id) => runs::by_request(&tx, thread, request_id)?,
+                    None => None,
+                };
+                let state = decisions::SubmissionState {
+                    previous,
+                    active: if args.mode == Some(SendMode::Steer) && previous.is_none() {
+                        runs::active(&tx, thread)?
+                    } else {
+                        None
+                    },
+                };
+                let (place, steer) = match decisions::submit(state, args.mode) {
+                    decisions::Submission::Replay(run) => return Ok((Sent { run }, false)),
+                    decisions::Submission::Enqueue { place, steer } => (place, steer),
+                };
+                let attachments = attachments::commit(&tx, thread, &staged, &args.stored)?;
+                let run = runs::enqueue(
+                    &tx,
+                    thread,
+                    NewRun {
+                        origin: args.origin.as_ref(),
+                        attachments: &attachments,
+                        context: &args.context,
+                        request_id: args.request_id.as_deref(),
+                        place,
+                        ..NewRun::new(&args.text)
+                    },
+                )?;
+                if let Some(active) = steer {
+                    store::withdraw_requests(&tx, Some(active), Withdrawal::Steered)?;
+                }
+                tx.commit()?;
+                drop(staged);
+                if let Some(active) = steer {
+                    ws.steer_active(thread, active);
+                }
+                ws.kick(thread, false);
+                Ok((Sent { run }, true))
+            })
+            .await?;
+        if created {
+            self.relist(thread);
         }
-        tx.commit().await?;
-        drop(staged);
-        if let Some(active) = steer {
-            self.steer_active(thread, active);
-        }
-        self.kick(thread, false);
-        drop(db);
-        self.relist(thread);
-        Ok(Sent { run })
+        Ok(sent)
     }
 
     /// Call after committing the withdrawal of the run's pending requests.
@@ -254,29 +272,32 @@ impl Workspace {
         thread: ThreadId,
         requested: Option<RunId>,
     ) -> Result<(), Error> {
-        let active = {
-            let mut db = self.db.lock().await;
-            store::require(&mut db, thread).await?;
-            if let Some(run) = requested
-                && runs::status(&mut db, thread, run).await?.is_none()
-            {
-                return Err(Error::NoRun { thread, run });
-            }
-            let mut tx = db.transaction().await?;
-            let active = runs::cancel(&mut tx, thread, requested).await?;
-            if let Some(active) = active {
-                store::withdraw_requests(&mut tx, Some(active), Withdrawal::Cancelled).await?;
-            }
-            tx.commit().await?;
-            if let Some(active) = active {
-                self.requests.release_run(active);
-                if let Some(driver) = self.workers.get(thread) {
-                    driver.signal(active, Intent::Stop);
+        let requests = Arc::clone(&self.requests);
+        let workers = Arc::clone(&self.workers);
+        let active = self
+            .db
+            .write(move |conn| {
+                store::require(conn, thread)?;
+                if let Some(run) = requested
+                    && runs::status(conn, thread, run)?.is_none()
+                {
+                    return Err(Error::NoRun { thread, run });
                 }
-            }
-            drop(db);
-            active
-        };
+                let tx = sql::immediate(conn)?;
+                let active = runs::cancel(&tx, thread, requested)?;
+                if let Some(active) = active {
+                    store::withdraw_requests(&tx, Some(active), Withdrawal::Cancelled)?;
+                }
+                tx.commit()?;
+                if let Some(active) = active {
+                    requests.release_run(active);
+                    if let Some(driver) = workers.get(thread) {
+                        driver.signal(active, Intent::Stop);
+                    }
+                }
+                Ok(active)
+            })
+            .await?;
         self.settled(thread);
         if let Some(active) = active {
             let result = self
@@ -296,16 +317,18 @@ impl Workspace {
             project,
         } = args;
         let changes = threads::Changes { title, project };
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let (current, in_worktree) = store::metadata(&mut tx, thread).await?;
-        if let Patch::Set(project) = &changes.project {
-            store::require_project(&mut tx, project).await?;
-        }
-        let updated = threads::update(current.clone(), in_worktree, changes)?;
-        store::save_metadata(&mut tx, thread, &updated).await?;
-        tx.commit().await?;
-        drop(db);
+        let (current, updated) = self
+            .db
+            .write_tx(move |tx| {
+                let (current, in_worktree) = store::metadata(tx, thread)?;
+                if let Patch::Set(project) = &changes.project {
+                    store::require_project(tx, project)?;
+                }
+                let updated = threads::update(current.clone(), in_worktree, changes)?;
+                store::save_metadata(tx, thread, &updated)?;
+                Ok((current, updated))
+            })
+            .await?;
         if let threads::Title::User(title) = &updated.title
             && updated.title != current.title
             && let Some(driver) = self.workers.get(thread)
@@ -337,33 +360,38 @@ impl Workspace {
         remove_worktree: bool,
     ) -> Result<(), Error> {
         let reservation = if remove_worktree {
-            let path = {
-                let mut db = self.db.lock().await;
-                let binding = store::binding(&mut db, thread).await?;
-                let path = binding
-                    .checkout
-                    .worktree
-                    .ok_or_else(|| Error::invalid("the thread runs in no worktree"))?;
-                drop(db);
-                path
-            };
+            let path = self
+                .db
+                .read(move |conn| {
+                    let binding = store::binding(conn, thread)?;
+                    binding
+                        .checkout
+                        .worktree
+                        .ok_or_else(|| Error::invalid("the thread runs in no worktree"))
+                })
+                .await?;
             if !worktree::managed(&self.worktrees, &path).await {
                 return Err(placement::Rejection::Unmanaged(path).into());
             }
-            let (reservation, idle_driver) = {
-                let mut db = self.db.lock().await;
-                let binding = store::binding(&mut db, thread).await?;
-                if binding.checkout.worktree.as_deref() != Some(path.as_str()) {
-                    return Err(threads::Rejection::Moved.into());
-                }
-                runs::idle(&mut db, thread).await?;
-                Self::require_unused(&mut db, &path, Some(thread)).await?;
-                let reservation =
-                    self.reserve(Path::new(&path), super::git::CheckoutAction::RemoveWorktree)?;
-                let driver = self.workers.remove(thread);
-                drop(db);
-                (reservation, driver)
-            };
+            let path_for_write = path.clone();
+            let ws = Arc::clone(self);
+            let (reservation, idle_driver) = self
+                .db
+                .write(move |conn| {
+                    let binding = store::binding(conn, thread)?;
+                    if binding.checkout.worktree.as_deref() != Some(path_for_write.as_str()) {
+                        return Err(threads::Rejection::Moved.into());
+                    }
+                    runs::idle(conn, thread)?;
+                    Self::require_unused(conn, &path_for_write, Some(thread))?;
+                    let reservation = ws.reserve(
+                        Path::new(&path_for_write),
+                        super::git::CheckoutAction::RemoveWorktree,
+                    )?;
+                    let driver = ws.workers.remove(thread);
+                    Ok((reservation, driver))
+                })
+                .await?;
             if let Some(driver) = idle_driver {
                 driver.close().await;
             }
@@ -372,27 +400,25 @@ impl Workspace {
         } else {
             None
         };
-        let (driver, binding) = {
-            let mut db = self.db.lock().await;
-            let mut tx = db.transaction().await?;
-            let binding = store::binding(&mut tx, thread).await?;
-            tasks::store::release(&mut tx, thread).await?;
-            super::checkpoints::queue_releases(&mut tx, thread).await?;
-            let count = exec(
-                &mut tx,
-                "DELETE FROM threads WHERE id = ?1",
-                [thread.into()],
-            )
+        let updates = Arc::clone(&self.updates);
+        let workers = Arc::clone(&self.workers);
+        let (driver, binding) = self
+            .db
+            .write(move |conn| {
+                let tx = sql::immediate(conn)?;
+                let binding = store::binding(&tx, thread)?;
+                tasks::store::release(&tx, thread)?;
+                super::checkpoints::queue_releases(&tx, thread)?;
+                let count = exec(&tx, "DELETE FROM threads WHERE id = ?1", [thread.into()])?;
+                if count == 0 {
+                    return Err(Error::NoThread(thread));
+                }
+                tx.commit()?;
+                updates.remove(thread);
+                let driver = workers.remove(thread);
+                Ok((driver, binding))
+            })
             .await?;
-            if count == 0 {
-                return Err(Error::NoThread(thread));
-            }
-            tx.commit().await?;
-            self.updates.remove(thread);
-            let driver = self.workers.remove(thread);
-            drop(db);
-            (driver, binding)
-        };
         drop(reservation);
         self.settled(thread);
         self.due.notify_one();
@@ -414,10 +440,7 @@ impl Workspace {
     }
 }
 
-pub(super) async fn launched(
-    db: &mut Connection,
-    request_id: Option<&str>,
-) -> Result<Option<Launched>, Error> {
+pub(super) fn launched(db: &Conn, request_id: Option<&str>) -> Result<Option<Launched>, Error> {
     let Some(request_id) = request_id else {
         return Ok(None);
     };
@@ -425,8 +448,7 @@ pub(super) async fn launched(
         db,
         "SELECT thread, run FROM launch_requests WHERE request_id = ?1",
         [request_id.into()],
-    )
-    .await?
+    )?
     .map(|row| {
         Ok(Launched {
             thread: row.id(0)?,

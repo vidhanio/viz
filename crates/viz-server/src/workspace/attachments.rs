@@ -9,8 +9,8 @@ use viz_protocol::{BlobInfo, RunId, ThreadId, peer::PeerAttachment};
 
 use super::{
     Workspace,
-    blobs::WritePermit,
-    sql::{Connection, exec, row},
+    reconcile::BlobPermit,
+    sql::{Conn, exec, row},
     store,
 };
 use crate::{
@@ -21,7 +21,7 @@ use crate::{
 const TOTAL_LIMIT: usize = viz_protocol::limits::ATTACHMENT_TOTAL_BYTES;
 
 /// Attachment bytes already persisted in [`super::blobs::BlobStore`] outside
-/// the SQLite lock, carrying GC-blocking permits until the referencing
+/// any SQLite transaction, carrying GC-blocking permits until the referencing
 /// transaction commits.
 #[derive(Debug, Default)]
 pub(super) struct StagedUploads {
@@ -33,7 +33,7 @@ pub(super) struct StagedUploads {
 struct StagedUpload {
     reference: PromptAttachment,
     size: u64,
-    _permit: WritePermit,
+    _permit: BlobPermit,
 }
 
 impl StagedUploads {
@@ -85,8 +85,8 @@ pub(super) async fn stage(
 
 /// Records staged uploads and resolves thread-owned stored attachment ids
 /// under one unified `TOTAL_LIMIT` byte budget for the prompt.
-pub(super) async fn commit(
-    db: &mut Connection,
+pub(super) fn commit(
+    db: &Conn,
     thread: ThreadId,
     staged: &StagedUploads,
     stored_ids: &[String],
@@ -107,8 +107,7 @@ pub(super) async fn commit(
                 upload.reference.mime.as_str().into(),
                 now.into(),
             ],
-        )
-        .await?;
+        )?;
         exec(
             db,
             "INSERT INTO thread_attachments (thread, id, blob, name, mime)
@@ -121,12 +120,11 @@ pub(super) async fn commit(
                 upload.reference.name.as_str().into(),
                 upload.reference.mime.as_str().into(),
             ],
-        )
-        .await?;
+        )?;
         attachments.push(upload.reference.clone());
     }
     for id in stored_ids {
-        let info = owned(db, thread, id).await?;
+        let info = owned(db, thread, id)?;
         let size = usize::try_from(info.size).map_err(|_| too_large())?;
         remaining = remaining.checked_sub(size).ok_or_else(too_large)?;
         attachments.push(PromptAttachment {
@@ -141,8 +139,8 @@ pub(super) async fn commit(
 /// Links peer-pushed content-addressed blobs into `thread_attachments` inside
 /// `db`, verifying each blob exists in `blobs`, matches its declared size, and
 /// stays within the unified prompt byte budget.
-pub(super) async fn link_peer(
-    db: &mut Connection,
+pub(super) fn link_peer(
+    db: &Conn,
     thread: ThreadId,
     refs: &[PeerAttachment],
 ) -> Result<Vec<PromptAttachment>, Error> {
@@ -157,8 +155,7 @@ pub(super) async fn link_peer(
             db,
             "SELECT size FROM blobs WHERE id = ?1",
             [item.blob.as_str().into()],
-        )
-        .await?
+        )?
         .ok_or_else(|| Error::unavailable(format!("blob {} has not been pushed yet", item.blob)))?
         .u64(0)?;
         if stored_size != item.size {
@@ -178,8 +175,7 @@ pub(super) async fn link_peer(
                 item.name.as_str().into(),
                 item.mime.as_str().into(),
             ],
-        )
-        .await?;
+        )?;
         attachments.push(PromptAttachment {
             id: item.blob.clone(),
             name: item.name.clone(),
@@ -204,37 +200,40 @@ pub(super) async fn store_raw(
     }
     let (blob_id, size, permit) = workspace.blobs.put(bytes).await?;
     let now = store::now();
-    let mut db = workspace.db.lock().await;
-    let mut tx = db.transaction().await?;
-    store::require(&mut tx, thread).await?;
-    exec(
-        &mut tx,
-        "INSERT INTO blobs (id, size, mime, created_at) VALUES (?1, ?2, ?3, ?4)
-         ON CONFLICT DO NOTHING",
-        [
-            blob_id.as_str().into(),
-            size.into(),
-            mime.as_str().into(),
-            now.into(),
-        ],
-    )
-    .await?;
-    exec(
-        &mut tx,
-        "INSERT INTO thread_attachments (thread, id, blob, name, mime)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT(thread, id) DO UPDATE SET name = excluded.name, mime = excluded.mime",
-        [
-            thread.into(),
-            blob_id.as_str().into(),
-            blob_id.as_str().into(),
-            name.as_str().into(),
-            mime.as_str().into(),
-        ],
-    )
-    .await?;
-    tx.commit().await?;
-    drop(db);
+    let blob_for_tx = blob_id.clone();
+    let name_for_tx = name.clone();
+    let mime_for_tx = mime.clone();
+    workspace
+        .db
+        .write_tx(move |tx| {
+            store::require(tx, thread)?;
+            exec(
+                tx,
+                "INSERT INTO blobs (id, size, mime, created_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT DO NOTHING",
+                [
+                    blob_for_tx.as_str().into(),
+                    size.into(),
+                    mime_for_tx.as_str().into(),
+                    now.into(),
+                ],
+            )?;
+            exec(
+                tx,
+                "INSERT INTO thread_attachments (thread, id, blob, name, mime)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT(thread, id) DO UPDATE SET name = excluded.name, mime = excluded.mime",
+                [
+                    thread.into(),
+                    blob_for_tx.as_str().into(),
+                    blob_for_tx.as_str().into(),
+                    name_for_tx.as_str().into(),
+                    mime_for_tx.as_str().into(),
+                ],
+            )?;
+            Ok(())
+        })
+        .await?;
     drop(permit);
     Ok(BlobInfo {
         id: blob_id.clone(),
@@ -258,35 +257,34 @@ pub(super) async fn prepare_delegated(
         return Ok(Vec::new());
     }
     let staged = stage(workspace, uploads).await?;
-    let mut db = workspace.db.lock().await;
-    let mut tx = db.transaction().await?;
-    store::require(&mut tx, parent).await?;
-    let refs = commit(&mut tx, parent, &staged, stored_ids).await?;
-    let mut out = Vec::with_capacity(refs.len());
-    for item in refs {
-        let info = owned(&mut tx, parent, &item.id).await?;
-        out.push(PeerAttachment {
-            blob: info.blob,
-            name: item.name,
-            mime: item.mime,
-            size: info.size,
-        });
-    }
-    tx.commit().await?;
-    drop(db);
-    drop(staged);
+    let stored_ids = stored_ids.to_vec();
+    let out = workspace
+        .db
+        .write_tx(move |tx| {
+            store::require(tx, parent)?;
+            let refs = commit(tx, parent, &staged, &stored_ids)?;
+            let mut out = Vec::with_capacity(refs.len());
+            for item in refs {
+                let info = owned(tx, parent, &item.id)?;
+                out.push(PeerAttachment {
+                    blob: info.blob,
+                    name: item.name,
+                    mime: item.mime,
+                    size: info.size,
+                });
+            }
+            drop(staged);
+            Ok(out)
+        })
+        .await?;
     Ok(out)
 }
 
 /// Returns thread-scoped attachment metadata without leaking whether a blob
 /// exists on any other thread.
-pub(super) async fn stat(
-    db: &mut Connection,
-    thread: ThreadId,
-    id: &str,
-) -> Result<BlobInfo, Error> {
-    store::require(db, thread).await?;
-    lookup(db, thread, id).await?.ok_or_else(|| {
+pub(super) fn stat(db: &Conn, thread: ThreadId, id: &str) -> Result<BlobInfo, Error> {
+    store::require(db, thread)?;
+    lookup(db, thread, id)?.ok_or_else(|| {
         Error::not_found(format!(
             "attachment {id} does not belong to thread {thread}"
         ))
@@ -294,26 +292,28 @@ pub(super) async fn stat(
 }
 
 /// Loads thread-owned attachments into wire [`Attachment`] values, enforcing
-/// membership under a brief SQLite lock and reading bytes from disk outside it.
+/// membership on the WAL reader pool and reading bytes from disk outside it.
 pub(super) async fn load_inputs(
     workspace: &Workspace,
     thread: ThreadId,
     ids: &[String],
 ) -> Result<Vec<Attachment>, Error> {
-    let entries = {
-        let mut db = workspace.db.lock().await;
-        store::require(&mut db, thread).await?;
-        let mut remaining = TOTAL_LIMIT;
-        let mut found = Vec::with_capacity(ids.len());
-        for id in ids {
-            let info = owned(&mut db, thread, id).await?;
-            let size = usize::try_from(info.size).map_err(|_| too_large())?;
-            remaining = remaining.checked_sub(size).ok_or_else(too_large)?;
-            found.push(info);
-        }
-        drop(db);
-        found
-    };
+    let ids = ids.to_vec();
+    let entries = workspace
+        .db
+        .read_snapshot(move |tx| {
+            store::require(tx, thread)?;
+            let mut remaining = TOTAL_LIMIT;
+            let mut found = Vec::with_capacity(ids.len());
+            for id in &ids {
+                let info = owned(tx, thread, id)?;
+                let size = usize::try_from(info.size).map_err(|_| too_large())?;
+                remaining = remaining.checked_sub(size).ok_or_else(too_large)?;
+                found.push(info);
+            }
+            Ok(found)
+        })
+        .await?;
     let mut attachments = Vec::with_capacity(entries.len());
     for info in entries {
         let bytes = workspace
@@ -330,7 +330,7 @@ pub(super) async fn load_inputs(
 }
 
 /// Materializes isolated read-only copies of a run's attachments on disk for
-/// an external ACP harness without holding the SQLite lock during file I/O.
+/// an external ACP harness without holding any SQLite lock during file I/O.
 pub(super) async fn materialize(
     workspace: &Workspace,
     thread: ThreadId,
@@ -340,16 +340,17 @@ pub(super) async fn materialize(
     if refs.is_empty() {
         return Ok(Vec::new());
     }
-    let resolved = {
-        let mut db = workspace.db.lock().await;
-        let mut resolved = Vec::with_capacity(refs.len());
-        for item in refs {
-            let info = owned(&mut db, thread, &item.id).await?;
-            resolved.push((item, info.blob, info.size));
-        }
-        drop(db);
-        resolved
-    };
+    let resolved = workspace
+        .db
+        .read_snapshot(move |tx| {
+            let mut resolved = Vec::with_capacity(refs.len());
+            for item in refs {
+                let info = owned(tx, thread, &item.id)?;
+                resolved.push((item, info.blob, info.size));
+            }
+            Ok(resolved)
+        })
+        .await?;
     let parent = workspace.attachment_dir(thread).join(run.to_string());
     let mut written = HashSet::new();
     let mut saved = Vec::with_capacity(resolved.len());
@@ -374,19 +375,15 @@ pub(super) async fn materialize(
     Ok(saved)
 }
 
-async fn owned(db: &mut Connection, thread: ThreadId, id: &str) -> Result<BlobInfo, Error> {
-    lookup(db, thread, id).await?.ok_or_else(|| {
+fn owned(db: &Conn, thread: ThreadId, id: &str) -> Result<BlobInfo, Error> {
+    lookup(db, thread, id)?.ok_or_else(|| {
         Error::invalid(format!(
             "attachment {id} does not belong to thread {thread}"
         ))
     })
 }
 
-async fn lookup(
-    db: &mut Connection,
-    thread: ThreadId,
-    id: &str,
-) -> Result<Option<BlobInfo>, Error> {
+fn lookup(db: &Conn, thread: ThreadId, id: &str) -> Result<Option<BlobInfo>, Error> {
     let Some(mut row) = row(
         db,
         "SELECT ta.id, ta.blob, ta.name, ta.mime, b.size
@@ -394,8 +391,7 @@ async fn lookup(
          JOIN blobs AS b ON b.id = ta.blob
          WHERE ta.thread = ?1 AND ta.id = ?2",
         [thread.into(), id.into()],
-    )
-    .await?
+    )?
     else {
         return Ok(None);
     };

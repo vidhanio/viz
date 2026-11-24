@@ -31,7 +31,7 @@ use crate::{
     error::Error,
     rpc::handlers,
     wire::{RunId, Task, ThreadId},
-    workspace::{Workspace, active_run_from},
+    workspace::{Workspace, active_run_from, sql},
 };
 
 const POLL: Duration = Duration::from_secs(1);
@@ -52,19 +52,18 @@ pub(crate) struct Tasks {
     delivery: AsyncMutex<()>,
     /// Tasks whose delegating call is still waiting to see them admitted. A
     /// refusal the call itself reports is not delivered again.
-    awaited: Mutex<HashSet<TaskId>>,
+    awaited: Arc<Mutex<HashSet<TaskId>>>,
 }
 
 /// Keeps a task in [`Tasks::awaited`].
-struct Awaited<'a> {
-    tasks: &'a Tasks,
+struct Awaited {
+    awaited: Arc<Mutex<HashSet<TaskId>>>,
     id: TaskId,
 }
 
-impl Drop for Awaited<'_> {
+impl Drop for Awaited {
     fn drop(&mut self) {
-        self.tasks
-            .awaited
+        self.awaited
             .lock()
             .expect("awaited tasks lock poisoned")
             .remove(&self.id);
@@ -125,7 +124,7 @@ impl Tasks {
             shutdown: CancellationToken::new(),
             supervisor: Mutex::new(None),
             delivery: AsyncMutex::new(()),
-            awaited: Mutex::default(),
+            awaited: Arc::new(Mutex::default()),
         })
     }
 
@@ -157,7 +156,11 @@ impl Tasks {
     }
 
     pub(crate) async fn list(&self, parent: Option<ThreadId>) -> Result<Vec<Task>, Error> {
-        let stored = store::list(&mut *self.workspace.db.lock().await, parent).await?;
+        let stored = self
+            .workspace
+            .db
+            .read(move |conn| store::list(conn, parent))
+            .await?;
         Ok(stored.into_iter().map(|task| self.task(task)).collect())
     }
 
@@ -167,44 +170,54 @@ impl Tasks {
         turn: Option<RunId>,
         input: DelegateInput,
     ) -> Result<Task, Error> {
-        let environment = input.environment.as_deref().unwrap_or(&self.peers.local);
-        if environment != self.peers.local && self.peers.get(environment).is_none() {
-            return Err(Rejection::UnknownEnvironment(environment.to_owned()).into());
+        let environment = input
+            .environment
+            .clone()
+            .unwrap_or_else(|| self.peers.local.clone());
+        if environment != self.peers.local && self.peers.get(&environment).is_none() {
+            return Err(Rejection::UnknownEnvironment(environment).into());
         }
         decisions::validate_request(&input.text, input.request_id.as_deref())?;
         let title = decisions::title(input.title.as_deref(), &input.text)?;
-        if let Some(request_id) = input.request_id.as_deref() {
-            let mut db = self.workspace.db.lock().await;
-            if let Some(id) = prior_request(&mut db, parent, request_id).await? {
-                drop(db);
-                return self.admitted(&id, parent).await;
-            }
+        if let Some(request_id) = input.request_id.clone()
+            && let Some(id) = self
+                .workspace
+                .db
+                .read(move |conn| prior_request(conn, parent, &request_id))
+                .await?
+        {
+            return self.admitted(&id, parent).await;
         }
         let attachments = self
             .workspace
             .prepare_delegated_attachments(parent, input.attachments, &input.attachment_ids)
             .await?;
 
-        let (id, awaited) = {
-            let mut db = self.workspace.db.lock().await;
-            let prior = if let Some(request_id) = input.request_id.as_deref() {
-                prior_request(&mut db, parent, request_id).await?
-            } else {
-                None
-            };
-            if let Some(id) = prior {
-                (id, None)
-            } else {
-                let active = active_run_from(&mut db, parent).await?;
+        let local_env = self.peers.local.clone();
+        let awaited_set = Arc::clone(&self.awaited);
+        let (id, awaited, created) = self
+            .workspace
+            .db
+            .write(move |conn| {
+                let tx = sql::immediate(conn)?;
+                let prior = if let Some(request_id) = input.request_id.as_deref() {
+                    prior_request(&tx, parent, request_id)?
+                } else {
+                    None
+                };
+                if let Some(id) = prior {
+                    return Ok((id, None, false));
+                }
+                let active = active_run_from(&tx, parent)?;
                 let stopping = match active {
-                    Some(run) => stop_exists(&mut db, parent, run).await?,
+                    Some(run) => stop_exists(&tx, parent, run)?,
                     None => false,
                 };
                 let parent_run = decisions::open(Delegator { active, stopping }, turn)?;
                 let id = TaskId(Uuid::new_v4().to_string());
                 let payload = serde_json::to_string(&ReceiveTask {
                     task: id.clone(),
-                    origin_environment: self.peers.local.clone(),
+                    origin_environment: local_env,
                     parent,
                     thread: input.thread,
                     target: TaskTarget {
@@ -218,44 +231,33 @@ impl Tasks {
                     text: input.text,
                     attachments,
                 })?;
-                let awaited = turn.map(|_| self.await_admission(&id));
                 store::insert(
-                    &mut db,
+                    &tx,
                     New {
                         id: &id,
                         parent,
                         parent_run,
-                        environment,
+                        environment: &environment,
                         title: &title,
                         payload: &payload,
                         request_id: input.request_id.as_deref(),
                     },
-                )
-                .await?;
-                drop(db);
-                self.signal();
-                self.scan.notify_one();
-                (id, awaited)
-            }
-        };
+                )?;
+                tx.commit()?;
+                let awaited = turn.map(|_| hold_admission(&awaited_set, &id));
+                Ok((id, awaited, true))
+            })
+            .await?;
+        if created {
+            self.signal();
+            self.scan.notify_one();
+        }
         let task = self.admitted(&id, parent).await?;
         if awaited.is_some() {
             self.apply(&id, Command::Seen).await?;
         }
         drop(awaited);
         Ok(task)
-    }
-
-    /// Hold back the task's delivery while its delegating call waits.
-    fn await_admission(&self, id: &TaskId) -> Awaited<'_> {
-        self.awaited
-            .lock()
-            .expect("awaited tasks lock poisoned")
-            .insert(id.clone());
-        Awaited {
-            tasks: self,
-            id: id.clone(),
-        }
     }
 
     fn held(&self, id: &TaskId) -> bool {
@@ -271,29 +273,34 @@ impl Tasks {
         task: &TaskId,
         parent: Option<ThreadId>,
     ) -> Result<(), Error> {
-        let mut db = self.workspace.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let stored = store::read(&mut tx, task, parent).await?;
-        store::save(&mut tx, task, &decisions::dismiss(&stored.state)?).await?;
-        tx.commit().await?;
-        drop(db);
+        let task = task.clone();
+        self.workspace
+            .db
+            .write_tx(move |tx| {
+                let stored = store::read(tx, &task, parent)?;
+                store::save(tx, &task, &decisions::dismiss(&stored.state)?)
+            })
+            .await?;
         self.signal();
         Ok(())
     }
 
     /// Remove every removable task from a thread's list.
     pub(crate) async fn clear(&self, parent: ThreadId) -> Result<usize, Error> {
-        let mut db = self.workspace.db.lock().await;
-        let mut tx = db.transaction().await?;
-        let mut count = 0;
-        for task in store::list(&mut tx, Some(parent)).await? {
-            if let Ok(next) = decisions::dismiss(&task.state) {
-                store::save(&mut tx, &task.id, &next).await?;
-                count += 1;
-            }
-        }
-        tx.commit().await?;
-        drop(db);
+        let count = self
+            .workspace
+            .db
+            .write_tx(move |tx| {
+                let mut count = 0;
+                for task in store::list(tx, Some(parent))? {
+                    if let Ok(next) = decisions::dismiss(&task.state) {
+                        store::save(tx, &task.id, &next)?;
+                        count += 1;
+                    }
+                }
+                Ok(count)
+            })
+            .await?;
         self.signal();
         Ok(count)
     }
@@ -326,7 +333,12 @@ impl Tasks {
         task: &TaskId,
         parent: Option<ThreadId>,
     ) -> Result<Task, Error> {
-        let current = store::read(&mut *self.workspace.db.lock().await, task, parent).await?;
+        let task_owned = task.clone();
+        let current = self
+            .workspace
+            .db
+            .read(move |conn| store::read(conn, &task_owned, parent))
+            .await?;
         if is_settled(current.state.status) {
             return Ok(self.task(current));
         }
@@ -372,7 +384,12 @@ impl Tasks {
     }
 
     async fn read(&self, id: &TaskId, parent: Option<ThreadId>) -> Result<Task, Error> {
-        let stored = store::read(&mut *self.workspace.db.lock().await, id, parent).await?;
+        let id = id.clone();
+        let stored = self
+            .workspace
+            .db
+            .read(move |conn| store::read(conn, &id, parent))
+            .await?;
         Ok(self.task(stored))
     }
 
@@ -397,5 +414,17 @@ impl Tasks {
     fn signal(&self) {
         let _ = self.changed.send(());
         self.workspace.directory_changed();
+    }
+}
+
+/// Hold back the task's delivery while its delegating call waits.
+fn hold_admission(awaited: &Arc<Mutex<HashSet<TaskId>>>, id: &TaskId) -> Awaited {
+    awaited
+        .lock()
+        .expect("awaited tasks lock poisoned")
+        .insert(id.clone());
+    Awaited {
+        awaited: Arc::clone(awaited),
+        id: id.clone(),
     }
 }

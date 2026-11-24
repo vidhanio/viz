@@ -42,8 +42,19 @@ pub(super) fn open(path: &Path) -> anyhow::Result<Connection> {
     db.pragma_update(None, "foreign_keys", false)?;
     migrate(&mut db, path)?;
     db.pragma_update(None, "foreign_keys", true)?;
-    db.pragma_update(None, "locking_mode", "EXCLUSIVE")?;
     db.pragma_update(None, "journal_mode", "WAL")?;
+    db.pragma_update(None, "synchronous", "NORMAL")?;
+    Ok(db)
+}
+
+/// Opens a read-only WAL connection for concurrent queries outside the writer
+/// thread.
+pub(super) fn open_reader(path: &Path) -> anyhow::Result<Connection> {
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+    let db = Connection::open_with_flags(path, flags)
+        .with_context(|| format!("opening read-only {}", path.display()))?;
+    db.busy_timeout(BUSY_TIMEOUT)?;
+    db.pragma_update(None, "query_only", true)?;
     Ok(db)
 }
 

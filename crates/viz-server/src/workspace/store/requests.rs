@@ -7,7 +7,7 @@ use viz_protocol::{
 };
 
 use super::{
-    super::sql::{Connection, Row, exec, row, rows},
+    super::sql::{Conn, Row, exec, row, rows},
     from_json, json, now,
 };
 use crate::error::Error;
@@ -26,8 +26,8 @@ fn decode(mut row: Row) -> Result<RunRequest, Error> {
 }
 
 /// Records a request that waits for an answer.
-pub(in crate::workspace) async fn insert_request(
-    db: &mut Connection,
+pub(in crate::workspace) fn insert_request(
+    db: &Conn,
     thread: ThreadId,
     run: RunId,
     body: &RequestBody,
@@ -44,8 +44,7 @@ pub(in crate::workspace) async fn insert_request(
             json(body)?.into(),
             json(&RequestState::Pending)?.into(),
         ],
-    )
-    .await?
+    )?
     .expect("request INSERT RETURNING yielded one row");
     Ok(RunRequest {
         id: row.id(0)?,
@@ -57,8 +56,8 @@ pub(in crate::workspace) async fn insert_request(
     })
 }
 
-pub(in crate::workspace) async fn request(
-    db: &mut Connection,
+pub(in crate::workspace) fn request(
+    db: &Conn,
     thread: ThreadId,
     id: RequestId,
 ) -> Result<Option<RunRequest>, Error> {
@@ -66,44 +65,38 @@ pub(in crate::workspace) async fn request(
         db,
         &format!("SELECT {COLUMNS} FROM run_requests WHERE id = ?1 AND thread = ?2"),
         [id.into(), thread.into()],
-    )
-    .await?
+    )?
     .map(decode)
     .transpose()
 }
 
 /// A thread's requests that still wait, oldest first.
-pub(in crate::workspace) async fn pending_requests(
-    db: &mut Connection,
+pub(in crate::workspace) fn pending_requests(
+    db: &Conn,
     thread: ThreadId,
 ) -> Result<Vec<RunRequest>, Error> {
     rows(
         db,
         &format!("SELECT {COLUMNS} FROM run_requests WHERE thread = ?1 AND pending ORDER BY id"),
         [thread.into()],
-    )
-    .await?
+    )?
     .map(decode)
     .collect()
 }
 
-pub(in crate::workspace) async fn save_request(
-    db: &mut Connection,
-    request: &RunRequest,
-) -> Result<(), Error> {
+pub(in crate::workspace) fn save_request(db: &Conn, request: &RunRequest) -> Result<(), Error> {
     exec(
         db,
         "UPDATE run_requests SET state = ?2 WHERE id = ?1",
         [request.id.into(), json(&request.state)?.into()],
-    )
-    .await?;
+    )?;
     Ok(())
 }
 
 /// Withdraws the waiting requests of one run, or of every run, and returns
 /// the threads they belonged to.
-pub(in crate::workspace) async fn withdraw_requests(
-    db: &mut Connection,
+pub(in crate::workspace) fn withdraw_requests(
+    db: &Conn,
     run: Option<RunId>,
     reason: Withdrawal,
 ) -> Result<Vec<ThreadId>, Error> {
@@ -111,8 +104,7 @@ pub(in crate::workspace) async fn withdraw_requests(
         db,
         &format!("SELECT {COLUMNS} FROM run_requests WHERE pending AND (?1 IS NULL OR run = ?1)"),
         [run.into()],
-    )
-    .await?
+    )?
     .map(decode)
     .collect::<Result<Vec<_>, Error>>()?;
     let at = now();
@@ -127,7 +119,7 @@ pub(in crate::workspace) async fn withdraw_requests(
             at,
         ) {
             request.state = state;
-            save_request(db, &request).await?;
+            save_request(db, &request)?;
             if !threads.contains(&request.thread) {
                 threads.push(request.thread);
             }
@@ -138,8 +130,8 @@ pub(in crate::workspace) async fn withdraw_requests(
 
 /// The thread's chosen access mode and its project's default for the
 /// thread's harness.
-pub(in crate::workspace) async fn chosen_access(
-    db: &mut Connection,
+pub(in crate::workspace) fn chosen_access(
+    db: &Conn,
     thread: ThreadId,
 ) -> Result<(Option<AccessMode>, Option<AccessMode>), Error> {
     let Some(mut row) = row(
@@ -148,8 +140,7 @@ pub(in crate::workspace) async fn chosen_access(
         LEFT JOIN project_access AS p ON p.project = t.project AND p.harness = t.harness
         WHERE t.id = ?1",
         [thread.into()],
-    )
-    .await?
+    )?
     else {
         return Err(Error::NoThread(thread));
     };
@@ -159,17 +150,17 @@ pub(in crate::workspace) async fn chosen_access(
 }
 
 /// The thread's access, from the options its harness last reported.
-pub(in crate::workspace) async fn access(
-    db: &mut Connection,
+pub(in crate::workspace) fn access(
+    db: &Conn,
     thread: ThreadId,
     options: &[viz_protocol::ConfigOption],
 ) -> Result<Access, Error> {
-    let (chosen, project) = chosen_access(db, thread).await?;
+    let (chosen, project) = chosen_access(db, thread)?;
     Ok(requests::access(options, chosen.as_ref(), project.as_ref()))
 }
 
-pub(in crate::workspace) async fn save_thread_access(
-    db: &mut Connection,
+pub(in crate::workspace) fn save_thread_access(
+    db: &Conn,
     thread: ThreadId,
     access: Option<&AccessMode>,
 ) -> Result<(), Error> {
@@ -177,13 +168,12 @@ pub(in crate::workspace) async fn save_thread_access(
         db,
         "UPDATE threads SET access = ?2 WHERE id = ?1",
         [thread.into(), access.map(json).transpose()?.into()],
-    )
-    .await?;
+    )?;
     Ok(())
 }
 
-pub(in crate::workspace) async fn save_project_access(
-    db: &mut Connection,
+pub(in crate::workspace) fn save_project_access(
+    db: &Conn,
     project: &str,
     harness: &str,
     access: Option<&AccessMode>,
@@ -195,16 +185,14 @@ pub(in crate::workspace) async fn save_project_access(
                 "INSERT INTO project_access (project, harness, access) VALUES (?1, ?2, ?3)
                 ON CONFLICT (project, harness) DO UPDATE SET access = excluded.access",
                 [project.into(), harness.into(), json(access)?.into()],
-            )
-            .await?;
+            )?;
         }
         None => {
             exec(
                 db,
                 "DELETE FROM project_access WHERE project = ?1 AND harness = ?2",
                 [project.into(), harness.into()],
-            )
-            .await?;
+            )?;
         }
     }
     Ok(())

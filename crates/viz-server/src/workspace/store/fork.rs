@@ -6,14 +6,14 @@ use viz_core::fork::{Cut, Turn};
 use viz_protocol::{EntryId, ForkedPrompt, ThreadId};
 
 use super::{
-    super::sql::{Connection, exec, row, rows},
+    super::sql::{Conn, exec, row, rows},
     from_json, json,
 };
 use crate::{error::Error, wire::NewEntry};
 
 /// The started runs of a thread, and its last entry.
-pub(in crate::workspace) async fn turns(
-    db: &mut Connection,
+pub(in crate::workspace) fn turns(
+    db: &Conn,
     thread: ThreadId,
 ) -> Result<(Vec<Turn>, Option<EntryId>), Error> {
     let turns = rows(
@@ -22,8 +22,7 @@ pub(in crate::workspace) async fn turns(
          WHERE thread = ?1 AND prompt_entry IS NOT NULL AND (end_entry IS NOT NULL OR status = 'running')
          ORDER BY prompt_entry",
         [thread.into()],
-    )
-    .await?
+    )?
     .map(|row| {
         Ok(Turn {
             run: row.id(0)?,
@@ -36,15 +35,14 @@ pub(in crate::workspace) async fn turns(
         db,
         "SELECT max(id) FROM entries WHERE thread = ?1",
         [thread.into()],
-    )
-    .await?
+    )?
     .map_or(Ok(None), |row| row.opt_id(0))?;
     Ok((turns, last))
 }
 
 /// Whether `entry` belongs to `thread`.
-pub(in crate::workspace) async fn has_entry(
-    db: &mut Connection,
+pub(in crate::workspace) fn has_entry(
+    db: &Conn,
     thread: ThreadId,
     entry: EntryId,
 ) -> Result<bool, Error> {
@@ -52,14 +50,13 @@ pub(in crate::workspace) async fn has_entry(
         db,
         "SELECT 1 FROM entries WHERE thread = ?1 AND id = ?2",
         [thread.into(), entry.into()],
-    )
-    .await?
+    )?
     .is_some())
 }
 
 /// The user's prompt at an entry.
-pub(in crate::workspace) async fn fork_prompt(
-    db: &mut Connection,
+pub(in crate::workspace) fn fork_prompt(
+    db: &Conn,
     thread: ThreadId,
     entry: EntryId,
 ) -> Result<Option<ForkedPrompt>, Error> {
@@ -67,8 +64,7 @@ pub(in crate::workspace) async fn fork_prompt(
         db,
         "SELECT data FROM entries WHERE thread = ?1 AND id = ?2",
         [thread.into(), entry.into()],
-    )
-    .await?
+    )?
     else {
         return Ok(None);
     };
@@ -89,8 +85,8 @@ pub(in crate::workspace) async fn fork_prompt(
 
 /// Copy the entries, runs and attachments of a cut, and return the last entry
 /// copied. Search finds the originals only.
-pub(in crate::workspace) async fn copy_history(
-    db: &mut Connection,
+pub(in crate::workspace) fn copy_history(
+    db: &Conn,
     source: ThreadId,
     fork: ThreadId,
     cut: &Cut,
@@ -104,9 +100,7 @@ pub(in crate::workspace) async fn copy_history(
         db,
         "SELECT id, data FROM entries WHERE thread = ?1 AND id <= ?2 ORDER BY id",
         [source.into(), through.into()],
-    )
-    .await?
-    {
+    )? {
         let mut data = entry.str(1)?;
         if let NewEntry::ToolUpdate { entry, record } = from_json(&data)? {
             let entry = copies.get(&entry).copied().unwrap_or(entry);
@@ -116,8 +110,7 @@ pub(in crate::workspace) async fn copy_history(
             db,
             "INSERT INTO entries (thread, data) VALUES (?1, ?2) RETURNING id",
             [fork.into(), data.into()],
-        )
-        .await?
+        )?
         .expect("entry INSERT RETURNING yielded one row")
         .id::<EntryId>(0)?;
         let original = entry.id(0)?;
@@ -129,8 +122,7 @@ pub(in crate::workspace) async fn copy_history(
             db,
             "SELECT prompt_entry, end_entry FROM runs WHERE id = ?1",
             [run.into()],
-        )
-        .await?
+        )?
         else {
             continue;
         };
@@ -145,8 +137,7 @@ pub(in crate::workspace) async fn copy_history(
                 target(bounds.opt_id(0)?).into(),
                 target(bounds.opt_id(1)?).into(),
             ],
-        )
-        .await?;
+        )?;
     }
     exec(
         db,
@@ -156,7 +147,6 @@ pub(in crate::workspace) async fn copy_history(
              WHERE r.thread = ?1 AND r.attachments IS NOT NULL)
          ON CONFLICT DO NOTHING",
         [fork.into(), source.into()],
-    )
-    .await?;
+    )?;
     Ok(last)
 }

@@ -13,13 +13,16 @@ use viz_protocol::{
     GitDiffRequest, GitDiffTarget, GitFileKind, GitHunk, GitLineStats, GitStatus, ThreadId,
 };
 
-use super::{Workspace, store};
+use super::{Workspace, notifications::Updates, store, worker::Workers};
 use crate::error::Error;
 
 impl Workspace {
     pub(crate) async fn git_repository(&self, thread: ThreadId) -> Result<Repository, Error> {
-        let binding = store::binding(&mut *self.db.lock().await, thread).await?;
-        Ok(Repository::discover(Path::new(&binding.checkout.cwd), &self.closing).await?)
+        let cwd = self
+            .db
+            .read(move |conn| store::thread_cwd(conn, thread))
+            .await?;
+        Ok(Repository::discover(Path::new(&cwd), &self.closing).await?)
     }
 
     pub(crate) async fn git_status(&self, repo: &Repository) -> Result<GitStatus, Error> {
@@ -104,61 +107,9 @@ impl Workspace {
         &self,
         root: &Path,
         action: CheckoutAction,
-    ) -> Result<Reservation<'_>, Error> {
-        let mut held = self.reservations.lock();
-        let covers = |other: &Path| match action {
-            CheckoutAction::RemoveWorktree => other.starts_with(root),
-            CheckoutAction::Git { .. } => other == root,
-        };
-        let busy = held.actions.contains_key(root)
-            || held.actions.iter().any(|(other, held)| {
-                matches!(held, CheckoutAction::RemoveWorktree) && root.starts_with(other)
-            })
-            || (action.excludes_turns() && held.turns.keys().any(|turn| covers(turn)));
-        if busy {
-            return Err(viz_git::Error::Busy.into());
-        }
-        let exclusive = action.excludes_turns();
-        held.actions.insert(root.to_owned(), action);
-        drop(held);
-        self.git_activity();
-        Ok(Reservation {
-            workspace: self,
-            root: root.to_owned(),
-            exclusive,
-        })
-    }
-
-    /// Registers a turn in `root`, or returns `None` while an exclusive action
-    /// holds it. A turn outside any repository always proceeds.
-    pub(super) fn occupy(&self, root: Option<&Path>) -> Option<Occupancy<'_>> {
-        let Some(root) = root else {
-            return Some(Occupancy {
-                workspace: self,
-                root: None,
-            });
-        };
-        let mut held = self.reservations.lock();
-        if held.excludes(root) {
-            return None;
-        }
-        *held.turns.entry(root.to_owned()).or_default() += 1;
-        drop(held);
-        Some(Occupancy {
-            workspace: self,
-            root: Some(root.to_owned()),
-        })
-    }
-
-    /// Whether `path` lies in a worktree being removed.
-    pub(super) fn removing(&self, path: &Path) -> bool {
+    ) -> Result<Reservation, Error> {
         self.reservations
-            .lock()
-            .actions
-            .iter()
-            .any(|(root, action)| {
-                matches!(action, CheckoutAction::RemoveWorktree) && path.starts_with(root)
-            })
+            .reserve(&self.updates, &self.workers, root, action)
     }
 
     /// The checkout root a thread's turns occupy, if it runs in a repository.
@@ -211,6 +162,79 @@ impl Reservations {
     fn lock(&self) -> std::sync::MutexGuard<'_, Held> {
         self.0.lock().expect("checkout reservations poisoned")
     }
+
+    /// Validates a thread's destination synchronously without filesystem I/O.
+    /// Stored project, worktree, scratch, and default paths are canonicalized
+    /// before entering the SQLite writer.
+    pub(super) fn admit_checkout(
+        &self,
+        checkout: &viz_core::placement::Checkout,
+    ) -> Result<(), Error> {
+        let path = Path::new(checkout.worktree.as_deref().unwrap_or(&checkout.cwd));
+        if self.removing(path) {
+            return Err(viz_git::Error::Busy.into());
+        }
+        Ok(())
+    }
+
+    /// Whether `path` lies in a worktree being removed.
+    pub(super) fn removing(&self, path: &Path) -> bool {
+        self.lock().actions.iter().any(|(root, action)| {
+            matches!(action, CheckoutAction::RemoveWorktree) && path.starts_with(root)
+        })
+    }
+
+    pub(super) fn reserve(
+        self: &Arc<Self>,
+        updates: &Arc<Updates>,
+        workers: &Arc<Workers>,
+        root: &Path,
+        action: CheckoutAction,
+    ) -> Result<Reservation, Error> {
+        let mut held = self.lock();
+        let covers = |other: &Path| match action {
+            CheckoutAction::RemoveWorktree => other.starts_with(root),
+            CheckoutAction::Git { .. } => other == root,
+        };
+        let busy = held.actions.contains_key(root)
+            || held.actions.iter().any(|(other, held)| {
+                matches!(held, CheckoutAction::RemoveWorktree) && root.starts_with(other)
+            })
+            || (action.excludes_turns() && held.turns.keys().any(|turn| covers(turn)));
+        if busy {
+            return Err(viz_git::Error::Busy.into());
+        }
+        let exclusive = action.excludes_turns();
+        held.actions.insert(root.to_owned(), action);
+        drop(held);
+        updates.git_activity();
+        Ok(Reservation {
+            reservations: Arc::clone(self),
+            updates: Arc::clone(updates),
+            workers: Arc::clone(workers),
+            root: root.to_owned(),
+            exclusive,
+        })
+    }
+
+    pub(super) fn occupy(self: &Arc<Self>, root: Option<&Path>) -> Option<Occupancy> {
+        let Some(root) = root else {
+            return Some(Occupancy {
+                reservations: Arc::clone(self),
+                root: None,
+            });
+        };
+        let mut held = self.lock();
+        if held.excludes(root) {
+            return None;
+        }
+        *held.turns.entry(root.to_owned()).or_default() += 1;
+        drop(held);
+        Some(Occupancy {
+            reservations: Arc::clone(self),
+            root: Some(root.to_owned()),
+        })
+    }
 }
 
 impl Held {
@@ -249,38 +273,36 @@ impl CheckoutAction {
 }
 
 /// Holds a checkout for an action until dropped.
-pub(super) struct Reservation<'a> {
-    workspace: &'a Workspace,
+pub(super) struct Reservation {
+    reservations: Arc<Reservations>,
+    updates: Arc<Updates>,
+    workers: Arc<Workers>,
     root: PathBuf,
     exclusive: bool,
 }
 
-impl Drop for Reservation<'_> {
+impl Drop for Reservation {
     fn drop(&mut self) {
-        self.workspace
-            .reservations
-            .lock()
-            .actions
-            .remove(&self.root);
-        self.workspace.git_activity();
+        self.reservations.lock().actions.remove(&self.root);
+        self.updates.git_activity();
         if self.exclusive {
-            self.workspace.workers.wake_all();
+            self.workers.wake_all();
         }
     }
 }
 
 /// A turn's hold on its checkout root until dropped.
-pub(super) struct Occupancy<'a> {
-    workspace: &'a Workspace,
+pub(super) struct Occupancy {
+    reservations: Arc<Reservations>,
     root: Option<PathBuf>,
 }
 
-impl Drop for Occupancy<'_> {
+impl Drop for Occupancy {
     fn drop(&mut self) {
         let Some(root) = &self.root else {
             return;
         };
-        let mut held = self.workspace.reservations.lock();
+        let mut held = self.reservations.lock();
         if let Some(count) = held.turns.get_mut(root) {
             *count -= 1;
             if *count == 0 {

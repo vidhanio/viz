@@ -6,7 +6,7 @@ use viz_protocol::{AutoSettle, Lifecycle, RunStatus, SettledBy, Standing, Thread
 use super::{
     super::{
         runs,
-        sql::{Connection, Row, exec, row, rows},
+        sql::{Conn, Row, exec, row, rows},
     },
     now,
 };
@@ -85,26 +85,23 @@ pub(super) fn decode(
     Ok((lifecycle, activity, status))
 }
 
-pub(in crate::workspace) async fn lifecycle(
-    db: &mut Connection,
+pub(in crate::workspace) fn lifecycle(
+    db: &Conn,
     thread: ThreadId,
 ) -> Result<(Lifecycle, Activity), Error> {
     let query = format!("SELECT {COLUMNS} FROM threads AS t WHERE t.id = ?1");
-    let mut row = row(db, &query, [thread.into()])
-        .await?
-        .ok_or(Error::NoThread(thread))?;
+    let mut row = row(db, &query, [thread.into()])?.ok_or(Error::NoThread(thread))?;
     let (lifecycle, activity, _) = decode(&mut row, 0)?;
     Ok((lifecycle, activity))
 }
 
 /// Every thread that is not archived.
-pub(in crate::workspace) async fn standings(db: &mut Connection) -> Result<Vec<Standings>, Error> {
+pub(in crate::workspace) fn standings(db: &Conn) -> Result<Vec<Standings>, Error> {
     let query = format!(
         "SELECT t.id, json_extract(p.settings, '$.autoSettle'), t.cwd, {COLUMNS}
         FROM threads AS t LEFT JOIN projects AS p ON p.path = t.project WHERE t.archived = 0"
     );
-    rows(db, &query, [])
-        .await?
+    rows(db, &query, [])?
         .map(|mut row| {
             let (lifecycle, activity, _) = decode(&mut row, 3)?;
             Ok(Standings {
@@ -122,8 +119,8 @@ pub(in crate::workspace) async fn standings(db: &mut Connection) -> Result<Vec<S
         .collect()
 }
 
-pub(in crate::workspace) async fn save_lifecycle(
-    db: &mut Connection,
+pub(in crate::workspace) fn save_lifecycle(
+    db: &Conn,
     thread: ThreadId,
     lifecycle: &Lifecycle,
 ) -> Result<(), Error> {
@@ -159,28 +156,26 @@ pub(in crate::workspace) async fn save_lifecycle(
             lifecycle.archived.into(),
             lifecycle.unread.into(),
         ],
-    )
-    .await?;
+    )?;
     Ok(())
 }
 
 /// Record what an input, a run's end or the agent did to a thread's lifecycle,
 /// and when.
-pub(in crate::workspace) async fn touch(
-    db: &mut Connection,
+pub(in crate::workspace) fn touch(
+    db: &Conn,
     thread: ThreadId,
     change: impl FnOnce(&Lifecycle) -> Lifecycle,
 ) -> Result<(), Error> {
-    let (current, _) = lifecycle(db, thread).await?;
+    let (current, _) = lifecycle(db, thread)?;
     let next = change(&current);
     if next != current {
-        save_lifecycle(db, thread, &next).await?;
+        save_lifecycle(db, thread, &next)?;
     }
     exec(
         db,
         "UPDATE threads SET updated_at = ?2 WHERE id = ?1",
         [thread.into(), now().into()],
-    )
-    .await?;
+    )?;
     Ok(())
 }

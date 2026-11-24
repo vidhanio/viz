@@ -15,7 +15,7 @@ use super::{
     Workspace, attachments,
     runs::{self, Claimed},
     sessions::{Bound, SessionSlot, persist_snapshot},
-    sql::{Connection, exec, rows},
+    sql::{self, Conn, exec, rows},
     store::{self, Handoff},
     worker::{Driver, Turn},
 };
@@ -41,7 +41,7 @@ impl Workspace {
     pub(super) async fn continue_idle(
         &self,
         thread: ThreadId,
-        driver: &Driver,
+        driver: &Arc<Driver>,
         session: &mut Session,
     ) -> Result<(), Error> {
         let pending = session.idle_updates();
@@ -49,18 +49,24 @@ impl Workspace {
             return Ok(());
         }
         let root = self.turn_root(thread).await?;
-        let (turn, entry, _occupancy) = {
-            let mut db = self.db.lock().await;
-            if driver.lifetime.is_cancelled() {
-                return Ok(());
-            }
-            let occupancy = self.occupy(root.as_deref());
-            let mut tx = db.transaction().await?;
-            let (run, entry) = runs::begin_unprompted(&mut tx, thread).await?;
-            tx.commit().await?;
-            let turn = driver.begin(run);
-            drop(db);
-            (turn, entry, occupancy)
+        let driver_for_write = Arc::clone(driver);
+        let reservations = Arc::clone(&self.reservations);
+        let Some((turn, entry, _occupancy)) = self
+            .db
+            .write(move |conn| {
+                if driver_for_write.lifetime.is_cancelled() {
+                    return Ok(None);
+                }
+                let occupancy = reservations.occupy(root.as_deref());
+                let tx = sql::immediate(conn)?;
+                let (run, entry) = runs::begin_unprompted(&tx, thread)?;
+                tx.commit()?;
+                let turn = driver_for_write.begin(run);
+                Ok(Some((turn, entry, occupancy)))
+            })
+            .await?
+        else {
+            return Ok(());
         };
         let run = turn.run;
         self.checkpoint(thread, run, CheckpointEdge::Before).await;
@@ -93,7 +99,8 @@ impl Workspace {
                     loop {
                         let idle = !transcript.has_open_tools() && open_patches.is_empty();
                         if !session.is_alive()
-                            || (idle && runs::queued(&mut *self.db.lock().await, thread).await?)
+                            || (idle
+                                && self.db.read(move |conn| runs::queued(conn, thread)).await?)
                         {
                             break;
                         }
@@ -142,32 +149,38 @@ impl Workspace {
     pub(super) async fn finish(
         &self,
         thread: ThreadId,
-        driver: &Driver,
+        driver: &Arc<Driver>,
         turn: &Turn,
         end: Result<TurnEnd, String>,
     ) -> Result<(), Error> {
         let run = turn.run;
         self.checkpoint(thread, run, CheckpointEdge::After).await;
-        let mut db = self.db.lock().await;
-        if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
-            self.requests.release_run(run);
-            self.updates.live(thread, None);
-            drop(db);
-            self.settled(thread);
-            return Ok(());
-        }
-        let signals = Signals {
-            closing: self.closing.is_cancelled(),
-            stopped: driver.stopping(run),
-            steered: turn.steer.is_cancelled(),
-        };
-        let settlement = decisions::settle(signals, end);
-        let mut tx = db.transaction().await?;
-        runs::settle(&mut tx, thread, run, settlement, self.is_watched(thread)).await?;
-        tx.commit().await?;
-        self.requests.release_run(run);
-        self.updates.live(thread, None);
-        drop(db);
+        let driver = Arc::clone(driver);
+        let closing = self.closing.clone();
+        let steered = turn.steer.clone();
+        let requests = Arc::clone(&self.requests);
+        let updates = Arc::clone(&self.updates);
+        self.db
+            .write(move |conn| {
+                if runs::status(conn, thread, run)? != Some(RunStatus::Running) {
+                    requests.release_run(run);
+                    updates.live(thread, None);
+                    return Ok(());
+                }
+                let signals = Signals {
+                    closing: closing.is_cancelled(),
+                    stopped: driver.stopping(run),
+                    steered: steered.is_cancelled(),
+                };
+                let settlement = decisions::settle(signals, end);
+                let tx = sql::immediate(conn)?;
+                runs::settle(&tx, thread, run, settlement, updates.is_watched(thread))?;
+                tx.commit()?;
+                requests.release_run(run);
+                updates.live(thread, None);
+                Ok(())
+            })
+            .await?;
         self.settled(thread);
         Ok(())
     }
@@ -179,46 +192,45 @@ impl Workspace {
     /// bare update.
     pub(super) async fn abandon(&self, thread: ThreadId, run: RunId, error: &Error) {
         self.requests.release_run(run);
-        let mut db = self.db.lock().await;
-        let settled = async {
-            if runs::status(&mut db, thread, run).await? != Some(RunStatus::Running) {
-                return Ok(());
-            }
-            let mut tx = db.transaction().await?;
-            runs::settle(
-                &mut tx,
-                thread,
-                run,
-                Settlement::orphaned(),
-                self.is_watched(thread),
-            )
-            .await?;
-            tx.commit().await
-        }
-        .await;
-        let failed = match settled {
-            Ok(()) => Ok(()),
-            Err(settling) => {
-                tracing::warn!(%thread, %run, %settling, "settling an abandoned run");
-                let failed = exec(
-                    &mut db,
-                    "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
-                    [
-                        run.into(),
-                        format!("settling the run failed: {error}").into(),
-                    ],
-                )
-                .await;
-                match failed {
-                    Ok(_) => store::withdraw_requests(&mut db, Some(run), Withdrawal::TurnEnded)
-                        .await
-                        .map(drop),
-                    Err(error) => Err(error),
-                }
-            }
-        };
-        self.updates.live(thread, None);
-        drop(db);
+        let message = format!("settling the run failed: {error}");
+        let updates = Arc::clone(&self.updates);
+        let failed = self
+            .db
+            .write(move |conn| {
+                let settled = (|| -> Result<(), Error> {
+                    if runs::status(conn, thread, run)? != Some(RunStatus::Running) {
+                        return Ok(());
+                    }
+                    let tx = sql::immediate(conn)?;
+                    runs::settle(
+                        &tx,
+                        thread,
+                        run,
+                        Settlement::orphaned(),
+                        updates.is_watched(thread),
+                    )?;
+                    tx.commit()?;
+                    Ok(())
+                })();
+                let outcome = match settled {
+                    Ok(()) => Ok(()),
+                    Err(settling) => {
+                        tracing::warn!(%thread, %run, %settling, "settling an abandoned run");
+                        match exec(
+                            conn,
+                            "UPDATE runs SET status = 'failed', error = ?2 WHERE id = ?1 AND status = 'running'",
+                            [run.into(), message.into()],
+                        ) {
+                            Ok(_) => store::withdraw_requests(conn, Some(run), Withdrawal::TurnEnded)
+                                .map(drop),
+                            Err(error) => Err(error),
+                        }
+                    }
+                };
+                updates.live(thread, None);
+                outcome
+            })
+            .await;
         if let Err(error) = failed {
             tracing::error!(%thread, %run, %error, "could not fail an unsettled run");
         }
@@ -244,25 +256,20 @@ impl Workspace {
         } else {
             std::borrow::Cow::Borrowed(claim.text.as_str())
         };
-        let handoff = {
-            let mut db = self.db.lock().await;
-            let binding = store::binding(&mut db, thread).await?;
-            let note = match binding.session.handoff {
-                Some(from) => {
-                    Some(handoff_note(&mut db, thread, &binding.checkout.cwd, &from).await?)
-                }
-                None => None,
-            };
-            drop(db);
-            note
-        };
+        let (cwd, handoff) = self
+            .db
+            .read_snapshot(move |tx| {
+                let binding = store::binding(tx, thread)?;
+                let note = match binding.session.handoff {
+                    Some(from) => Some(handoff_note(tx, thread, &binding.checkout.cwd, &from)?),
+                    None => None,
+                };
+                Ok((binding.checkout.cwd, note))
+            })
+            .await?;
         if let Some(note) = &handoff {
             text = std::borrow::Cow::Owned(format!("{note}{text}"));
         }
-        let cwd = store::binding(&mut *self.db.lock().await, thread)
-            .await?
-            .checkout
-            .cwd;
         let context = viz_acp::context_blocks(&claim.context, std::path::Path::new(&cwd));
         let id = session.id().to_owned();
         let id = id.as_str();
@@ -285,12 +292,16 @@ impl Workspace {
             )
             .await;
         if handoff.is_some() && outcome.is_ok() {
-            exec(
-                &mut *self.db.lock().await,
-                "UPDATE threads SET session = json_remove(session, '$.handoff') WHERE id = ?1",
-                [thread.into()],
-            )
-            .await?;
+            self.db
+                .write(move |conn| {
+                    exec(
+                        conn,
+                        "UPDATE threads SET session = json_remove(session, '$.handoff') WHERE id = ?1",
+                        [thread.into()],
+                    )?;
+                    Ok(())
+                })
+                .await?;
         }
         outcome.map_err(Error::from)
     }
@@ -304,36 +315,45 @@ impl Workspace {
         live: Option<viz_acp::LiveTurn>,
         snapshot: Option<SessionSnapshot>,
     ) -> Result<Vec<(String, ToolCallStatus)>, Error> {
-        let mut db = self.db.lock().await;
-        let current = self
-            .workers
-            .get(thread)
-            .is_some_and(|driver| driver.is_current(run));
-        let mut patches = Vec::new();
-        if !current {
-            return Ok(patches);
-        }
-        let mut relist = false;
-        if !entries.is_empty() || snapshot.is_some() {
-            let mut tx = db.transaction().await?;
-            if let Some(snapshot) = snapshot {
-                relist = persist_snapshot(&mut tx, thread, snapshot, None).await?;
-            }
-            for entry in entries {
-                if let Some(patch) =
-                    store::publish(&mut tx, thread, session, entry, &self.entry_chunks).await?
-                {
-                    patches.push(patch);
+        let session = session.to_owned();
+        let workers = Arc::clone(&self.workers);
+        let updates = Arc::clone(&self.updates);
+        let entry_chunks = Arc::clone(&self.entry_chunks);
+        let (active, relist, patches) = self
+            .db
+            .write(move |conn| {
+                let current = workers
+                    .get(thread)
+                    .is_some_and(|driver| driver.is_current(run));
+                let mut patches = Vec::new();
+                if !current {
+                    return Ok((false, false, patches));
                 }
+                let mut relist = false;
+                if !entries.is_empty() || snapshot.is_some() {
+                    let tx = sql::immediate(conn)?;
+                    if let Some(snapshot) = snapshot {
+                        relist = persist_snapshot(&tx, thread, snapshot, None)?;
+                    }
+                    for entry in entries {
+                        if let Some(patch) =
+                            store::publish(&tx, thread, &session, entry, &entry_chunks)?
+                        {
+                            patches.push(patch);
+                        }
+                    }
+                    tx.commit()?;
+                }
+                updates.live(thread, live);
+                Ok((true, relist, patches))
+            })
+            .await?;
+        if active {
+            if relist {
+                self.relist(thread);
+            } else {
+                self.changed(Some(thread));
             }
-            tx.commit().await?;
-        }
-        self.updates.live(thread, live);
-        drop(db);
-        if relist {
-            self.relist(thread);
-        } else {
-            self.changed(Some(thread));
         }
         Ok(patches)
     }
@@ -359,8 +379,8 @@ pub(super) fn turn_end(outcome: Result<Outcome, Error>) -> Result<TurnEnd, Strin
 }
 
 /// Load the durable turns for the first prompt after a move.
-async fn handoff_note(
-    db: &mut Connection,
+fn handoff_note(
+    db: &Conn,
     thread: ThreadId,
     cwd: &str,
     handoff: &Handoff,
@@ -370,8 +390,7 @@ async fn handoff_note(
         "SELECT text, coalesce(answer, '') FROM runs WHERE thread = ?1 AND kind = 'prompt'
             AND status IN ('completed', 'failed', 'cancelled', 'interrupted') ORDER BY id DESC",
         [thread.into()],
-    )
-    .await?
+    )?
     .map(|mut row| Ok((row.str(0)?, row.str(1)?)))
     .collect::<Result<Vec<_>, Error>>()?;
     let reason = match handoff {

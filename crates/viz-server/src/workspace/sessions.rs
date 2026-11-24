@@ -10,7 +10,7 @@ use viz_protocol::ThreadId;
 
 use super::{
     Workspace,
-    sql::{Connection, exec, row},
+    sql::{Conn, exec, row},
     store::{self, Binding, Handoff},
 };
 use crate::{
@@ -69,10 +69,10 @@ impl Workspace {
             session,
             project,
             ..
-        } = {
-            let mut db = self.db.lock().await;
-            store::binding(&mut db, thread).await?
-        };
+        } = self
+            .db
+            .read(move |conn| store::binding(conn, thread))
+            .await?;
         if slot.current.as_ref().is_some_and(Session::is_alive) {
             return Ok(Bound {
                 session: slot.current.as_mut().expect("checked live session"),
@@ -83,16 +83,7 @@ impl Workspace {
         slot.clear();
         let (_, config) = self.harness(Some(&harness))?;
         let endpoint = self.mcp.endpoint(thread);
-        let mut setup = viz_acp::SessionSetup::new(&checkout.cwd);
-        if let Some(project) = project {
-            let (_, _, prefs) = store::preferences(&mut *self.db.lock().await, &project).await?;
-            setup.additional_directories = prefs
-                .settings
-                .additional_directories
-                .into_iter()
-                .map(Into::into)
-                .collect();
-        }
+        let setup = self.session_setup(&checkout.cwd, project).await?;
         let operation = match (session.session_id.as_deref(), &session.handoff) {
             (Some(id), _) => OpenSession::Restore {
                 id,
@@ -119,12 +110,18 @@ impl Workspace {
         };
         if session.session_id.as_deref() != Some(running.id()) || handoff.is_some() {
             let handoff = handoff.unwrap_or(session.handoff);
-            exec(
-                &mut *self.db.lock().await,
-                "UPDATE threads SET session = json_set(session, '$.session_id', ?2, '$.handoff', json(?3)) WHERE id = ?1",
-                [thread.into(), running.id().into(), store::json(&handoff)?.into()],
-            )
-            .await?;
+            let running_id = running.id().to_owned();
+            let handoff_json = store::json(&handoff)?;
+            self.db
+                .write(move |conn| {
+                    exec(
+                        conn,
+                        "UPDATE threads SET session = json_set(session, '$.session_id', ?2, '$.handoff', json(?3)) WHERE id = ?1",
+                        [thread.into(), running_id.into(), handoff_json.into()],
+                    )?;
+                    Ok(())
+                })
+                .await?;
         }
         let desired = tokio::select! {
             biased;
@@ -133,16 +130,16 @@ impl Workspace {
         };
         let desired = self.apply_access(thread, &running, desired).await?;
         let updates = running.watch();
-        let relist = {
-            let mut db = self.db.lock().await;
-            let mut tx = db.transaction().await?;
-            let snapshot = running.snapshot();
-            update_catalog(&mut tx, &harness, &snapshot).await?;
-            let relist = persist_snapshot(&mut tx, thread, snapshot, Some(&desired)).await?;
-            tx.commit().await?;
-            drop(db);
-            relist
-        };
+        let snapshot = running.snapshot();
+        let harness_for_tx = harness.clone();
+        let desired_for_tx = desired.clone();
+        let relist = self
+            .db
+            .write_tx(move |tx| {
+                update_catalog(tx, &harness_for_tx, &snapshot)?;
+                persist_snapshot(tx, thread, snapshot, Some(&desired_for_tx))
+            })
+            .await?;
         slot.updates = Some(updates);
         let session_ref = slot.current.insert(running);
         if relist {
@@ -157,6 +154,27 @@ impl Workspace {
         })
     }
 
+    async fn session_setup(
+        &self,
+        cwd: &str,
+        project: Option<String>,
+    ) -> Result<viz_acp::SessionSetup, Error> {
+        let mut setup = viz_acp::SessionSetup::new(cwd);
+        if let Some(project) = project {
+            let (_, _, prefs) = self
+                .db
+                .read(move |conn| store::preferences(conn, &project))
+                .await?;
+            setup.additional_directories = prefs
+                .settings
+                .additional_directories
+                .into_iter()
+                .map(Into::into)
+                .collect();
+        }
+        Ok(setup)
+    }
+
     /// Switches a newly opened session to the thread's or project's chosen
     /// harness mode. An explicit override must apply before the turn starts.
     async fn apply_access(
@@ -165,7 +183,10 @@ impl Workspace {
         session: &Session,
         desired: Desired,
     ) -> Result<Desired, Error> {
-        let (chosen, project) = store::chosen_access(&mut *self.db.lock().await, thread).await?;
+        let (chosen, project) = self
+            .db
+            .read(move |conn| store::chosen_access(conn, thread))
+            .await?;
         let required = chosen.is_some();
         let Some(native) = chosen.or(project).and_then(|mode| mode.native) else {
             return Ok(desired);
@@ -210,12 +231,13 @@ impl Workspace {
             })?,
         };
         let snapshot = session.snapshot();
-        let mut db = self.db.lock().await;
-        let mut tx = db.transaction().await?;
-        update_catalog(&mut tx, &harness, &snapshot).await?;
-        let relist = persist_snapshot(&mut tx, thread, snapshot, Some(&desired)).await?;
-        tx.commit().await?;
-        drop(db);
+        let relist = self
+            .db
+            .write_tx(move |tx| {
+                update_catalog(tx, &harness, &snapshot)?;
+                persist_snapshot(tx, thread, snapshot, Some(&desired))
+            })
+            .await?;
         if relist {
             self.relist(thread);
         } else {
@@ -232,8 +254,11 @@ impl Workspace {
         let Some(session) = slot.current.as_ref() else {
             return Ok(());
         };
-        let updated =
-            persist_snapshot(&mut *self.db.lock().await, thread, session.snapshot(), None).await?;
+        let snapshot = session.snapshot();
+        let updated = self
+            .db
+            .write(move |conn| persist_snapshot(conn, thread, snapshot, None))
+            .await?;
         if updated {
             self.relist(thread);
         } else {
@@ -283,35 +308,29 @@ pub(super) struct Bound<'slot> {
     desired: Desired,
 }
 
-pub(super) async fn catalog(db: &mut Connection, name: &str) -> Result<Option<Catalog>, Error> {
+pub(super) fn catalog(db: &Conn, name: &str) -> Result<Option<Catalog>, Error> {
     row(
         db,
         "SELECT data FROM harness_catalogs WHERE name = ?1",
         [name.into()],
-    )
-    .await?
+    )?
     .map(|mut row| store::from_json(&row.str(0)?))
     .transpose()
 }
 
-pub(super) async fn save_catalog(
-    db: &mut Connection,
-    name: &str,
-    catalog: &Catalog,
-) -> Result<(), Error> {
-    exec(db, "INSERT INTO harness_catalogs (name, data) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET data = excluded.data WHERE data <> excluded.data",
-        [name.into(), store::json(catalog)?.into()]).await?;
+pub(super) fn save_catalog(db: &Conn, name: &str, catalog: &Catalog) -> Result<(), Error> {
+    exec(
+        db,
+        "INSERT INTO harness_catalogs (name, data) VALUES (?1, ?2) ON CONFLICT(name) DO UPDATE SET data = excluded.data WHERE data <> excluded.data",
+        [name.into(), store::json(catalog)?.into()],
+    )?;
     Ok(())
 }
 
-async fn update_catalog(
-    db: &mut Connection,
-    name: &str,
-    snapshot: &SessionSnapshot,
-) -> Result<(), Error> {
-    let stored = catalog(db, name).await?;
+fn update_catalog(db: &Conn, name: &str, snapshot: &SessionSnapshot) -> Result<(), Error> {
+    let stored = catalog(db, name)?;
     if let Some(updated) = Catalog::merge(stored.as_ref(), &snapshot.options, &snapshot.opened) {
-        save_catalog(db, name, &updated).await?;
+        save_catalog(db, name, &updated)?;
     }
     if !snapshot.commands.is_empty() {
         let commands: Vec<_> = snapshot
@@ -324,23 +343,21 @@ async fn update_catalog(
             db,
             "UPDATE harness_catalogs SET commands = ?2 WHERE name = ?1",
             [name.into(), store::json(&commands)?.into()],
-        )
-        .await?;
+        )?;
     }
     Ok(())
 }
 
 /// The commands a harness's latest session offered.
-pub(super) async fn harness_commands(
-    db: &mut Connection,
+pub(super) fn harness_commands(
+    db: &Conn,
     name: &str,
 ) -> Result<Vec<viz_protocol::SlashCommand>, Error> {
     Ok(row(
         db,
         "SELECT commands FROM harness_catalogs WHERE name = ?1",
         [name.into()],
-    )
-    .await?
+    )?
     .and_then(|mut row| row.opt_str(0).transpose())
     .transpose()?
     .map(|text| store::from_json(&text))
@@ -367,13 +384,13 @@ fn slash_command(command: viz_acp::Command) -> viz_protocol::SlashCommand {
 /// Saves `value` as the thread's choice for `option` while a turn holds the
 /// session, showing it in the thread's options until the harness reports
 /// otherwise. Returns whether the thread's summary labels changed.
-pub(super) async fn defer_option(
-    db: &mut Connection,
+pub(super) fn defer_option(
+    db: &Conn,
     thread: ThreadId,
     option: &str,
     value: OptionValue,
 ) -> Result<bool, Error> {
-    let mut session = store::binding(db, thread).await?.session;
+    let mut session = store::binding(db, thread)?.session;
     let before = Labels::from_options(&session.options);
     let (model, thinking) = (
         before.model.map(str::to_owned),
@@ -395,13 +412,12 @@ pub(super) async fn defer_option(
             after.model.into(),
             after.thinking.into(),
         ],
-    )
-    .await?;
+    )?;
     Ok(after.model != model.as_deref() || after.thinking != thinking.as_deref())
 }
 
-pub(super) async fn persist_snapshot(
-    db: &mut Connection,
+pub(super) fn persist_snapshot(
+    db: &Conn,
     thread: ThreadId,
     snapshot: SessionSnapshot,
     desired: Option<&Desired>,
@@ -416,8 +432,7 @@ pub(super) async fn persist_snapshot(
         db,
         "SELECT title, user_title, model, thinking, setup_failed FROM threads WHERE id = ?1",
         [thread.into()],
-    )
-    .await?
+    )?
     else {
         return Ok(false);
     };
@@ -431,18 +446,32 @@ pub(super) async fn persist_snapshot(
         || prior.opt_str(2)?.as_deref() != model
         || prior.opt_str(3)?.as_deref() != thinking
         || prior.flag(4)?;
-    exec(db, "UPDATE threads SET
+    exec(
+        db,
+        "UPDATE threads SET
           session = json_set(session, '$.session_id', ?2, '$.options', json(?3), '$.commands', json(?4), '$.images', json(?5), '$.usage', json(?6),
             '$.title', coalesce(?10, json_extract(session, '$.title'))),
           title = ?7,
-          model = ?8, thinking = ?9, setup_failed = 0 WHERE id = ?1", [
-        thread.into(), snapshot.session_id.into(), store::json(&snapshot.options)?.into(), store::json(&commands)?.into(),
-        if snapshot.images { "true" } else { "false" }.into(), store::json(&usage)?.into(), title.into(), model.into(), thinking.into(),
-        snapshot.title.into(),
-    ]).await?;
+          model = ?8, thinking = ?9, setup_failed = 0 WHERE id = ?1",
+        [
+            thread.into(),
+            snapshot.session_id.into(),
+            store::json(&snapshot.options)?.into(),
+            store::json(&commands)?.into(),
+            if snapshot.images { "true" } else { "false" }.into(),
+            store::json(&usage)?.into(),
+            title.into(),
+            model.into(),
+            thinking.into(),
+            snapshot.title.into(),
+        ],
+    )?;
     if let Some(desired) = desired {
-        exec(db, "UPDATE threads SET session = json_set(session, '$.desired', json(?2), '$.selection', NULL) WHERE id = ?1",
-            [thread.into(), store::json(desired)?.into()]).await?;
+        exec(
+            db,
+            "UPDATE threads SET session = json_set(session, '$.desired', json(?2), '$.selection', NULL) WHERE id = ?1",
+            [thread.into(), store::json(desired)?.into()],
+        )?;
     }
     Ok(relist)
 }

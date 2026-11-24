@@ -23,29 +23,34 @@ impl Tasks {
     /// Give the parent thread a settled result.
     pub(super) async fn deliver(&self, task: &TaskId) -> Result<(), Error> {
         let _delivery = self.delivery.lock().await;
-        let task = store::read(&mut *self.workspace.db.lock().await, task, None).await?;
+        let task_id = task.clone();
+        let task = self
+            .workspace
+            .db
+            .read(move |conn| store::read(conn, &task_id, None))
+            .await?;
         let Step::Deliver(mode) = decisions::next(&task.state) else {
             return Ok(());
         };
         let text = task.state.report(&task.id, &task.title, &task.environment);
         let wake = NewWake {
             thread: task.parent,
-            task: &task.id,
+            task: task.id.clone(),
             source: WakeSource::Result,
-            text: &text,
+            text,
             mode,
         };
+        let state = task.state;
+        let id = task.id;
         self.workspace
-            .wake(wake, async |tx, woken| {
+            .wake(wake, move |tx, woken| {
                 let run = match woken {
                     Woken::Run(run) => Some(*run),
                     Woken::Entry => None,
-                    Woken::Deleted => return store::remove(tx, &task.id).await,
+                    Woken::Deleted => return store::remove(tx, &id),
                 };
-                match decisions::decide(&task.state, Command::Delivered(run)) {
-                    Some(next) => store::save(tx, &task.id, &next).await,
-                    None => Ok(()),
-                }
+                decisions::decide(&state, Command::Delivered(run))
+                    .map_or_else(|| Ok(()), |next| store::save(tx, &id, &next))
             })
             .await?;
         self.signal();
@@ -60,17 +65,30 @@ impl Tasks {
         task: &TaskId,
         run: RunId,
     ) -> Result<(), Error> {
-        let Some(mut row) = sql::row(
-            &mut *self.workspace.db.lock().await,
-            "SELECT thread, text FROM task_follow_ups WHERE environment = ?1 AND task = ?2 AND run = ?3",
-            [environment.into(), task.into(), run.into()],
-        ).await? else { return Ok(()) };
+        let env_owned = environment.to_owned();
+        let task_owned = task.clone();
+        let Some((thread, text)) = self
+            .workspace
+            .db
+            .read(move |conn| {
+                sql::row(
+                    conn,
+                    "SELECT thread, text FROM task_follow_ups WHERE environment = ?1 AND task = ?2 AND run = ?3",
+                    [env_owned.as_str().into(), (&task_owned).into(), run.into()],
+                )?
+                .map(|mut row| Ok::<_, Error>((row.id(0)?, row.str(1)?)))
+                .transpose()
+            })
+            .await?
+        else {
+            return Ok(());
+        };
         let request = FollowUp {
             source: self.peers.local.clone(),
             task: task.clone(),
-            thread: row.id(0)?,
+            thread,
             run,
-            text: row.str(1)?,
+            text,
         };
         let acknowledged = if environment == self.peers.local {
             self.follow_up(request).await?
@@ -80,12 +98,19 @@ impl Tasks {
                 .await?
         };
         if acknowledged {
-            sql::exec(
-                &mut *self.workspace.db.lock().await,
-                "DELETE FROM task_follow_ups WHERE environment = ?1 AND task = ?2 AND run = ?3",
-                [environment.into(), task.into(), run.into()],
-            )
-            .await?;
+            let env_owned = environment.to_owned();
+            let task_owned = task.clone();
+            self.workspace
+                .db
+                .write(move |conn| {
+                    sql::exec(
+                        conn,
+                        "DELETE FROM task_follow_ups WHERE environment = ?1 AND task = ?2 AND run = ?3",
+                        [env_owned.as_str().into(), (&task_owned).into(), run.into()],
+                    )?;
+                    Ok(())
+                })
+                .await?;
         }
         Ok(())
     }
@@ -94,23 +119,27 @@ impl Tasks {
     /// transcript entries, but cannot be woken by a follow-up.
     pub(crate) async fn follow_up(&self, request: FollowUp) -> Result<bool, Error> {
         let _delivery = self.delivery.lock().await;
-        let (task, stopped) = {
-            let mut db = self.workspace.db.lock().await;
-            let task = match store::read(&mut db, &request.task, None).await {
-                Ok(task) if task.environment == request.source => Some(task),
-                Ok(_) | Err(Error::NoTask(_)) => None,
-                Err(error) => return Err(error),
-            };
-            let stopped = match &task {
-                Some(task) => match task.parent_run {
-                    Some(run) => stop_exists(&mut db, task.parent, run).await?,
+        let task_id = request.task.clone();
+        let source = request.source.clone();
+        let (task, stopped) = self
+            .workspace
+            .db
+            .read_snapshot(move |tx| {
+                let task = match store::read(tx, &task_id, None) {
+                    Ok(task) if task.environment == source => Some(task),
+                    Ok(_) | Err(Error::NoTask(_)) => None,
+                    Err(error) => return Err(error),
+                };
+                let stopped = match &task {
+                    Some(task) => match task.parent_run {
+                        Some(run) => stop_exists(tx, task.parent, run)?,
+                        None => false,
+                    },
                     None => false,
-                },
-                None => false,
-            };
-            drop(db);
-            (task, stopped)
-        };
+                };
+                Ok((task, stopped))
+            })
+            .await?;
         let decision = decisions::follow_up(
             task.as_ref().map(|task| &task.state),
             request.thread,
@@ -127,12 +156,12 @@ impl Tasks {
         );
         let wake = NewWake {
             thread: task.parent,
-            task: &request.task,
+            task: request.task,
             source: WakeSource::Continuation(request.run),
-            text: &text,
+            text,
             mode,
         };
-        self.workspace.wake(wake, async |_, _| Ok(())).await?;
+        self.workspace.wake(wake, |_, _| Ok(())).await?;
         self.signal();
         Ok(true)
     }
@@ -144,27 +173,34 @@ impl Tasks {
             cancel,
         } = request;
         let _delivery = self.delivery.lock().await;
-        let mut db = self.workspace.db.lock().await;
-        let family = snapshot(&mut db, thread, run).await?;
-        let mut stopped = stop_exists(&mut db, thread, run).await?;
-        if family.should_record_stop(cancel, stopped) {
-            let mut tx = db.transaction().await?;
-            sql::exec(
-                &mut tx,
-                "INSERT INTO stopped_task_runs (thread, run, handled) VALUES (?1, ?2, 0)",
-                [thread.into(), run.into()],
-            )
+        let (run_progress, recorded_stop) = self
+            .workspace
+            .db
+            .write(move |conn| {
+                let family = snapshot(conn, thread, run)?;
+                let mut stopped = stop_exists(conn, thread, run)?;
+                let recorded_stop = if family.should_record_stop(cancel, stopped) {
+                    let tx = sql::immediate(conn)?;
+                    sql::exec(
+                        &tx,
+                        "INSERT INTO stopped_task_runs (thread, run, handled) VALUES (?1, ?2, 0)",
+                        [thread.into(), run.into()],
+                    )?;
+                    suppress(&tx, thread, run)?;
+                    tx.commit()?;
+                    stopped = true;
+                    true
+                } else {
+                    false
+                };
+                Ok((family.progress(thread, run, stopped), recorded_stop))
+            })
             .await?;
-            suppress(&mut tx, thread, run).await?;
-            tx.commit().await?;
-            stopped = true;
+        if recorded_stop {
             self.scan.notify_one();
             self.signal();
         }
-        drop(db);
-        Ok(ProgressResult {
-            run: family.progress(thread, run, stopped),
-        })
+        Ok(ProgressResult { run: run_progress })
     }
 
     pub(super) async fn drive_stop(&self, thread: ThreadId, run: RunId) {
@@ -183,22 +219,29 @@ impl Tasks {
     async fn stop_family(&self, thread: ThreadId, run: RunId) -> Result<bool, Error> {
         let active = {
             let _delivery = self.delivery.lock().await;
-            let mut db = self.workspace.db.lock().await;
-            let family = snapshot(&mut db, thread, run).await?;
-            if !family.pending() {
-                sql::exec(
-                    &mut db,
-                    "UPDATE stopped_task_runs SET handled = 1 WHERE thread = ?1 AND run = ?2",
-                    [thread.into(), run.into()],
-                )
+            let outcome = self
+                .workspace
+                .db
+                .write(move |conn| {
+                    let family = snapshot(conn, thread, run)?;
+                    if !family.pending() {
+                        sql::exec(
+                            conn,
+                            "UPDATE stopped_task_runs SET handled = 1 WHERE thread = ?1 AND run = ?2",
+                            [thread.into(), run.into()],
+                        )?;
+                        return Ok(None);
+                    }
+                    let tx = sql::immediate(conn)?;
+                    suppress(&tx, thread, run)?;
+                    tx.commit()?;
+                    Ok(Some(family.active))
+                })
                 .await?;
-                return Ok(true);
+            match outcome {
+                Some(active) => active,
+                None => return Ok(true),
             }
-            let mut tx = db.transaction().await?;
-            suppress(&mut tx, thread, run).await?;
-            tx.commit().await?;
-            drop(db);
-            family.active
         };
         for active_run in active {
             if let Err(error) = self.workspace.stop(thread, Some(active_run)).await

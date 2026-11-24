@@ -11,7 +11,7 @@ use crate::{
     workspace::{
         run_from,
         runs::by_ids,
-        sql::{self, Connection, Row},
+        sql::{self, Conn, Row},
     },
 };
 
@@ -26,6 +26,7 @@ pub(super) struct Stored {
 }
 
 /// A task to record.
+#[derive(Clone, Copy)]
 pub(super) struct New<'a> {
     pub(super) id: &'a TaskId,
     pub(super) parent: ThreadId,
@@ -47,33 +48,24 @@ macro_rules! select_task {
 }
 
 /// Read one task, or only if `parent` owns it.
-pub(super) async fn read(
-    db: &mut Connection,
-    id: &TaskId,
-    parent: Option<ThreadId>,
-) -> Result<Stored, Error> {
+pub(super) fn read(db: &Conn, id: &TaskId, parent: Option<ThreadId>) -> Result<Stored, Error> {
     sql::row(
         db,
         select_task!("id = ?1 AND (?2 IS NULL OR parent = ?2)"),
         [id.into(), parent.into()],
-    )
-    .await?
+    )?
     .map(decode)
     .transpose()?
     .ok_or_else(|| Error::NoTask(id.clone()))
 }
 
 /// The tasks listed under `parent`, or under any thread, newest first.
-pub(super) async fn list(
-    db: &mut Connection,
-    parent: Option<ThreadId>,
-) -> Result<Vec<Stored>, Error> {
+pub(super) fn list(db: &Conn, parent: Option<ThreadId>) -> Result<Vec<Stored>, Error> {
     sql::rows(
         db,
         select_task!("dismissed = 0 AND (?1 IS NULL OR parent = ?1) ORDER BY rowid DESC"),
         [parent.into()],
-    )
-    .await?
+    )?
     .map(decode)
     .collect()
 }
@@ -130,34 +122,32 @@ fn decode_delivery(row: &mut Row, column: usize) -> Result<Delivery, Error> {
 }
 
 /// Remove a task nothing can refer to.
-pub(super) async fn remove(db: &mut Connection, id: &TaskId) -> Result<(), Error> {
-    sql::exec(db, "DELETE FROM agent_tasks WHERE id = ?1", [id.into()]).await?;
+pub(super) fn remove(db: &Conn, id: &TaskId) -> Result<(), Error> {
+    sql::exec(db, "DELETE FROM agent_tasks WHERE id = ?1", [id.into()])?;
     Ok(())
 }
 
 /// Release what a deleted thread delegated, and its stop requests. Tasks still
 /// under way are stopped first (see [`decisions::orphan`]).
-pub(crate) async fn release(db: &mut Connection, parent: ThreadId) -> Result<(), Error> {
-    let tasks = sql::rows(db, select_task!("parent = ?1"), [parent.into()])
-        .await?
+pub(crate) fn release(db: &Conn, parent: ThreadId) -> Result<(), Error> {
+    let tasks = sql::rows(db, select_task!("parent = ?1"), [parent.into()])?
         .map(decode)
         .collect::<Result<Vec<_>, Error>>()?;
     for task in tasks {
         match decisions::orphan(&task.state) {
-            Orphan::Remove => remove(db, &task.id).await?,
-            Orphan::Stop(next) => save(db, &task.id, &next).await?,
+            Orphan::Remove => remove(db, &task.id)?,
+            Orphan::Stop(next) => save(db, &task.id, &next)?,
         }
     }
     sql::exec(
         db,
         "DELETE FROM stopped_task_runs WHERE thread = ?1",
         [parent.into()],
-    )
-    .await?;
+    )?;
     Ok(())
 }
 
-pub(super) async fn insert(db: &mut Connection, new: New<'_>) -> Result<(), Error> {
+pub(super) fn insert(db: &Conn, new: New<'_>) -> Result<(), Error> {
     sql::exec(
         db,
         "INSERT INTO agent_tasks (id, parent, parent_run, environment, status, title, payload, request_id, phase, delivery)
@@ -171,17 +161,12 @@ pub(super) async fn insert(db: &mut Connection, new: New<'_>) -> Result<(), Erro
             new.payload.into(),
             new.request_id.into(),
         ],
-    )
-    .await?;
+    )?;
     Ok(())
 }
 
 /// Store a task's new state, dropping the payload once its offer is over.
-pub(super) async fn save(
-    db: &mut Connection,
-    id: &TaskId,
-    task: &decisions::Task,
-) -> Result<(), Error> {
+pub(super) fn save(db: &Conn, id: &TaskId, task: &decisions::Task) -> Result<(), Error> {
     let phase = match task.phase {
         Phase::Pending => "pending",
         Phase::Offered => "offered",
@@ -222,24 +207,22 @@ pub(super) async fn save(
             task.phase.offerable().into(),
             task.dismissed.into(),
         ],
-    )
-    .await?;
+    )?;
     Ok(())
 }
 
 /// The offer to send for a task, while it may still be sent.
-pub(super) async fn payload(db: &mut Connection, id: &TaskId) -> Result<Option<String>, Error> {
+pub(super) fn payload(db: &Conn, id: &TaskId) -> Result<Option<String>, Error> {
     sql::row(
         db,
         "SELECT payload FROM agent_tasks WHERE id = ?1",
         [id.into()],
-    )
-    .await?
+    )?
     .map_or(Ok(None), |mut row| row.opt_str(0))
 }
 
-pub(super) async fn prior_request(
-    db: &mut Connection,
+pub(super) fn prior_request(
+    db: &Conn,
     parent: ThreadId,
     request: &str,
 ) -> Result<Option<TaskId>, Error> {
@@ -247,57 +230,43 @@ pub(super) async fn prior_request(
         db,
         "SELECT id FROM agent_tasks WHERE parent = ?1 AND request_id = ?2",
         [parent.into(), request.into()],
-    )
-    .await?
+    )?
     .map(|mut row| row.str(0).map(TaskId))
     .transpose()
 }
 
-pub(super) async fn stop_exists(
-    db: &mut Connection,
-    thread: ThreadId,
-    run: RunId,
-) -> Result<bool, Error> {
+pub(super) fn stop_exists(db: &Conn, thread: ThreadId, run: RunId) -> Result<bool, Error> {
     Ok(sql::row(
         db,
         "SELECT handled FROM stopped_task_runs WHERE thread = ?1 AND run = ?2",
         [thread.into(), run.into()],
-    )
-    .await?
+    )?
     .is_some())
 }
 
 /// Keep a stopped family's undelivered results from waking anyone, and cancel
 /// what is still running.
-pub(super) async fn suppress(
-    db: &mut Connection,
-    thread: ThreadId,
-    run: RunId,
-) -> Result<(), Error> {
-    for member in family(db, thread, run).await?.tasks {
+pub(super) fn suppress(db: &Conn, thread: ThreadId, run: RunId) -> Result<(), Error> {
+    for member in family(db, thread, run)?.tasks {
         if matches!(member.delivery, Delivery::Delivered(_)) {
             continue;
         }
-        let task = read(db, &member.id, None).await?;
+        let task = read(db, &member.id, None)?;
         if let Some(next) = decisions::decide(&task.state, decisions::Command::Suppress) {
-            save(db, &task.id, &next).await?;
+            save(db, &task.id, &next)?;
         }
     }
     Ok(())
 }
 
-pub(super) async fn snapshot(
-    db: &mut Connection,
-    thread: ThreadId,
-    run: RunId,
-) -> Result<Family, Error> {
-    let root = run_from(db, thread, run).await?;
-    let family = family(db, thread, run).await?;
+pub(super) fn snapshot(db: &Conn, thread: ThreadId, run: RunId) -> Result<Family, Error> {
+    let root = run_from(db, thread, run)?;
+    let family = family(db, thread, run)?;
     let pending_delivery = family
         .tasks
         .iter()
         .any(|task| matches!(task.delivery, Delivery::Owed(_)));
-    let wakes = by_ids(db, thread, &family.wakes).await?;
+    let wakes = by_ids(db, thread, &family.wakes)?;
     Ok(Family::from_runs(root, wakes, pending_delivery))
 }
 
@@ -315,14 +284,13 @@ struct Member {
 
 /// Original result wakes join the family after delivery is recorded. Follow-up
 /// wakes join on their receipt, which is persisted with the new run.
-async fn family(db: &mut Connection, thread: ThreadId, run: RunId) -> Result<FamilyRows, Error> {
+fn family(db: &Conn, thread: ThreadId, run: RunId) -> Result<FamilyRows, Error> {
     let tasks = sql::rows(
         db,
         "SELECT id, parent_run, delivery, wake_run FROM agent_tasks
          WHERE parent = ?1 AND parent_run IS NOT NULL",
         [thread.into()],
-    )
-    .await?
+    )?
     .map(|mut row| {
         Ok(Member {
             id: TaskId(row.str(0)?),
@@ -337,8 +305,7 @@ async fn family(db: &mut Connection, thread: ThreadId, run: RunId) -> Result<Fam
          JOIN agent_tasks a ON a.id = w.task AND a.parent = w.thread
          WHERE w.thread = ?1 AND w.sequence > 0 AND w.run IS NOT NULL AND a.parent_run IS NOT NULL",
         [thread.into()],
-    )
-    .await?
+    )?
     .map(|row| {
         Ok(WakeEdge {
             parent: row.id(0)?,
