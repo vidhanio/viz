@@ -492,13 +492,14 @@ fn queue_entry_image_attachments(
     if !model.connected() {
         return;
     }
+    let env = model.active_env_key().to_owned();
     for entry in entries {
         if let EntryData::Prompt { attachments, .. } = &entry.data {
             for att in attachments {
                 if !att.mime.starts_with("image/") {
                     continue;
                 }
-                let key = (thread, att.id.clone());
+                let key = (env.clone(), thread, att.id.clone());
                 if !model.timeline.loaded_attachments.contains_key(&key)
                     && model.timeline.pending_attachments.insert(key)
                 {

@@ -137,17 +137,19 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             default_open,
             anchor,
         } => {
+            let env = model.active_env_key().to_owned();
             let thread = model.selection.selected;
-            let current = model.timeline.is_open(thread, &key, default_open);
-            model.timeline.set_fold(thread, key, !current);
+            let current = model.timeline.is_open(&env, thread, &key, default_open);
+            model.timeline.set_fold(&env, thread, key, !current);
             if let Some(anchor) = anchor {
                 effects.push(Effect::KeepOnScreen(anchor));
             }
         }
         TimelineMsg::ToggleChangedFolders { keys, expand } => {
+            let env = model.active_env_key().to_owned();
             let thread = model.selection.selected;
             for key in keys {
-                model.timeline.set_fold(thread, key, expand);
+                model.timeline.set_fold(&env, thread, key, expand);
             }
         }
         TimelineMsg::ToggleCodeWrap(key) => {
@@ -552,7 +554,7 @@ fn open_attachment_preview(
             crate::model::FilePreviewBody::Loading
         },
     });
-    let key = (thread, id.clone());
+    let key = (model.active_env_key().to_owned(), thread, id.clone());
     if let Some(cached) = model.timeline.loaded_attachments.get(&key).cloned() {
         apply_loaded_attachment_to_preview(model, request, &cached, effects);
         return;
@@ -614,11 +616,11 @@ pub(super) fn apply_loaded_attachment_to_preview(
 }
 
 fn lookup_attachment_meta(model: &Model, thread: ThreadId, id: &str) -> (String, String) {
-    if let Some(cached) = model
-        .timeline
-        .loaded_attachments
-        .get(&(thread, id.to_owned()))
-    {
+    if let Some(cached) = model.timeline.loaded_attachments.get(&(
+        model.active_env_key().to_owned(),
+        thread,
+        id.to_owned(),
+    )) {
         return (cached.name.clone(), cached.mime.clone());
     }
     if let Some(open) = model.cache().open_threads.get(&thread) {

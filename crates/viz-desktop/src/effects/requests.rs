@@ -1,12 +1,11 @@
 //! Asynchronous RPC request helpers dispatched by [`super::server::Session`].
 
-use std::{io, sync::Arc};
+use std::io;
 
 use base64::Engine as _;
-use rune::AppHandle;
 use sha2::{Digest, Sha256};
 use viz_client::{
-    Client, Error, Result,
+    Error, Result,
     protocol::{
         EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks, ListWorktrees,
         Patch, ProjectIconResult, ProjectSettingsPatch, ReadProjectIcon, RetitleThread,
@@ -15,11 +14,7 @@ use viz_client::{
 };
 
 use super::{ProjectChange, ThreadChange, server::Session};
-use crate::{
-    app::Desktop,
-    model::Checkouts,
-    update::{Msg, ServerMsg},
-};
+use crate::{model::Checkouts, update::ServerMsg};
 
 impl Session<'_> {
     /// Relists harnesses so the model picker's catalog stays current.
@@ -101,23 +96,17 @@ impl Session<'_> {
         }
     }
 
-    pub(super) fn load_draft(&self, draft: u64) {
-        let ui = self.ui.clone();
+    pub(super) fn load_draft(&mut self, draft: u64) {
         let client = self.client.clone();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = client
                 .list_harnesses()
                 .await
                 .map_err(|error| error.to_string());
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::DraftHarnessesLoaded {
-                        draft,
-                        result: Some(result),
-                    }),
-                    tx,
-                );
-            });
+            ServerMsg::DraftHarnessesLoaded {
+                draft,
+                result: Some(result),
+            }
         });
     }
 
@@ -196,11 +185,10 @@ impl Session<'_> {
         Ok(())
     }
 
-    pub(super) fn read_project_icon(&self, project: String, etag: Option<String>) {
-        let ui = self.ui.clone();
+    pub(super) fn read_project_icon(&mut self, project: String, etag: Option<String>) {
         let client = self.client.clone();
         let environment = self.environment.to_string();
-        tokio::spawn(async move {
+        self.spawn_opt_msg(async move {
             let Ok(reply) = client
                 .project_icon(&ReadProjectIcon {
                     project: project.clone(),
@@ -208,7 +196,7 @@ impl Session<'_> {
                 })
                 .await
             else {
-                return;
+                return None;
             };
             let payload = match reply {
                 ProjectIconResult::None => Some((None, None)),
@@ -222,19 +210,12 @@ impl Session<'_> {
                     Some((Some(etag), bytes.map(|bytes| (media_type, bytes))))
                 }
             };
-            if let Some((etag, image)) = payload {
-                ui.update(move |s, tx| {
-                    s.dispatch(
-                        Msg::Server(ServerMsg::ProjectIconLoaded {
-                            environment,
-                            project,
-                            etag,
-                            image,
-                        }),
-                        tx,
-                    );
-                });
-            }
+            payload.map(|(etag, image)| ServerMsg::ProjectIconLoaded {
+                environment,
+                project,
+                etag,
+                image,
+            })
         });
     }
 
@@ -297,11 +278,10 @@ impl Session<'_> {
         error.map_or(Ok(()), Err)
     }
 
-    pub(super) fn load_checkouts(&self, project: String) {
-        let ui = self.ui.clone();
+    pub(super) fn load_checkouts(&mut self, project: String) {
         let client = self.client.clone();
         let environment = self.environment.to_string();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = async {
                 let mut branches = Vec::new();
                 let mut offset = None;
@@ -332,24 +312,18 @@ impl Session<'_> {
             }
             .await
             .map_err(|error| error.to_string());
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::CheckoutsLoaded {
-                        environment,
-                        project,
-                        result,
-                    }),
-                    tx,
-                );
-            });
+            ServerMsg::CheckoutsLoaded {
+                environment,
+                project,
+                result,
+            }
         });
     }
 
-    pub(super) fn harness_options(&self, harness: String, model: String) {
-        let ui = self.ui.clone();
+    pub(super) fn harness_options(&mut self, harness: String, model: String) {
         let client = self.client.clone();
         let environment = self.environment.to_string();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = client
                 .harness_options(&HarnessOptions {
                     harness: harness.clone(),
@@ -358,66 +332,39 @@ impl Session<'_> {
                 .await
                 .map(|reply| reply.options)
                 .map_err(|error| error.to_string());
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::HarnessOptionsLoaded {
-                        environment,
-                        harness,
-                        model,
-                        result,
-                    }),
-                    tx,
-                );
-            });
+            ServerMsg::HarnessOptionsLoaded {
+                environment,
+                harness,
+                model,
+                result,
+            }
         });
     }
-}
 
-/// Runs a transcript full-text search for the command palette.
-pub(super) fn search_threads(
-    ui: &AppHandle<Desktop>,
-    client: &Client,
-    request: u64,
-    query: String,
-) {
-    let ui = ui.clone();
-    let client = client.clone();
-    tokio::spawn(async move {
-        let result = client
-            .search_threads(&SearchThreads {
-                query,
-                limit: Some(24),
-            })
-            .await
-            .map_err(|error| error.to_string());
-        ui.update(move |s, tx| {
-            s.dispatch(
-                Msg::Server(ServerMsg::ThreadSearchResult { request, result }),
-                tx,
-            );
+    /// Runs a transcript full-text search for the command palette.
+    pub(super) fn search_threads(&mut self, request: u64, query: String) {
+        let client = self.client.clone();
+        self.spawn_msg(async move {
+            let result = client
+                .search_threads(&SearchThreads {
+                    query,
+                    limit: Some(24),
+                })
+                .await
+                .map_err(|error| error.to_string());
+            ServerMsg::ThreadSearchResult { request, result }
         });
-    });
-}
+    }
 
-impl Session<'_> {
     pub(super) async fn answer(
         &self,
         answer: viz_client::protocol::AnswerRequest,
     ) -> viz_client::Result<()> {
         let result = self.client.request(&answer).await;
         let closed = matches!(result, Err(viz_client::Error::Closed));
-        let environment = Arc::clone(&self.environment);
-        self.ui.update(move |app, tx| {
-            if app.model.active_env_key() != environment.as_ref() {
-                return;
-            }
-            app.dispatch(
-                Msg::Requests(crate::update::requests::RequestMsg::Finished(
-                    answer.request,
-                    result.map(drop).map_err(|error| error.to_string()),
-                )),
-                tx,
-            );
+        self.dispatch(ServerMsg::RequestAnswered {
+            request: answer.request,
+            result: result.map(drop).map_err(|error| error.to_string()),
         });
         if closed {
             return Err(viz_client::Error::Closed);

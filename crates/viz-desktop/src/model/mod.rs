@@ -75,8 +75,8 @@ pub use self::{
     state::{
         ConnectionState, ContextMenu, DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH,
         DisclosureState, NewThread, OptimisticLedger, OptimisticUndo, PaneSwitch, PanelsState,
-        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SelectionState, SidebarEdit,
-        SidebarState, Status, WINDOW_SIZE,
+        SIDEBAR_DEFAULT_WIDTH, SIDEBAR_MAX_WIDTH, SIDEBAR_MIN_WIDTH, SelectionState, SessionId,
+        SidebarEdit, SidebarState, Status, WINDOW_SIZE,
     },
     subagents::{
         AgentStanding, SubagentCall, child_link, delegated_task, local_child, spawned_subagent,
@@ -167,6 +167,18 @@ impl Model {
             .environment
             .as_deref()
             .unwrap_or(DEFAULT_ENV_KEY)
+    }
+
+    /// Whether a collapsible timeline fold `key` on the active environment and
+    /// thread is currently open.
+    #[must_use]
+    pub fn is_fold_open(&self, key: &str, default_open: bool) -> bool {
+        self.timeline.is_open(
+            self.active_env_key(),
+            self.selection.selected,
+            key,
+            default_open,
+        )
     }
 
     /// Active environment's normalised server cache.

@@ -48,10 +48,10 @@ pub enum FilePreviewBody {
 /// switches.
 #[derive(Debug, Clone, Default)]
 pub struct TimelineState {
-    /// Per-thread disclosure overrides (`true` = open, `false` = closed) for
-    /// turn folds, tool inspectors, long user messages, plan cards, and changed
-    /// file folders.
-    pub folds_by_thread: BTreeMap<ThreadId, HashMap<String, bool>>,
+    /// Per-`(environment, thread)` disclosure overrides (`true` = open,
+    /// `false` = closed) for turn folds, tool inspectors, long user messages,
+    /// plan cards, and changed file folders.
+    pub folds_by_thread: BTreeMap<(String, ThreadId), HashMap<String, bool>>,
     /// Fallback disclosure map when no thread id is selected (e.g. draft).
     pub draft_folds: HashMap<String, bool>,
     /// Markdown code-block keys (`"{msg_key}-code-{idx}"`) with word wrap
@@ -76,35 +76,48 @@ pub struct TimelineState {
     pub file_preview: Option<FilePreview>,
     /// Monotonic serial for [`Self::file_preview`] requests.
     pub file_preview_seq: u64,
-    /// Stored thread attachments fetched lazily for inline Markdown previews.
-    pub loaded_attachments: HashMap<(ThreadId, String), Attachment>,
-    /// In-flight `(thread, attachment_id)` fetches to avoid duplicate RPCs.
-    pub pending_attachments: HashSet<(ThreadId, String)>,
+    /// Stored thread attachments fetched lazily for inline Markdown previews,
+    /// keyed by `(environment, thread, attachment_id)`.
+    pub loaded_attachments: HashMap<(String, ThreadId, String), Attachment>,
+    /// In-flight `(environment, thread, attachment_id)` fetches to avoid
+    /// duplicate RPCs.
+    pub pending_attachments: HashSet<(String, ThreadId, String)>,
 }
 
 impl TimelineState {
-    /// Reads an explicit fold override for `key` on `thread`, if recorded.
+    /// Reads an explicit fold override for `key` on `(env, thread)`, if
+    /// recorded.
     #[must_use]
-    pub fn fold_override(&self, thread: Option<ThreadId>, key: &str) -> Option<bool> {
+    pub fn fold_override(&self, env: &str, thread: Option<ThreadId>, key: &str) -> Option<bool> {
         match thread {
-            Some(id) => self.folds_by_thread.get(&id)?.get(key).copied(),
+            Some(id) => self
+                .folds_by_thread
+                .get(&(env.to_owned(), id))?
+                .get(key)
+                .copied(),
             None => self.draft_folds.get(key).copied(),
         }
     }
 
     /// Resolves whether a collapsible timeline element `key` is currently open,
-    /// honoring per-thread overrides and `default_open`.
+    /// honoring per-`(env, thread)` overrides and `default_open`.
     #[must_use]
-    pub fn is_open(&self, thread: Option<ThreadId>, key: &str, default_open: bool) -> bool {
-        self.fold_override(thread, key).unwrap_or(default_open)
+    pub fn is_open(
+        &self,
+        env: &str,
+        thread: Option<ThreadId>,
+        key: &str,
+        default_open: bool,
+    ) -> bool {
+        self.fold_override(env, thread, key).unwrap_or(default_open)
     }
 
-    /// Sets an explicit open/closed state for `key` on `thread`.
-    pub fn set_fold(&mut self, thread: Option<ThreadId>, key: String, open: bool) {
+    /// Sets an explicit open/closed state for `key` on `(env, thread)`.
+    pub fn set_fold(&mut self, env: &str, thread: Option<ThreadId>, key: String, open: bool) {
         match thread {
             Some(id) => {
                 self.folds_by_thread
-                    .entry(id)
+                    .entry((env.to_owned(), id))
                     .or_default()
                     .insert(key, open);
             }
@@ -114,14 +127,21 @@ impl TimelineState {
         }
     }
 
-    /// Clears recorded fold overrides for `thread`.
-    pub fn clear_folds(&mut self, thread: Option<ThreadId>) {
+    /// Clears recorded fold overrides for `(env, thread)`.
+    pub fn clear_folds(&mut self, env: &str, thread: Option<ThreadId>) {
         match thread {
             Some(id) => {
-                self.folds_by_thread.remove(&id);
+                self.folds_by_thread.remove(&(env.to_owned(), id));
             }
             None => self.draft_folds.clear(),
         }
+    }
+
+    /// Clears in-flight RPC tracking sets when a connection closes or switches
+    /// environments so interrupted fetches can retry cleanly.
+    pub fn clear_in_flight(&mut self) {
+        self.pending_attachments.clear();
+        self.loading_chunks.clear();
     }
 
     /// Clears transient per-viewport state when switching threads while keeping

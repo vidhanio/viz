@@ -59,9 +59,19 @@ pub enum PaneSwitch {
     Fade,
 }
 
+/// Monotonic identifier for one live WebSocket connection session.
+///
+/// `SessionId(0)` is the inactive sentinel used while disconnected or switching
+/// environments so late replies from a prior connection are dropped at the
+/// reducer boundary.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+pub struct SessionId(pub u64);
+
 /// Connection metadata shared across the desktop session.
 #[derive(Debug, Clone)]
 pub struct ConnectionState {
+    /// Active connection session id (`SessionId(0)` when disconnected).
+    pub session: SessionId,
     /// Live WebSocket connection status.
     pub status: Status,
     /// Display endpoint string, once desktop config is read.
@@ -79,6 +89,7 @@ pub struct ConnectionState {
 impl Default for ConnectionState {
     fn default() -> Self {
         Self {
+            session: SessionId(0),
             status: Status::Connecting,
             endpoint: None,
             environment: None,

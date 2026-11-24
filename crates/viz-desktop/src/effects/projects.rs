@@ -38,26 +38,18 @@ pub enum ProjectRequest {
 }
 
 impl Session<'_> {
-    pub(super) fn dispatch(&self, msg: ServerMsg) {
-        super::server::dispatch_ui(self.ui, msg);
-    }
-
-    pub(super) fn project_palette(&self, request: u64, command: ProjectRequest) {
+    pub(super) fn project_palette(&mut self, request: u64, command: ProjectRequest) {
         let client = self.client.clone();
-        let ui = self.ui.clone();
         let environment = self.environment.to_string();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = execute(&client, command)
                 .await
                 .map_err(|error| error.to_string());
-            super::server::dispatch_ui(
-                &ui,
-                ServerMsg::ProjectPalette {
-                    environment,
-                    request,
-                    result: Box::new(result),
-                },
-            );
+            ServerMsg::ProjectPalette {
+                environment,
+                request,
+                result: Box::new(result),
+            }
         });
     }
 }

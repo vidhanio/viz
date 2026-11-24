@@ -27,10 +27,7 @@ use crate::{
 pub fn compaction_divider(s: &Desktop, notice: &CompactionNotice, t: &Theme) -> El {
     let fold_key = format!("{}-summary", notice.key);
     let has_summary = !notice.summary.trim().is_empty();
-    let open = has_summary
-        && s.model
-            .timeline
-            .is_open(s.model.selection.selected, &fold_key, false);
+    let open = has_summary && s.model.is_fold_open(&fold_key, false);
     let failed = notice.status == CompactionStatus::Failed;
     let rule_color = if failed {
         t.danger.alpha(0.30)

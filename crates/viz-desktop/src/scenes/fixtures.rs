@@ -64,7 +64,8 @@ pub(super) fn select_preview(m: &mut Model, thread: ThreadId) {
         m.selection.new_thread = None;
         m.selection.selected = Some(thread);
         m.composer.draft_focused = false;
-        m.timeline.clear_folds(Some(thread));
+        let env = m.active_env_key().to_owned();
+        m.timeline.clear_folds(&env, Some(thread));
         m.composer.completion.reset();
         m.composer.open_picker = None;
         let open = m.cache_mut().open_thread_mut(thread);
@@ -76,8 +77,9 @@ pub(super) fn select_preview(m: &mut Model, thread: ThreadId) {
 }
 
 pub(super) fn open_fold(m: &mut Model, key: &str) {
+    let env = m.active_env_key().to_owned();
     m.timeline
-        .set_fold(m.selection.selected, key.to_owned(), true);
+        .set_fold(&env, m.selection.selected, key.to_owned(), true);
 }
 
 pub(super) fn seed_activity(m: &mut Model) {
@@ -105,7 +107,8 @@ pub(super) fn seed_activity(m: &mut Model) {
         ],
         None,
     );
-    m.timeline.clear_folds(Some(THREAD));
+    let env = m.active_env_key().to_owned();
+    m.timeline.clear_folds(&env, Some(THREAD));
     open_fold(m, "turn-e1-0-fold");
     open_fold(m, "acp-1-run-1");
 }
@@ -194,7 +197,8 @@ pub(super) fn seed_worklog(m: &mut Model) {
         ],
         None,
     );
-    m.timeline.clear_folds(Some(THREAD));
+    let env = m.active_env_key().to_owned();
+    m.timeline.clear_folds(&env, Some(THREAD));
     for key in [
         "turn-e1-0-fold",
         "acp-1-edit-1",
@@ -300,7 +304,8 @@ pub(super) fn seed_thread_details_subagents(m: &mut Model) {
 
 pub(super) fn seed_agents(m: &mut Model) {
     seed_subagents(m);
-    m.timeline.clear_folds(Some(THREAD));
+    let env = m.active_env_key().to_owned();
+    m.timeline.clear_folds(&env, Some(THREAD));
     open_fold(m, "turn-e1-0-fold");
 }
 

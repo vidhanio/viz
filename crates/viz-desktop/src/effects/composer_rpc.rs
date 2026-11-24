@@ -10,21 +10,20 @@ use viz_client::{
 };
 
 use super::server::Session;
-use crate::update::{Msg, ServerMsg};
+use crate::update::ServerMsg;
 
 impl Session<'_> {
     /// Searches a checkout or registered project for files and directories,
     /// returning ranked [`viz_client::protocol::FileSearchMatch`] entries.
     pub(super) fn search_files(
-        &self,
+        &mut self,
         thread: Option<ThreadId>,
         project: Option<String>,
         request: u64,
         query: String,
     ) {
-        let ui = self.ui.clone();
         let client = self.client.clone();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = client
                 .search_files(&SearchFiles {
                     thread,
@@ -34,21 +33,15 @@ impl Session<'_> {
                 })
                 .await
                 .map_err(|error| error.to_string());
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::FileSearchResult { request, result }),
-                    tx,
-                );
-            });
+            ServerMsg::FileSearchResult { request, result }
         });
     }
 
     /// Searches GitHub pull requests and issues for a project's `#` mention
     /// drawer, placing pull requests ahead of issues.
-    pub(super) fn search_github(&self, project: String, request: u64, query: String) {
-        let ui = self.ui.clone();
+    pub(super) fn search_github(&mut self, project: String, request: u64, query: String) {
         let client = self.client.clone();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let pr_req = GitHubSearch {
                 project: project.clone(),
                 kind: GitHubItemKind::PullRequest,
@@ -71,12 +64,7 @@ impl Session<'_> {
                 (Err(_), Ok(issue_list)) => Ok(issue_list.items),
                 (Err(error), Err(_)) => Err(error.to_string()),
             };
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::GitHubSearchResult { request, result }),
-                    tx,
-                );
-            });
+            ServerMsg::GitHubSearchResult { request, result }
         });
     }
 

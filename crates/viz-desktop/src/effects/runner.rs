@@ -4,10 +4,7 @@
 use rune::{TextEdit, Tx};
 
 use super::{EditSync, EditTarget, Effect, ServerEffect, prefs};
-use crate::{
-    app::Desktop,
-    update::{self, Msg, ServerMsg},
-};
+use crate::{app::Desktop, update};
 
 impl Desktop {
     /// Executes every effect returned by [`crate::update::update`].
@@ -95,12 +92,19 @@ impl Desktop {
                     self.widgets.preview_image = None;
                 }
                 Effect::DecodeThreadAttachmentImage {
+                    environment,
                     thread,
                     id,
                     media_type,
                     bytes,
                 } => {
-                    self.decode_thread_attachment_image(thread, id, &media_type, bytes);
+                    self.decode_thread_attachment_image(
+                        environment,
+                        thread,
+                        id,
+                        &media_type,
+                        bytes,
+                    );
                 }
                 Effect::Focus {
                     key,
@@ -180,72 +184,26 @@ impl Desktop {
         }
     }
 
-    fn send_server(&mut self, command: ServerEffect, mut tx: Option<&mut Tx>) {
-        if let Some(error) = self.send_command(command) {
-            let recovery = match error {
-                ServerEffect::Answer(answer) => {
-                    let effects = update::update(
-                        &mut self.model,
-                        Msg::Requests(crate::update::requests::RequestMsg::Finished(
-                            answer.request,
-                            Err("Server disconnected".into()),
-                        )),
-                    );
-                    self.apply_effects(effects, tx);
-                    return;
+    fn send_server(&mut self, command: ServerEffect, tx: Option<&mut Tx>) {
+        if let Some(failed) = self.send_command(command) {
+            let env = self.model.active_env_key().to_owned();
+            match super::offline::derive(failed, &env) {
+                super::offline::Offline::Dispatch(msg) => {
+                    let follow_up = update::update(&mut self.model, msg);
+                    self.apply_effects(follow_up, tx);
                 }
-                ServerEffect::Create {
-                    draft, recovery, ..
-                } => Some(ServerMsg::LaunchFailed {
-                    draft,
-                    recovery,
-                    title: "Offline".into(),
-                    detail: None,
-                }),
-                ServerEffect::SendInput { input, recovery } => Some(ServerMsg::SendFailed {
-                    thread: input.thread,
-                    recovery,
-                    title: "Offline".into(),
-                    detail: None,
-                }),
-                ServerEffect::Update { op_id, .. }
-                | ServerEffect::Project {
-                    op_id: Some(op_id), ..
-                } => Some(ServerMsg::MutationFailed {
-                    op_id,
-                    title: "Offline".into(),
-                    detail: "Server disconnected".into(),
-                }),
-                ServerEffect::LoadDraft(draft) => Some(ServerMsg::DraftHarnessesLoaded {
-                    draft,
-                    result: None,
-                }),
-                ServerEffect::ProjectPalette(request, _) => Some(ServerMsg::ProjectPalette {
-                    environment: self
-                        .model
-                        .connection
-                        .environment
-                        .clone()
-                        .unwrap_or_default(),
-                    request,
-                    result: Box::new(Err("The server is offline.".into())),
-                }),
-                ServerEffect::SearchThreads { request, .. } => {
-                    Some(ServerMsg::ThreadSearchResult {
-                        request,
-                        result: Err("The server is offline.".into()),
-                    })
-                }
-                _ => {
-                    if let Some(tx) = tx.as_deref_mut() {
+                super::offline::Offline::Toast => {
+                    if let Some(tx) = tx {
                         self.show_toast(tx, "Offline", None);
                     }
-                    None
                 }
-            };
-            if let Some(msg) = recovery {
-                let follow_up = update::update(&mut self.model, Msg::Server(msg));
-                self.apply_effects(follow_up, tx);
+                super::offline::Offline::Attach { .. }
+                | super::offline::Offline::Notify { .. }
+                | super::offline::Offline::Select(_)
+                | super::offline::Offline::ClearSelection
+                | super::offline::Offline::SwitchEnv { .. }
+                | super::offline::Offline::Reconnect
+                | super::offline::Offline::Ignore => {}
             }
         }
     }

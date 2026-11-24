@@ -117,10 +117,7 @@ fn append_thinking_rows(
 ) -> El {
     let trimmed = body.trim();
     let expandable = !trimmed.is_empty();
-    let open = expandable
-        && s.model
-            .timeline
-            .is_open(s.model.selection.selected, key, false);
+    let open = expandable && s.model.is_fold_open(key, false);
     let head = lane(
         col()
             .key(key.to_owned())
@@ -240,7 +237,7 @@ fn append_tool_rows(s: &Desktop, tool: &Tool, in_fold: bool, t: &Theme, mut list
     let m = &s.model;
     let action = ToolAction::of(tool);
     let expandable = inspector::has_inspector(tool);
-    let open = expandable && m.timeline.is_open(m.selection.selected, &tool.key, false);
+    let open = expandable && m.is_fold_open(&tool.key, false);
     let head = lane(
         col()
             .key(tool.key.clone())

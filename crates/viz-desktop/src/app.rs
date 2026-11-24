@@ -72,13 +72,13 @@ pub struct ShellWidgets {
     /// Background LaTeX math render client wired in `AppSpec::setup` and
     /// polled for completed renders.
     pub math: rune_kit::math::Client,
-    /// Decoded project icon images keyed by `"{env}\0{project_path}"`.
-    pub project_icons: HashMap<String, Image>,
+    /// Decoded project icon images keyed by `(environment, project_path)`.
+    pub project_icons: HashMap<(String, String), Image>,
     /// Decoded image currently shown in the file/attachment preview lightbox.
     pub preview_image: Option<Image>,
-    /// Decoded sent-message attachment images keyed by `(thread,
+    /// Decoded sent-message attachment images keyed by `(environment, thread,
     /// attachment_id)`.
-    pub thread_attachment_images: HashMap<(viz_client::protocol::ThreadId, String), Image>,
+    pub thread_attachment_images: HashMap<(String, viz_client::protocol::ThreadId, String), Image>,
     /// Decoded images for the active draft, in attachment order.
     pub attachment_images: crate::attachments::DraftImages,
     /// Latest `[offset_y, max_y]` of the active timeline scroll viewport.
@@ -305,8 +305,9 @@ impl Desktop {
     /// environment, if loaded.
     #[must_use]
     pub fn project_icon_image(&self, project: &str) -> Option<&Image> {
-        let key = format!("{}\0{project}", self.model.active_env_key());
-        self.widgets.project_icons.get(&key)
+        self.widgets
+            .project_icons
+            .get(&(self.model.active_env_key().to_owned(), project.to_owned()))
     }
 
     /// Decodes fetched project icon bytes on the image cache worker pool.
@@ -322,8 +323,9 @@ impl Desktop {
             .images
             .get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
         let image = cache.load_mime(bytes, media_type, 24.0, 2.0);
-        let key = format!("{environment}\0{project}");
-        self.widgets.project_icons.insert(key, image);
+        self.widgets
+            .project_icons
+            .insert((environment.to_owned(), project.to_owned()), image);
     }
 
     /// Returns the decoded image for the open file/attachment preview overlay.
@@ -344,21 +346,25 @@ impl Desktop {
         self.widgets.preview_image = Some(image);
     }
 
-    /// Returns the decoded image for a stored thread attachment, if fetched.
+    /// Returns the decoded image for a stored thread attachment in the active
+    /// environment, if fetched.
     #[must_use]
     pub fn thread_attachment_image(
         &self,
         thread: viz_client::protocol::ThreadId,
         id: &str,
     ) -> Option<&Image> {
-        self.widgets
-            .thread_attachment_images
-            .get(&(thread, id.to_owned()))
+        self.widgets.thread_attachment_images.get(&(
+            self.model.active_env_key().to_owned(),
+            thread,
+            id.to_owned(),
+        ))
     }
 
     /// Decodes fetched bytes for a stored thread attachment image.
     pub(crate) fn decode_thread_attachment_image(
         &mut self,
+        environment: String,
         thread: viz_client::protocol::ThreadId,
         id: String,
         media_type: &str,
@@ -371,7 +377,7 @@ impl Desktop {
         let image = cache.load_mime(bytes, media_type, 1024.0, 2.0);
         self.widgets
             .thread_attachment_images
-            .insert((thread, id), image);
+            .insert((environment, thread, id), image);
     }
 
     pub(crate) fn prefs_path(&self) -> Option<&Path> {

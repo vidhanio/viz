@@ -59,8 +59,17 @@ pub enum NavKey {
 pub enum Msg {
     Requests(requests::RequestMsg),
     Git(GitMsg),
-    /// Event arriving from the background server or blocking platform worker.
+    /// Global lifecycle event from the background server or blocking platform
+    /// worker (endpoint, connection status, initial handshake, local attach).
     Server(ServerMsg),
+    /// Event scoped to a specific server WebSocket session; dropped when the
+    /// session has been superseded by a reconnect or environment switch.
+    Session {
+        /// Session id that produced this message.
+        session: crate::model::SessionId,
+        /// Payload routed to [`server::update`] when `session` is still active.
+        msg: Box<ServerMsg>,
+    },
     /// Thread selection, navigation history, draft setup, or environment
     /// switch.
     Selection(SelectionMsg),
@@ -86,6 +95,12 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::Requests(msg) => requests::update(model, msg),
         Msg::Git(msg) => git::update(model, msg),
         Msg::Server(msg) => server::update(model, msg),
+        Msg::Session { session, msg } => {
+            if session != model.connection.session {
+                return Vec::new();
+            }
+            server::update(model, *msg)
+        }
         Msg::Selection(msg) => selection::update(model, msg),
         Msg::Sidebar(msg) => sidebar::update(model, msg),
         Msg::Composer(msg) => composer::update(model, msg),

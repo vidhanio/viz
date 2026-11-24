@@ -97,10 +97,7 @@ pub fn append_live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut list
 
         if settled_indices.len() > 3 {
             let fold_key = format!("{}-live-earlier", turn.key);
-            let open = s
-                .model
-                .timeline
-                .is_open(s.model.selection.selected, &fold_key, false);
+            let open = s.model.is_fold_open(&fold_key, false);
             let settled_slice: Vec<(&Item, bool)> =
                 settled_indices.iter().map(|&i| turn.work[i]).collect();
             list = append_live_earlier_fold(s, &fold_key, &settled_slice, open, t, list);
@@ -197,9 +194,7 @@ pub fn append_completed_fold(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut li
     let m = &s.model;
     let fold_key = turn.fold_key();
     let default_open = turn.interrupted;
-    let open = m
-        .timeline
-        .is_open(m.selection.selected, &fold_key, default_open);
+    let open = m.is_fold_open(&fold_key, default_open);
 
     let label = fold_label(turn);
     let failures = turn

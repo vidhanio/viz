@@ -75,10 +75,9 @@ impl StackPos {
 /// actions.
 pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
     let m = &s.model;
-    let thread = m.selection.selected;
     let fold_key = format!("{}-full", user.key);
     let collapsible = should_collapse(&user.text);
-    let expanded = !collapsible || m.timeline.is_open(thread, &fold_key, false);
+    let expanded = !collapsible || m.is_fold_open(&fold_key, false);
 
     let labels = attachment_ref_labels(user.attachments.iter().map(|a| a.mime.as_str()));
     let unreferenced_attachments: Vec<&PromptAttachment> = user

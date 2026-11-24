@@ -397,6 +397,7 @@ pub(super) fn open_in_environment(
         return;
     }
     let saved = save_draft(model);
+    model.connection.session = crate::model::SessionId(0);
     model.connection.status = Status::Connecting;
     model.connection.environment = Some(environment.clone());
     model.connection.epoch = model.connection.epoch.wrapping_add(1);
@@ -408,9 +409,12 @@ pub(super) fn open_in_environment(
     model.composer.attachment_reads.clear();
     model.optimistic.clear();
     model.cache_mut().clear();
+    model.timeline.clear_in_flight();
+    model.timeline.file_preview = None;
     model.sidebar.dismiss_overlays();
     model.palette = crate::model::PaletteState::default();
     reset_active_view(model);
+    effects.push(Effect::ClearPreviewImage);
     effects.push(Effect::SyncEdit(EditSync::Clear(EditTarget::Draft)));
     effects.push(Effect::SyncEdit(EditSync::Clear(EditTarget::PaletteQuery)));
     effects.push(Effect::SetWindowTitle(model.window_title()));

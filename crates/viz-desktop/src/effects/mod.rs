@@ -102,6 +102,8 @@ pub enum Effect {
     /// Decode fetched stored thread attachment image bytes for inline Markdown
     /// rendering.
     DecodeThreadAttachmentImage {
+        /// Owning environment id.
+        environment: String,
         /// Owning thread id.
         thread: ThreadId,
         /// Attachment SHA-256 id.

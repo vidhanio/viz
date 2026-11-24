@@ -10,14 +10,14 @@ use viz_client::{
     Client, Connection, Endpoint, Error,
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, DeleteThread, ListEnvironments,
-        MoveThread, Notification, ThreadId,
+        ListTasks, MoveThread, Notification, ThreadId,
     },
 };
 
-use super::{ServerEffect, git, offline, platform, requests};
+use super::{ServerEffect, git, offline, platform};
 use crate::{
     app::Desktop,
-    model::Status,
+    model::{SessionId, Status},
     update::{Msg, ServerMsg},
 };
 
@@ -41,7 +41,7 @@ pub fn spawn(
             Ok(runtime) => runtime.block_on(run(&ui, commands, first, endpoint)),
             Err(error) => {
                 tracing::error!(%error, "could not start the connection runtime");
-                dispatch(
+                dispatch_global(
                     &ui,
                     ServerMsg::StatusChanged(Status::Error(format!(
                         "Couldn’t start the connection thread: {error}"
@@ -53,16 +53,24 @@ pub fn spawn(
     });
 }
 
-fn dispatch(ui: &AppHandle<Desktop>, msg: ServerMsg) {
+pub(super) fn dispatch_global(ui: &AppHandle<Desktop>, msg: ServerMsg) {
     ui.update(move |s, tx| s.dispatch(Msg::Server(msg), tx));
 }
 
-pub(super) fn dispatch_ui(ui: &AppHandle<Desktop>, msg: ServerMsg) {
-    dispatch(ui, msg);
+fn dispatch_session(ui: &AppHandle<Desktop>, session: SessionId, msg: ServerMsg) {
+    ui.update(move |s, tx| {
+        s.dispatch(
+            Msg::Session {
+                session,
+                msg: Box::new(msg),
+            },
+            tx,
+        );
+    });
 }
 
 pub(super) fn toast(ui: &AppHandle<Desktop>, title: &str, detail: String) {
-    dispatch(
+    dispatch_global(
         ui,
         ServerMsg::RequestFailed {
             title: title.to_owned(),
@@ -87,19 +95,20 @@ async fn run(
     let endpoint = match endpoint {
         Ok(endpoint) => endpoint,
         Err(detail) => {
-            dispatch(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
+            dispatch_global(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
             signal(&mut first);
             while let Some(command) = commands.recv().await {
                 if !offline::handle(ui, command, &mut None, &mut None) {
-                    dispatch(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
+                    dispatch_global(ui, ServerMsg::StatusChanged(Status::Error(detail.clone())));
                 }
             }
             return;
         }
     };
-    dispatch(ui, ServerMsg::Endpoint(endpoint.to_string()));
+    dispatch_global(ui, ServerMsg::Endpoint(endpoint.to_string()));
     let mut selected = None;
     let mut environment = None;
+    let mut next_session = 0_u64;
     loop {
         let info = ClientInfo {
             kind: ClientKind::App,
@@ -107,7 +116,18 @@ async fn run(
         };
         let lost = match Client::connect(&endpoint, info, environment.clone()).await {
             Ok(connection) => {
-                match session(ui, connection, &mut commands, &mut selected, &mut first).await {
+                next_session = next_session.wrapping_add(1).max(1);
+                let session_id = SessionId(next_session);
+                match session(
+                    ui,
+                    session_id,
+                    connection,
+                    &mut commands,
+                    &mut selected,
+                    &mut first,
+                )
+                .await
+                {
                     Ended::Quit => return,
                     Ended::Environment { target, thread } => {
                         selected = thread;
@@ -123,7 +143,7 @@ async fn run(
             Err(error) => error.to_string(),
         };
         tracing::debug!(%endpoint, "server connection unavailable; retrying");
-        dispatch(ui, ServerMsg::StatusChanged(Status::Error(lost)));
+        dispatch_global(ui, ServerMsg::StatusChanged(Status::Error(lost)));
         signal(&mut first);
         let retry = tokio::time::sleep(RETRY);
         tokio::pin!(retry);
@@ -155,6 +175,7 @@ enum Ended {
 /// commands and push notifications until closed or switched.
 async fn session(
     ui: &AppHandle<Desktop>,
+    id: SessionId,
     connection: Connection,
     commands: &mut mpsc::UnboundedReceiver<ServerEffect>,
     selected: &mut Option<ThreadId>,
@@ -166,17 +187,18 @@ async fn session(
         hello,
     } = connection;
     let mut session = Session {
+        id,
         ui,
         client,
         environment: Arc::from(hello.environment.as_str()),
         watched: None,
         git_watched: None,
+        jobs: JoinSet::new(),
     };
     if let Err(error) = session.start(hello, selected).await {
         return Ended::Lost(error);
     }
     signal(first);
-    let mut jobs = JoinSet::new();
     let mut configs: std::collections::VecDeque<(
         ThreadId,
         String,
@@ -187,7 +209,7 @@ async fn session(
         if !configuring && let Some((thread, option, value)) = configs.pop_front() {
             configuring = true;
             let client = session.client.clone();
-            jobs.spawn(async move {
+            session.jobs.spawn(async move {
                 let result = client
                     .configure_thread(&ConfigureThread {
                         thread,
@@ -203,7 +225,14 @@ async fn session(
                 Some(notification) => session.on_notification(notification).await,
                 None => Err(Error::Closed),
             },
-            done = jobs.join_next(), if !jobs.is_empty() => match done {
+            done = session.jobs.join_next(), if !session.jobs.is_empty() => match done {
+                Some(Ok(
+                    BackgroundReply::Msg(msg) | BackgroundReply::OptionalMsg(Some(msg)),
+                )) => {
+                    session.dispatch(msg);
+                    Ok(())
+                }
+                Some(Ok(BackgroundReply::OptionalMsg(None))) | None => Ok(()),
                 Some(Ok(BackgroundReply::Configured(result))) => {
                     configuring = false;
                     result
@@ -216,7 +245,6 @@ async fn session(
                     tracing::error!(%error, "desktop request task ended unexpectedly");
                     return Ended::Lost(Error::Closed);
                 }
-                None => Ok(()),
             },
             command = commands.recv() => match command {
                 Some(ServerEffect::Environment { environment, thread }) => {
@@ -228,7 +256,7 @@ async fn session(
                     if session.watched == Some(thread) {
                         let client = session.client.clone();
                         let refresh = matches!(&request, git::Request::Init(_) | git::Request::CreatePull { .. });
-                        jobs.spawn(async move {
+                        session.jobs.spawn(async move {
                             let reply = git::execute(client, thread, serial, request).await;
                             BackgroundReply::Git { reply, refresh }
                         });
@@ -251,31 +279,60 @@ async fn session(
     }
 }
 
-enum BackgroundReply {
+pub(super) enum BackgroundReply {
+    Msg(ServerMsg),
+    OptionalMsg(Option<ServerMsg>),
     Configured(viz_client::Result<()>),
     Git { reply: ServerMsg, refresh: bool },
 }
 
 /// Active WebSocket session state owned by the connection task.
 pub(super) struct Session<'a> {
+    pub(super) id: SessionId,
     pub(super) ui: &'a AppHandle<Desktop>,
     pub(super) client: Client,
     pub(super) environment: Arc<str>,
     pub(super) watched: Option<ThreadId>,
     pub(super) git_watched: Option<ThreadId>,
+    pub(super) jobs: JoinSet<BackgroundReply>,
 }
 
 impl Session<'_> {
+    pub(super) fn dispatch(&self, msg: ServerMsg) {
+        dispatch_session(self.ui, self.id, msg);
+    }
+
+    pub(super) fn spawn_msg<F>(&mut self, fut: F)
+    where
+        F: Future<Output = ServerMsg> + Send + 'static,
+    {
+        self.jobs
+            .spawn(async move { BackgroundReply::Msg(fut.await) });
+    }
+
+    pub(super) fn spawn_opt_msg<F>(&mut self, fut: F)
+    where
+        F: Future<Output = Option<ServerMsg>> + Send + 'static,
+    {
+        self.jobs
+            .spawn(async move { BackgroundReply::OptionalMsg(fut.await) });
+    }
+
     async fn start(
         &mut self,
         hello: viz_client::protocol::Hello,
         selected: &mut Option<ThreadId>,
     ) -> viz_client::Result<()> {
-        let ((), harnesses, environments) = tokio::try_join!(
-            self.refresh_list(),
+        let list_tasks = ListTasks::default();
+        let list_envs = ListEnvironments {};
+        let (threads, mut projects, tasks, harnesses, environments) = tokio::try_join!(
+            self.client.list_threads(),
+            self.client.list_projects(),
+            self.client.request(&list_tasks),
             self.client.list_harnesses(),
-            self.client.request(&ListEnvironments {}),
+            self.client.request(&list_envs),
         )?;
+        projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
         if let Some(thread) = *selected {
             match self.switch(Some(thread)).await {
                 Err(Error::Rpc {
@@ -284,13 +341,20 @@ impl Session<'_> {
                 result => result?,
             }
         }
-        self.dispatch(ServerMsg::Connected {
-            version: hello.version,
-            environment: hello.environment,
-            environments: environments.environments,
-            harnesses,
-            watched: *selected,
-        });
+        dispatch_global(
+            self.ui,
+            ServerMsg::Connected {
+                session: self.id,
+                version: hello.version,
+                environment: hello.environment,
+                environments: environments.environments,
+                harnesses,
+                projects,
+                threads,
+                tasks: tasks.tasks,
+                watched: *selected,
+            },
+        );
         Ok(())
     }
 
@@ -400,7 +464,7 @@ impl Session<'_> {
             }
             ServerEffect::RemoveQueued { thread, run } => self.remove_queued(thread, run).await,
             ServerEffect::SearchThreads { request, query } => {
-                requests::search_threads(self.ui, &self.client, request, query);
+                self.search_threads(request, query);
                 Ok(())
             }
             ServerEffect::LoadEarlier { thread, before } => self.load_earlier(thread, before).await,

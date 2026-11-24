@@ -17,7 +17,7 @@ use super::{
 };
 use crate::{
     effects::Effect,
-    model::{Model, PaletteSearch, Status},
+    model::{Model, PaletteSearch, SessionId, Status},
 };
 
 #[expect(
@@ -32,16 +32,34 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             model.connection.endpoint = Some(endpoint);
         }
         ServerMsg::StatusChanged(status) => {
+            if matches!(status, Status::Error(_)) {
+                model.connection.session = SessionId(0);
+                model.timeline.clear_in_flight();
+            }
             model.connection.status = status;
             effects.push(Effect::SetWindowTitle(model.window_title()));
         }
         ServerMsg::Connected {
+            session,
             version,
             environment,
             environments,
             harnesses,
+            projects,
+            threads,
+            tasks,
             watched,
         } => {
+            if model
+                .connection
+                .environment
+                .as_deref()
+                .is_some_and(|expected| expected != environment)
+            {
+                return effects;
+            }
+            model.connection.session = session;
+            model.timeline.clear_in_flight();
             model.connection.status = Status::Connected { version };
             model.connection.environment = Some(environment);
             model.connection.environments = environments;
@@ -54,7 +72,15 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                     clear_selection(model, &mut effects);
                 }
             }
+            apply_workspace_sync(model, projects, threads, &mut effects);
+            model.cache_mut().tasks = tasks;
             effects.push(Effect::SetWindowTitle(model.window_title()));
+        }
+        ServerMsg::RequestAnswered { request, result } => {
+            return super::requests::update(
+                model,
+                super::requests::RequestMsg::Finished(request, result),
+            );
         }
         ServerMsg::WorkspaceSynced {
             environment,
@@ -393,16 +419,18 @@ fn apply_thread_attachment_loaded(
     result: Result<viz_client::protocol::Attachment, String>,
     effects: &mut Vec<Effect>,
 ) {
+    let env = model.active_env_key().to_owned();
     model
         .timeline
         .pending_attachments
-        .remove(&(thread, id.clone()));
+        .remove(&(env.clone(), thread, id.clone()));
     match result {
         Ok(attachment) => {
             if attachment.mime.starts_with("image/")
                 && let Ok(bytes) = STANDARD.decode(&attachment.data)
             {
                 effects.push(Effect::DecodeThreadAttachmentImage {
+                    environment: env.clone(),
                     thread,
                     id: id.clone(),
                     media_type: attachment.mime.clone(),
@@ -426,7 +454,7 @@ fn apply_thread_attachment_loaded(
             model
                 .timeline
                 .loaded_attachments
-                .insert((thread, id), attachment);
+                .insert((env, thread, id), attachment);
         }
         Err(error) => {
             if let Some(req) = preview_request

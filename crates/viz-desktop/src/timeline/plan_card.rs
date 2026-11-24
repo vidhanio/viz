@@ -193,10 +193,7 @@ fn checklist_body(steps: &[PlanStep], t: &Theme) -> El {
 fn markdown_body(s: &Desktop, key: &str, source: &str, t: &Theme) -> El {
     let collapsible = should_collapse_plan(source);
     let fold_key = format!("{key}-expanded");
-    let expanded = !collapsible
-        || s.model
-            .timeline
-            .is_open(s.model.selection.selected, &fold_key, false);
+    let expanded = !collapsible || s.model.is_fold_open(&fold_key, false);
     let cwd = s.model.thread_state().map(|st| st.cwd.as_str());
     let md = super::markdown::with_file_pills(
         Markdown::new(source.to_owned())

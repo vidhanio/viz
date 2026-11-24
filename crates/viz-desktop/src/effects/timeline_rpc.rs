@@ -1,7 +1,6 @@
 //! Timeline-specific asynchronous RPC helpers (`thread.fork`,
 //! `thread.entry_chunk`) kept separate from `requests.rs`.
 
-use rune::AppHandle;
 use viz_client::{
     Client, Result,
     protocol::{
@@ -11,11 +10,7 @@ use viz_client::{
 };
 
 use super::server::Session;
-use crate::{
-    app::Desktop,
-    model::LoadedEntry,
-    update::{Msg, ServerMsg},
-};
+use crate::{model::LoadedEntry, update::ServerMsg};
 
 impl Session<'_> {
     pub(super) async fn fork_thread(&self, params: ForkThread, load_prompt: bool) -> Result<()> {
@@ -27,57 +22,44 @@ impl Session<'_> {
         Ok(())
     }
 
-    pub(super) fn read_entry_chunk(&self, thread: ThreadId, key: String, source: EntrySource) {
-        let ui: AppHandle<Desktop> = self.ui.clone();
+    pub(super) fn read_entry_chunk(&mut self, thread: ThreadId, key: String, source: EntrySource) {
         let client: Client = self.client.clone();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = fetch_entry_chunks(&client, thread, &source).await;
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::EntryChunkLoaded {
-                        thread,
-                        key,
-                        source,
-                        result,
-                    }),
-                    tx,
-                );
-            });
+            ServerMsg::EntryChunkLoaded {
+                thread,
+                key,
+                source,
+                result,
+            }
         });
     }
 
     pub(super) fn read_file_preview(
-        &self,
+        &mut self,
         request: u64,
         root: FileRoot,
         path: String,
         window: Option<LineWindow>,
     ) {
-        let ui: AppHandle<Desktop> = self.ui.clone();
         let client: Client = self.client.clone();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = client
                 .request(&ReadFile { root, path, window })
                 .await
                 .map_err(|error| error.to_string());
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::FilePreviewLoaded { request, result }),
-                    tx,
-                );
-            });
+            ServerMsg::FilePreviewLoaded { request, result }
         });
     }
 
     pub(super) fn read_thread_attachment(
-        &self,
+        &mut self,
         thread: ThreadId,
         id: String,
         preview_request: Option<u64>,
     ) {
-        let ui: AppHandle<Desktop> = self.ui.clone();
         let client: Client = self.client.clone();
-        tokio::spawn(async move {
+        self.spawn_msg(async move {
             let result = client
                 .request(&ReadAttachment {
                     thread,
@@ -85,17 +67,12 @@ impl Session<'_> {
                 })
                 .await
                 .map_err(|error| error.to_string());
-            ui.update(move |s, tx| {
-                s.dispatch(
-                    Msg::Server(ServerMsg::ThreadAttachmentLoaded {
-                        thread,
-                        id,
-                        preview_request,
-                        result,
-                    }),
-                    tx,
-                );
-            });
+            ServerMsg::ThreadAttachmentLoaded {
+                thread,
+                id,
+                preview_request,
+                result,
+            }
         });
     }
 }

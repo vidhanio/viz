@@ -3,13 +3,13 @@
 
 use viz_client::protocol::{
     Attachment, ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileContent,
-    FileSearchMatch, Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, SearchHit, Task,
-    ThreadId, ThreadState, ThreadSummary,
+    FileSearchMatch, Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, RequestId,
+    SearchHit, Task, ThreadId, ThreadState, ThreadSummary,
 };
 
 use crate::{
     effects::LoadedAttachments,
-    model::{AttachmentTarget, Checkouts, LoadedEntry, Status},
+    model::{AttachmentTarget, Checkouts, LoadedEntry, SessionId, Status},
 };
 
 /// Events pushed from the background server runtime or blocking platform tasks.
@@ -23,6 +23,8 @@ pub enum ServerMsg {
     StatusChanged(Status),
     /// Initial handshake and workspace bootstrap succeeded.
     Connected {
+        /// Active session identifier for subsequent session-scoped events.
+        session: SessionId,
         /// Server version string.
         version: String,
         /// Active environment id reported by `hello`.
@@ -31,8 +33,21 @@ pub enum ServerMsg {
         environments: Vec<Environment>,
         /// Available harnesses in this environment.
         harnesses: Vec<Harness>,
+        /// Initial project list sorted for display.
+        projects: Vec<Project>,
+        /// Initial thread list sorted for display.
+        threads: Vec<ThreadSummary>,
+        /// Initial delegated task list.
+        tasks: Vec<Task>,
         /// Thread already watched during reconnect, if any.
         watched: Option<ThreadId>,
+    },
+    /// Reply to an agent approval or question request finished.
+    RequestAnswered {
+        /// Request id that was answered.
+        request: RequestId,
+        /// Completion result or error string.
+        result: Result<(), String>,
     },
     /// Authoritative project and thread list snapshot arrived.
     WorkspaceSynced {
