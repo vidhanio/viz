@@ -7,49 +7,46 @@ use viz_protocol::{ProjectSettings, PromoteThread, PromotedThread, ThreadId};
 
 use super::{
     Workspace,
-    sql::{Transaction, exec, row, rows},
+    sql::{exec, row, rows},
     store,
 };
 use crate::error::Error;
 
+/// A private scratch directory provisioned outside any SQLite lock before
+/// inserting a projectless thread.
+pub(super) struct PreparedScratch {
+    path: PathBuf,
+    pub(super) cwd: String,
+}
+
+impl PreparedScratch {
+    /// Removes the empty scratch folder when the thread creation failed or
+    /// replayed an earlier request.
+    pub(super) async fn discard(self) {
+        if let Err(error) = tokio::fs::remove_dir(&self.path).await {
+            tracing::warn!(%error, path = %self.path.display(), "could not remove unused scratch folder");
+        }
+    }
+}
+
 impl Workspace {
-    /// Commit a new thread after provisioning its private directory, if needed.
-    pub(super) async fn commit_thread(
-        &self,
-        mut tx: Transaction<'_>,
-        thread: ThreadId,
-        scratch_title: Option<&str>,
-    ) -> Result<(), Error> {
-        let Some(title) = scratch_title else {
-            return tx.commit().await;
-        };
+    /// Provision a private directory outside Git for a new projectless thread
+    /// before taking the database write lock.
+    pub(super) async fn prepare_scratch(&self, title: &str) -> Result<PreparedScratch, Error> {
+        let root = self.scratch_root().await?;
         let date = chrono::DateTime::from_timestamp_millis(store::now())
             .ok_or_else(|| Error::invalid("invalid scratch creation time"))?
             .date_naive()
             .to_string();
-        let path = self
-            .scratch_root()
-            .await?
-            .join(placement::scratch_name(&date, title, thread));
-        let cwd = store::path_text(&path)?;
+        let suffix = uuid::Uuid::new_v4().simple().to_string();
+        let path = root.join(placement::scratch_name(&date, title, &suffix[..8]));
+        let cwd = store::path_text(&path)?.to_owned();
         tokio::fs::create_dir(&path).await?;
-        let result = async {
-            ensure_outside_git(&path, &self.closing).await?;
-            exec(
-                &mut tx,
-                "UPDATE threads SET cwd = ?2 WHERE id = ?1",
-                [thread.into(), cwd.into()],
-            )
-            .await?;
-            tx.commit().await
+        if let Err(error) = ensure_outside_git(&path, &self.closing).await {
+            let _ = tokio::fs::remove_dir(&path).await;
+            return Err(error);
         }
-        .await;
-        if result.is_err()
-            && let Err(error) = tokio::fs::remove_dir(&path).await
-        {
-            tracing::warn!(%error, %thread, "could not remove uncommitted scratch folder");
-        }
-        result
+        Ok(PreparedScratch { path, cwd })
     }
 
     async fn scratch_root(&self) -> Result<PathBuf, Error> {

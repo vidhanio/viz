@@ -85,6 +85,30 @@ impl Workspace {
         args: LaunchThread,
         placement: Option<&Placement>,
     ) -> Result<(Launched, bool), Error> {
+        let scratch = if args.project.is_none() && placement.is_none() {
+            let title = args.title.as_deref().map_or_else(
+                || titles::from_prompt(args.text.as_deref().unwrap_or_default()),
+                str::to_owned,
+            );
+            Some(self.prepare_scratch(&title).await?)
+        } else {
+            None
+        };
+        let result = self.launch_tx(args, placement, scratch.as_ref()).await;
+        if !matches!(result, Ok((_, true)))
+            && let Some(scratch) = scratch
+        {
+            scratch.discard().await;
+        }
+        result
+    }
+
+    async fn launch_tx(
+        self: &Arc<Self>,
+        args: LaunchThread,
+        placement: Option<&Placement>,
+        scratch: Option<&super::scratch::PreparedScratch>,
+    ) -> Result<(Launched, bool), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         if let Some(found) = launched(&mut tx, args.request_id.as_deref()).await? {
@@ -102,9 +126,13 @@ impl Workspace {
         } else {
             None
         };
-        let checkout = match placement {
-            Some(placement) => placement.checkout.clone(),
-            None => self.checkout_for(&mut tx, args.project.as_deref()).await?,
+        let checkout = match (placement, scratch) {
+            (Some(placement), _) => placement.checkout.clone(),
+            (None, Some(scratch)) => placement::Checkout {
+                cwd: scratch.cwd.clone(),
+                worktree: None,
+            },
+            (None, None) => self.checkout_for(&mut tx, args.project.as_deref()).await?,
         };
         let attachments = attachments::decode(args.attachments)?;
         let session = SavedSession {
@@ -154,12 +182,7 @@ impl Workspace {
             )
             .await?;
         }
-        let scratch_title = args.project.is_none().then(|| {
-            args.title
-                .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()))
-        });
-        self.commit_thread(tx, thread, scratch_title.as_deref())
-            .await?;
+        tx.commit().await?;
         self.kick(thread, run.is_none());
         drop(db);
         self.relist(thread);

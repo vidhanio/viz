@@ -219,11 +219,11 @@ fn slug(text: &str, fallback: &str) -> String {
     }
 }
 
-/// Name a fresh projectless workspace from its creation date, title, and thread
-/// id.
+/// Name a fresh projectless workspace from its creation date, title, and unique
+/// suffix.
 #[must_use]
-pub fn scratch_name(date: &str, title: &str, thread: ThreadId) -> String {
-    format!("{date}-{}-{thread}", slug(title, "thread"))
+pub fn scratch_name(date: &str, title: &str, suffix: &str) -> String {
+    format!("{date}-{}-{suffix}", slug(title, "thread"))
 }
 
 /// Decide whether a checkout may be registered in place as a project.

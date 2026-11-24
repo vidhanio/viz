@@ -26,7 +26,7 @@ use serde_json::Value;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{ChildStdin, ChildStdout},
-    sync::{mpsc, oneshot},
+    sync::{Semaphore, mpsc, oneshot},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -37,6 +37,12 @@ use crate::{
     process::EXIT_GRACE,
     schema::{AgentNotification, CancelRequestNotification, RequestId, SessionNotification},
 };
+
+/// Maximum single newline-delimited JSON-RPC frame accepted from an ACP
+/// harness (`32 MiB`).
+const MAX_ACP_LINE_BYTES: usize = viz_protocol::limits::MAX_WS_FRAME;
+/// Maximum concurrent harness-initiated requests served per ACP connection.
+const MAX_INCOMING_REQUESTS: usize = 32;
 
 /// Receives each session update on the reader before the following frame.
 pub type UpdateSink = Arc<dyn Fn(SessionNotification, i64) + Send + Sync>;
@@ -55,6 +61,7 @@ pub struct Connection {
     pub closed: CancellationToken,
     reason: Mutex<Option<String>>,
     pub incoming: Arc<Incoming>,
+    incoming_permits: Arc<Semaphore>,
 }
 
 impl Connection {
@@ -66,6 +73,7 @@ impl Connection {
             closed: CancellationToken::new(),
             reason: Mutex::default(),
             incoming: Arc::new(incoming),
+            incoming_permits: Arc::new(Semaphore::new(MAX_INCOMING_REQUESTS)),
         }
     }
 
@@ -182,9 +190,10 @@ pub async fn read(
     notifications: Option<mpsc::UnboundedSender<ClientEvent>>,
     shutdown: CancellationToken,
 ) {
-    let mut lines = BufReader::new(stdout).lines();
+    let mut reader = BufReader::new(stdout);
+    let mut buf = Vec::new();
     let drain = async {
-        while let Some(line) = lines.next_line().await? {
+        while let Some(line) = read_bounded_line(&mut reader, &mut buf, MAX_ACP_LINE_BYTES).await? {
             if !line.trim().is_empty() {
                 dispatch(&connection, &updates, notifications.as_ref(), &line);
             }
@@ -269,12 +278,69 @@ fn dispatch(
 }
 
 fn dispatch_request(connection: &Arc<Connection>, request: RawJsonRpcRequest) {
+    let Ok(permit) = Arc::clone(&connection.incoming_permits).try_acquire_owned() else {
+        tracing::warn!(
+            method = %request.method,
+            "ACP incoming request concurrency limit reached"
+        );
+        let reply = RawJsonRpcMessage::response(
+            request.id,
+            Err(agent_client_protocol::Error::internal_error()
+                .data("too many concurrent ACP requests")),
+        );
+        let _ = connection.send(&reply);
+        return;
+    };
     let connection = Arc::clone(connection);
     let job = connection.incoming.prepare(request);
     tokio::spawn(async move {
+        let _permit = permit;
         let reply = job.answer(&connection.closed).await;
         let _ = connection.send(&reply);
     });
+}
+
+async fn read_bounded_line(
+    reader: &mut BufReader<ChildStdout>,
+    buf: &mut Vec<u8>,
+    limit: usize,
+) -> std::io::Result<Option<String>> {
+    buf.clear();
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        if let Some(pos) = available.iter().position(|&byte| byte == b'\n') {
+            if buf.len().saturating_add(pos) > limit {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "ACP JSON-RPC frame exceeded maximum line length",
+                ));
+            }
+            buf.extend_from_slice(&available[..pos]);
+            reader.consume(pos + 1);
+            break;
+        }
+        if buf.len().saturating_add(available.len()) > limit {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "ACP JSON-RPC frame exceeded maximum line length",
+            ));
+        }
+        buf.extend_from_slice(available);
+        let consumed = available.len();
+        reader.consume(consumed);
+    }
+    if buf.ends_with(b"\r") {
+        buf.pop();
+    }
+    String::from_utf8(std::mem::take(buf))
+        .map(Some)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "ACP frame is not UTF-8"))
 }
 
 pub async fn write(

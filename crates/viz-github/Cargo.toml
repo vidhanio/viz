@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 http.workspace = true
+http-body-util.workspace = true
 octocrab.workspace = true
 regex.workspace = true
 serde = { workspace = true, features = ["derive"] }

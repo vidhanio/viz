@@ -19,6 +19,8 @@ use crate::{Error, blocking, check};
 
 const LISTING_TTL: Duration = Duration::from_secs(30);
 const CACHED_ROOTS: usize = 8;
+const MAX_ENTRIES_PER_ROOT: usize = 200_000;
+const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
 
 static LISTINGS: LazyLock<Mutex<HashMap<PathBuf, Listing>>> = LazyLock::new(Mutex::default);
 
@@ -40,6 +42,7 @@ pub struct FileMatch {
 #[derive(Clone)]
 struct Listing {
     entries: Arc<[Entry]>,
+    bytes: usize,
     scanned_at: Instant,
 }
 
@@ -129,8 +132,12 @@ fn listing(root: &Path, cancel: &CancellationToken) -> Result<Arc<[Entry]>, Erro
     walk.require_git(false)
         .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git");
     let mut entries = Vec::new();
+    let mut bytes = 0usize;
     for entry in walk.build() {
         check(cancel)?;
+        if entries.len() >= MAX_ENTRIES_PER_ROOT {
+            break;
+        }
         let entry = entry?;
         if entry.depth() == 0 {
             continue;
@@ -148,6 +155,7 @@ fn listing(root: &Path, cancel: &CancellationToken) -> Result<Arc<[Entry]>, Erro
         let Some(display) = path.to_str() else {
             continue;
         };
+        bytes = bytes.saturating_add(display.len() * 2 + std::mem::size_of::<Entry>());
         entries.push(Entry {
             path: path.to_owned(),
             display: display.to_owned(),
@@ -159,25 +167,32 @@ fn listing(root: &Path, cancel: &CancellationToken) -> Result<Arc<[Entry]>, Erro
         });
     }
     let entries = Arc::from(entries);
-    let mut cache = LISTINGS
-        .lock()
-        .map_err(|_| Error::Invalid("file listing lock"))?;
-    if cache.len() >= CACHED_ROOTS
-        && !cache.contains_key(root)
-        && let Some(oldest) = cache
-            .iter()
-            .min_by_key(|(_, listing)| listing.scanned_at)
-            .map(|(root, _)| root.clone())
-    {
-        cache.remove(&oldest);
+    if bytes <= MAX_CACHE_BYTES {
+        let mut cache = LISTINGS
+            .lock()
+            .map_err(|_| Error::Invalid("file listing lock"))?;
+        cache.remove(root);
+        let mut total_bytes: usize = cache.values().map(|listing| listing.bytes).sum();
+        while cache.len() >= CACHED_ROOTS || total_bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
+            let Some(oldest) = cache
+                .iter()
+                .min_by_key(|(_, listing)| listing.scanned_at)
+                .map(|(root, _)| root.clone())
+            else {
+                break;
+            };
+            if let Some(removed) = cache.remove(&oldest) {
+                total_bytes = total_bytes.saturating_sub(removed.bytes);
+            }
+        }
+        cache.insert(
+            root.to_owned(),
+            Listing {
+                entries: Arc::clone(&entries),
+                bytes,
+                scanned_at: Instant::now(),
+            },
+        );
     }
-    cache.insert(
-        root.to_owned(),
-        Listing {
-            entries: Arc::clone(&entries),
-            scanned_at: Instant::now(),
-        },
-    );
-    drop(cache);
     Ok(entries)
 }

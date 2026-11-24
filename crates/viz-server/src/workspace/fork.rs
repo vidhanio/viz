@@ -76,6 +76,58 @@ impl Workspace {
         args: ForkThread,
         placement: Option<&Placement>,
     ) -> Result<(Forked, bool), Error> {
+        let scratch = if placement.is_none() {
+            let needs_scratch = {
+                let mut db = self.db.lock().await;
+                if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
+                    return Ok((
+                        Forked {
+                            thread: found.thread,
+                            prompt: None,
+                        },
+                        false,
+                    ));
+                }
+                let binding = store::binding(&mut db, args.thread).await?;
+                let title = if binding.project.is_none() {
+                    let (metadata, _) = store::metadata(&mut db, args.thread).await?;
+                    Some(
+                        args.title
+                            .clone()
+                            .unwrap_or_else(|| metadata.title().to_owned()),
+                    )
+                } else {
+                    None
+                };
+                drop(db);
+                title
+            };
+            match needs_scratch {
+                Some(title) => Some(self.prepare_scratch(&title).await?),
+                None => None,
+            }
+        } else {
+            None
+        };
+        let result = self.fork_tx(args, placement, scratch.as_ref()).await;
+        if !matches!(result, Ok((_, true)))
+            && let Some(scratch) = scratch
+        {
+            scratch.discard().await;
+        }
+        result
+    }
+
+    #[expect(
+        clippy::too_many_lines,
+        reason = "single atomic SQLite transaction recording a forked thread, copied history, and idempotency receipt"
+    )]
+    async fn fork_tx(
+        self: &Arc<Self>,
+        args: ForkThread,
+        placement: Option<&Placement>,
+        scratch: Option<&super::scratch::PreparedScratch>,
+    ) -> Result<(Forked, bool), Error> {
         let source = args.thread;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
@@ -105,12 +157,29 @@ impl Workspace {
         let (harness, _) =
             self.harness(Some(args.harness.as_deref().unwrap_or(&binding.harness)))?;
         let same_harness = harness == binding.harness;
-        let checkout = placement.map_or(&binding.checkout, |placement| &placement.checkout);
+        let scratch_checkout = (binding.project.is_none() && placement.is_none())
+            .then(|| {
+                scratch.map(|s| viz_core::placement::Checkout {
+                    cwd: s.cwd.clone(),
+                    worktree: None,
+                })
+            })
+            .flatten();
+        if binding.project.is_none() && placement.is_none() && scratch_checkout.is_none() {
+            return Err(Error::unavailable(
+                "source thread project changed during fork; retry",
+            ));
+        }
+        let checkout = match (placement, scratch_checkout.as_ref()) {
+            (Some(placement), _) => &placement.checkout,
+            (None, Some(checkout)) => checkout,
+            (None, None) => &binding.checkout,
+        };
         let native = binding
             .session
             .session_id
             .clone()
-            .filter(|_| same_harness && placement.is_none());
+            .filter(|_| same_harness && placement.is_none() && scratch_checkout.is_none());
         let session = SavedSession {
             desired: if same_harness {
                 binding.session.desired
@@ -148,12 +217,6 @@ impl Workspace {
             [thread.into(), source.into(), shared.into()],
         )
         .await?;
-        let scratch_title = binding.project.is_none().then(|| {
-            args.title
-                .as_deref()
-                .unwrap_or_else(|| metadata.title())
-                .to_owned()
-        });
         if args.title.is_none() {
             let title = Title::Derived(metadata.title().to_owned());
             let metadata = threads::Metadata { title, ..metadata };
@@ -167,8 +230,7 @@ impl Workspace {
             )
             .await?;
         }
-        self.commit_thread(tx, thread, scratch_title.as_deref())
-            .await?;
+        tx.commit().await?;
         self.kick(thread, true);
         drop(db);
         self.relist(thread);

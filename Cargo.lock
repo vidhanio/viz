@@ -6357,6 +6357,7 @@ name = "viz-github"
 version = "0.1.0"
 dependencies = [
  "http",
+ "http-body-util",
  "octocrab",
  "regex",
  "serde",

@@ -35,17 +35,18 @@ impl Workspace {
         if args.thread.is_some() {
             return Err(Rejection::MovedThread.into());
         }
-        let parent = {
+        let parent_binding = {
             let mut db = self.db.lock().await;
             if let Some(found) =
                 receipt(&mut db, (args.origin_environment.as_str(), &args.task)).await?
             {
                 return Ok(found);
             }
-            let parent = self.parent(&mut db, &args).await?;
+            let binding = self.parent_binding(&mut db, &args).await?;
             drop(db);
-            parent
+            binding
         };
+        let parent = self.resolve_parent(parent_binding).await;
         let (project, source) = placement::child_worktree(
             args.target.project.as_deref(),
             parent.as_ref().map(Parent::placed),
@@ -75,8 +76,56 @@ impl Workspace {
 
     async fn receive_in(
         self: &Arc<Self>,
+        args: ReceiveTask,
+        placement: Option<&Placement>,
+    ) -> Result<(Received, bool), Error> {
+        let parent_binding = if args.thread.is_none() {
+            let mut db = self.db.lock().await;
+            if let Some(found) =
+                receipt(&mut db, (args.origin_environment.as_str(), &args.task)).await?
+            {
+                return Ok((found, false));
+            }
+            let binding = self.parent_binding(&mut db, &args).await?;
+            drop(db);
+            binding
+        } else {
+            None
+        };
+        let parent = self.resolve_parent(parent_binding).await;
+        let needs_scratch = args.thread.is_none()
+            && placement.is_none()
+            && placement::child_project(
+                args.target.project.as_deref(),
+                parent.as_ref().map(Parent::placed),
+            )
+            .is_none();
+        let scratch = if needs_scratch {
+            let title = args
+                .title
+                .as_deref()
+                .map_or_else(|| titles::from_prompt(&args.text), str::to_owned);
+            Some(self.prepare_scratch(&title).await?)
+        } else {
+            None
+        };
+        let result = self
+            .receive_tx(args, placement, parent.as_ref(), scratch.as_ref())
+            .await;
+        if !matches!(result, Ok((_, true)))
+            && let Some(scratch) = scratch
+        {
+            scratch.discard().await;
+        }
+        result
+    }
+
+    async fn receive_tx(
+        self: &Arc<Self>,
         mut args: ReceiveTask,
         placement: Option<&Placement>,
+        parent: Option<&Parent>,
+        scratch: Option<&super::scratch::PreparedScratch>,
     ) -> Result<(Received, bool), Error> {
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
@@ -101,7 +150,9 @@ impl Workspace {
             return Err(Rejection::EmptyText.into());
         }
         let decoded = attachments::decode(std::mem::take(&mut args.attachments))?;
-        let (thread, scratch) = self.task_thread(&mut tx, &args, placement).await?;
+        let thread = self
+            .task_thread(&mut tx, &args, placement, parent, scratch)
+            .await?;
         let attachments = attachments::save(&mut tx, thread, decoded).await?;
         let run = runs::enqueue(
             &mut tx,
@@ -123,30 +174,31 @@ impl Workspace {
             ],
         )
         .await?;
-        let scratch_title = scratch.then(|| {
-            args.title
-                .unwrap_or_else(|| titles::from_prompt(&args.text))
-        });
-        self.commit_thread(tx, thread, scratch_title.as_deref())
-            .await?;
+        tx.commit().await?;
         self.kick(thread, false);
         drop(db);
         self.relist(thread);
         Ok((Received { thread, run }, true))
     }
 
-    /// The local thread an offer came from.
-    async fn parent(
+    /// The local thread an offer came from (DB lookup only; no FS/Git I/O).
+    async fn parent_binding(
         &self,
         db: &mut Connection,
         offer: &ReceiveTask,
-    ) -> Result<Option<Parent>, Error> {
+    ) -> Result<Option<Binding>, Error> {
         if offer.origin_environment != self.environment {
             return Ok(None);
         }
-        let binding = store::binding(db, offer.parent).await?;
+        Ok(Some(store::binding(db, offer.parent).await?))
+    }
+
+    /// Resolves whether the local parent sits within its project repository
+    /// outside any SQLite lock.
+    async fn resolve_parent(&self, binding: Option<Binding>) -> Option<Parent> {
+        let binding = binding?;
         let within = self.within(&binding).await;
-        Ok(Some(Parent { binding, within }))
+        Some(Parent { binding, within })
     }
 
     /// The thread a task runs in: the child it names, or a new one in its
@@ -156,7 +208,9 @@ impl Workspace {
         db: &mut Connection,
         args: &ReceiveTask,
         resolved: Option<&Placement>,
-    ) -> Result<(ThreadId, bool), Error> {
+        parent: Option<&Parent>,
+        scratch: Option<&super::scratch::PreparedScratch>,
+    ) -> Result<ThreadId, Error> {
         if let Some(thread) = args.thread {
             let binding = store::binding(db, thread).await?;
             tasks::reuse(Reuse {
@@ -166,32 +220,35 @@ impl Workspace {
                 harness: &binding.harness,
                 project: binding.project.as_deref(),
             })?;
-            return Ok((thread, false));
+            return Ok(thread);
         }
-        let parent = self.parent(db, args).await?;
-        let placed = parent.as_ref().map(Parent::placed);
+        let placed = parent.map(Parent::placed);
         let target = args.target.project.as_deref();
         let project = placement::child_project(target, placed);
         if resolved.is_none() && args.target.worktree.is_some() {
             return Err(Error::invalid("unresolved worktree target"));
         }
-        let selected = args.target.harness.as_deref().or_else(|| {
-            parent
-                .as_ref()
-                .map(|parent| parent.binding.harness.as_str())
-        });
+        let selected = args
+            .target
+            .harness
+            .as_deref()
+            .or_else(|| parent.map(|parent| parent.binding.harness.as_str()));
         let (harness, _) = self.harness(selected)?;
-        let checkout = match (resolved, placement::child(target, placed)) {
-            (Some(resolved), _) => resolved.checkout.clone(),
-            (None, Place::Parent(checkout)) => checkout.clone(),
-            (None, Place::Project(project)) => self.checkout_for(db, Some(project)).await?,
-            (None, Place::Default) => self.checkout_for(db, None).await?,
+        let checkout = match (resolved, project, scratch, placement::child(target, placed)) {
+            (Some(resolved), _, _, _) => resolved.checkout.clone(),
+            (None, None, Some(scratch), _) => placement::Checkout {
+                cwd: scratch.cwd.clone(),
+                worktree: None,
+            },
+            (None, _, _, Place::Parent(checkout)) => checkout.clone(),
+            (None, _, _, Place::Project(project)) => self.checkout_for(db, Some(project)).await?,
+            (None, _, _, Place::Default) => self.checkout_for(db, None).await?,
         };
         let session = SavedSession {
             selection: selection(args.target.model.clone(), args.target.thinking.clone()),
             ..SavedSession::default()
         };
-        let thread = store::create_thread(
+        store::create_thread(
             self,
             db,
             &NewThread {
@@ -204,8 +261,7 @@ impl Workspace {
                 session,
             },
         )
-        .await?;
-        Ok((thread, project.is_none()))
+        .await
     }
 
     pub(crate) async fn retract(&self, args: RetractTask) -> Result<Option<Received>, Error> {

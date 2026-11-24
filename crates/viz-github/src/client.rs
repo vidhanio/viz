@@ -10,6 +10,7 @@ use std::{
 };
 
 use http::{HeaderMap, StatusCode, header};
+use http_body_util::{BodyExt as _, Limited};
 use octocrab::Octocrab;
 use regex::Regex;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -20,6 +21,7 @@ use viz_config::Secret;
 const CACHE_TTL: Duration = Duration::from_secs(15);
 const CACHE_CAPACITY: usize = 64;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const MAX_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 /// Local gh authentication state for the configured host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -280,7 +282,7 @@ impl GitHub {
             }
         } else {
             require_success(status, throttled)?;
-            let body = within(api.body_to_string(response), &auth.token).await?;
+            let body = read_bounded_body(response, &auth.token).await?;
             Cached {
                 etag,
                 at: Instant::now(),
@@ -361,7 +363,7 @@ impl GitHub {
         self.forget_unauthorized(status, auth).await;
         let throttled = auth.record_limit(status, response.headers()).await;
         require_success(status, throttled)?;
-        let body = within(api.body_to_string(response), &auth.token).await?;
+        let body = read_bounded_body(response, &auth.token).await?;
         Ok(serde_json::from_str(&body)?)
     }
 
@@ -448,6 +450,40 @@ pub fn missing_graphql(message: &'static str) -> Error {
     Error::GraphQl {
         messages: vec![message.to_owned()],
     }
+}
+
+async fn read_bounded_body<B>(response: http::Response<B>, token: &Secret) -> Result<String, Error>
+where
+    B: http_body_util::BodyExt,
+    B::Error: StdError + Send + Sync + 'static,
+{
+    if response
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|len| len > MAX_RESPONSE_BYTES)
+    {
+        return Err(Error::Transport(TransportFailure {
+            message: format!("response body exceeded {MAX_RESPONSE_BYTES} bytes"),
+        }));
+    }
+    let collected = tokio::time::timeout(
+        REQUEST_TIMEOUT,
+        Limited::new(response.into_body(), MAX_RESPONSE_BYTES).collect(),
+    )
+    .await
+    .map_err(|_| Error::Timeout)?
+    .map_err(|error| {
+        let message = sanitized(&error.to_string(), token);
+        Error::Transport(TransportFailure { message })
+    })?;
+    let bytes = collected.to_bytes();
+    String::from_utf8(bytes.to_vec()).map_err(|_| {
+        Error::Transport(TransportFailure {
+            message: "response body is not UTF-8".to_owned(),
+        })
+    })
 }
 
 async fn within<T>(

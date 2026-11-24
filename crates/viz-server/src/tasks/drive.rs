@@ -19,6 +19,8 @@ use crate::{
     workspace::{Change, sql},
 };
 
+const MAX_CONCURRENT_JOBS: usize = 64;
+
 impl Tasks {
     pub(super) async fn supervise(self: Arc<Self>) {
         let mut jobs: HashMap<Job, JoinHandle<()>> = HashMap::new();
@@ -30,9 +32,15 @@ impl Tasks {
                 () = self.scan.notified() => {},
             }
             jobs.retain(|_, worker| !worker.is_finished());
+            if jobs.len() >= MAX_CONCURRENT_JOBS {
+                continue;
+            }
             match self.pending_jobs().await {
                 Ok(pending) => {
                     for job in pending {
+                        if jobs.len() >= MAX_CONCURRENT_JOBS {
+                            break;
+                        }
                         jobs.entry(job)
                             .or_insert_with_key(|job| self.start_job(job));
                     }
@@ -95,6 +103,7 @@ impl Tasks {
                         () = tasks.shutdown.cancelled() => {},
                         () = tasks.drive_task(&id) => {},
                     }
+                    tasks.scan.notify_one();
                 })
             }
             Job::FollowUp {
@@ -112,6 +121,7 @@ impl Tasks {
                             }
                         }
                     }
+                    tasks.scan.notify_one();
                 })
             }
             Job::Stop { thread, run } => {
@@ -121,6 +131,7 @@ impl Tasks {
                         () = tasks.shutdown.cancelled() => {},
                         () = tasks.drive_stop(thread, run) => {},
                     }
+                    tasks.scan.notify_one();
                 })
             }
         }

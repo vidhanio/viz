@@ -8,6 +8,7 @@ use std::{
     path::Path,
     process::{Command, Stdio},
     sync::LazyLock,
+    time::{Duration, Instant},
 };
 
 use regex::Regex;
@@ -17,7 +18,10 @@ use tempfile::NamedTempFile;
 use crate::Error;
 
 const DIAGNOSTIC_LIMIT: usize = 8 * 1024;
+const STDOUT_LIMIT: usize = 32 * 1024 * 1024;
 const TRACE_LIMIT: u64 = 1024 * 1024;
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+const WAIT_POLL: Duration = Duration::from_millis(15);
 
 /// Failure classes a caller can use to present a recovery action.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -96,29 +100,36 @@ pub fn output(command: &mut Command, operation: &'static str) -> Result<Vec<u8>,
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(Error::Invalid("git stdout pipe"))?;
     let stderr = child
         .stderr
         .take()
         .ok_or(Error::Invalid("git stderr pipe"))?;
-    let (result, stderr) = std::thread::scope(|scope| {
-        let reader = scope.spawn(|| bounded_diagnostic(stderr));
-        let result = child.wait_with_output();
-        Ok::<_, Error>((
-            result,
-            reader
-                .join()
-                .map_err(|_| Error::Invalid("git stderr reader"))?,
-        ))
+    let (status, stdout, stderr) = std::thread::scope(|scope| {
+        let out_reader = scope.spawn(|| bounded_stdout(stdout));
+        let err_reader = scope.spawn(|| bounded_diagnostic(stderr));
+        let status = wait_with_timeout(&mut child, COMMAND_TIMEOUT);
+        let stdout = out_reader
+            .join()
+            .map_err(|_| Error::Invalid("git stdout reader"))?;
+        let stderr = err_reader
+            .join()
+            .map_err(|_| Error::Invalid("git stderr reader"))?;
+        Ok::<_, Error>((status, stdout, stderr))
     })?;
-    let result = result?;
-    if result.status.success() {
-        return Ok(result.stdout);
+    let status = status?;
+    let stdout = stdout?;
+    if status.success() {
+        return Ok(stdout);
     }
     let stderr = stderr?;
     let hook_rejected = trace
         .as_ref()
         .is_some_and(|trace| hook_rejected(trace.as_file()).unwrap_or(false));
-    let stdout = diagnostic_prefix(&result.stdout);
+    let stdout = diagnostic_prefix(&stdout);
     let message = if stderr.trim().is_empty() {
         &stdout
     } else {
@@ -126,11 +137,42 @@ pub fn output(command: &mut Command, operation: &'static str) -> Result<Vec<u8>,
     };
     Err(command_error(
         operation,
-        result.status,
+        status,
         &format!("{stderr}\n{stdout}"),
         message,
         hook_rejected,
     ))
+}
+
+fn wait_with_timeout(
+    child: &mut std::process::Child,
+    timeout: Duration,
+) -> Result<std::process::ExitStatus, Error> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Invalid("git command timed out"));
+        }
+        std::thread::sleep(WAIT_POLL);
+    }
+}
+
+fn bounded_stdout(pipe: impl Read) -> Result<Vec<u8>, Error> {
+    let mut pipe = BufReader::new(pipe);
+    let mut kept = Vec::new();
+    pipe.by_ref()
+        .take(STDOUT_LIMIT as u64 + 1)
+        .read_to_end(&mut kept)?;
+    if kept.len() > STDOUT_LIMIT {
+        let _ = io::copy(&mut pipe, &mut io::sink());
+        return Err(Error::Invalid("git stdout exceeded size limit"));
+    }
+    Ok(kept)
 }
 
 pub fn clone_failure(status: std::process::ExitStatus, message: &str) -> Error {

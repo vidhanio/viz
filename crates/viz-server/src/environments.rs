@@ -4,7 +4,7 @@ use std::{
     collections::BTreeMap,
     net::{Ipv4Addr, SocketAddr},
     sync::{
-        Mutex,
+        Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::{Duration, Instant},
@@ -14,7 +14,7 @@ use anyhow::{Context as _, ensure};
 use jsonrpsee_types::{Id, Response, ResponsePayload, TwoPointZero};
 use reqwest::{Client, header::HeaderValue, redirect::Policy};
 use serde::Serialize;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, Semaphore};
 use url::{Host, Url};
 use viz_protocol::{ClientInfo, ClientKind, HelloParams, Method};
 
@@ -27,6 +27,8 @@ use crate::{
 const RECENCY: Duration = Duration::from_secs(10);
 const PROBE_TIMEOUT: Duration = Duration::from_secs(2);
 const RPC_TIMEOUT: Duration = Duration::from_secs(8);
+const MAX_PEER_CONCURRENCY: usize = 8;
+const MAX_RESPONSE_BYTES: usize = viz_protocol::limits::MAX_WS_FRAME;
 
 pub(crate) struct Peer {
     pub(crate) url: Url,
@@ -35,6 +37,7 @@ pub(crate) struct Peer {
     destination: HeaderValue,
     last: Mutex<Option<(Instant, bool)>>,
     probing: AsyncMutex<()>,
+    permits: Arc<Semaphore>,
 }
 
 impl std::fmt::Debug for Peer {
@@ -100,6 +103,7 @@ impl Peers {
                     destination,
                     last: Mutex::new(None),
                     probing: AsyncMutex::new(()),
+                    permits: Arc::new(Semaphore::new(MAX_PEER_CONCURRENCY)),
                 },
             );
         }
@@ -233,8 +237,9 @@ impl Peers {
             params: &'a P,
         }
 
+        let _permit = peer.permits.acquire().await.map_err(|_| ())?;
         let id = self.sequence.fetch_add(1, Ordering::Relaxed);
-        let response = self
+        let mut response = self
             .client
             .post(peer.url.clone())
             .bearer_auth(&peer.token)
@@ -252,7 +257,19 @@ impl Peers {
         if !response.status().is_success() {
             return Err(());
         }
-        let bytes = response.bytes().await.map_err(|_| ())?;
+        if response
+            .content_length()
+            .is_some_and(|len| len > MAX_RESPONSE_BYTES as u64)
+        {
+            return Err(());
+        }
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|_| ())? {
+            if bytes.len().saturating_add(chunk.len()) > MAX_RESPONSE_BYTES {
+                return Err(());
+            }
+            bytes.extend_from_slice(&chunk);
+        }
         let reply: Response<'_, M::Response> = serde_json::from_slice(&bytes).map_err(|_| ())?;
         if reply.jsonrpc.is_none() || reply.id != Id::Number(id) {
             return Err(());
