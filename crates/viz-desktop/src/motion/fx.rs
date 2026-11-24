@@ -8,12 +8,15 @@
 //!   renders only the enclosed icon and text instances into a reusable mask
 //!   texture and sweeps the sheen strictly across those glyph pixels
 //!   (`use_mask: true`), leaving the background untouched.
+//!
+//! Shape shimmer can draw inside Rune's isolated layers, whose `Rgba16Float`
+//! target uses a different pipeline from the frame target.
 
 use std::{collections::HashMap, ops::Range};
 
 use rune::{
     compose::{Compositor, DeviceKey, Frame},
-    render::{Kind, OFFSCREEN_FORMAT},
+    render::Kind,
 };
 use rune_fx::{
     Fx, FxFrame, FxLayer, FxOptions, FxRenderer, FxSlot, Place, Rect, Rgb, Shape, ShimmerParams,
@@ -88,7 +91,7 @@ impl MaskTarget {
 /// `draws_own() == false`, so idle windows draw zero frames.
 #[derive(Default)]
 pub struct FxCompositor {
-    renderer: Option<(DeviceKey, FxRenderer)>,
+    renderer: Option<(DeviceKey, wgpu::TextureFormat, FxRenderer)>,
     mask: Option<MaskTarget>,
     layers: Vec<FxLayer>,
     slots: Vec<FxSlot>,
@@ -293,11 +296,11 @@ impl Compositor<Desktop> for FxCompositor {
         let needs_new = self
             .renderer
             .as_ref()
-            .is_none_or(|(key, _)| *key != device_key);
+            .is_none_or(|(key, format, _)| *key != device_key || *format != frame.format);
         if needs_new {
             let mut renderer = FxRenderer::new(frame.device, frame.format, FxOptions::default());
-            renderer.add_format(frame.device, OFFSCREEN_FORMAT);
-            self.renderer = Some((device_key, renderer));
+            renderer.add_format(frame.device, wgpu::TextureFormat::Rgba16Float);
+            self.renderer = Some((device_key, frame.format, renderer));
         }
         let clear = frame.rt.clear_color();
         frame.ui.set_fade_stops(frame.rt.fade_stops());
@@ -348,7 +351,7 @@ impl Compositor<Desktop> for FxCompositor {
             }
         }
 
-        let Some((_, fx)) = self.renderer.as_mut() else {
+        let Some((_, _, fx)) = self.renderer.as_mut() else {
             frame.draw_ui();
             return;
         };
