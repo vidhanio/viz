@@ -78,13 +78,36 @@ pub fn thought_inspector(key: &str, body: &str, streaming: bool, t: &Theme) -> E
         .child(scrolled.grow(1.0).shrink().min_w(0.0))
 }
 
-/// Shows a compact preview of the leading portion of a streaming thought.
+/// Shows a compact 4-line preview of a streaming thought that breaks cleanly
+/// on line boundaries without slicing glyphs mid-line.
 pub(super) fn thought_preview(body: &str, t: &Theme) -> El {
-    col()
+    let preview = compact_thought_preview(body);
+    text(preview)
+        .font(t.small)
+        .color(t.muted)
         .w_full()
-        .max_h(4.0 * t.small.line_height)
-        .clip_rounded(0.0)
-        .child(activity_markdown(body, t.small, t.muted, true, false, t))
+        .wrap()
+        .max_lines(4)
+}
+
+fn compact_thought_preview(body: &str) -> String {
+    let mut lines = Vec::new();
+    for raw in body.lines() {
+        let cleaned = raw
+            .replace("**", "")
+            .replace("__", "")
+            .replace('`', "")
+            .trim_start_matches(['#', '>', ' '])
+            .trim()
+            .to_owned();
+        if !cleaned.is_empty() {
+            lines.push(cleaned);
+            if lines.len() >= 8 {
+                break;
+            }
+        }
+    }
+    lines.join("\n")
 }
 
 fn activity_markdown(

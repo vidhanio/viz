@@ -31,7 +31,32 @@ pub fn live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
         "Working"
     };
 
-    let mut header_row = row()
+    let label_el = elapsed_ms.map_or_else(
+        || text(prefix).font(t.ui).color(t.muted),
+        |ms| {
+            let secs = (ms / 1_000).max(0);
+            let label = format_turn_duration(ms);
+            #[expect(
+                clippy::cast_precision_loss,
+                reason = "elapsed turn seconds stay well within exact f64 range"
+            )]
+            let value = secs as f64;
+            row()
+                .center_y()
+                .child(text(prefix).font(t.ui).color(t.muted))
+                .child(motion::rolling_count(
+                    format!("{}-elapsed", turn.key),
+                    label,
+                    value,
+                    t.ui,
+                    t.muted,
+                    false,
+                    &t.k,
+                ))
+        },
+    );
+
+    let header_row = row()
         .key(format!("{}-working-head", turn.key))
         .role("status")
         .label(if compacting { "Compacting" } else { "Working" })
@@ -43,26 +68,7 @@ pub fn live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
         .center_y()
         .radius(RADIUS_SM)
         .child(ui::radar(ICON_SMALL, t.accent, t))
-        .child(text(prefix).font(t.ui).color(t.muted));
-
-    if let Some(ms) = elapsed_ms {
-        let secs = (ms / 1_000).max(0);
-        let label = format_turn_duration(ms);
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "elapsed turn seconds stay well within exact f64 range"
-        )]
-        let value = secs as f64;
-        header_row = header_row.child(motion::rolling_count(
-            format!("{}-elapsed", turn.key),
-            label,
-            value,
-            t.ui,
-            t.muted,
-            false,
-            &t.k,
-        ));
-    }
+        .child(label_el);
 
     let mut section =
         motion::fold_container(col().key(format!("{}-working", turn.key)).w_full().pb(S6))
