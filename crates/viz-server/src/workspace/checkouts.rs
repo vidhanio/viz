@@ -145,21 +145,8 @@ impl Workspace {
         Ok(WorktreeList { worktrees })
     }
 
-    /// Checks that `path` is viz's own worktree and that no thread other
-    /// than `except` runs in it.
-    pub(super) async fn removable(
-        &self,
-        db: &mut crate::workspace::sql::Connection,
-        path: &str,
-        except: Option<ThreadId>,
-    ) -> Result<(), Error> {
-        if !worktree::managed(&self.worktrees, path).await {
-            return Err(placement::Rejection::Unmanaged(path.to_owned()).into());
-        }
-        Self::require_unused(db, path, except).await
-    }
-
-    async fn require_unused(
+    /// Checks that no thread other than `except` runs in `path`.
+    pub(super) async fn require_unused(
         db: &mut crate::workspace::sql::Connection,
         path: &str,
         except: Option<ThreadId>,

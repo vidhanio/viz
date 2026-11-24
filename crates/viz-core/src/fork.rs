@@ -33,7 +33,8 @@ pub enum Rejection {
     NoEntry(EntryId),
 }
 
-/// Cut a transcript, given its started runs and its last entry.
+/// Cut a transcript, given its started runs, its last entry, and whether the
+/// target entry of [`ForkPoint::Through`] belongs to the source thread.
 ///
 /// A fork never shares part of a run: forking from an entry shares the run it
 /// is in, and forking from the head of a busy thread leaves its current run
@@ -41,13 +42,18 @@ pub enum Rejection {
 ///
 /// # Errors
 /// The point must be in the thread, and not in a run still under way.
-pub fn cut(turns: &[Turn], last: Option<EntryId>, point: ForkPoint) -> Result<Cut, Rejection> {
+pub fn cut(
+    turns: &[Turn],
+    last: Option<EntryId>,
+    point: ForkPoint,
+    entry_exists: bool,
+) -> Result<Cut, Rejection> {
     let before = |entry: EntryId| entry.0.checked_sub(1).filter(|&id| id > 0).map(EntryId);
     let running = turns.iter().find(|turn| turn.end.is_none());
     let through = match point {
         ForkPoint::Head => running.map_or(last, |turn| before(turn.start)),
         ForkPoint::Through { entry } => {
-            if last.is_none_or(|last| entry > last) {
+            if !entry_exists || last.is_none_or(|last| entry > last) {
                 return Err(Rejection::NoEntry(entry));
             }
             match turns

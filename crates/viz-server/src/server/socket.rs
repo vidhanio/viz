@@ -561,17 +561,26 @@ async fn client_call(
         let Some(result) = status.run else {
             return Ok(());
         };
-        if matches!(result.status, RunStatus::Queued | RunStatus::Running) {
-            continue;
-        }
+        let (text, error) = match result.status {
+            RunStatus::Completed => (result.answer, None),
+            RunStatus::Failed | RunStatus::Cancelled | RunStatus::Interrupted => (
+                None,
+                Some(
+                    result
+                        .error
+                        .unwrap_or_else(|| format!("run ended ({:?})", result.status)),
+                ),
+            ),
+            RunStatus::Queued | RunStatus::Running => continue,
+        };
         return send_note(
             outgoing,
             Notification::Reply {
                 origin,
                 thread,
                 run,
-                text: result.answer,
-                error: result.error,
+                text,
+                error,
             },
         )
         .await;

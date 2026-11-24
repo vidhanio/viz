@@ -207,12 +207,6 @@ pub(super) async fn remove(root: &Path, path: &str, force: bool) -> Result<(), E
     Ok(repo.remove_worktree_with(path, mode, &cancel).await?)
 }
 
-pub(super) async fn clean(dir: &Path) -> Result<bool, Error> {
-    let cancel = CancellationToken::new();
-    let repo = discover(dir, &cancel).await?;
-    Ok(repo.status(&cancel).await?.is_empty())
-}
-
 pub(super) async fn discard(root: &Path, source: &Path, placement: &Placement) {
     let (Some(path), Some(branch)) = (&placement.checkout.worktree, &placement.created) else {
         return;

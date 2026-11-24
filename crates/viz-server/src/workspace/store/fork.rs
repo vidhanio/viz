@@ -42,6 +42,21 @@ pub(in crate::workspace) async fn turns(
     Ok((turns, last))
 }
 
+/// Whether `entry` belongs to `thread`.
+pub(in crate::workspace) async fn has_entry(
+    db: &mut Connection,
+    thread: ThreadId,
+    entry: EntryId,
+) -> Result<bool, Error> {
+    Ok(row(
+        db,
+        "SELECT 1 FROM entries WHERE thread = ?1 AND id = ?2",
+        [thread.into(), entry.into()],
+    )
+    .await?
+    .is_some())
+}
+
 /// The user's prompt at an entry.
 pub(in crate::workspace) async fn fork_prompt(
     db: &mut Connection,

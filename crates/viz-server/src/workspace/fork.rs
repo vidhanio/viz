@@ -97,7 +97,11 @@ impl Workspace {
             ForkPoint::Head | ForkPoint::Through { .. } => None,
         };
         let (turns, last) = store::turns(&mut tx, source).await?;
-        let cut = fork::cut(&turns, last, args.point)?;
+        let target_exists = match args.point {
+            ForkPoint::Through { entry } => store::has_entry(&mut tx, source, entry).await?,
+            ForkPoint::Head | ForkPoint::Before { .. } => true,
+        };
+        let cut = fork::cut(&turns, last, args.point, target_exists)?;
         let (harness, _) =
             self.harness(Some(args.harness.as_deref().unwrap_or(&binding.harness)))?;
         let same_harness = harness == binding.harness;

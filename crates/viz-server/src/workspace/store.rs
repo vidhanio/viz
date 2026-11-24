@@ -14,7 +14,7 @@ use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) use self::{
     entry_wire::{chunk, live_preview},
-    fork::{copy_history, fork_prompt, turns},
+    fork::{copy_history, fork_prompt, has_entry, turns},
     lifecycle::{lifecycle, save_lifecycle, standings, touch},
     projects::{directory, path_text, preferences, project, project_at, projects, thread_worktree},
     requests::{

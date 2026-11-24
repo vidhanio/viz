@@ -165,7 +165,7 @@ impl Workspace {
     pub(super) async fn turn_root(&self, thread: ThreadId) -> Result<Option<PathBuf>, Error> {
         match self.git_repository(thread).await {
             Ok(repo) => Ok(repo.identity().checkout.clone()),
-            Err(Error::Git(_) | Error::NoThread(_)) => Ok(None),
+            Err(Error::Git(viz_git::Error::NotRepository) | Error::NoThread(_)) => Ok(None),
             Err(error) => Err(error),
         }
     }

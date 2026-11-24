@@ -9,7 +9,7 @@ use anyhow::{Context as _, bail};
 use clap::{Parser, Subcommand};
 use viz_client::{
     Client, Endpoint,
-    protocol::{ClientInfo, ClientKind, SendInput, ThreadId, WaitThread},
+    protocol::{ClientInfo, ClientKind, RunStatus, SendInput, ThreadId, WaitThread},
 };
 use viz_config::{Component, Connection, DEFAULT_URL};
 
@@ -144,14 +144,24 @@ async fn send(endpoint: &Endpoint, thread: ThreadId, text: String) -> anyhow::Re
             continue;
         }
         let run = result.run.context("run no longer exists")?;
-        if let Some(answer) = run.answer {
-            println!("{answer}");
-            return Ok(());
+        match run.status {
+            RunStatus::Completed => {
+                if let Some(answer) = run.answer {
+                    println!("{answer}");
+                    return Ok(());
+                }
+                bail!("run completed without an answer");
+            }
+            RunStatus::Failed | RunStatus::Cancelled | RunStatus::Interrupted => {
+                if let Some(error) = run.error {
+                    bail!("{error}");
+                }
+                bail!("run ended without completing ({:?})", run.status);
+            }
+            RunStatus::Queued | RunStatus::Running => {
+                bail!("wait returned non-terminal status ({:?})", run.status);
+            }
         }
-        if let Some(error) = run.error {
-            bail!("{error}");
-        }
-        bail!("no answer ({:?})", run.status);
     }
 }
 

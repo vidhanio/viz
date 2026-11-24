@@ -312,21 +312,39 @@ impl Workspace {
         thread: ThreadId,
         remove_worktree: bool,
     ) -> Result<(), Error> {
-        let checkout = if remove_worktree {
-            let mut db = self.db.lock().await;
-            let binding = store::binding(&mut db, thread).await?;
-            let path = binding
-                .checkout
-                .worktree
-                .ok_or_else(|| Error::invalid("the thread runs in no worktree"))?;
-            self.removable(&mut db, &path, Some(thread)).await?;
-            drop(db);
-            if !worktree::clean(Path::new(&path)).await? {
-                return Err(Error::invalid(format!(
-                    "worktree {path} has uncommitted changes or untracked files"
-                )));
+        let reservation = if remove_worktree {
+            let path = {
+                let mut db = self.db.lock().await;
+                let binding = store::binding(&mut db, thread).await?;
+                let path = binding
+                    .checkout
+                    .worktree
+                    .ok_or_else(|| Error::invalid("the thread runs in no worktree"))?;
+                drop(db);
+                path
+            };
+            if !worktree::managed(&self.worktrees, &path).await {
+                return Err(placement::Rejection::Unmanaged(path).into());
             }
-            Some(path)
+            let (reservation, idle_driver) = {
+                let mut db = self.db.lock().await;
+                let binding = store::binding(&mut db, thread).await?;
+                if binding.checkout.worktree.as_deref() != Some(path.as_str()) {
+                    return Err(threads::Rejection::Moved.into());
+                }
+                runs::idle(&mut db, thread).await?;
+                Self::require_unused(&mut db, &path, Some(thread)).await?;
+                let reservation =
+                    self.reserve(Path::new(&path), super::git::CheckoutAction::RemoveWorktree)?;
+                let driver = self.workers.remove(thread);
+                drop(db);
+                (reservation, driver)
+            };
+            if let Some(driver) = idle_driver {
+                driver.close().await;
+            }
+            worktree::remove(&self.worktrees, &path, false).await?;
+            Some(reservation)
         } else {
             None
         };
@@ -351,6 +369,7 @@ impl Workspace {
             drop(db);
             (driver, binding)
         };
+        drop(reservation);
         self.settled(thread);
         self.due.notify_one();
         if let Some(driver) = driver {
@@ -364,10 +383,8 @@ impl Workspace {
                 tracing::warn!(%thread, %error, "removing materialized thread attachments");
             }
         }
-        if let Some(path) = checkout {
-            self.remove_worktree(&path, false).await.map_err(|error| {
-                Error::invalid(format!("deleted the thread, but not its worktree: {error}"))
-            })?;
+        if remove_worktree {
+            self.changed(None);
         }
         Ok(())
     }
