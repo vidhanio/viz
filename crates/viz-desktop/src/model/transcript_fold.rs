@@ -254,7 +254,7 @@ impl Transcript {
                     }
                     return;
                 }
-                let parsed = Item::Tool(Box::new(parse_tool(Some(turn), record)));
+                let parsed = Item::Tool(Box::new(parse_tool(Some(turn), record, false)));
                 if let Some(idx) = existing_idx {
                     self.acp_partial[idx] = parsed;
                     self.live_meta[idx].order = entry.order;
@@ -389,7 +389,7 @@ impl Transcript {
     }
 
     /// Splices an older [`EntryPage`] (`EntryAnchor::Before`) in front of the
-    /// loaded transcript in `O(|page|)` time without re-folding existing pages
+    /// loaded transcript without re-folding existing complete turns
     /// or discarding hydrated entries.
     ///
     /// When the existing window began mid-turn (only possible if a single turn
@@ -402,7 +402,7 @@ impl Transcript {
             return;
         }
 
-        let prefix = if self.leading_raw.is_empty() {
+        let mut prefix = if self.leading_raw.is_empty() {
             Self::from_entries(page.entries.iter(), page.before)
         } else {
             let removed_items = self.leading_item_count.min(self.items.len());
@@ -423,6 +423,17 @@ impl Transcript {
                 page.before,
             )
         };
+
+        if self.items.is_empty() {
+            prefix.acp_partial = std::mem::take(&mut self.acp_partial);
+            prefix.live_meta = std::mem::take(&mut self.live_meta);
+            prefix.live_turn = self.live_turn.take();
+            prefix.rev = self.rev;
+            prefix.reconcile_live_after_commit();
+            prefix.bump_rev();
+            *self = prefix;
+            return;
+        }
 
         let shift = prefix.items.len();
         self.acp_start = self.acp_start.saturating_add(shift);
@@ -445,6 +456,10 @@ impl Transcript {
     /// `ContentRequest::GetEntry` resolves its complete payload over the
     /// content plane.
     pub fn apply_loaded_entry(&mut self, id: EntryId, data: EntryData) {
+        if let Some(raw) = self.leading_raw.iter_mut().find(|raw| raw.id == id) {
+            raw.data = data.clone();
+            raw.full = None;
+        }
         let mut changed = false;
         match data {
             EntryData::Transcript(segment) => {
@@ -455,7 +470,7 @@ impl Transcript {
                             .iter_mut()
                             .find(|item| matches!(item, Item::Tool(t) if t.entry == Some(id)))
                         {
-                            let mut parsed = parse_tool(None, &record);
+                            let mut parsed = parse_tool(None, &record, true);
                             parsed.key.clone_from(&tool.key);
                             parsed.entry = Some(id);
                             parsed.full = None;
@@ -594,17 +609,17 @@ impl Transcript {
 
     fn transcript_entry(&mut self, id: EntryId, full: Option<u64>, entry: &TranscriptEntry) {
         match &entry.body {
-            Body::Text(segment) => {
-                self.commit_text(&entry.key, segment, false);
+            Body::Text(segment) | Body::Thought(segment) => {
+                self.commit_text(&entry.key, segment, matches!(entry.body, Body::Thought(_)));
                 if let Some(item) = self.items.last() {
                     self.message_rows.insert(id, item.key().to_owned());
                 }
             }
-            Body::Thought(segment) => self.commit_text(&entry.key, segment, true),
             Body::Tool(record) => {
-                let mut tool = parse_tool(self.acp_turn.as_deref(), record);
+                let mut tool = parse_tool(self.acp_turn.as_deref(), record, full.is_none());
                 tool.entry = Some(id);
                 tool.full = full;
+                self.message_rows.insert(id, tool.key.clone());
                 self.items.push(Item::Tool(Box::new(tool)));
             }
             Body::Plan(plan) => {
@@ -636,7 +651,9 @@ impl Transcript {
                     existing.tokens_before = projected.tokens_before.or(existing.tokens_before);
                     existing.tokens_after = projected.tokens_after.or(existing.tokens_after);
                     existing.ended_at = projected.ended_at;
+                    self.message_rows.insert(id, existing.key.clone());
                 } else {
+                    self.message_rows.insert(id, projected.key.clone());
                     self.items.push(Item::Compaction(projected));
                 }
             }
@@ -738,7 +755,7 @@ impl Transcript {
             Item::Tool(tool) if tool.entry == Some(entry) => Some(tool),
             _ => None,
         }) {
-            let mut updated = parse_tool(None, record);
+            let mut updated = parse_tool(None, record, full.is_none());
             updated.key.clone_from(&tool.key);
             updated.entry = Some(entry);
             updated.full = full;

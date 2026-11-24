@@ -4,6 +4,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use viz_client::protocol::{EntryId, ThreadId};
+
 use super::{Model, Tool, is_command};
 
 /// Active file or attachment preview overlay state.
@@ -36,10 +38,42 @@ pub enum FilePreviewBody {
     },
     /// Raster or vector image decoded into `ShellWidgets::preview_image`.
     Image { size: u64 },
+    /// Full tool output or prompt with byte ranges for the virtual viewport.
+    EntryText {
+        text: String,
+        rows: Vec<std::ops::Range<usize>>,
+    },
     /// Non-text binary file preview summary.
     Binary { mime: String, size: u64 },
     /// Error reading or decoding the file.
     Error(String),
+}
+
+impl FilePreviewBody {
+    /// Splits text into UTF-8-safe display chunks, preferring line boundaries.
+    pub fn entry_text(text: String) -> Self {
+        let mut rows = Vec::new();
+        let mut start = 0;
+        while start < text.len() {
+            let mut end = text.floor_char_boundary((start + 2_048).min(text.len()));
+            if end < text.len()
+                && let Some(line) = text[start..end].rfind('\n')
+            {
+                end = start + line + 1;
+            }
+            rows.push(start..end);
+            start = end;
+        }
+        Self::EntryText { text, rows }
+    }
+}
+
+/// User action waiting for a full entry download.
+#[derive(Debug, Clone, Copy)]
+pub enum EntryAction {
+    CopyPrompt,
+    EditPrompt,
+    Preview(u64),
 }
 
 /// Client-side timeline UI state persisted in session memory across thread
@@ -70,6 +104,8 @@ pub struct TimelineState {
     pub dismissed_errors: HashSet<String>,
     /// File selected in the diff inspector.
     pub selected_diff_file: Option<String>,
+    /// Explicit actions waiting for an entry download in the active thread.
+    pub entry_actions: HashMap<(ThreadId, EntryId), EntryAction>,
     /// Open file or attachment preview overlay, if any.
     pub file_preview: Option<FilePreview>,
     /// Monotonic serial for [`Self::file_preview`] requests.
@@ -89,6 +125,7 @@ impl TimelineState {
         self.unseen_activity = false;
         self.open_plan_menu = None;
         self.copied_key = None;
+        self.entry_actions.clear();
     }
 }
 

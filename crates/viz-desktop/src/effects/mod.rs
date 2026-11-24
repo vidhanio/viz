@@ -16,8 +16,8 @@ mod timeline_rpc;
 use std::{path::PathBuf, time::Duration};
 
 use viz_client::protocol::{
-    EntryId, ForkPoint, ForkThread, LaunchThread, OptionValue, RunId, SendInput, ThreadId,
-    TriageAction, WorktreeTarget,
+    EntryAnchor, EntryId, ForkPoint, ForkThread, LaunchThread, OptionValue, RunId, SendInput,
+    ThreadId, TriageAction, WorktreeTarget,
 };
 
 use crate::model::{AttachmentTarget, DraftAttachment, DraftData, DraftPill, Prefs, UndoTriage};
@@ -425,12 +425,12 @@ pub enum ServerEffect {
         /// Search query string.
         query: String,
     },
-    /// Fetch an older page of entries for `thread`.
-    LoadEarlier {
+    /// Fetch an anchored page for the timeline viewport.
+    LoadHistory {
         /// Target thread id.
         thread: ThreadId,
-        /// Exclusive entry cursor.
-        before: EntryId,
+        /// Requested page position.
+        anchor: EntryAnchor,
     },
     /// Send a prompt or steering message to an existing thread.
     SendInput {

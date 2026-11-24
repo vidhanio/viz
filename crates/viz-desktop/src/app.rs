@@ -102,12 +102,10 @@ pub struct ShellWidgets {
     pub open_thread_media: OpenThreadMedia,
     /// Decoded images for the active draft, in attachment order.
     pub attachment_images: crate::attachments::DraftImages,
-    /// Latest `[offset_y, max_y]` of the active timeline scroll viewport.
-    pub timeline_scroll: rune::Live<[f32; 2]>,
+    /// Derived index for the active timeline viewport.
+    pub timeline_rows: crate::timeline::TimelineRows,
     /// Latest `[offset_y, max_y]` of the composer draft scroll viewport.
     pub composer_scroll: rune::Live<[f32; 2]>,
-    /// Timeline page key that [`Self::timeline_scroll`] was last observed on.
-    pub timeline_scroll_page: String,
 }
 
 impl std::fmt::Debug for ShellWidgets {
@@ -158,9 +156,8 @@ impl Default for ShellWidgets {
             preview_image: None,
             open_thread_media: OpenThreadMedia::default(),
             attachment_images: crate::attachments::DraftImages::default(),
-            timeline_scroll: rune::Live::new([f32::MAX, 0.0]),
+            timeline_rows: crate::timeline::TimelineRows::default(),
             composer_scroll: rune::Live::new([0.0, 0.0]),
-            timeline_scroll_page: String::new(),
         }
     }
 }

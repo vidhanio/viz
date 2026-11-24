@@ -7,7 +7,7 @@ use viz_client::protocol::PlanPriority;
 
 use crate::{
     app::Desktop,
-    model::{PlanBody, PlanCard, PlanStep, ToolStatus, relative_path},
+    model::{Item, PlanBody, PlanCard, PlanStep, ToolStatus, relative_path},
     motion,
     theme::{CARD_INSET, HAIRLINE, ICON_MD, RADIUS_CARD, S4, S6, S8, Size, Theme},
     ui,
@@ -24,44 +24,8 @@ const PLAN_COLLAPSE_LINES: usize = 16;
 const PLAN_COLLAPSE_CHARS: usize = 1_000;
 
 /// Renders a checklist or proposed Markdown [`PlanCard`].
-pub fn plan_card(s: &Desktop, plan: &PlanCard, t: &Theme, layer: &mut Vec<El>) -> El {
-    let copy_text = serialize_plan(&plan.content);
-    let menu_open = s.model.timeline.open_plan_menu.as_deref() == Some(plan.key.as_str());
-    let toggle_key = plan.key.clone();
-    let menu_trigger = rune_kit::IconButton::new(&ui::MORE)
-        .help("Plan actions")
-        .variant(IconButtonVariant::GhostMuted)
-        .control_size(Size::Micro.kit())
-        .on_press(move |s: &mut Desktop| {
-            s.dispatch_local(Msg::Timeline(TimelineMsg::TogglePlanMenu(
-                toggle_key.clone(),
-            )));
-        })
-        .build(&t.k)
-        .key(format!("{}-more", plan.key));
-
-    let mut menu = Menu::new(format!("{}-plan-menu", plan.key))
-        .placement(Placement::BottomEnd)
-        .min_width(164.0)
-        .open(menu_open)
-        .on_close(|s: &mut Desktop| s.dispatch_local(Msg::Timeline(TimelineMsg::ClosePlanMenu)))
-        .trigger(menu_trigger);
-    if menu_open {
-        let copy_id = format!("copy-{}", plan.key);
-        menu = menu.item(MenuItem::new("Copy plan").icon(&ui::COPY).on_select_tx(
-            move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(Msg::Timeline(TimelineMsg::ClosePlanMenu), tx);
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::CopyWithFeedback {
-                        key: copy_id.clone(),
-                        text: copy_text.clone(),
-                    }),
-                    tx,
-                );
-            },
-        ));
-    }
-    let menu_el = menu.build(&t.overlay, layer);
+pub fn plan_card(s: &Desktop, plan: &PlanCard, t: &Theme) -> El {
+    let menu_el = plan_menu(s, plan, t, &mut Vec::new(), false);
 
     let subtitle = plan_header_subtitle(s, plan, t);
     let header = row()
@@ -105,6 +69,61 @@ pub fn plan_card(s: &Desktop, plan: &PlanCard, t: &Theme, layer: &mut Vec<El>) -
         .child(ui::rule(t))
         .child(body);
     col().key(plan.key.clone()).w_full().py(S6).child(card)
+}
+
+/// Mounts the selected plan's menu in the window overlay layer.
+pub fn mount_menu(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
+    if let Some(key) = &s.model.timeline.open_plan_menu
+        && let Some(Item::Plan(plan)) = s
+            .model
+            .transcript()
+            .items
+            .iter()
+            .chain(&s.model.transcript().acp_partial)
+            .find(|item| item.key() == key)
+    {
+        drop(plan_menu(s, plan, t, layer, true));
+    }
+}
+
+fn plan_menu(s: &Desktop, plan: &PlanCard, t: &Theme, layer: &mut Vec<El>, mount: bool) -> El {
+    let menu_open = s.model.timeline.open_plan_menu.as_deref() == Some(plan.key.as_str());
+    let toggle_key = plan.key.clone();
+    let menu_trigger = rune_kit::IconButton::new(&ui::MORE)
+        .help("Plan actions")
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Micro.kit())
+        .on_press(move |s: &mut Desktop| {
+            s.dispatch_local(Msg::Timeline(TimelineMsg::TogglePlanMenu(
+                toggle_key.clone(),
+            )));
+        })
+        .build(&t.k)
+        .key(format!("{}-more", plan.key));
+
+    let mut menu = Menu::new(format!("{}-plan-menu", plan.key))
+        .placement(Placement::BottomEnd)
+        .min_width(164.0)
+        .open(mount && menu_open)
+        .on_close(|s: &mut Desktop| s.dispatch_local(Msg::Timeline(TimelineMsg::ClosePlanMenu)))
+        .trigger(menu_trigger);
+    if mount && menu_open {
+        let copy_text = serialize_plan(&plan.content);
+        let copy_id = format!("copy-{}", plan.key);
+        menu = menu.item(MenuItem::new("Copy plan").icon(&ui::COPY).on_select_tx(
+            move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(Msg::Timeline(TimelineMsg::ClosePlanMenu), tx);
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::CopyWithFeedback {
+                        key: copy_id.clone(),
+                        text: copy_text.clone(),
+                    }),
+                    tx,
+                );
+            },
+        ));
+    }
+    menu.build(&t.overlay, layer).expanded(menu_open)
 }
 
 fn plan_header_subtitle(s: &Desktop, plan: &PlanCard, t: &Theme) -> El {

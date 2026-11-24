@@ -2,8 +2,8 @@
 //! send recovery, attachment ingestion, and optimistic rollback.
 
 use viz_client::protocol::{
-    Entry, EntryData, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, Task, ThreadId,
-    ThreadState, ThreadStatus, ThreadSummary, WorkspaceChange, attachment_inline_md,
+    Entry, EntryAnchor, EntryData, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, Task,
+    ThreadId, ThreadState, ThreadStatus, ThreadSummary, WorkspaceChange, attachment_inline_md,
     attachment_ref_labels,
 };
 
@@ -224,9 +224,12 @@ pub(super) fn apply_thread_view(
     }
     let open = model.cache_mut().open_thread_mut(thread);
     if reset {
-        open.transcript = Transcript::from_entries(entries.iter(), before);
+        let mut transcript = Transcript::from_entries(entries.iter(), before);
+        transcript.rev = open.transcript.rev.wrapping_add(1);
+        open.transcript = transcript;
+        open.history = None;
         open.loading = false;
-        open.history_loading = false;
+        open.history_request = None;
         open.media_slots.clear();
     } else {
         open.transcript.append(entries.iter());
@@ -239,44 +242,76 @@ pub(super) fn apply_thread_view(
     }
 }
 
-pub(super) fn apply_earlier_loaded(
+pub(super) fn apply_history_loaded(
     model: &mut Model,
     thread: ThreadId,
-    before: EntryId,
+    anchor: EntryAnchor,
     page: Option<EntryPage>,
     effects: &mut Vec<Effect>,
 ) {
-    if model.selection.selected != Some(thread) {
+    if model.selection.selected != Some(thread) || model.history_request() != Some(anchor) {
         return;
     }
-    let first_key = model
-        .transcript()
-        .items
-        .first()
-        .map(|item| item.key().to_owned());
     let open = model.cache_mut().open_thread_mut(thread);
-    if open.transcript.before != Some(before) {
+    open.history_request = None;
+    let Some(page) = page else {
+        effects.push(Effect::Toast {
+            title: "Couldn’t load message history".into(),
+            detail: None,
+        });
         return;
-    }
-    open.history_loading = false;
-    if let Some(page) = page {
-        if let Some(first_key) = first_key {
-            effects.push(Effect::KeepOnScreen(first_key));
+    };
+    match anchor {
+        EntryAnchor::Before { .. } => {
+            let transcript = open
+                .history
+                .as_mut()
+                .map_or(&mut open.transcript, |window| &mut window.transcript);
+            transcript.prepend(&page);
+            if let Some(window) = &open.history
+                && window.at_bottom == Some(true)
+                && let Some(entry) = window.after
+            {
+                super::palette::request_history(
+                    model,
+                    thread,
+                    EntryAnchor::After { entry },
+                    effects,
+                );
+            }
         }
-        queue_entry_image_attachments(model, thread, &page.entries, effects);
-        model
-            .cache_mut()
-            .open_thread_mut(thread)
-            .transcript
-            .prepend(&page);
-        super::palette::continue_message_jump(model, effects);
-    } else if model
-        .palette
-        .message_jump
-        .is_some_and(|(target, _)| target == thread)
-    {
-        model.palette.message_jump = None;
+        EntryAnchor::Around { entry } => {
+            let transcript = Transcript::from_entries(&page.entries, page.before);
+            if let Some(target) = crate::timeline::message_row(&transcript, entry) {
+                open.history = Some(crate::model::HistoryWindow {
+                    transcript,
+                    after: page.after,
+                    at_bottom: None,
+                });
+                model.timeline.far_from_bottom = false;
+                model.timeline.bump_fold_rev();
+                super::palette::reveal_message(model, thread, target, effects);
+            } else {
+                effects.push(Effect::Toast {
+                    title: "Message is no longer available".into(),
+                    detail: None,
+                });
+            }
+        }
+        EntryAnchor::After { .. } => {
+            if let Some(window) = &mut open.history {
+                window.transcript.append(&page.entries);
+                window.after = page.after;
+                if window.after.is_none() {
+                    open.history = None;
+                    model.timeline.bump_fold_rev();
+                    effects.push(Effect::ScrollToBottom(model.timeline_page_key()));
+                }
+            }
+        }
+        EntryAnchor::Latest => return,
     }
+    queue_entry_image_attachments(model, thread, &page.entries, effects);
 }
 
 pub(super) fn apply_select_failed(
@@ -289,7 +324,7 @@ pub(super) fn apply_select_failed(
     if model.selection.selected == Some(failed) {
         if let Some(previous) = previous {
             show_thread(model, previous, effects);
-            model.cache_mut().open_thread_mut(previous).history_loading = false;
+            model.cache_mut().open_thread_mut(previous).history_request = None;
         } else {
             clear_selection(model, effects);
         }
@@ -322,7 +357,7 @@ pub(super) fn apply_thread_created(
     open.transcript = Transcript::default();
     open.state = None;
     open.loading = true;
-    open.history_loading = false;
+    open.history_request = None;
     effects.push(focus_draft());
     effects.push(Effect::Server(ServerEffect::Select(thread)));
 }

@@ -41,7 +41,7 @@ pub fn tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     } else if action == ToolAction::Search && !tool.search_matches.is_empty() {
         search_inspector(s, tool, t)
     } else if action == ToolAction::Other && tool.raw_input_pretty.is_some() {
-        dynamic_tool_inspector(s, tool, t)
+        dynamic_tool_inspector(tool, t)
     } else {
         plain_output_inspector(s, tool, action == ToolAction::Read, t)
     };
@@ -52,6 +52,7 @@ pub fn tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         .pt(S2)
         .pb(S6)
         .child(content)
+        .children(full_output_status(s, tool, t))
 }
 
 /// Renders an expanded reasoning trace beside a `2pt` hairline rule.
@@ -173,10 +174,6 @@ fn command_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         );
     }
 
-    if let Some(chunk_bar) = load_more_bar(s, tool, t) {
-        card = card.child(ui::rule(t)).child(chunk_bar);
-    }
-
     if let Some(exit_text) = exit_footer_text(tool) {
         card = card.child(ui::rule(t)).child(
             row()
@@ -239,7 +236,7 @@ fn cmd_header(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     )
 }
 
-fn dynamic_tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+fn dynamic_tool_inspector(tool: &Tool, t: &Theme) -> El {
     let mut card = inspector_frame("mcp-card", t);
 
     if let Some(args) = &tool.raw_input_pretty {
@@ -273,9 +270,6 @@ fn dynamic_tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
             ));
     }
 
-    if let Some(chunk_bar) = load_more_bar(s, tool, t) {
-        card = card.child(ui::rule(t)).child(chunk_bar);
-    }
     card
 }
 
@@ -324,7 +318,7 @@ fn plain_output_inspector(s: &Desktop, tool: &Tool, mono: bool, t: &Theme) -> El
                 .key("copy"),
         );
     let streaming = tool.status == ToolStatus::Running;
-    let mut card = inspector_frame("plain-card", t)
+    inspector_frame("plain-card", t)
         .child(head)
         .child(ui::rule(t))
         .child(output_scroll(
@@ -333,11 +327,7 @@ fn plain_output_inspector(s: &Desktop, tool: &Tool, mono: bool, t: &Theme) -> El
             CMD_OUTPUT_MAX_H,
             streaming,
             t,
-        ));
-    if let Some(chunk_bar) = load_more_bar(s, tool, t) {
-        card = card.child(ui::rule(t)).child(chunk_bar);
-    }
-    card
+        ))
 }
 
 fn section_head(label: &str, t: &Theme) -> El {
@@ -383,41 +373,42 @@ fn output_scroll(key: &str, output: El, max_h: f32, stick_bottom: bool, t: &Them
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
 }
 
-fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
+fn full_output_status(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
     let full = tool.full?;
     let entry = tool.entry?;
-    let loading = s.model.connection.live.is_entry_loading(&tool.key);
+    if full <= viz_client::protocol::limits::AUTO_HYDRATE_ENTRY_BYTES {
+        return s
+            .model
+            .connection
+            .live
+            .has_entry_fetch(s.model.selection.selected?, entry)
+            .then(|| {
+                text("Loading full output…")
+                    .font(t.small)
+                    .color(t.muted)
+                    .px(S10)
+                    .py(S6)
+            });
+    }
     let key = tool.key.clone();
-    let label = if loading {
-        format!("Loading remaining {}…", format_bytes(full))
-    } else {
-        format!("Load full output ({})", format_bytes(full))
-    };
+    let title = format!("{} output", tool.name);
     Some(
-        row()
-            .key("load-more-bar")
-            .w_full()
-            .px(S10)
-            .py(S6)
-            .center_y()
-            .child(
-                rune_kit::Button::new(label)
-                    .variant(rune_kit::ButtonVariant::GhostMuted)
-                    .control_size(crate::theme::Size::Micro.kit())
-                    .icon(&ui::DOWNLOAD)
-                    .disabled(loading || !s.model.connected())
-                    .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                        s.dispatch(
-                            Msg::Timeline(TimelineMsg::LoadFullEntry {
-                                key: key.clone(),
-                                entry,
-                            }),
-                            tx,
-                        );
-                    })
-                    .build(&t.k)
-                    .key("load-chunk"),
-            ),
+        rune_kit::Button::new(format!("View full output ({})", format_bytes(full)))
+            .variant(rune_kit::ButtonVariant::GhostMuted)
+            .control_size(crate::theme::Size::Micro.kit())
+            .disabled(!s.model.connected())
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::OpenEntryPreview {
+                        key: key.clone(),
+                        entry,
+                        title: title.clone(),
+                    }),
+                    tx,
+                );
+            })
+            .build(&t.k)
+            .key("view-full-output"),
     )
 }
 

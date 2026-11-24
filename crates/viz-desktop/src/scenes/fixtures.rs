@@ -71,7 +71,6 @@ pub(super) fn select_preview(m: &mut Model, thread: ThreadId) {
         open.transcript = Transcript::default();
         open.state = None;
         open.loading = true;
-        open.history_loading = false;
     }
 }
 

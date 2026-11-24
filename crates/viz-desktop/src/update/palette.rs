@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use viz_client::protocol::{EntryId, Position, TriageAction};
+use viz_client::protocol::{EntryAnchor, EntryId, Position, ThreadId, TriageAction};
 
 use super::{
     NavKey, projects,
@@ -373,8 +373,7 @@ fn command_view(model: &Model, command: PaletteCommand) -> Option<ProjectView> {
     }
 }
 
-/// Resolve a search hit against visible message rows, paging older history when
-/// needed.
+/// Resolves a search hit in the current window or fetches one centered page.
 pub(super) fn continue_message_jump(model: &mut Model, effects: &mut Vec<Effect>) {
     let Some((thread, entry)) = model.palette.message_jump else {
         return;
@@ -383,23 +382,45 @@ pub(super) fn continue_message_jump(model: &mut Model, effects: &mut Vec<Effect>
         model.palette.message_jump = None;
         return;
     }
-    if model
-        .cache()
-        .open_thread(thread)
-        .is_some_and(|view| view.loading || view.history_loading)
-    {
+    if model.is_loading() {
         return;
     }
-    if let Some(key) = model.transcript().message_row(entry) {
-        effects.push(Effect::RevealMessage {
-            thread,
-            item: key.to_owned(),
-        });
-        model.palette.message_jump = None;
-    } else if let Some(before) = model.transcript().before.filter(|before| *before > entry) {
-        model.cache_mut().open_thread_mut(thread).history_loading = true;
-        effects.push(Effect::Server(ServerEffect::LoadEarlier { thread, before }));
-    } else {
-        model.palette.message_jump = None;
+    model.palette.message_jump = None;
+    if let Some(target) = crate::timeline::message_row(model.transcript(), entry) {
+        if matches!(model.history_request(), Some(EntryAnchor::Around { .. })) {
+            model.cache_mut().open_thread_mut(thread).history_request = None;
+        }
+        reveal_message(model, thread, target, effects);
+    } else if model.connected() {
+        request_history(model, thread, EntryAnchor::Around { entry }, effects);
     }
+}
+
+pub(super) fn request_history(
+    model: &mut Model,
+    thread: ThreadId,
+    anchor: EntryAnchor,
+    effects: &mut Vec<Effect>,
+) {
+    let open = model.cache_mut().open_thread_mut(thread);
+    if open.history_request == Some(anchor) {
+        return;
+    }
+    open.history_request = Some(anchor);
+    effects.push(Effect::Server(ServerEffect::LoadHistory { thread, anchor }));
+}
+
+pub(super) fn reveal_message(
+    model: &mut Model,
+    thread: ThreadId,
+    target: crate::timeline::MessageTarget,
+    effects: &mut Vec<Effect>,
+) {
+    for key in target.folds.into_iter().flatten() {
+        model.set_fold(Some(thread), key, true);
+    }
+    effects.push(Effect::RevealMessage {
+        thread,
+        item: target.selector,
+    });
 }

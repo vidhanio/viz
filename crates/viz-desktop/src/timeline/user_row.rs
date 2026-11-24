@@ -207,6 +207,10 @@ fn bubble(
     if collapsible {
         let toggle_key = fold_key.to_owned();
         let anchor_key = user.key.clone();
+        let preview_entry = user.entry_id.filter(|_| {
+            user.full
+                .is_some_and(|size| size > viz_client::protocol::limits::AUTO_HYDRATE_ENTRY_BYTES)
+        });
         let label = if expanded {
             "Show less"
         } else {
@@ -218,14 +222,19 @@ fn bubble(
                     .variant(rune_kit::ButtonVariant::GhostMuted)
                     .control_size(Size::Micro.kit())
                     .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                        s.dispatch(
-                            Msg::Timeline(TimelineMsg::ToggleFold {
+                        let msg = preview_entry.map_or_else(
+                            || TimelineMsg::ToggleFold {
                                 key: toggle_key.clone(),
                                 default_open: false,
                                 anchor: Some(anchor_key.clone()),
-                            }),
-                            tx,
+                            },
+                            |entry| TimelineMsg::OpenEntryPreview {
+                                key: anchor_key.clone(),
+                                entry,
+                                title: "Prompt".into(),
+                            },
                         );
+                        s.dispatch(Msg::Timeline(msg), tx);
                     })
                     .build(&t.k)
                     .key("toggle-full"),
@@ -773,28 +782,49 @@ fn hover_actions(s: &Desktop, user: &User, t: &Theme) -> Option<El> {
         );
     }
 
-    if !user.text.is_empty() {
-        let text_copy = user.text.clone();
-        let copy_id = copy_key;
-        let copy_btn = copy_morph_button(
+    Some(actions.children(copy_action(user, copied, t)))
+}
+
+fn copy_action(user: &User, copied: bool, t: &Theme) -> Option<El> {
+    if let Some(entry) = user.entry_id.filter(|_| user.full.is_some()) {
+        let key = user.key.clone();
+        return Some(copy_morph_button(
             "copy-user",
             "Copy message",
             copied,
             move |s: &mut Desktop, tx: &mut Tx| {
                 s.dispatch(
-                    Msg::Timeline(TimelineMsg::CopyWithFeedback {
-                        key: copy_id.clone(),
-                        text: text_copy.clone(),
+                    Msg::Timeline(TimelineMsg::CopyPrompt {
+                        key: key.clone(),
+                        entry,
                     }),
                     tx,
                 );
             },
             t,
-        );
-        actions = actions.child(copy_btn);
+        ));
     }
-
-    Some(actions)
+    if user.text.is_empty() {
+        return None;
+    }
+    let text_copy = user.text.clone();
+    let copy_id = format!("copy-{}", user.key);
+    let copy_btn = copy_morph_button(
+        "copy-user",
+        "Copy message",
+        copied,
+        move |s: &mut Desktop, tx: &mut Tx| {
+            s.dispatch(
+                Msg::Timeline(TimelineMsg::CopyWithFeedback {
+                    key: copy_id.clone(),
+                    text: text_copy.clone(),
+                }),
+                tx,
+            );
+        },
+        t,
+    );
+    Some(copy_btn)
 }
 
 /// Compact `24×24` Copy button with in-place `Copy <-> Check` icon morph.

@@ -1,6 +1,8 @@
 //! Headless preview scenes verifying rich timeline turns, expanded work logs,
 //! and live working state across dark and light base16 themes.
 
+use std::fmt::Write as _;
+
 use serde_json::Value;
 use viz_client::protocol::{
     Attention, Body, EntryData, Exit, LiveTurn, PromptAttachment, PromptContext, RunEnd, Segment,
@@ -27,11 +29,51 @@ pub(super) fn populated(s: &mut Desktop) {
     s.sync_widgets_from_model();
 }
 
+/// Long transcript showing the latest turns of an indexed history.
+pub(super) fn long(s: &mut Desktop) {
+    seed_workspace(&mut s.model);
+    let entries = (1..=400).flat_map(|turn| {
+        [
+            prompt(&format!("Review export batch {turn}.")),
+            timed_text(
+                &format!("{turn}:0"),
+                &format!("Batch {turn} is complete. The Markdown export preserves line endings and fenced code blocks."),
+                false,
+                BASE_TS,
+                BASE_TS + 1_000,
+            ),
+            run_end(Some("end_turn"), None, None),
+        ]
+    });
+    s.model.cache_mut().open_thread_mut(THREAD).transcript = preview_thread(entries, None);
+    s.sync_widgets_from_model();
+}
+
 /// Expanded `WorkLog` showing summary header, reasoning inspector, inline diff
-/// card, ANSI-coloured command output with exit footer & lazy chunk bar,
+/// card, ANSI-coloured command output with exit footer,
 /// structured search matches, clickable no-output file read, and MCP JSON I/O.
 pub(super) fn expanded(s: &mut Desktop) {
     seed_expanded(&mut s.model);
+    s.sync_widgets_from_model();
+}
+
+/// Full tool output in the scrollable entry viewer.
+pub(super) fn entry_output(s: &mut Desktop) {
+    seed_expanded(&mut s.model);
+    let mut output = String::new();
+    for i in 1..=20_000 {
+        let _ = writeln!(
+            output,
+            "Export item {i:05} preserved line endings and Markdown formatting."
+        );
+    }
+    s.model.timeline.file_preview = Some(crate::model::FilePreview {
+        request: 1,
+        path: "Command output".into(),
+        lines: None,
+        open_url: None,
+        body: crate::model::FilePreviewBody::entry_text(output),
+    });
     s.sync_widgets_from_model();
 }
 

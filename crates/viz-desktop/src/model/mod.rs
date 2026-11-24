@@ -38,7 +38,7 @@ use viz_client::protocol::{
 
 pub use self::{
     async_slot::AsyncSlot,
-    cache::{Checkouts, EnvState, OpenThread},
+    cache::{Checkouts, EnvState, HistoryWindow, OpenThread},
     completion::{
         BuiltinCommand, CompletionChoice, GitHubEntry, MentionEntry, SkillEntry, SlashEntry,
         available_commands, completion_choice_at, completion_count, completion_token_at,
@@ -85,7 +85,7 @@ pub use self::{
         subagent_call, subagent_title,
     },
     timeline::{
-        FilePreview, FilePreviewBody, TimelineState, ToolAction, first_non_empty_line,
+        EntryAction, FilePreview, FilePreviewBody, TimelineState, ToolAction, first_non_empty_line,
         humanize_tool, plural, relative_path, split_path,
     },
     tool_parse::is_command,
@@ -96,7 +96,7 @@ pub use self::{
     turn_format::{
         diff_line_stats, format_clock_hm, format_cost, format_turn_duration, work_group_summary,
     },
-    turns::{ChangedFile, TurnView, project_turns},
+    turns::{ChangedFile, TurnSpec, TurnView, project_turn, turn_items, turn_specs},
 };
 
 /// Default key used in per-environment maps before the server reports an
@@ -274,7 +274,11 @@ impl Model {
         static EMPTY: OnceLock<Transcript> = OnceLock::new();
         self.open_thread().map_or_else(
             || EMPTY.get_or_init(Transcript::default),
-            |open| &open.transcript,
+            |open| {
+                open.history
+                    .as_ref()
+                    .map_or(&open.transcript, |window| &window.transcript)
+            },
         )
     }
 
@@ -292,14 +296,21 @@ impl Model {
 
     /// Whether an older page of entries is currently being fetched.
     #[must_use]
-    pub fn is_history_loading(&self) -> bool {
-        self.open_thread().is_some_and(|open| open.history_loading)
+    pub fn history_request(&self) -> Option<viz_client::protocol::EntryAnchor> {
+        self.open_thread()?.history_request
+    }
+
+    /// Whether the viewport is showing a detached search window.
+    pub fn detached(&self) -> bool {
+        self.open_thread()
+            .is_some_and(|open| open.history.is_some())
     }
 
     /// Stable element key of the active timeline scroll viewport.
     #[must_use]
     pub fn timeline_page_key(&self) -> String {
         match (self.selection.selected, &self.selection.new_thread) {
+            (Some(id), _) if self.detached() => format!("history-{id}"),
             (Some(id), _) => format!("page-{id}"),
             (None, Some(draft)) => format!("page-draft-{}", draft.id),
             (None, None) => "page-none".to_owned(),

@@ -193,6 +193,16 @@ impl ToolCall {
     /// readable raw output.
     #[must_use]
     pub fn output_text(&self) -> Option<String> {
+        self.render_output(Some(OUTPUT_LIMIT))
+    }
+
+    /// Renders a complete output downloaded over the content plane.
+    #[must_use]
+    pub fn full_output_text(&self) -> Option<String> {
+        self.render_output(None)
+    }
+
+    fn render_output(&self, limit: Option<usize>) -> Option<String> {
         let text = join(self.content.iter().filter_map(|content| match content {
             ToolContent::Block(block) if block.kind == ContentKind::Text => {
                 block.payload.get("text").and_then(Value::as_str)
@@ -223,7 +233,7 @@ impl ToolCall {
         {
             text = rest.trim_start_matches('\n');
         }
-        (!text.is_empty()).then(|| truncate(text, OUTPUT_LIMIT))
+        (!text.is_empty()).then(|| limit.map_or_else(|| text.to_owned(), |max| truncate(text, max)))
     }
 
     /// The file changes among the content.

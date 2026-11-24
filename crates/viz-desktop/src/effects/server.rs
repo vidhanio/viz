@@ -503,7 +503,7 @@ impl Session<'_> {
                 self.search_threads(request, query);
                 Ok(())
             }
-            ServerEffect::LoadEarlier { thread, before } => self.load_earlier(thread, before).await,
+            ServerEffect::LoadHistory { thread, anchor } => self.load_history(thread, anchor).await,
             ServerEffect::Notify {
                 thread,
                 title,

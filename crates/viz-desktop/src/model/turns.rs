@@ -6,8 +6,7 @@ use std::collections::BTreeMap;
 use viz_client::protocol::CompactionStatus;
 
 use super::{
-    CompactionNotice, ErrorKind, Item, MediaItem, Model, PlanCard, TaskResult, ToolStatus,
-    Transcript, TurnEnd, User, diff_line_stats, relative_path,
+    ErrorKind, Item, Model, ToolStatus, Transcript, TurnEnd, diff_line_stats, relative_path,
 };
 
 /// One projected conversation turn ready for the timeline renderer.
@@ -15,20 +14,12 @@ use super::{
 pub struct TurnView<'a> {
     /// Stable element key for the turn container.
     pub key: String,
-    /// User messages that initiated (or stacked into) this turn.
-    pub users: Vec<&'a User>,
     /// True when the turn began via `Continued` rather than a user prompt.
     pub continued: bool,
-    /// Optional task-result arrival that initiated this turn.
-    pub task_result: Option<&'a TaskResult>,
     /// Intermediate work-log entries (reasoning, tools, subagent messages).
     pub work: Vec<(&'a Item, bool)>,
-    /// Plans reported in this turn.
-    pub plans: Vec<&'a PlanCard>,
-    /// Context compaction notices in this turn.
-    pub compactions: Vec<&'a CompactionNotice>,
-    /// Non-text media blocks emitted in this turn.
-    pub media: Vec<&'a MediaItem>,
+    /// Whether compaction is currently in progress in this turn.
+    pub compaction: Option<CompactionStatus>,
     /// Assistant prose blocks (item, streaming flag).
     pub prose: Vec<(&'a Item, bool)>,
     /// Non-default stop-reason dividers inside this turn.
@@ -72,14 +63,6 @@ impl TurnView<'_> {
             .map(|start| now_ms.saturating_sub(start).max(0))
     }
 
-    /// Whether a context compaction is currently in progress in this turn.
-    #[must_use]
-    pub fn compacting(&self) -> bool {
-        self.compactions
-            .iter()
-            .any(|notice| notice.status == CompactionStatus::InProgress)
-    }
-
     /// Total additions and deletions across all changed files in this turn.
     #[must_use]
     pub fn total_diff_stats(&self) -> (u32, u32) {
@@ -103,116 +86,131 @@ pub struct ChangedFile {
     pub removed: u32,
 }
 
-/// Projects a [`Transcript`] into an ordered sequence of [`TurnView`]s.
-#[must_use]
-pub fn project_turns<'a>(
-    model: &Model,
-    transcript: &'a Transcript,
-    busy: bool,
-) -> Vec<TurnView<'a>> {
-    let mut turns: Vec<TurnView<'a>> = Vec::new();
-    let stream = transcript
-        .displayed_history()
+/// An index into the displayed committed and live item stream.
+#[derive(Debug)]
+pub struct TurnSpec {
+    pub key: String,
+    pub start: usize,
+    pub end: usize,
+}
+
+pub fn turn_items(
+    transcript: &Transcript,
+    start: usize,
+    end: usize,
+) -> impl Iterator<Item = (&Item, bool)> {
+    let history = transcript.displayed_history();
+    history[start.min(history.len())..end.min(history.len())]
         .iter()
         .map(|item| (item, false))
-        .chain(transcript.acp_partial.iter().map(|item| (item, true)));
-
-    for (item, streaming) in stream {
-        match item {
-            Item::User(user) => {
-                let can_stack = turns.last().is_some_and(|turn| {
-                    !turn.continued
-                        && turn.task_result.is_none()
-                        && turn.work.is_empty()
-                        && turn.plans.is_empty()
-                        && turn.prose.is_empty()
-                        && turn.end.is_none()
-                });
-                if can_stack {
-                    if let Some(turn) = turns.last_mut() {
-                        turn.users.push(user);
-                    }
-                } else {
-                    turns.push(new_turn(format!("turn-{}", user.key), Some(user)));
-                }
-            }
-            Item::Continued { key } => {
-                let mut turn = new_turn(format!("turn-{key}"), None);
-                turn.continued = true;
-                turns.push(turn);
-            }
-            Item::TaskResult(result) => {
-                let mut turn = new_turn(format!("turn-{}", result.key), None);
-                turn.task_result = Some(result);
-                turns.push(turn);
-            }
-            other => {
-                if turns.is_empty() {
-                    turns.push(new_turn(format!("turn-{}", other.key()), None));
-                }
-                let turn = turns
-                    .last_mut()
-                    .expect("turns is guaranteed non-empty above");
-                push_turn_item(turn, other, streaming);
-            }
-        }
-    }
-
-    for turn in &mut turns {
-        let mut files: BTreeMap<String, (u32, u32)> = BTreeMap::new();
-        for (item, _) in &turn.work {
-            if let Item::Tool(tool) = item {
-                for diff in &tool.diffs {
-                    let rel = relative_path(model, &diff.path).to_owned();
-                    let (add, del) = diff_line_stats(diff);
-                    let entry = files.entry(rel).or_insert((0, 0));
-                    entry.0 = entry.0.saturating_add(add);
-                    entry.1 = entry.1.saturating_add(del);
-                }
-            }
-        }
-        turn.changed_files = files
-            .into_iter()
-            .map(|(path, (added, removed))| ChangedFile {
-                path,
-                added,
-                removed,
-            })
-            .collect();
-        turn.interrupted = turn
-            .end
-            .and_then(|end| end.stop_reason.as_deref())
-            .is_some_and(|r| r == "cancelled")
-            || turn
-                .statuses
+        .chain(
+            transcript.acp_partial
+                [start.saturating_sub(history.len())..end.saturating_sub(history.len())]
                 .iter()
-                .any(|(_, reason, _)| *reason == "cancelled");
+                .map(|item| (item, true)),
+        )
+}
+
+/// Indexes turn boundaries without inspecting the contents of tools or prose.
+pub fn turn_specs(transcript: &Transcript) -> Vec<TurnSpec> {
+    let count = transcript.displayed_history().len() + transcript.acp_partial.len();
+    let mut specs: Vec<TurnSpec> = Vec::new();
+    let mut stack_users = false;
+    for (index, (item, _)) in turn_items(transcript, 0, count).enumerate() {
+        let starts_turn = match item {
+            Item::User(_) => !stack_users,
+            Item::Continued { .. } | Item::TaskResult(_) => true,
+            _ => false,
+        };
+        if starts_turn || specs.is_empty() {
+            specs.push(TurnSpec {
+                key: format!("turn-{}", item.key()),
+                start: index,
+                end: index,
+            });
+            stack_users = !matches!(item, Item::Continued { .. } | Item::TaskResult(_));
+        }
+        specs.last_mut().expect("turn exists").end = index + 1;
+        match item {
+            Item::Thinking { .. } | Item::Text { .. } | Item::Plan(_) | Item::TurnEnd(_) => {
+                stack_users = false;
+            }
+            Item::Tool(tool) if tool.review.is_none() || tool.status == ToolStatus::Failed => {
+                stack_users = false;
+            }
+            _ => {}
+        }
+    }
+    specs
+}
+
+/// Projects a mounted turn, including its file statistics and live state.
+pub fn project_turn<'a>(
+    model: &Model,
+    transcript: &'a Transcript,
+    spec: &TurnSpec,
+    last: bool,
+    with_files: bool,
+) -> TurnView<'a> {
+    let mut turn: TurnView<'a> = new_turn(spec.key.clone());
+    for (item, streaming) in turn_items(transcript, spec.start, spec.end) {
+        match item {
+            Item::Continued { .. } => turn.continued = true,
+            other => push_turn_item(&mut turn, other, streaming),
+        }
     }
 
-    if let Some(last) = turns.last_mut() {
-        let has_active_work = last.work.iter().any(|(item, streaming)| {
+    if with_files {
+        turn.changed_files = changed_files(model, &turn.work);
+    }
+    turn.interrupted = turn
+        .end
+        .and_then(|end| end.stop_reason.as_deref())
+        .is_some_and(|r| r == "cancelled")
+        || turn
+            .statuses
+            .iter()
+            .any(|(_, reason, _)| *reason == "cancelled");
+    turn.live = last && !model.detached() && turn.end.is_none() && (model.busy()
+        || turn.work.iter().any(|(item, streaming)| {
             *streaming
                 || matches!(
                     item,
                     Item::Tool(tool) if matches!(tool.status, ToolStatus::Pending | ToolStatus::Running)
                 )
-        }) || last.prose.iter().any(|(_, streaming)| *streaming);
-        last.live = last.end.is_none() && (busy || has_active_work);
-    }
-
-    turns
+        }) || turn.prose.iter().any(|(_, streaming)| *streaming));
+    turn
 }
 
-fn new_turn(key: String, user: Option<&User>) -> TurnView<'_> {
+fn changed_files(model: &Model, work: &[(&Item, bool)]) -> Vec<ChangedFile> {
+    let mut files: BTreeMap<String, (u32, u32)> = BTreeMap::new();
+    for (item, _) in work {
+        if let Item::Tool(tool) = item {
+            for diff in &tool.diffs {
+                let rel = relative_path(model, &diff.path).to_owned();
+                let (add, del) = diff_line_stats(diff);
+                let entry = files.entry(rel).or_insert((0, 0));
+                entry.0 = entry.0.saturating_add(add);
+                entry.1 = entry.1.saturating_add(del);
+            }
+        }
+    }
+    files
+        .into_iter()
+        .map(|(path, (added, removed))| ChangedFile {
+            path,
+            added,
+            removed,
+        })
+        .collect()
+}
+
+const fn new_turn(key: String) -> TurnView<'static> {
     TurnView {
         key,
-        users: user.into_iter().collect(),
         continued: false,
-        task_result: None,
         work: Vec::new(),
-        plans: Vec::new(),
-        compactions: Vec::new(),
-        media: Vec::new(),
+        compaction: None,
         prose: Vec::new(),
         statuses: Vec::new(),
         notices: Vec::new(),
@@ -252,15 +250,15 @@ fn push_turn_item<'a>(turn: &mut TurnView<'a>, item: &'a Item, streaming: bool) 
         }
         Item::Plan(plan) => {
             record_span(turn, plan.at, plan.at);
-            turn.plans.push(plan);
         }
         Item::Compaction(notice) => {
             let s = (notice.started_at > 0).then_some(notice.started_at);
             let e = (notice.ended_at > 0).then_some(notice.ended_at);
             record_span(turn, s, e);
-            turn.compactions.push(notice);
+            if turn.compaction != Some(CompactionStatus::InProgress) {
+                turn.compaction = Some(notice.status);
+            }
         }
-        Item::Media(media) => turn.media.push(media),
         Item::TurnStatus {
             key,
             stop_reason,
@@ -273,7 +271,7 @@ fn push_turn_item<'a>(turn: &mut TurnView<'a>, item: &'a Item, streaming: bool) 
             record_span(turn, end.started_at, end.ended_at);
             turn.end = Some(end);
         }
-        Item::User(_) | Item::Continued { .. } | Item::TaskResult(_) => {}
+        Item::User(_) | Item::Continued { .. } | Item::TaskResult(_) | Item::Media(_) => {}
     }
 }
 

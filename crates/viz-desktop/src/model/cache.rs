@@ -4,7 +4,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use viz_client::protocol::{
-    GitBranch, Harness, Project, Task, ThreadId, ThreadState, ThreadSummary, Worktree,
+    EntryAnchor, EntryId, GitBranch, Harness, Project, Task, ThreadId, ThreadState, ThreadSummary,
+    Worktree,
 };
 
 use super::{async_slot::AsyncSlot, composer_state::DraftData, transcript::Transcript};
@@ -28,13 +29,24 @@ pub struct OpenThread {
     pub state: Option<ThreadState>,
     /// True after selecting the thread until its initial view arrives.
     pub loading: bool,
-    /// True while a page of older entries is being fetched.
-    pub history_loading: bool,
+    /// Detached search window while the watched transcript continues updating.
+    pub history: Option<HistoryWindow>,
+    /// Anchor of the outstanding viewport request.
+    pub history_request: Option<EntryAnchor>,
     /// Per-attachment inline preview fetch lifecycle, keyed by attachment id.
     ///
     /// Decoded GPU textures live outside the pure model in `ShellWidgets`,
     /// strictly scoped to the active open thread.
     pub media_slots: HashMap<String, AsyncSlot<()>>,
+}
+
+/// Search-centered transcript and its exclusive forward cursor.
+#[derive(Debug, Clone)]
+pub struct HistoryWindow {
+    pub transcript: Transcript,
+    pub after: Option<EntryId>,
+    /// Last layout report for the detached scroll viewport.
+    pub at_bottom: Option<bool>,
 }
 
 /// Cached project icon fetch metadata keyed by project path.

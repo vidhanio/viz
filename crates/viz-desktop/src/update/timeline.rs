@@ -3,13 +3,14 @@
 //! running tool timers.
 
 use viz_client::protocol::{
-    EntryData, EntryId, FileRoot, ForkPoint, ForkThread, Forked, LineWindow, SendInput, ThreadId,
+    EntryAnchor, EntryData, EntryId, FileRoot, ForkPoint, ForkThread, Forked, LineWindow,
+    SendInput, ThreadId,
 };
 
 use super::selection::{focus_draft, open_in_environment, open_thread, select_thread};
 use crate::{
     effects::{EditSync, EditTarget, Effect, ServerEffect},
-    model::{Item, Model},
+    model::{EntryAction, FilePreview, FilePreviewBody, Item, Model},
 };
 
 /// Messages emitted by timeline rows, folds, inspectors, and cards.
@@ -46,12 +47,17 @@ pub enum TimelineMsg {
     ScrollToEnd,
     /// Fetch the previous page of older transcript entries.
     LoadEarlier,
-    /// Hydrate a trimmed stored entry over the content plane.
-    LoadFullEntry {
-        /// Stable item key used to track loading state.
+    /// Fetch the next detached history page.
+    LoadLater,
+    /// Hydrate trimmed stored entries over the content plane.
+    HydrateEntries(Vec<(String, EntryId)>),
+    /// Copy the original prompt, hydrating it first when needed.
+    CopyPrompt { key: String, entry: EntryId },
+    /// View a full entry in the modal viewer.
+    OpenEntryPreview {
         key: String,
-        /// Stored entry id.
         entry: EntryId,
+        title: String,
     },
     /// Fork the active thread before a user prompt (optionally loading it into
     /// the composer for editing).
@@ -136,35 +142,19 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             default_open,
             anchor,
         } => {
-            let thread = model.selection.selected;
-            let current = model.is_fold_open(&key, default_open);
-            let opening = !current;
-            model.set_fold(thread, key.clone(), opening);
-            if opening
-                && model.connected()
-                && let Some(thread) = thread
-            {
-                let target_key = key.strip_suffix("-full").unwrap_or(&key);
-                if let Some((item_key, entry, full)) =
-                    model.transcript().items.iter().find_map(|item| {
-                        (item.key() == target_key)
-                            .then(|| {
-                                item.partial_entry()
-                                    .map(|(e, f)| (item.key().to_owned(), e, f))
-                            })
-                            .flatten()
-                    })
+            let opening = !model.is_fold_open(&key, default_open);
+            model.set_fold(model.selection.selected, key.clone(), opening);
+            if opening {
+                let target = key.strip_suffix("-full").unwrap_or(&key);
+                if let Some((entry, full)) = model
+                    .transcript()
+                    .items
+                    .iter()
+                    .find(|item| item.key() == target)
+                    .and_then(Item::partial_entry)
                     && full <= viz_client::protocol::limits::AUTO_HYDRATE_ENTRY_BYTES
-                    && model
-                        .connection
-                        .live
-                        .request_entry(thread, item_key.clone(), entry)
                 {
-                    effects.push(Effect::Server(ServerEffect::ReadEntry {
-                        thread,
-                        key: item_key,
-                        entry,
-                    }));
+                    request_entry(model, target.to_owned(), entry, &mut effects);
                 }
             }
             if let Some(anchor) = anchor {
@@ -199,50 +189,82 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             }
         }
         TimelineMsg::ScrollToEnd => {
+            if let Some(thread) = model.selection.selected
+                && model.detached()
+            {
+                let open = model.cache_mut().open_thread_mut(thread);
+                open.history = None;
+                open.history_request = None;
+                model.timeline.bump_fold_rev();
+            }
             model.timeline.far_from_bottom = false;
             model.timeline.unseen_activity = false;
             effects.push(Effect::ScrollToBottom(model.timeline_page_key()));
         }
-        TimelineMsg::LoadEarlier => {
-            if !model.is_history_loading()
+        TimelineMsg::LoadEarlier | TimelineMsg::LoadLater => {
+            if model.history_request().is_none()
                 && model.connected()
-                && let (Some(thread), Some(before)) =
-                    (model.selection.selected, model.transcript().before)
+                && let Some(thread) = model.selection.selected
             {
-                model.cache_mut().open_thread_mut(thread).history_loading = true;
-                effects.push(Effect::Server(ServerEffect::LoadEarlier { thread, before }));
+                let anchor = if matches!(msg, TimelineMsg::LoadEarlier) {
+                    model
+                        .transcript()
+                        .before
+                        .map(|entry| EntryAnchor::Before { entry })
+                } else {
+                    model
+                        .open_thread()
+                        .and_then(|open| open.history.as_ref())
+                        .and_then(|window| window.after)
+                        .map(|entry| EntryAnchor::After { entry })
+                };
+                if let Some(anchor) = anchor {
+                    super::palette::request_history(model, thread, anchor, &mut effects);
+                }
             }
         }
-        TimelineMsg::LoadFullEntry { key, entry } => {
-            if model.connected()
-                && let Some(thread) = model.selection.selected
-                && model
-                    .connection
-                    .live
-                    .request_entry(thread, key.clone(), entry)
-            {
-                effects.push(Effect::Server(ServerEffect::ReadEntry {
-                    thread,
-                    key,
-                    entry,
-                }));
+        TimelineMsg::HydrateEntries(requests) => {
+            for (key, entry) in requests {
+                request_entry(model, key, entry, &mut effects);
             }
+        }
+        TimelineMsg::CopyPrompt { key, entry } => {
+            if let Some(thread) = model.selection.selected.filter(|_| model.connected()) {
+                model
+                    .timeline
+                    .entry_actions
+                    .insert((thread, entry), EntryAction::CopyPrompt);
+                request_entry(model, key, entry, &mut effects);
+            }
+        }
+        TimelineMsg::OpenEntryPreview { key, entry, title } => {
+            open_entry_preview(model, key, entry, title, &mut effects);
         }
         TimelineMsg::ForkBefore { entry, load_prompt } => {
             if model.connected()
                 && let Some(thread) = model.selection.selected
             {
-                effects.push(Effect::Server(ServerEffect::Fork {
-                    params: ForkThread {
-                        thread,
-                        point: ForkPoint::Before { entry },
-                        worktree: None,
-                        harness: None,
-                        title: None,
-                        request_id: None,
-                    },
-                    load_prompt,
-                }));
+                let trimmed_key = load_prompt
+                    .then(|| {
+                        model.transcript().items.iter().find_map(|item| match item {
+                            Item::User(user)
+                                if user.entry_id == Some(entry) && user.full.is_some() =>
+                            {
+                                Some(user.key.clone())
+                            }
+                            _ => None,
+                        })
+                    })
+                    .flatten();
+                if let Some(key) = trimmed_key {
+                    model
+                        .timeline
+                        .entry_actions
+                        .insert((thread, entry), EntryAction::EditPrompt);
+                    request_entry(model, key, entry, &mut effects);
+                } else {
+                    fork_before(thread, entry, load_prompt, &mut effects);
+                }
             }
         }
         TimelineMsg::ForkThrough(entry) => {
@@ -321,8 +343,7 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         }
         TimelineMsg::CopyText(text) => effects.push(Effect::CopyText(text)),
         TimelineMsg::CopyWithFeedback { key, text } => {
-            model.timeline.copied_key = Some(key);
-            effects.push(Effect::CopyText(text));
+            copy_feedback(model, key, text, &mut effects);
         }
         TimelineMsg::OpenUrl(url) => {
             if let Some((path, lines)) = crate::timeline::file_preview::parse_file_link(&url) {
@@ -434,7 +455,7 @@ pub(super) fn apply_thread_forked(
 pub(super) fn apply_entry_loaded(
     model: &mut Model,
     thread: ThreadId,
-    _key: &str,
+    key: &str,
     entry: EntryId,
     result: Result<Box<EntryData>, String>,
     effects: &mut Vec<Effect>,
@@ -443,17 +464,61 @@ pub(super) fn apply_entry_loaded(
         .connection
         .live
         .finish_entry(thread, entry, model.selection.selected);
+    let action = model.timeline.entry_actions.remove(&(thread, entry));
+    let oversized = model.selection.selected == Some(thread)
+        && model.transcript().items.iter().any(|item| {
+            item.partial_entry().is_some_and(|(id, size)| {
+                id == entry && size > viz_client::protocol::limits::AUTO_HYDRATE_ENTRY_BYTES
+            })
+        });
     match result {
         Ok(loaded) => {
-            if let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
-                open.transcript.apply_loaded_entry(entry, *loaded);
+            if let Some(EntryAction::Preview(request)) = action {
+                if let Some(preview) = model
+                    .timeline
+                    .file_preview
+                    .as_mut()
+                    .filter(|p| p.request == request)
+                {
+                    preview.body = entry_preview_text(&loaded).map_or_else(
+                        || FilePreviewBody::Error("The entry has no displayable output.".into()),
+                        FilePreviewBody::entry_text,
+                    );
+                }
+            } else {
+                if let Some(EntryData::Prompt { text, .. }) =
+                    matches!(action, Some(EntryAction::CopyPrompt)).then_some(loaded.as_ref())
+                {
+                    copy_feedback(model, format!("copy-{key}"), text.clone(), effects);
+                }
+                if matches!(action, Some(EntryAction::EditPrompt)) {
+                    fork_before(thread, entry, true, effects);
+                }
+                if !oversized && let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
+                    if let Some(window) = &mut open.history {
+                        window
+                            .transcript
+                            .apply_loaded_entry(entry, (*loaded).clone());
+                    }
+                    open.transcript.apply_loaded_entry(entry, *loaded);
+                }
             }
         }
         Err(error) => {
-            effects.push(Effect::Toast {
-                title: "Couldn’t load full output".into(),
-                detail: Some(error),
-            });
+            if let Some(EntryAction::Preview(request)) = action
+                && let Some(preview) = model
+                    .timeline
+                    .file_preview
+                    .as_mut()
+                    .filter(|p| p.request == request)
+            {
+                preview.body = FilePreviewBody::Error(error);
+            } else {
+                effects.push(Effect::Toast {
+                    title: "Couldn’t load full entry".into(),
+                    detail: Some(error),
+                });
+            }
         }
     }
     if let Some((next_thread, next_key, next_entry)) = next
@@ -465,6 +530,103 @@ pub(super) fn apply_entry_loaded(
             entry: next_entry,
         }));
     }
+}
+
+fn copy_feedback(model: &mut Model, key: String, text: String, effects: &mut Vec<Effect>) {
+    model.timeline.copied_key = Some(key);
+    effects.push(Effect::CopyText(text));
+}
+
+fn request_entry(model: &mut Model, key: String, entry: EntryId, effects: &mut Vec<Effect>) {
+    if model.connected()
+        && let Some(thread) = model.selection.selected
+        && model
+            .connection
+            .live
+            .request_entry(thread, key.clone(), entry)
+    {
+        effects.push(Effect::Server(ServerEffect::ReadEntry {
+            thread,
+            key,
+            entry,
+        }));
+    }
+}
+
+fn fork_before(thread: ThreadId, entry: EntryId, load_prompt: bool, effects: &mut Vec<Effect>) {
+    effects.push(Effect::Server(ServerEffect::Fork {
+        params: ForkThread {
+            thread,
+            point: ForkPoint::Before { entry },
+            worktree: None,
+            harness: None,
+            title: None,
+            request_id: None,
+        },
+        load_prompt,
+    }));
+}
+
+fn open_entry_preview(
+    model: &mut Model,
+    key: String,
+    entry: EntryId,
+    title: String,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(thread) = model.selection.selected.filter(|_| model.connected()) else {
+        return;
+    };
+    model.timeline.file_preview_seq = model.timeline.file_preview_seq.wrapping_add(1);
+    let request = model.timeline.file_preview_seq;
+    model.timeline.file_preview = Some(FilePreview {
+        request,
+        path: title,
+        lines: None,
+        open_url: None,
+        body: FilePreviewBody::Loading,
+    });
+    model
+        .timeline
+        .entry_actions
+        .insert((thread, entry), EntryAction::Preview(request));
+    effects.push(Effect::ClearPreviewImage);
+    request_entry(model, key, entry, effects);
+}
+
+fn entry_preview_text(entry: &EntryData) -> Option<String> {
+    let tool = match entry {
+        EntryData::Prompt { text, .. } | EntryData::TaskResult { text, .. } => {
+            return Some(text.clone());
+        }
+        EntryData::Transcript(entry) => match &entry.body {
+            viz_client::protocol::Body::Tool(tool) => tool,
+            viz_client::protocol::Body::Plan(plan) => {
+                return Some(match &plan.content {
+                    viz_client::protocol::PlanContent::Markdown { text, .. } => text.clone(),
+                    viz_client::protocol::PlanContent::Items { entries } => entries
+                        .iter()
+                        .map(|entry| entry.content.as_str())
+                        .collect::<Vec<_>>()
+                        .join("\n"),
+                });
+            }
+            viz_client::protocol::Body::Compaction(notice) => return Some(notice.summary.clone()),
+            _ => return None,
+        },
+        EntryData::ToolUpdate { record, .. } => record,
+        _ => return None,
+    };
+    tool.full_output_text().or_else(|| {
+        let mut output = String::new();
+        for diff in tool.diffs() {
+            use std::fmt::Write as _;
+            let _ = writeln!(output, "{}", diff.path);
+            output.push_str(&diff.new_text);
+            output.push('\n');
+        }
+        (!output.is_empty()).then_some(output)
+    })
 }
 
 fn open_file_preview(

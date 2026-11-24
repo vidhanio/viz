@@ -2,9 +2,9 @@
 //! platform tasks into [`super::server::update`].
 
 use viz_client::protocol::{
-    ConfigOption, Entry, EntryData, EntryId, EntryPage, Environment, FileContent, FileSearchMatch,
-    Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, RequestId, SearchHit, Task,
-    ThreadId, ThreadState, ThreadSummary, WorkspaceChange,
+    ConfigOption, Entry, EntryAnchor, EntryData, EntryId, EntryPage, Environment, FileContent,
+    FileSearchMatch, Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, RequestId,
+    SearchHit, Task, ThreadId, ThreadState, ThreadSummary, WorkspaceChange,
 };
 
 use crate::{
@@ -105,13 +105,13 @@ pub enum ServerMsg {
         /// Exclusive cursor for loading older entries.
         before: Option<EntryId>,
     },
-    /// Older transcript page finished loading (or failed).
-    EarlierLoaded {
+    /// Anchored transcript page finished loading.
+    HistoryLoaded {
         /// Thread id.
         thread: ThreadId,
-        /// Cursor that was requested.
-        before: EntryId,
-        /// Older entries, or `None` on failure.
+        /// Anchor that was requested.
+        anchor: EntryAnchor,
+        /// Entries and cursors, or `None` on failure.
         page: Option<EntryPage>,
     },
     /// Watching a newly selected thread failed; restore the prior watched

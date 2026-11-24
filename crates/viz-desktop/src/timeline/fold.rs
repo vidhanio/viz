@@ -21,7 +21,7 @@ use crate::{
 /// the timeline's flat growth stack `list`.
 pub fn append_live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut list: El) -> El {
     let now = s.model.disclosure.tool_clock;
-    let compacting = turn.compacting();
+    let compacting = turn.compaction == Some(viz_client::protocol::CompactionStatus::InProgress);
     let elapsed_ms = turn.elapsed_ms(now);
     let prefix = if compacting {
         "Compacting for "

@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use viz_client::{
     ContentClient, Error, ProjectIconFetch, Result,
     protocol::{
-        BlobAttachment, EntryAnchor, EntryId, HarnessOptions, LaunchThread, ListBranches,
-        ListEntries, ListTasks, ListWorktrees, Patch, ProjectSettingsPatch, RetitleThread,
-        SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
+        BlobAttachment, EntryAnchor, HarnessOptions, LaunchThread, ListBranches, ListEntries,
+        ListTasks, ListWorktrees, Patch, ProjectSettingsPatch, RetitleThread, SearchThreads,
+        SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
@@ -263,12 +263,12 @@ impl Session<'_> {
         }
     }
 
-    pub(super) async fn load_earlier(&self, thread: ThreadId, before: EntryId) -> Result<()> {
+    pub(super) async fn load_history(&self, thread: ThreadId, anchor: EntryAnchor) -> Result<()> {
         let result = if self.watched == Some(thread) {
             self.client
                 .list_entries(&ListEntries {
                     thread,
-                    anchor: EntryAnchor::Before { entry: before },
+                    anchor,
                     limit: None,
                 })
                 .await
@@ -280,9 +280,9 @@ impl Session<'_> {
             Ok(page) => (page, None),
             Err(error) => (None, Some(error)),
         };
-        self.dispatch(ServerMsg::EarlierLoaded {
+        self.dispatch(ServerMsg::HistoryLoaded {
             thread,
-            before,
+            anchor,
             page,
         });
         error.map_or(Ok(()), Err)

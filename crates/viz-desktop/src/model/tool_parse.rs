@@ -26,7 +26,7 @@ const MAX_SEARCH_MATCHES: usize = 60;
     clippy::too_many_lines,
     reason = "projects every ToolCall field into the timeline view model in one cohesive pass"
 )]
-pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
+pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall, hydrated: bool) -> Tool {
     let name = match record.name.as_deref() {
         Some(
             "bash" | "read" | "read_file" | "write" | "write_file" | "edit" | "edit_file"
@@ -58,7 +58,11 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
     let raw_input_pretty = arguments
         .and_then(|value| serde_json::to_string_pretty(value).ok())
         .map(|text| cap_head(&text, ARGS_CHARS));
-    let rendered = record.output_text();
+    let rendered = if hydrated {
+        record.full_output_text()
+    } else {
+        record.output_text()
+    };
     let output = rendered.as_deref().unwrap_or_default();
     let delegation = record
         .viz
@@ -143,7 +147,11 @@ pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
         status,
         exit_code,
         exit_signal,
-        output: cap_output(output, status),
+        output: if hydrated {
+            output.into_owned()
+        } else {
+            cap_output(output, status)
+        },
         terminal_truncated,
         full: None,
         review: record.review.clone(),

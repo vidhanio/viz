@@ -7,7 +7,7 @@ pub use super::server_msg::ServerMsg;
 use super::{
     selection::{clear_selection, focus_draft, show_thread},
     server_sync::{
-        apply_attachments_loaded, apply_earlier_loaded, apply_launch_failed,
+        apply_attachments_loaded, apply_history_loaded, apply_launch_failed,
         apply_project_icon_loaded, apply_select_failed, apply_send_failed, apply_thread_created,
         apply_thread_state, apply_thread_triaged, apply_thread_view, apply_workspace_delta,
         apply_workspace_sync, is_active_env, rollback_optimistic,
@@ -129,12 +129,12 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             }
             apply_thread_view(model, thread, &entries, reset, before, &mut effects);
         }
-        ServerMsg::EarlierLoaded {
+        ServerMsg::HistoryLoaded {
             thread,
-            before,
+            anchor,
             page,
         } => {
-            apply_earlier_loaded(model, thread, before, page, &mut effects);
+            apply_history_loaded(model, thread, anchor, page, &mut effects);
         }
         ServerMsg::SelectFailed {
             failed,

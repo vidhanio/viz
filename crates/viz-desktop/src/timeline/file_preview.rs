@@ -211,6 +211,12 @@ pub fn modal(s: &Desktop, reduced: bool, t: &Theme, layer: &mut Vec<El>) {
             truncated,
             ..
         } => code_body(preview, source, *start_line, *truncated, body_max_h, t),
+        FilePreviewBody::EntryText { rows, .. } => entry_body(
+            preview.request,
+            rows.len(),
+            body_max_h,
+            Theme::get(t.k.dark),
+        ),
         FilePreviewBody::Binary { mime, size } => binary_body(&preview.path, mime, *size, t),
         FilePreviewBody::Error(message) => error_body(message, t),
         FilePreviewBody::Image { .. } => unreachable!(),
@@ -244,6 +250,49 @@ pub fn modal(s: &Desktop, reduced: bool, t: &Theme, layer: &mut Vec<El>) {
         .padding(S16)
         .child(sheet);
     layer.push(centered);
+}
+
+fn entry_body(request: u64, count: usize, max_h: f32, t: &'static Theme) -> El {
+    let body = motion::fold_container(col().key("entry-output-rows").w_full().padding(S12))
+        .virtual_rows(
+            count,
+            220.0,
+            |_: &Desktop, index| format!("output-{index}").into(),
+            move |s: &Desktop, index| {
+                if let Some(FilePreviewBody::EntryText { text: source, rows }) = s
+                    .model
+                    .timeline
+                    .file_preview
+                    .as_ref()
+                    .filter(|preview| preview.request == request)
+                    .map(|preview| &preview.body)
+                    && let Some(bytes) = rows.get(index)
+                {
+                    let source = &source[bytes.clone()];
+                    let source = source.strip_suffix('\n').unwrap_or(source);
+                    let (plain, spans) = super::ansi::parse_ansi(source, t);
+                    return rich(plain, spans)
+                        .font(t.mono_small)
+                        .color(t.text)
+                        .w_full()
+                        .wrap_anywhere()
+                        .selectable(true)
+                        .selection_color(t.k.selection());
+                }
+                el()
+            },
+        )
+        .virtual_rows_version(request);
+    col()
+        .key(format!("entry-output-{request}"))
+        .w_full()
+        .max_h(max_h)
+        .min_h(0.0)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .child(body)
+        .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
 }
 
 fn mount_image_lightbox(
@@ -314,6 +363,8 @@ fn header(s: &Desktop, preview: &FilePreview, t: &Theme) -> El {
     let copy_key = format!("preview-copy-{}", preview.request);
     let copied = s.model.timeline.copied_key.as_deref() == Some(copy_key.as_str());
     let copy_path = preview.path.clone();
+    let request = preview.request;
+    let is_output = matches!(&preview.body, FilePreviewBody::EntryText { .. });
 
     let mut bar = row()
         .key("file-preview-header")
@@ -371,6 +422,7 @@ fn header(s: &Desktop, preview: &FilePreview, t: &Theme) -> El {
         FilePreviewBody::Text { size, .. }
         | FilePreviewBody::Binary { size, .. }
         | FilePreviewBody::Image { size, .. } => usize::try_from(*size).ok(),
+        FilePreviewBody::EntryText { text, .. } => Some(text.len()),
         FilePreviewBody::Loading | FilePreviewBody::Error(_) => None,
     } {
         bar = bar.child(text(compact_bytes(size)).font(t.mono_micro).color(t.faint));
@@ -378,14 +430,33 @@ fn header(s: &Desktop, preview: &FilePreview, t: &Theme) -> El {
 
     bar = bar.child(
         rune_kit::IconButton::new(if copied { &ui::CHECK } else { &ui::COPY })
-            .help("Copy path")
+            .help(if is_output {
+                "Copy full text"
+            } else {
+                "Copy path"
+            })
             .variant(IconButtonVariant::GhostMuted)
             .control_size(Size::Compact.kit())
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                let source = if is_output {
+                    match s
+                        .model
+                        .timeline
+                        .file_preview
+                        .as_ref()
+                        .filter(|p| p.request == request)
+                        .map(|p| &p.body)
+                    {
+                        Some(FilePreviewBody::EntryText { text, .. }) => text.clone(),
+                        _ => return,
+                    }
+                } else {
+                    copy_path.clone()
+                };
                 s.dispatch(
                     Msg::Timeline(TimelineMsg::CopyWithFeedback {
                         key: copy_key.clone(),
-                        text: copy_path.clone(),
+                        text: source,
                     }),
                     tx,
                 );

@@ -103,14 +103,6 @@ impl LiveSession {
         }
     }
 
-    /// Returns whether the item identified by `key` currently has a pending or
-    /// queued content-plane entry hydration.
-    #[must_use]
-    pub fn is_entry_loading(&self, key: &str) -> bool {
-        self.pending_entries.values().any(|k| k == key)
-            || self.queued_entries.iter().any(|(_, k, _)| k == key)
-    }
-
     /// Returns whether `(thread, entry)` is already pending or queued.
     #[must_use]
     pub fn has_entry_fetch(&self, thread: ThreadId, entry: EntryId) -> bool {

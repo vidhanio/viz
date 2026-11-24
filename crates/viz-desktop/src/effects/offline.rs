@@ -101,10 +101,10 @@ pub(super) fn derive(command: ServerEffect, active_env: &str) -> Offline {
                 result: Err("Offline".into()),
             }))
         }
-        ServerEffect::LoadEarlier { thread, before } => {
-            Offline::Dispatch(Msg::Server(ServerMsg::EarlierLoaded {
+        ServerEffect::LoadHistory { thread, anchor } => {
+            Offline::Dispatch(Msg::Server(ServerMsg::HistoryLoaded {
                 thread,
-                before,
+                anchor,
                 page: None,
             }))
         }

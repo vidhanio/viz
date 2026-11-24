@@ -140,8 +140,10 @@ impl Desktop {
                     }
                 }
                 Effect::RevealMessage { thread, item } => {
-                    if let Some(tx) = tx.as_deref_mut() {
-                        tx.scroll_center_in_instant(format!("page-{thread}"), item);
+                    if let Some(tx) = tx.as_deref_mut()
+                        && self.model.selection.selected == Some(thread)
+                    {
+                        tx.scroll_center_in_instant(self.model.timeline_page_key(), item);
                     }
                 }
                 Effect::KeepOnScreen(key) => {
