@@ -170,9 +170,19 @@ handlers! {
         ForkThread, |workspace, input| {
             workspace.fork(input).await
         }
-        SendInput, |workspace, input| {
-            if input.origin.is_some() {
-                return Err(Error::invalid("origins require a connector WebSocket"));
+        SendInput, |workspace, ctx, input| {
+            if let Some(origin) = &input.origin {
+                match ctx.connector() {
+                    Some(name) if origin.connector == name => {}
+                    Some(_) => {
+                        return Err(Error::invalid(
+                            "origin must belong to the connected connector",
+                        ));
+                    }
+                    None => {
+                        return Err(Error::invalid("origins require a connector WebSocket"));
+                    }
+                }
             }
             workspace.send(input).await
         }

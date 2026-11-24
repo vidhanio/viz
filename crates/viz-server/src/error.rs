@@ -86,6 +86,8 @@ pub(crate) enum RequestError {
     UnknownMethod(String),
     #[error("call hello first")]
     HelloRequired,
+    #[error("{0}")]
+    Forbidden(String),
 }
 
 /// What a caller can do about an error.

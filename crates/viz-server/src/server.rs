@@ -32,7 +32,7 @@ use crate::{
     config::Config,
     environments::Peers,
     error::{Error, RequestError},
-    rpc::{self, Route, handlers},
+    rpc::{self, CallCtx, Principal, Route, handlers},
     tasks::{self, Tasks},
     wire::{
         BLOBS_PATH, HEALTH_PATH, Hello, HelloParams, Id, PROTOCOL_VERSION, RPC_PATH, Request,
@@ -43,18 +43,6 @@ use crate::{
 
 const MAX_FRAME: usize = viz_protocol::limits::MAX_WS_FRAME;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// Authenticated caller identity injected by [`guard`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum Principal {
-    /// Local user connected over the `0600` Unix domain socket.
-    Local,
-    /// Remote operator authenticated with `server.token` over TCP.
-    Client,
-    /// Configured peer environment authenticated with its per-peer `accept`
-    /// credential over TCP.
-    Peer(Arc<str>),
-}
 
 pub(crate) struct Server {
     workspace: Arc<Workspace>,
@@ -244,13 +232,15 @@ impl Server {
         }
     }
 
-    async fn call(&self, method: &str, raw: &str) -> Result<Value, Error> {
-        if let Some(call) = Route::find(ROUTES, method) {
-            call(self, raw).await
-        } else if let Some(call) = Route::find(tasks::ROUTES, method) {
-            call(&self.tasks, raw).await
-        } else if let Some(call) = Route::find(workspace::ROUTES, method) {
-            call(&self.workspace, raw).await
+    async fn call(&self, ctx: &CallCtx, method: &str, raw: &str) -> Result<Value, Error> {
+        if let Some(route) = Route::find(ROUTES, method) {
+            route.call(self, ctx, raw).await
+        } else if let Some(route) = Route::find(tasks::ROUTES, method) {
+            route.call(&self.tasks, ctx, raw).await
+        } else if let Some(route) = Route::find(workspace::ROUTES, method) {
+            route.call(&self.workspace, ctx, raw).await
+        } else if let Some(route) = Route::find(peer_rpc::ROUTES, method) {
+            route.call(self, ctx, raw).await
         } else {
             Err(rpc::unknown(method))
         }
@@ -336,24 +326,26 @@ async fn peer_rpc(
             }
             encode(listener.server.hello(&params)?)
         })
-    } else if let Some(dispatch) = peer_rpc::find(&request.method) {
+    } else {
+        let ctx = CallCtx::peer_http(source);
         let result = tokio::select! {
-            () = listener.server.stop.cancelled() => Err(Error::unavailable("server is stopping").into()),
-            result = dispatch(&listener.server, raw_params(&request), &source) => result,
+            () = listener.server.stop.cancelled() => Err(Error::unavailable("server is stopping")),
+            result = listener.server.call(&ctx, request.method_name(), raw_params(&request)) => result,
         };
         match result {
             Ok(value) => Ok(value),
-            Err(peer_rpc::PeerError::Rpc(error)) => Err(error),
-            Err(peer_rpc::PeerError::SourceMismatch) => {
-                return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
+            Err(Error::Request(RequestError::Forbidden(message))) => {
+                return (StatusCode::FORBIDDEN, message).into_response();
             }
+            Err(Error::Request(RequestError::UnknownMethod(_))) => {
+                return (
+                    StatusCode::FORBIDDEN,
+                    "method not permitted on peer HTTP RPC",
+                )
+                    .into_response();
+            }
+            Err(error) => Err(error),
         }
-    } else {
-        return (
-            StatusCode::FORBIDDEN,
-            "method not permitted on peer HTTP RPC",
-        )
-            .into_response();
     };
     Json(Response::new(request.id, response)).into_response()
 }

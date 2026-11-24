@@ -2,6 +2,9 @@
   "protocol": 2,
   "methods": {
     "hello": {
+      "scopes": [
+        "handshake"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "HelloParams",
@@ -118,6 +121,9 @@
       }
     },
     "environments.list": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListEnvironments",
@@ -172,6 +178,9 @@
       }
     },
     "tasks.list": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListTasks",
@@ -303,6 +312,9 @@
       }
     },
     "task.status": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "TaskStatusRequest",
@@ -441,6 +453,9 @@
       }
     },
     "task.cancel": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "CancelTask",
@@ -563,6 +578,9 @@
       }
     },
     "task.delegate": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "DelegateTask",
@@ -858,6 +876,9 @@
       }
     },
     "task.delete": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "DeleteTask",
@@ -887,6 +908,9 @@
       }
     },
     "tasks.clear": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ClearTasks",
@@ -928,6 +952,11 @@
       }
     },
     "thread.wait": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "WaitThread",
@@ -1208,6 +1237,11 @@
       }
     },
     "thread.state": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadThreadState",
@@ -2957,6 +2991,9 @@
       }
     },
     "project.read": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadProject",
@@ -3251,6 +3288,9 @@
       }
     },
     "queue.steer": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "SteerQueuedInput",
@@ -3291,6 +3331,9 @@
       }
     },
     "queue.update": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "UpdateQueuedInput",
@@ -3350,6 +3393,11 @@
       }
     },
     "threads.list": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListThreads",
@@ -3873,6 +3921,10 @@
       }
     },
     "thread.update": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "UpdateThread",
@@ -3947,6 +3999,10 @@
       }
     },
     "thread.retitle": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "RetitleThread",
@@ -4003,6 +4059,10 @@
       }
     },
     "thread.triage": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "TriageThread",
@@ -4556,6 +4616,9 @@
       }
     },
     "thread.configure": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ConfigureThread",
@@ -4610,6 +4673,11 @@
       }
     },
     "thread.stop": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "StopThread",
@@ -4657,6 +4725,9 @@
       }
     },
     "thread.delete": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "DeleteThread",
@@ -4692,6 +4763,11 @@
       }
     },
     "projects.list": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListProjects",
@@ -4982,6 +5058,10 @@
       }
     },
     "project.create": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "CreateProject",
@@ -5285,6 +5365,10 @@
       }
     },
     "project.update": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "UpdateProject",
@@ -5696,6 +5780,9 @@
       }
     },
     "project.icon": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadProjectIcon",
@@ -5776,6 +5863,9 @@
       }
     },
     "folders.browse": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "BrowseFolders",
@@ -5904,6 +5994,9 @@
       }
     },
     "folder.create": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "CreateFolder",
@@ -5932,6 +6025,9 @@
       }
     },
     "git.status": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitStatusRequest",
@@ -6053,6 +6149,9 @@
       }
     },
     "git.action": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitActionRequest",
@@ -6201,6 +6300,9 @@
       }
     },
     "git.restoreCheckpoint": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "RestoreCheckpoint",
@@ -6257,6 +6359,9 @@
       }
     },
     "git.diff": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitDiffRequest",
@@ -6564,6 +6669,9 @@
       }
     },
     "git.watch": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "WatchGit",
@@ -6686,6 +6794,9 @@
       }
     },
     "git.unwatch": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "UnwatchGit",
@@ -6716,6 +6827,9 @@
       }
     },
     "git.init": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "InitRepository",
@@ -6744,6 +6858,9 @@
       }
     },
     "project.clone": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "StartClone",
@@ -6872,6 +6989,9 @@
       }
     },
     "project.cloneStatus": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadClone",
@@ -6990,6 +7110,9 @@
       }
     },
     "project.cancelClone": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "CancelClone",
@@ -7108,6 +7231,9 @@
       }
     },
     "github.auth": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitHubAuth",
@@ -7133,6 +7259,9 @@
       }
     },
     "github.search": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitHubSearch",
@@ -7227,6 +7356,9 @@
       }
     },
     "github.checks": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitHubChecks",
@@ -7305,6 +7437,9 @@
       }
     },
     "github.reviews": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitHubPullPage",
@@ -7391,6 +7526,9 @@
       }
     },
     "github.createPull": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitHubCreatePull",
@@ -7472,6 +7610,9 @@
       }
     },
     "github.launch": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitHubLaunch",
@@ -7849,6 +7990,9 @@
       }
     },
     "github.repositories": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "GitHubRepositories",
@@ -7931,6 +8075,10 @@
       }
     },
     "project.remove": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "RemoveProject",
@@ -7954,6 +8102,11 @@
       }
     },
     "harnesses.list": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListHarnesses",
@@ -8458,6 +8611,10 @@
       }
     },
     "harnesses.options": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "HarnessOptions",
@@ -8684,6 +8841,9 @@
       }
     },
     "harness.sessions": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListHarnessSessions",
@@ -8788,6 +8948,9 @@
       }
     },
     "thread.import": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ImportSession",
@@ -8859,6 +9022,9 @@
       }
     },
     "files.search": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "SearchFiles",
@@ -8971,6 +9137,9 @@
       }
     },
     "files.read": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadFile",
@@ -9201,6 +9370,10 @@
       }
     },
     "thread.attachment": {
+      "scopes": [
+        "operator",
+        "connector"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadAttachment",
@@ -9256,6 +9429,10 @@
       }
     },
     "blob.stat": {
+      "scopes": [
+        "operator",
+        "connector"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "StatBlob",
@@ -9323,6 +9500,11 @@
       }
     },
     "thread.launch": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "LaunchThread",
@@ -9683,6 +9865,10 @@
       }
     },
     "thread.fork": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ForkThread",
@@ -9994,6 +10180,11 @@
       }
     },
     "thread.send": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "SendInput",
@@ -10215,6 +10406,10 @@
       }
     },
     "thread.watch": {
+      "scopes": [
+        "operator",
+        "connector"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Watch",
@@ -10255,6 +10450,10 @@
       }
     },
     "thread.unwatch": {
+      "scopes": [
+        "operator",
+        "connector"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "Unwatch",
@@ -10295,6 +10494,10 @@
       }
     },
     "threads.search": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "SearchThreads",
@@ -10372,6 +10575,11 @@
       }
     },
     "thread.entries": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListEntries",
@@ -11709,6 +11917,11 @@
       }
     },
     "thread.entry_chunk": {
+      "scopes": [
+        "operator",
+        "connector",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadEntryChunk",
@@ -11820,6 +12033,9 @@
       }
     },
     "thread.answer": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "AnswerRequest",
@@ -12274,6 +12490,9 @@
       }
     },
     "thread.access": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "SetThreadAccess",
@@ -12388,6 +12607,9 @@
       }
     },
     "project.access": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "SetProjectAccess",
@@ -12500,6 +12722,9 @@
       }
     },
     "queue.remove": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "RemoveQueuedInput",
@@ -12540,6 +12765,10 @@
       }
     },
     "project.branches": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListBranches",
@@ -12647,6 +12876,10 @@
       }
     },
     "worktrees.list": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListWorktrees",
@@ -12728,6 +12961,10 @@
       }
     },
     "worktree.remove": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "RemoveWorktree",
@@ -12755,6 +12992,10 @@
       }
     },
     "thread.move": {
+      "scopes": [
+        "operator",
+        "peer_tool"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "MoveThread",
@@ -12896,6 +13137,9 @@
       }
     },
     "thread.promoteProject": {
+      "scopes": [
+        "operator"
+      ],
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "PromoteThread",

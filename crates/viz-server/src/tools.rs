@@ -24,7 +24,7 @@ use crate::{
     acp::mcp::{Dispatch, ToolDefinition, ToolResult, ToolScope},
     environments::Peers,
     error::Error,
-    rpc::Handler,
+    rpc::{CallCtx, Handler},
     tasks::Tasks,
     wire::decode,
     workspace::Workspace,
@@ -263,7 +263,7 @@ impl Tools {
     {
         Box::pin(async move {
             if environment == self.peers.local {
-                Handler::<M>::handle(&self.workspace, input.into()).await
+                Handler::<M>::handle(&self.workspace, &CallCtx::internal(), input.into()).await
             } else {
                 self.peers.call::<M>(environment, &input, wait).await
             }
@@ -360,9 +360,12 @@ impl Tools {
             .dispatch::<ListHarnesses, _>(environment, ListHarnesses {}, Duration::ZERO)
             .await?;
         let parent_harness = if input.harness.is_none() && environment == self.peers.local {
-            let ThreadStateResult { state } =
-                Handler::<ReadThreadState>::handle(&self.workspace, ReadThreadState { thread })
-                    .await?;
+            let ThreadStateResult { state } = Handler::<ReadThreadState>::handle(
+                &self.workspace,
+                &CallCtx::internal(),
+                ReadThreadState { thread },
+            )
+            .await?;
             Some(state.harness)
         } else {
             None

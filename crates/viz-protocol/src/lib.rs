@@ -103,11 +103,68 @@ pub use transcript::{
 /// The protocol version this crate speaks.
 pub const PROTOCOL_VERSION: u32 = 2;
 
-/// A request method: its params type, its name on the wire, and its result
-/// type. Sealed: the protocol defines every method.
+/// Capability bitmask declaring which authenticated caller classes may invoke
+/// a protocol method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MethodScope(u8);
+
+impl MethodScope {
+    /// Chat/messaging connector WebSocket (`ClientKind::Connector`).
+    pub const CONNECTOR: Self = Self(1 << 1);
+    /// Initial connection handshake (`hello`).
+    pub const HANDSHAKE: Self = Self(1 << 4);
+    /// Full operator session (local Unix socket, authenticated TCP client, or
+    /// peer-proxied desktop/CLI WebSocket).
+    pub const OPERATOR: Self = Self(1 << 0);
+    /// Server-to-server durable delegation RPC over authenticated peer HTTP.
+    pub const PEER_DELEGATION: Self = Self(1 << 2);
+    /// Cross-environment workspace RPC invoked by a peer's MCP tools over
+    /// authenticated peer HTTP.
+    pub const PEER_TOOL: Self = Self(1 << 3);
+
+    /// Combines two capability bitmasks.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Returns whether `self` and `other` share at least one capability bit.
+    #[must_use]
+    pub const fn intersects(self, other: Self) -> bool {
+        (self.0 & other.0) != 0
+    }
+
+    /// Human-readable scope labels emitted into `protocol/schema.json`.
+    #[must_use]
+    pub fn names(self) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        if self.intersects(Self::HANDSHAKE) {
+            out.push("handshake");
+        }
+        if self.intersects(Self::OPERATOR) {
+            out.push("operator");
+        }
+        if self.intersects(Self::CONNECTOR) {
+            out.push("connector");
+        }
+        if self.intersects(Self::PEER_TOOL) {
+            out.push("peer_tool");
+        }
+        if self.intersects(Self::PEER_DELEGATION) {
+            out.push("peer_delegation");
+        }
+        out
+    }
+}
+
+/// A request method: its params type, its name on the wire, its required
+/// capability scope, and its result type. Sealed: the protocol defines every
+/// method.
 pub trait Method: Serialize + DeserializeOwned + Send + Sync + private::Sealed {
     /// The JSON-RPC method name.
     const NAME: &'static str;
+    /// Caller scopes allowed to invoke this method.
+    const SCOPE: MethodScope;
     /// The `result` of a successful call.
     type Response: Clone + DeserializeOwned + Serialize;
 }
@@ -116,12 +173,18 @@ mod private {
     pub trait Sealed {}
 }
 
+const OP: MethodScope = MethodScope::OPERATOR;
+const OP_CONN: MethodScope = MethodScope::OPERATOR.union(MethodScope::CONNECTOR);
+const OP_PEER: MethodScope = MethodScope::OPERATOR.union(MethodScope::PEER_TOOL);
+const OP_CONN_PEER: MethodScope = OP_CONN.union(MethodScope::PEER_TOOL);
+
 macro_rules! methods {
-    ($($params:ty => $name:literal, $response:ty;)*) => {
+    ($($params:ty => $name:literal, $response:ty, $scope:expr;)*) => {
         $(
         impl private::Sealed for $params {}
         impl Method for $params {
             const NAME: &'static str = $name;
+            const SCOPE: MethodScope = $scope;
             type Response = $response;
         }
         )*
@@ -131,6 +194,7 @@ macro_rules! methods {
         pub fn method_schemas() -> serde_json::Value {
             serde_json::Value::Object([
                 $(($name.to_owned(), serde_json::json!({
+                    "scopes": (<$params as Method>::SCOPE).names(),
                     "params": schemars::schema_for!($params),
                     "result": schemars::schema_for!($response),
                 })),)*
@@ -140,75 +204,75 @@ macro_rules! methods {
 }
 
 methods! {
-    HelloParams => "hello", Hello;
-    ListEnvironments => "environments.list", EnvironmentList;
-    ListTasks => "tasks.list", TaskList;
-    TaskStatusRequest => "task.status", TaskStatusResult;
-    CancelTask => "task.cancel", TaskResult;
-    DelegateTask => "task.delegate", TaskResult;
-    DeleteTask => "task.delete", Empty;
-    ClearTasks => "tasks.clear", Cleared;
-    WaitThread => "thread.wait", WaitResult;
-    ReadThreadState => "thread.state", ThreadStateResult;
-    ReadProject => "project.read", ProjectResult;
-    SteerQueuedInput => "queue.steer", Empty;
-    UpdateQueuedInput => "queue.update", Empty;
-    ListThreads => "threads.list", ThreadList;
-    UpdateThread => "thread.update", ThreadUpdated;
-    RetitleThread => "thread.retitle", ThreadUpdated;
-    TriageThread => "thread.triage", Triaged;
-    ConfigureThread => "thread.configure", Empty;
-    StopThread => "thread.stop", Empty;
-    DeleteThread => "thread.delete", Empty;
-    ListProjects => "projects.list", ProjectList;
-    CreateProject => "project.create", ProjectResult;
-    UpdateProject => "project.update", Empty;
-    ReadProjectIcon => "project.icon", ProjectIconResult;
-    BrowseFolders => "folders.browse", FolderEntries;
-    CreateFolder => "folder.create", FolderCreated;
-    GitStatusRequest => "git.status", GitStatus;
-    GitActionRequest => "git.action", GitActionResult;
-    RestoreCheckpoint => "git.restoreCheckpoint", Empty;
-    GitDiffRequest => "git.diff", GitDiff;
-    WatchGit => "git.watch", GitStatus;
-    UnwatchGit => "git.unwatch", Empty;
-    InitRepository => "git.init", FolderCreated;
-    StartClone => "project.clone", CloneStatus;
-    ReadClone => "project.cloneStatus", CloneStatus;
-    CancelClone => "project.cancelClone", CloneStatus;
-    GitHubAuth => "github.auth", GitHubAuthState;
-    GitHubSearch => "github.search", GitHubSearchResult;
-    GitHubChecks => "github.checks", Vec<GitHubCheck>;
-    GitHubPullPage => "github.reviews", Vec<GitHubReview>;
-    GitHubCreatePull => "github.createPull", GitHubItem;
-    GitHubLaunch => "github.launch", Launched;
-    GitHubRepositories => "github.repositories", GitHubRepositoryList;
-    RemoveProject => "project.remove", Empty;
-    ListHarnesses => "harnesses.list", HarnessList;
-    HarnessOptions => "harnesses.options", HarnessOptionsResult;
-    ListHarnessSessions => "harness.sessions", HarnessSessions;
-    ImportSession => "thread.import", Launched;
-    SearchFiles => "files.search", FileList;
-    ReadFile => "files.read", FileContent;
-    ReadAttachment => "thread.attachment", Attachment;
-    StatBlob => "blob.stat", BlobInfo;
-    LaunchThread => "thread.launch", Launched;
-    ForkThread => "thread.fork", Forked;
-    SendInput => "thread.send", Sent;
-    Watch => "thread.watch", Watching;
-    Unwatch => "thread.unwatch", Watching;
-    SearchThreads => "threads.search", SearchHits;
-    ListEntries => "thread.entries", EntryPage;
-    ReadEntryChunk => "thread.entry_chunk", EntryChunk;
-    AnswerRequest => "thread.answer", RunRequest;
-    SetThreadAccess => "thread.access", Empty;
-    SetProjectAccess => "project.access", Empty;
-    RemoveQueuedInput => "queue.remove", Empty;
-    ListBranches => "project.branches", BranchList;
-    ListWorktrees => "worktrees.list", WorktreeList;
-    RemoveWorktree => "worktree.remove", Empty;
-    MoveThread => "thread.move", Moved;
-    PromoteThread => "thread.promoteProject", PromotedThread;
+    HelloParams => "hello", Hello, MethodScope::HANDSHAKE;
+    ListEnvironments => "environments.list", EnvironmentList, OP;
+    ListTasks => "tasks.list", TaskList, OP;
+    TaskStatusRequest => "task.status", TaskStatusResult, OP;
+    CancelTask => "task.cancel", TaskResult, OP;
+    DelegateTask => "task.delegate", TaskResult, OP;
+    DeleteTask => "task.delete", Empty, OP;
+    ClearTasks => "tasks.clear", Cleared, OP;
+    WaitThread => "thread.wait", WaitResult, OP_CONN_PEER;
+    ReadThreadState => "thread.state", ThreadStateResult, OP_CONN_PEER;
+    ReadProject => "project.read", ProjectResult, OP;
+    SteerQueuedInput => "queue.steer", Empty, OP;
+    UpdateQueuedInput => "queue.update", Empty, OP;
+    ListThreads => "threads.list", ThreadList, OP_CONN_PEER;
+    UpdateThread => "thread.update", ThreadUpdated, OP_PEER;
+    RetitleThread => "thread.retitle", ThreadUpdated, OP_PEER;
+    TriageThread => "thread.triage", Triaged, OP_PEER;
+    ConfigureThread => "thread.configure", Empty, OP;
+    StopThread => "thread.stop", Empty, OP_CONN_PEER;
+    DeleteThread => "thread.delete", Empty, OP;
+    ListProjects => "projects.list", ProjectList, OP_CONN_PEER;
+    CreateProject => "project.create", ProjectResult, OP_PEER;
+    UpdateProject => "project.update", Empty, OP_PEER;
+    ReadProjectIcon => "project.icon", ProjectIconResult, OP;
+    BrowseFolders => "folders.browse", FolderEntries, OP;
+    CreateFolder => "folder.create", FolderCreated, OP;
+    GitStatusRequest => "git.status", GitStatus, OP;
+    GitActionRequest => "git.action", GitActionResult, OP;
+    RestoreCheckpoint => "git.restoreCheckpoint", Empty, OP;
+    GitDiffRequest => "git.diff", GitDiff, OP;
+    WatchGit => "git.watch", GitStatus, OP;
+    UnwatchGit => "git.unwatch", Empty, OP;
+    InitRepository => "git.init", FolderCreated, OP;
+    StartClone => "project.clone", CloneStatus, OP;
+    ReadClone => "project.cloneStatus", CloneStatus, OP;
+    CancelClone => "project.cancelClone", CloneStatus, OP;
+    GitHubAuth => "github.auth", GitHubAuthState, OP;
+    GitHubSearch => "github.search", GitHubSearchResult, OP;
+    GitHubChecks => "github.checks", Vec<GitHubCheck>, OP;
+    GitHubPullPage => "github.reviews", Vec<GitHubReview>, OP;
+    GitHubCreatePull => "github.createPull", GitHubItem, OP;
+    GitHubLaunch => "github.launch", Launched, OP;
+    GitHubRepositories => "github.repositories", GitHubRepositoryList, OP;
+    RemoveProject => "project.remove", Empty, OP_PEER;
+    ListHarnesses => "harnesses.list", HarnessList, OP_CONN_PEER;
+    HarnessOptions => "harnesses.options", HarnessOptionsResult, OP_PEER;
+    ListHarnessSessions => "harness.sessions", HarnessSessions, OP;
+    ImportSession => "thread.import", Launched, OP;
+    SearchFiles => "files.search", FileList, OP;
+    ReadFile => "files.read", FileContent, OP;
+    ReadAttachment => "thread.attachment", Attachment, OP_CONN;
+    StatBlob => "blob.stat", BlobInfo, OP_CONN;
+    LaunchThread => "thread.launch", Launched, OP_CONN_PEER;
+    ForkThread => "thread.fork", Forked, OP_PEER;
+    SendInput => "thread.send", Sent, OP_CONN_PEER;
+    Watch => "thread.watch", Watching, OP_CONN;
+    Unwatch => "thread.unwatch", Watching, OP_CONN;
+    SearchThreads => "threads.search", SearchHits, OP_PEER;
+    ListEntries => "thread.entries", EntryPage, OP_CONN_PEER;
+    ReadEntryChunk => "thread.entry_chunk", EntryChunk, OP_CONN_PEER;
+    AnswerRequest => "thread.answer", RunRequest, OP;
+    SetThreadAccess => "thread.access", Empty, OP;
+    SetProjectAccess => "project.access", Empty, OP;
+    RemoveQueuedInput => "queue.remove", Empty, OP;
+    ListBranches => "project.branches", BranchList, OP_PEER;
+    ListWorktrees => "worktrees.list", WorktreeList, OP_PEER;
+    RemoveWorktree => "worktree.remove", Empty, OP_PEER;
+    MoveThread => "thread.move", Moved, OP_PEER;
+    PromoteThread => "thread.promoteProject", PromotedThread, OP;
 }
 
 /// What kind of client is connecting; decides which notifications it receives.

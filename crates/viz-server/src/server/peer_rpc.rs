@@ -1,59 +1,41 @@
-//! Peer-only method registry. A peer payload's claimed source is checked
-//! against the authenticated environment before invoking a typed handler.
+//! Peer-only delegation routes registered into the unified RPC router.
+//!
+//! Each route carries [`viz_protocol::MethodScope::PEER_DELEGATION`] and binds
+//! any claimed source environment in the payload to the authenticated peer
+//! principal in [`CallCtx`].
 
-use futures_util::future::BoxFuture;
-use serde_json::Value;
 use viz_protocol::peer::{FollowUp, PeerMethod, ProgressRequest, ReceiveTask, RetractTask};
 
 use super::Server;
 use crate::{
-    error::Error,
-    rpc::{self, Handler},
-    wire::encode,
+    error::{Error, RequestError},
+    rpc::{CallCtx, Handler, Route},
 };
 
-pub(super) enum PeerError {
-    Rpc(Error),
-    SourceMismatch,
-}
-
-impl From<Error> for PeerError {
-    fn from(error: Error) -> Self {
-        Self::Rpc(error)
+fn verify_source<M: PeerMethod>(ctx: &CallCtx, input: &M) -> Result<(), Error> {
+    let Some(source) = ctx.peer() else {
+        return Err(RequestError::Forbidden("peer credential required".into()).into());
+    };
+    if input.source().is_some_and(|claimed| claimed != source) {
+        return Err(RequestError::Forbidden("source environment mismatch".into()).into());
     }
-}
-
-type Dispatch = for<'a> fn(&'a Server, &'a str, &'a str) -> BoxFuture<'a, Result<Value, PeerError>>;
-
-fn dispatch<'a, M: PeerMethod>(
-    server: &'a Server,
-    raw: &'a str,
-    source: &'a str,
-) -> BoxFuture<'a, Result<Value, PeerError>>
-where
-    Server: Handler<M>,
-{
-    Box::pin(async move {
-        let input: M = rpc::parse(raw)?;
-        if input.source().is_some_and(|claimed| claimed != source) {
-            return Err(PeerError::SourceMismatch);
-        }
-        Ok(encode(server.handle(input).await?)?)
-    })
+    Ok(())
 }
 
 macro_rules! peer_handlers {
     ($($method:ty => $service:ident.$operation:ident),+ $(,)?) => {
-        const ROUTES: &[(&str, Dispatch)] = &[
-            $((<$method as viz_protocol::Method>::NAME, dispatch::<$method>)),+
+        pub(super) const ROUTES: &[Route<Server>] = &[
+            $(Route::new::<$method>()),+
         ];
 
         $(
             impl Handler<$method> for Server {
-                async fn handle(&self, input: $method) -> Result<
-                    <$method as viz_protocol::Method>::Response,
-                    Error,
-                > {
+                async fn handle(
+                    &self,
+                    ctx: &CallCtx,
+                    input: $method,
+                ) -> Result<<$method as viz_protocol::Method>::Response, Error> {
+                    verify_source(ctx, &input)?;
                     self.$service.$operation(input).await
                 }
             }
@@ -66,11 +48,4 @@ peer_handlers! {
     RetractTask => workspace.retract,
     ProgressRequest => tasks.progress,
     FollowUp => tasks.follow_up,
-}
-
-pub(super) fn find(method: &str) -> Option<Dispatch> {
-    ROUTES
-        .iter()
-        .find(|(name, _)| *name == method)
-        .map(|(_, dispatch)| *dispatch)
 }

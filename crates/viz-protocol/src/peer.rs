@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use super::{Method, Run, RunId, TaskId, ThreadId, WorktreeTarget, private};
+use super::{Method, MethodScope, Run, RunId, TaskId, ThreadId, WorktreeTarget, private};
 
 /// A method restricted to configured peers.
 pub trait PeerMethod: Method + DeserializeOwned + Send {
@@ -140,6 +140,7 @@ macro_rules! peer_methods {
             impl private::Sealed for $params {}
             impl Method for $params {
                 const NAME: &'static str = $name;
+                const SCOPE: MethodScope = MethodScope::PEER_DELEGATION;
                 type Response = $response;
             }
         )*

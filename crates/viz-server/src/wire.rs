@@ -48,6 +48,7 @@ pub(crate) const fn error_code(error: &Error) -> i32 {
             RequestError::NotARequest(_) => -32600,
             RequestError::UnknownMethod(_) => -32601,
             RequestError::HelloRequired => -32000,
+            RequestError::Forbidden(_) => -32003,
         },
         error => match error.kind() {
             Kind::Invalid => INVALID_PARAMS,

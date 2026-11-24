@@ -15,18 +15,19 @@ use tokio::{
     task::JoinSet,
 };
 use viz_protocol::{
-    ContentRequest, ContentResponse, decode_content_frame, encode_content_frame, limits,
+    ContentRequest, ContentResponse, MethodScope, decode_content_frame, encode_content_frame,
+    limits,
 };
 
 use super::Server;
-use crate::{error::Error, wire::error_code};
+use crate::{error::Error, rpc::CallCtx, wire::error_code};
 
 const MAX_IN_FLIGHT: usize = 8;
 const MAX_CONCURRENT_UPLOADS: usize = 4;
 const OUTGOING_CAPACITY: usize = 32;
 
 /// Runs a content-plane WebSocket session after the `hello` handshake.
-pub(super) async fn session(socket: WebSocket, server: Arc<Server>) -> Result<()> {
+pub(super) async fn session(socket: WebSocket, server: Arc<Server>, ctx: CallCtx) -> Result<()> {
     let (mut write, mut read) = socket.split();
     let (outgoing, mut messages) = mpsc::channel::<Message>(OUTGOING_CAPACITY);
     let stop = server.stop.clone();
@@ -78,9 +79,10 @@ pub(super) async fn session(socket: WebSocket, server: Arc<Server>) -> Result<()
                             let server = Arc::clone(&server);
                             let outgoing = outgoing.clone();
                             let uploads = Arc::clone(&uploads);
+                            let ctx = ctx.clone();
                             jobs.spawn(async move {
                                 if let Err(error) =
-                                    handle_request(&server, &uploads, &outgoing, request, payload).await
+                                    handle_request(&server, &ctx, &uploads, &outgoing, request, payload).await
                                 {
                                     tracing::debug!(%error, "content request ended");
                                 }
@@ -110,11 +112,13 @@ pub(super) async fn session(socket: WebSocket, server: Arc<Server>) -> Result<()
 
 async fn handle_request(
     server: &Server,
+    ctx: &CallCtx,
     uploads: &Mutex<HashMap<u64, Vec<u8>>>,
     outgoing: &mpsc::Sender<Message>,
     request: ContentRequest,
     payload: Vec<u8>,
 ) -> Result<()> {
+    let attachment_scope = MethodScope::OPERATOR.union(MethodScope::CONNECTOR);
     match request {
         ContentRequest::GetAttachment {
             id,
@@ -124,6 +128,9 @@ async fn handle_request(
             offset,
             len,
         } => {
+            if let Err(error) = ctx.require(attachment_scope, "content.getAttachment") {
+                return send_error(outgoing, id, &error).await;
+            }
             let capped = clamp_chunk_len(len);
             let reply = server
                 .workspace
@@ -139,6 +146,9 @@ async fn handle_request(
             offset,
             len,
         } => {
+            if let Err(error) = ctx.require(MethodScope::OPERATOR, "content.getFile") {
+                return send_error(outgoing, id, &error).await;
+            }
             let capped = clamp_chunk_len(len);
             let reply = server
                 .workspace
@@ -147,6 +157,9 @@ async fn handle_request(
             send_chunk_reply(outgoing, id, offset, reply).await?;
         }
         ContentRequest::UploadChunk { id, upload, offset } => {
+            if let Err(error) = ctx.require(attachment_scope, "content.uploadChunk") {
+                return send_error(outgoing, id, &error).await;
+            }
             match append_upload_chunk(uploads, upload, offset, &payload).await {
                 Ok(received) => {
                     send_frame(
@@ -170,6 +183,9 @@ async fn handle_request(
             name,
             mime,
         } => {
+            if let Err(error) = ctx.require(attachment_scope, "content.uploadFinish") {
+                return send_error(outgoing, id, &error).await;
+            }
             let bytes = { uploads.lock().await.remove(&upload) }.unwrap_or_default();
             match server
                 .workspace
@@ -183,6 +199,9 @@ async fn handle_request(
             }
         }
         ContentRequest::UploadAbort { id, upload } => {
+            if let Err(error) = ctx.require(attachment_scope, "content.uploadAbort") {
+                return send_error(outgoing, id, &error).await;
+            }
             uploads.lock().await.remove(&upload);
             send_frame(
                 outgoing,
