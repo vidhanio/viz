@@ -163,7 +163,7 @@ pub fn retry_draft_image(s: &mut Desktop, index: usize) {
 /// `pills`.
 #[must_use]
 pub fn build_draft_edit(text: &str, pills: &[DraftPill]) -> TextEdit {
-    let mut edit = crate::composer::rich::new_edit();
+    let mut edit = TextEdit::new("");
     let mut sorted: Vec<&DraftPill> = pills
         .iter()
         .filter(|pill| {
@@ -214,6 +214,5 @@ pub fn sync_draft_text(s: &mut Desktop) {
     if pills != s.model.composer.draft.pills {
         s.model.composer.draft.pills = pills;
     }
-    s.model.composer.draft.formatted_text = crate::composer::rich::to_markdown(&s.widgets.draft);
     s.model.composer.draft_focused = s.widgets.draft.focused;
 }

@@ -42,8 +42,6 @@ pub struct ShellWidgets {
     pub subagent_hover: Option<String>,
     /// Main composer text editor.
     pub draft: TextEdit,
-    /// Whether the composer's rich-text formatting toolbar is expanded.
-    pub format_bar_open: bool,
     /// Project filter combobox search input.
     pub project_filter_query: TextEdit,
     /// Sidebar inline thread title rename input.
@@ -97,7 +95,7 @@ impl std::fmt::Debug for ShellWidgets {
 
 impl Default for ShellWidgets {
     fn default() -> Self {
-        let mut draft = crate::composer::rich::new_edit();
+        let mut draft = TextEdit::new("");
         draft.focused = true;
         Self {
             request_edit: TextEdit::new(""),
@@ -111,7 +109,6 @@ impl Default for ShellWidgets {
             git_tree_open: false,
             subagent_hover: None,
             draft,
-            format_bar_open: false,
             project_filter_query: TextEdit::new(""),
             inline_rename: TextEdit::new(""),
             sidebar_dialog: TextEdit::new(""),

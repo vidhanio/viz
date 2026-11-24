@@ -6,7 +6,7 @@ use rune::{Color, El, Key, KeyEvent, Tx, col, icon, row, text, text_input};
 
 use super::{
     actions::{PillPalette, primary_actions},
-    attachments, completion, rich, toolbar,
+    attachments, completion, markdown, toolbar,
 };
 use crate::{
     app::Desktop,
@@ -64,7 +64,6 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
         .center_y()
         .instant_changes()
         .children(attach)
-        .child(rich::toggle_button(s, t))
         .child(rune::spacer())
         .child(
             row()
@@ -79,7 +78,6 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
                 .child(primary_actions(s, t)),
         );
 
-    let show_format_bar = s.widgets.format_bar_open || rich::has_formatting(&s.widgets.draft);
     let card = col()
         .key("composer-card")
         .paint_order(30)
@@ -87,18 +85,13 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
         .radius(RADIUS_SURFACE)
         .fill(t.surface)
         .border(HAIRLINE, border)
-        .children(show_format_bar.then(|| rich::toolbar(s, t)))
         .children(attachments::strip(s, t))
         .children(editing_queued_banner(s, t))
         .child(
             col()
                 .w_full()
                 .px(S16)
-                .pt(if has_attachments || show_format_bar {
-                    S8
-                } else {
-                    S14
-                })
+                .pt(if has_attachments { S8 } else { S14 })
                 .pb(S8)
                 .min_h(S44)
                 .child(rune::auto_grow(field, 1, MAX_LINES)),
@@ -120,7 +113,7 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
 
 fn draft_field(s: &Desktop, placeholder: &'static str, t: &Theme) -> El {
     let pill_theme = PillPalette::from_theme(t);
-    let spans = rich::code_block_spans(&s.widgets.draft, &t.syntax);
+    let md = markdown::decorate(&s.widgets.draft, t);
     text_input(&s.widgets.draft, t.body)
         .key("draft")
         .label("Message")
@@ -128,8 +121,8 @@ fn draft_field(s: &Desktop, placeholder: &'static str, t: &Theme) -> El {
         .color(t.text)
         .caret(t.accent, t.k.selection())
         .placeholder(placeholder, t.faint)
-        .rich_style(rich::style(t))
-        .decorations(spans)
+        .decorations(md.spans)
+        .strikes(md.strikes)
         .pill_style(move |id| pill_theme.style(id))
         .spellcheck(true)
         .on_edit(|s: &mut Desktop| &mut s.widgets.draft)
@@ -209,7 +202,7 @@ fn on_draft_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if crate::requests::on_draft_key(s, ev, tx) || completion::on_key(s, ev, tx) {
         return true;
     }
-    if rich::handle_key(&mut s.widgets.draft, ev) {
+    if markdown::handle_key(&mut s.widgets.draft, ev) {
         s.sync_draft_text();
         let text = s.widgets.draft.text.clone();
         s.dispatch(Msg::Composer(ComposerMsg::DraftChanged(text)), tx);

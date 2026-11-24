@@ -406,3 +406,24 @@ pub(super) fn composer_queued(s: &mut Desktop) {
     s.model.composer.draft_focused = true;
     s.sync_widgets_from_model();
 }
+
+/// Active thread composer showcasing live WYSIWYG-style Markdown decorations:
+/// heading, bold, italic, strikethrough, inline code, link, blockquote, lists,
+/// task items, and language-highlighted fenced code block.
+pub(super) fn composer_markdown(s: &mut Desktop) {
+    seed_workspace(&mut s.model);
+    let text = "\
+## Ship live Markdown
+Use **bold**, *italic*, ~~legacy toolbar~~, `inline_code()`, and [docs](https://example.com).
+> Quoted note with **emphasis** and `tokens`
+- [x] Remove formatting buttons
+- [ ] Highlight fenced blocks
+```rust
+fn greet(name: &str) -> String {
+    format!(\"hello {name}\")
+}
+```";
+    s.model.composer.draft.text = text.into();
+    s.model.composer.draft_focused = true;
+    s.sync_widgets_from_model();
+}

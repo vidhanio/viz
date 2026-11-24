@@ -99,6 +99,7 @@ pub const SCENES: &[Scene] = &[
     ("home-project", home_composer::home_project),
     ("home-empty", home_composer::home_empty),
     ("composer-chips", home_composer::composer_chips),
+    ("composer-markdown", home_composer::composer_markdown),
     ("composer-at", home_composer::composer_at),
     ("composer-slash", home_composer::composer_slash),
     ("composer-dollar", home_composer::composer_dollar),

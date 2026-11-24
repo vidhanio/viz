@@ -8,9 +8,9 @@ mod completion;
 pub mod context_strip;
 mod draft;
 mod editor;
+pub mod markdown;
 mod menus;
 mod queued;
-pub mod rich;
 mod toolbar;
 
 use rune::{El, col};

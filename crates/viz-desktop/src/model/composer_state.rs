@@ -127,10 +127,8 @@ pub struct DraftData {
     /// Submission key and payload fingerprint retained after an uncertain
     /// reply.
     pub retry_submission: Option<(String, [u8; 32])>,
-    /// Plain prompt text (including pill label spans).
+    /// Markdown prompt text (including pill label spans).
     pub text: String,
-    /// Markdown serialization of rich inline marks and blocks, when present.
-    pub formatted_text: Option<String>,
     /// Atomic inline chips synced with `ShellWidgets::draft`.
     pub pills: Vec<DraftPill>,
     /// Prepared attachments queued for the next send.
@@ -147,13 +145,10 @@ impl DraftData {
         self.text.is_empty() && self.attachments.is_empty()
     }
 
-    /// Outbound prompt payload preserving Markdown formatting when rich marks
-    /// or paragraph blocks are present.
+    /// Outbound prompt payload.
     #[must_use]
     pub fn outbound_text(&self) -> String {
-        self.formatted_text
-            .clone()
-            .unwrap_or_else(|| self.text.clone())
+        self.text.clone()
     }
 
     /// Status for attachment `index`, defaulting to
