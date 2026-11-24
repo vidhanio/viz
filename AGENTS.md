@@ -33,6 +33,7 @@ nix build .#server .#desktop
 ## Rules
 
 - **No tests.** Do not write or run unit or integration tests, `cargo test`, test fixtures, or faux-model harnesses. Verify invariants from code and exercise real binaries/harnesses against a temporary state directory without touching a running server's state.
+- **Caching is cope; write more performant code.** Fix the underlying data structure, query, I/O path, or rendering work instead of papering over slowness with caches, TTL maps, or memoization layers. Only cache across genuine network/process/GPU-decode boundaries with explicit bounds and invalidation, and delete incidental caches whenever the direct path is fast.
 - **Doc comments only.** Use `///` and `//!`. No line comments (`//`): put rationale in an item's doc comment or make the code express it.
 - **No standalone docs.** No `docs/`, roadmaps, ADRs, or session logs. Architecture and design rationale live in module/item doc comments and `*.example.toml`.
 - **Workspace dependencies.** Declare direct Rust dependencies under `[workspace.dependencies]` in root `Cargo.toml` and inherit with `.workspace = true`.
