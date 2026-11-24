@@ -15,7 +15,7 @@ use crate::{
     workspace::sql::Connection,
 };
 
-const TOTAL_LIMIT: usize = 20 * 1024 * 1024;
+const TOTAL_LIMIT: usize = viz_protocol::limits::ATTACHMENT_TOTAL_BYTES;
 
 pub(super) struct Upload {
     reference: PromptAttachment,

@@ -276,8 +276,8 @@ impl Workspace {
     }
 
     async fn read_file_preview(&self, args: ReadFile) -> Result<FileContent, Error> {
-        const TEXT_LIMIT: usize = 512 * 1024;
-        const IMAGE_LIMIT: usize = 10 * 1024 * 1024;
+        const TEXT_LIMIT: usize = viz_protocol::limits::PREVIEW_TEXT_BYTES;
+        const IMAGE_LIMIT: usize = viz_protocol::limits::PREVIEW_IMAGE_BYTES;
 
         let requested = Path::new(&args.path);
         let resolved = if requested.is_absolute() {

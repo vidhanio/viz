@@ -16,8 +16,8 @@ use tokio::{
     time::timeout,
 };
 use tokio_tungstenite::{
-    connect_async,
-    tungstenite::{Message as PeerMessage, client::IntoClientRequest},
+    connect_async_with_config,
+    tungstenite::{Message as PeerMessage, client::IntoClientRequest, protocol::WebSocketConfig},
 };
 use tokio_util::sync::CancellationToken;
 use viz_protocol::{
@@ -601,7 +601,14 @@ async fn proxy(
         request
             .headers_mut()
             .insert("x-viz-environment", environment.parse()?);
-        let (mut link, _) = timeout(HANDSHAKE, connect_async(request)).await??;
+        let ws_config = WebSocketConfig::default()
+            .max_message_size(Some(viz_protocol::limits::MAX_WS_FRAME))
+            .max_frame_size(Some(viz_protocol::limits::MAX_WS_FRAME));
+        let (mut link, _) = timeout(
+            HANDSHAKE,
+            connect_async_with_config(request, Some(ws_config), false),
+        )
+        .await??;
         link.send(PeerMessage::Text(
             serde_json::to_string(
                 &json!({"jsonrpc":"2.0","id":id,"method":"hello","params":params}),

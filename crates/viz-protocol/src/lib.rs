@@ -14,6 +14,7 @@ mod history;
 mod ids;
 mod interactions;
 mod lifecycle;
+pub mod limits;
 pub mod peer;
 mod project_settings;
 mod requests;

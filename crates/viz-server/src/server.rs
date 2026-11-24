@@ -35,7 +35,7 @@ use crate::{
     workspace::{self, Workspace},
 };
 
-const MAX_FRAME: usize = 32 * 1024 * 1024;
+const MAX_FRAME: usize = viz_protocol::limits::MAX_WS_FRAME;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub(crate) struct Server {

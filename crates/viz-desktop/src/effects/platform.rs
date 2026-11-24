@@ -18,11 +18,11 @@ use crate::{
     update::{Msg, ServerMsg},
 };
 
-/// Maximum single-file size before base64 encoding (20 MiB).
-const FILE_LIMIT: usize = 20 * 1024 * 1024;
-/// Leave room for JSON metadata and the prompt under the server's 128 MiB frame
-/// cap.
-pub const ENCODED_LIMIT: usize = 120 * 1024 * 1024;
+/// Maximum single-file size before base64 encoding.
+const FILE_LIMIT: usize = viz_client::protocol::limits::ATTACHMENT_TOTAL_BYTES;
+/// Maximum total base64 bytes for attachments matching the server's prompt
+/// budget.
+pub const ENCODED_LIMIT: usize = viz_client::protocol::limits::ATTACHMENT_ENCODED_LIMIT;
 
 /// Loads attachments synchronously from `source` (intended for the blocking
 /// thread pool).

@@ -15,9 +15,9 @@ use super::{
 use crate::error::Error;
 
 /// A 200-entry page stays below typical host message limits.
-const INLINE_BYTES: usize = 16 * 1024;
+const INLINE_BYTES: usize = viz_protocol::limits::INLINE_ENTRY_BYTES;
 /// A returned JSON string stays bounded even after outer JSON escaping.
-const CHUNK_BYTES: usize = 16 * 1024;
+const CHUNK_BYTES: usize = viz_protocol::limits::INLINE_ENTRY_BYTES;
 
 pub(in crate::workspace) fn preview(entry: &mut Entry) -> Result<(), Error> {
     match &mut entry.data {

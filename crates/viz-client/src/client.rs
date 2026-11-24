@@ -17,7 +17,9 @@ use tokio::{
 };
 use tokio_tungstenite::{
     WebSocketStream,
-    tungstenite::{Message, Utf8Bytes, client::IntoClientRequest, http::HeaderValue},
+    tungstenite::{
+        Message, Utf8Bytes, client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig,
+    },
 };
 
 use crate::{
@@ -27,17 +29,22 @@ use crate::{
         HarnessOptions, HarnessOptionsResult, Hello, HelloParams, LaunchThread, ListEntries,
         ListHarnesses, ListProjects, ListThreads, Method, Notification, PROTOCOL_VERSION, Project,
         RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SearchHit, SearchThreads, SendInput,
-        StopThread, ThreadId, ThreadSummary, Unwatch, UpdateProject, UpdateThread, Watch,
+        StopThread, ThreadId, ThreadSummary, Unwatch, UpdateProject, UpdateThread, Watch, limits,
     },
 };
 
 /// The WebSocket path the server serves the protocol on.
 const RPC_PATH: &str = "/v2/rpc";
+/// Bounded outgoing WebSocket request queue capacity.
+const OUTGOING_CAPACITY: usize = 256;
+/// Bounded incoming notification queue capacity before triggering a reconnect
+/// resync.
+const NOTIFICATION_CAPACITY: usize = 1024;
 
 /// A connected client. Cheap to clone; calls may run concurrently.
 #[derive(Debug, Clone)]
 pub struct Client {
-    outgoing: mpsc::UnboundedSender<Message>,
+    outgoing: mpsc::Sender<Message>,
     pending: Arc<PendingCalls>,
     next_id: Arc<AtomicU64>,
 }
@@ -49,7 +56,7 @@ pub struct Connection {
     /// Handle for calls.
     pub client: Client,
     /// Notifications pushed by the server. Ends when the connection closes.
-    pub notifications: mpsc::UnboundedReceiver<Notification>,
+    pub notifications: mpsc::Receiver<Notification>,
     /// The `hello` result.
     pub hello: Hello,
 }
@@ -82,7 +89,7 @@ impl Client {
             source,
         };
         let _ = rustls::crypto::ring::default_provider().install_default();
-        let (notify_tx, notifications) = mpsc::unbounded_channel();
+        let (notify_tx, notifications) = mpsc::channel(NOTIFICATION_CAPACITY);
         let pending = Arc::<PendingCalls>::default();
         let ws_url = format!("ws{}{RPC_PATH}", &endpoint.url[4..]);
         let mut request = ws_url
@@ -93,7 +100,10 @@ impl Client {
                 .map_err(|e| connect_err(e.into()))?;
             request.headers_mut().insert("authorization", auth);
         }
-        let (ws, _) = tokio_tungstenite::connect_async(request)
+        let ws_config = WebSocketConfig::default()
+            .max_message_size(Some(limits::MAX_WS_FRAME))
+            .max_frame_size(Some(limits::MAX_WS_FRAME));
+        let (ws, _) = tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false)
             .await
             .map_err(|e| connect_err(e.into()))?;
         let outgoing = spawn_io(ws, Arc::clone(&pending), notify_tx);
@@ -124,7 +134,12 @@ impl Client {
 
     /// Closes this WebSocket and fails calls that are still pending.
     pub fn close(&self) {
-        _ = self.outgoing.send(Message::Close(None));
+        if self.outgoing.try_send(Message::Close(None)).is_err() {
+            let outgoing = self.outgoing.clone();
+            tokio::spawn(async move {
+                let _ = outgoing.send(Message::Close(None)).await;
+            });
+        }
     }
 
     /// Lists every thread, titled by the server.
@@ -420,9 +435,8 @@ impl Client {
         })
         .map_err(|source| Error::Encode { method, source })?;
         let (tx, rx) = oneshot::channel();
-        self.pending.insert(id, tx);
-        if self.outgoing.send(Message::text(request)).is_err() {
-            self.pending.take(id);
+        let _guard = PendingGuard::insert(&self.pending, id, tx);
+        if self.outgoing.send(Message::text(request)).await.is_err() {
             return Err(Error::Closed);
         }
         let raw = rx.await.map_err(|_| Error::Closed)?;
@@ -512,16 +526,37 @@ impl PendingCalls {
     }
 }
 
-/// Spawns the task that drives `ws`; returns the queue its writes go to.
+/// Removes a pending RPC entry when its caller future drops before a reply
+/// arrives.
+struct PendingGuard<'a> {
+    pending: &'a PendingCalls,
+    id: u64,
+}
+
+impl<'a> PendingGuard<'a> {
+    fn insert(pending: &'a PendingCalls, id: u64, responder: Responder) -> Self {
+        pending.insert(id, responder);
+        Self { pending, id }
+    }
+}
+
+impl Drop for PendingGuard<'_> {
+    fn drop(&mut self) {
+        let _ = self.pending.take(self.id);
+    }
+}
+
+/// Spawns the task that drives `ws`; returns the bounded queue its writes go
+/// to.
 fn spawn_io<S>(
     ws: WebSocketStream<S>,
     pending: Arc<PendingCalls>,
-    notifications: mpsc::UnboundedSender<Notification>,
-) -> mpsc::UnboundedSender<Message>
+    notifications: mpsc::Sender<Notification>,
+) -> mpsc::Sender<Message>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    let (tx, mut rx) = mpsc::channel::<Message>(OUTGOING_CAPACITY);
     let (mut sink, mut stream) = ws.split();
     tokio::spawn(async move {
         loop {
@@ -536,7 +571,9 @@ where
                 incoming = stream.next() => {
                     let Some(Ok(message)) = incoming else { break };
                     let Message::Text(text) = message else { continue };
-                    dispatch(text, &pending, &notifications);
+                    if !dispatch(text, &pending, &notifications) {
+                        break;
+                    }
                 }
             }
         }
@@ -553,17 +590,18 @@ struct Route {
 }
 
 /// Routes one incoming message: a response to its call, a notification to the
-/// notification queue.
+/// bounded notification queue. Returns `false` when notifications lagged full
+/// so the caller reconnects and resyncs.
 fn dispatch(
     text: Utf8Bytes,
     pending: &PendingCalls,
-    notifications: &mpsc::UnboundedSender<Notification>,
-) {
+    notifications: &mpsc::Sender<Notification>,
+) -> bool {
     let route: Route = match serde_json::from_str(text.as_str()) {
         Ok(message) => message,
         Err(e) => {
             tracing::warn!("server sent invalid JSON: {e}");
-            return;
+            return true;
         }
     };
     if let Some(id) = route.id {
@@ -572,8 +610,15 @@ fn dispatch(
         }
     } else if route.method.is_some() {
         match serde_json::from_str(text.as_str()) {
-            Ok(notification) => _ = notifications.send(notification),
+            Ok(notification) => match notifications.try_send(notification) {
+                Ok(()) | Err(mpsc::error::TrySendError::Closed(_)) => {}
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    tracing::warn!("client notification queue overflowed; closing to resync");
+                    return false;
+                }
+            },
             Err(e) => tracing::debug!("ignoring unknown notification: {e}"),
         }
     }
+    true
 }
