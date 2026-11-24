@@ -76,6 +76,7 @@ wgpu = { version = "30", default-features = false }
 viz-acp = { path = "crates/viz-acp" }
 viz-client = { path = "crates/viz-client" }
 viz-config = { path = "crates/viz-config" }
+viz-fs = { path = "crates/viz-fs" }
 viz-git = { path = "crates/viz-git" }
 viz-github = { path = "crates/viz-github" }
 viz-core = { path = "crates/viz-core" }

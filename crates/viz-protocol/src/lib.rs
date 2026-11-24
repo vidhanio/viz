@@ -72,12 +72,12 @@ pub use project_settings::{
     ProjectSettings, ProjectSettingsPatch, ReadProjectIcon, Setting,
 };
 pub use requests::{
-    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileContent, FileList,
-    FileSearchKind, FileSearchMatch, GitBranch, HarnessList, HarnessOptions, HarnessOptionsResult,
-    ListBranches, ListHarnesses, ListProjects, ListWorktrees, MoveThread, Moved, Patch,
-    ProjectList, ProjectResult, PromoteThread, PromotedThread, ReadAttachment, ReadFile,
-    RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode, Sent, StopThread,
-    UpdateProject, UpdateThread, Worktree, WorktreeList,
+    BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileBody, FileContent,
+    FileList, FileRoot, FileSearchKind, FileSearchMatch, GitBranch, HarnessList, HarnessOptions,
+    HarnessOptionsResult, LineWindow, ListBranches, ListHarnesses, ListProjects, ListWorktrees,
+    MoveThread, Moved, Patch, ProjectList, ProjectResult, PromoteThread, PromotedThread,
+    ReadAttachment, ReadFile, RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode,
+    Sent, StopThread, UpdateProject, UpdateThread, Worktree, WorktreeList,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};

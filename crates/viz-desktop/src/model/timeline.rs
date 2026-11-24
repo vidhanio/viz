@@ -32,6 +32,7 @@ pub enum FilePreviewBody {
     /// UTF-8 text or source code.
     Text {
         text: String,
+        start_line: usize,
         truncated: bool,
         size: u64,
     },

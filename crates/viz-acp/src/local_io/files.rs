@@ -1,60 +1,27 @@
 //! Reads and writes files inside a granted root without following symlinks.
 
-use std::{
-    fs::File,
-    io::{self, Read as _, Write as _},
-    path::{Component, Path},
-};
+use std::{io, path::Path};
 
-use rustix::fs::{Mode, OFlags, open, openat};
+use viz_fs::{FsError, RelPath, Root};
 
 use crate::schema::ReadTextFileRequest;
 
 const FILE_LIMIT: u64 = 16 * 1024 * 1024;
-
-fn open_file(root: &Path, relative: &Path, flags: OFlags) -> io::Result<File> {
-    let directories = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let mut parent = open(root, directories, Mode::empty())?;
-    let mut components = relative.components();
-    let Some(Component::Normal(name)) = components.next_back() else {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "expected a file path",
-        ));
-    };
-    for component in components {
-        parent = openat(&parent, component.as_os_str(), directories, Mode::empty())?;
-    }
-    let file = File::from(openat(
-        &parent,
-        name,
-        flags | OFlags::NOFOLLOW | OFlags::CLOEXEC | OFlags::NONBLOCK,
-        Mode::RUSR | Mode::WUSR,
-    )?);
-    if !file.metadata()?.is_file() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "expected a regular file",
-        ));
-    }
-    Ok(file)
-}
 
 pub(super) fn read_text_file(
     root: &Path,
     path: &Path,
     request: &ReadTextFileRequest,
 ) -> io::Result<String> {
-    let mut text = String::new();
-    open_file(root, path, OFlags::RDONLY)?
-        .take(FILE_LIMIT + 1)
-        .read_to_string(&mut text)?;
-    if text.len() as u64 > FILE_LIMIT {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "file exceeds ACP read limit",
-        ));
-    }
+    let rel = RelPath::from_path(path).map_err(to_io)?;
+    let bytes = Root::open(root)
+        .map_err(to_io)?
+        .open_regular_nofollow(&rel, false)
+        .map_err(to_io)?
+        .read_exact_bounded(FILE_LIMIT)
+        .map_err(to_io)?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "file is not valid UTF-8"))?;
     if request.line.is_none() && request.limit.is_none() {
         return Ok(text);
     }
@@ -70,7 +37,28 @@ pub(super) fn read_text_file(
 }
 
 pub(super) fn write_text_file(root: &Path, path: &Path, content: &str) -> io::Result<()> {
-    let mut file = open_file(root, path, OFlags::WRONLY | OFlags::CREATE)?;
-    file.set_len(0)?;
-    file.write_all(content.as_bytes())
+    let rel = RelPath::from_path(path).map_err(to_io)?;
+    Root::open(root)
+        .map_err(to_io)?
+        .open_regular_nofollow(&rel, true)
+        .map_err(to_io)?
+        .write_all_truncated(content.as_bytes())
+        .map_err(to_io)
+}
+
+fn to_io(error: FsError) -> io::Error {
+    match error {
+        FsError::Io(io) => io,
+        FsError::InvalidPath(reason) => io::Error::new(io::ErrorKind::InvalidInput, reason),
+        FsError::NotRegularFile => {
+            io::Error::new(io::ErrorKind::InvalidInput, "expected a regular file")
+        }
+        FsError::Symlink => io::Error::new(io::ErrorKind::InvalidInput, "symlinks are not allowed"),
+        FsError::TooLarge { .. } => {
+            io::Error::new(io::ErrorKind::InvalidData, "file exceeds ACP read limit")
+        }
+        FsError::InvalidUtf8 => {
+            io::Error::new(io::ErrorKind::InvalidData, "file is not valid UTF-8")
+        }
+    }
 }

@@ -65,6 +65,7 @@ pub fn build_prompt(
         open_url: Some("file:///work/workbench/crates/viz-acp/src/prompt.rs#L6-L13".into()),
         body: crate::model::FilePreviewBody::Text {
             text: sample.into(),
+            start_line: 1,
             truncated: false,
             size: sample.len() as u64,
         },

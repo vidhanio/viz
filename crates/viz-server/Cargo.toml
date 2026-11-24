@@ -49,6 +49,7 @@ url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 viz-acp.workspace = true
 viz-core.workspace = true
+viz-fs.workspace = true
 viz-git.workspace = true
 viz-github.workspace = true
 viz-protocol.workspace = true

@@ -207,9 +207,10 @@ pub fn modal(s: &Desktop, reduced: bool, t: &Theme, layer: &mut Vec<El>) {
         FilePreviewBody::Loading => loading_body(t),
         FilePreviewBody::Text {
             text: source,
+            start_line,
             truncated,
             ..
-        } => code_body(preview, source, *truncated, body_max_h, t),
+        } => code_body(preview, source, *start_line, *truncated, body_max_h, t),
         FilePreviewBody::Binary { mime, size } => binary_body(&preview.path, mime, *size, t),
         FilePreviewBody::Error(message) => error_body(message, t),
         FilePreviewBody::Image { .. } => unreachable!(),
@@ -428,14 +429,22 @@ fn header(s: &Desktop, preview: &FilePreview, t: &Theme) -> El {
     clippy::too_many_lines,
     reason = "line-by-line syntax span slicing, line gutter, and highlight band layout"
 )]
-fn code_body(preview: &FilePreview, source: &str, truncated: bool, max_h: f32, t: &Theme) -> El {
+fn code_body(
+    preview: &FilePreview,
+    source: &str,
+    start_line: usize,
+    truncated: bool,
+    max_h: f32,
+    t: &Theme,
+) -> El {
     let lang = language_for_path(&preview.path);
     let highlights = highlight(lang, source);
     let all_spans = t.syntax.spans(&highlights, 0);
 
     let trimmed_source = source.strip_suffix('\n').unwrap_or(source);
     let line_count = trimmed_source.split('\n').count().max(1);
-    let gutter_digits = line_count.to_string().len().max(3);
+    let max_line_no = start_line.saturating_add(line_count).saturating_sub(1);
+    let gutter_digits = max_line_no.to_string().len().max(3);
     #[expect(clippy::cast_precision_loss, reason = "gutter digit count is tiny")]
     let gutter_w = (gutter_digits as f32).mul_add(7.5, 16.0);
     let highlight_bg = t.accent.alpha(if t.k.dark { 0.15 } else { 0.10 });
@@ -445,7 +454,7 @@ fn code_body(preview: &FilePreview, source: &str, truncated: bool, max_h: f32, t
     let mut offset = 0usize;
 
     for (idx, raw_line) in trimmed_source.split('\n').enumerate() {
-        let line_no = idx + 1;
+        let line_no = start_line + idx;
         let line_start = offset;
         let line_end = offset + raw_line.len();
         let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);

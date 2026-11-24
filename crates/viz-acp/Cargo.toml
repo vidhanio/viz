@@ -41,6 +41,7 @@ tracing.workspace = true
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 viz-config.workspace = true
+viz-fs.workspace = true
 viz-protocol.workspace = true
 
 [lints]

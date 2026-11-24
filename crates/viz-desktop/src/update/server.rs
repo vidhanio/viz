@@ -337,40 +337,46 @@ fn apply_file_preview_loaded(
     match result {
         Ok(content) => {
             preview.path.clone_from(&content.path);
-            if preview.open_url.is_none() {
-                preview.open_url = crate::timeline::file_preview::path_to_file_url(&content.path);
-            }
-            if let Some(text) = content.text {
-                let target_line = preview.lines.map(|(start, _)| start);
-                preview.body = crate::model::FilePreviewBody::Text {
+            match content.body {
+                viz_client::protocol::FileBody::Text {
                     text,
-                    truncated: content.truncated,
-                    size: content.size,
-                };
-                if let Some(start) = target_line {
-                    effects.push(Effect::ScrollCenterInstant {
-                        list: crate::timeline::file_preview::PREVIEW_SCROLL_KEY,
-                        item: format!("preview-line-{start}"),
-                    });
+                    start_line,
+                    truncated,
+                    ..
+                } => {
+                    let target_line = preview.lines.map(|(start, _)| start);
+                    preview.body = crate::model::FilePreviewBody::Text {
+                        text,
+                        start_line: usize::try_from(start_line).unwrap_or(1).max(1),
+                        truncated,
+                        size: content.size,
+                    };
+                    if let Some(start) = target_line {
+                        effects.push(Effect::ScrollCenterInstant {
+                            list: crate::timeline::file_preview::PREVIEW_SCROLL_KEY,
+                            item: format!("preview-line-{start}"),
+                        });
+                    }
                 }
-            } else if content.mime.starts_with("image/")
-                && let Some(data) = content.data
-            {
-                if let Ok(bytes) = STANDARD.decode(&data) {
-                    preview.body = crate::model::FilePreviewBody::Image { size: content.size };
-                    effects.push(Effect::DecodePreviewImage {
-                        media_type: content.mime,
-                        bytes,
-                    });
-                } else {
-                    preview.body =
-                        crate::model::FilePreviewBody::Error("Couldn’t decode image bytes".into());
+                viz_client::protocol::FileBody::Image { data } => {
+                    if let Ok(bytes) = STANDARD.decode(&data) {
+                        preview.body = crate::model::FilePreviewBody::Image { size: content.size };
+                        effects.push(Effect::DecodePreviewImage {
+                            media_type: content.mime,
+                            bytes,
+                        });
+                    } else {
+                        preview.body = crate::model::FilePreviewBody::Error(
+                            "Couldn’t decode image bytes".into(),
+                        );
+                    }
                 }
-            } else {
-                preview.body = crate::model::FilePreviewBody::Binary {
-                    mime: content.mime,
-                    size: content.size,
-                };
+                viz_client::protocol::FileBody::Binary { .. } => {
+                    preview.body = crate::model::FilePreviewBody::Binary {
+                        mime: content.mime,
+                        size: content.size,
+                    };
+                }
             }
         }
         Err(error) => {

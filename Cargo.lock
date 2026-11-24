@@ -6251,6 +6251,7 @@ dependencies = [
  "url",
  "uuid",
  "viz-config",
+ "viz-fs",
  "viz-protocol",
 ]
 
@@ -6322,13 +6323,21 @@ dependencies = [
 ]
 
 [[package]]
-name = "viz-git"
+name = "viz-fs"
 version = "0.1.0"
 dependencies = [
  "cap-std",
+ "libc",
+ "mime_guess",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "viz-git"
+version = "0.1.0"
+dependencies = [
  "git2",
  "ignore",
- "libc",
  "notify",
  "nucleo-matcher",
  "regex",
@@ -6340,6 +6349,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "viz-fs",
 ]
 
 [[package]]
@@ -6402,6 +6412,7 @@ dependencies = [
  "viz-acp",
  "viz-config",
  "viz-core",
+ "viz-fs",
  "viz-git",
  "viz-github",
  "viz-protocol",

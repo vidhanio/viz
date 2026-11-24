@@ -338,39 +338,90 @@ pub enum FileSearchKind {
     Directory,
 }
 
-/// Read a file for in-app preview (text or image) relative to a thread's
-/// working directory, a project, or an absolute path on the environment.
+/// Root directory confining a workspace file read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileRoot {
+    /// Confine reads to the thread's working directory.
+    Thread {
+        /// Owning thread id.
+        thread: ThreadId,
+    },
+    /// Confine reads to a registered project directory.
+    Project {
+        /// Registered project path.
+        project: String,
+    },
+}
+
+/// Bounded 1-based line window requested from a text file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct LineWindow {
+    /// 1-based starting line number.
+    pub start: u32,
+    /// Maximum number of lines to return.
+    pub count: u32,
+}
+
+/// Read a file confined to a thread or project root for in-app preview.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ReadFile {
-    /// Active thread whose working directory resolves relative paths.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub thread: Option<ThreadId>,
-    /// Project path resolving relative paths when no thread is selected.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub project: Option<String>,
-    /// Absolute or workspace-relative file path.
+    /// Workspace root confining the file read.
+    pub root: FileRoot,
+    /// Relative path within `root` (no `..` or absolute paths).
     pub path: String,
+    /// Optional 1-based line window for text files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<LineWindow>,
 }
 
 /// Preview payload returned by `files.read`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct FileContent {
-    /// Resolved path on the environment.
+    /// Normalized relative path within the requested root.
     pub path: String,
     /// Detected MIME media type.
     pub mime: String,
-    /// UTF-8 text contents when the file is text.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    /// Base64-encoded bytes when the file is an image or supported binary
-    /// media.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data: Option<String>,
-    /// Whether the returned payload was truncated to the preview size cap.
-    #[serde(default)]
-    pub truncated: bool,
     /// Total file size in bytes on disk.
     pub size: u64,
+    /// Typed preview body.
+    pub body: FileBody,
+}
+
+/// Typed content payload returned by `files.read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum FileBody {
+    /// UTF-8 text or source code (possibly windowed).
+    Text {
+        /// Returned UTF-8 text slice.
+        text: String,
+        /// 1-based line number of the first line in `text`.
+        start_line: u32,
+        /// Number of lines in `text`.
+        line_count: u32,
+        /// Total line count when EOF was reached within scan bounds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        total_lines: Option<u32>,
+        /// Whether the returned content was capped by window, byte, or scan
+        /// limits.
+        #[serde(default)]
+        truncated: bool,
+        /// Whether additional lines follow this window.
+        #[serde(default)]
+        has_more: bool,
+    },
+    /// Raster or vector image bytes.
+    Image {
+        /// Base64-encoded image bytes.
+        data: String,
+    },
+    /// Non-text binary file or image exceeding the preview byte limit.
+    Binary {
+        /// Whether an image exceeded the inline preview size ceiling.
+        #[serde(default)]
+        too_large: bool,
+    },
 }
 
 /// Read one stored attachment belonging to a thread (`thread.attachment`).

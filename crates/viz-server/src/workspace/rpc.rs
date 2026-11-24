@@ -1,22 +1,26 @@
 //! Public workspace methods bind deserialized parameters to typed operations.
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use tokio::io::AsyncReadExt as _;
+use viz_fs::{FsError, LineWindowSpec, RelPath, Root, sniff_mime};
 use viz_protocol::{
     AnswerRequest, BranchList, BrowseFolders, CancelClone, ConfigureThread, CreateFolder,
-    CreateProject, DeleteThread, Empty, FileContent, FileList, ForkThread, GitActionRequest,
-    GitDiffRequest, GitHubAuth, GitHubChecks, GitHubCreatePull, GitHubLaunch, GitHubPullPage,
-    GitHubRepositories, GitHubSearch, GitStatusRequest, HarnessList, HarnessOptions,
-    HarnessOptionsResult, ImportSession, InitRepository, LaunchThread, ListBranches, ListEntries,
-    ListHarnessSessions, ListHarnesses, ListProjects, ListThreads, ListWorktrees, MoveThread,
-    ProjectList, ProjectResult, PromoteThread, ReadAttachment, ReadClone, ReadEntryChunk, ReadFile,
-    ReadProject, ReadProjectIcon, ReadThreadState, RemoveProject, RemoveQueuedInput,
-    RemoveWorktree, RestoreCheckpoint, RetitleThread, SearchFiles, SearchHits, SearchThreads,
-    SendInput, SetProjectAccess, SetThreadAccess, StartClone, SteerQueuedInput, StopThread,
-    ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread,
-    WaitThread,
+    CreateProject, DeleteThread, Empty, FileBody, FileContent, FileList, FileRoot, ForkThread,
+    GitActionRequest, GitDiffRequest, GitHubAuth, GitHubChecks, GitHubCreatePull, GitHubLaunch,
+    GitHubPullPage, GitHubRepositories, GitHubSearch, GitStatusRequest, HarnessList,
+    HarnessOptions, HarnessOptionsResult, ImportSession, InitRepository, LaunchThread,
+    ListBranches, ListEntries, ListHarnessSessions, ListHarnesses, ListProjects, ListThreads,
+    ListWorktrees, MoveThread, ProjectList, ProjectResult, PromoteThread, ReadAttachment,
+    ReadClone, ReadEntryChunk, ReadFile, ReadProject, ReadProjectIcon, ReadThreadState,
+    RemoveProject, RemoveQueuedInput, RemoveWorktree, RestoreCheckpoint, RetitleThread,
+    SearchFiles, SearchHits, SearchThreads, SendInput, SetProjectAccess, SetThreadAccess,
+    StartClone, SteerQueuedInput, StopThread, ThreadList, ThreadStateResult, TriageThread,
+    UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
 };
 
 use super::{Workspace, runs, sql::row, store};
@@ -278,106 +282,100 @@ impl Workspace {
     async fn read_file_preview(&self, args: ReadFile) -> Result<FileContent, Error> {
         const TEXT_LIMIT: usize = viz_protocol::limits::PREVIEW_TEXT_BYTES;
         const IMAGE_LIMIT: usize = viz_protocol::limits::PREVIEW_IMAGE_BYTES;
+        const MAX_SCAN_BYTES: usize = 8 * viz_protocol::limits::MIB;
+        const DEFAULT_WINDOW_LINES: u32 = 600;
+        const MAX_WINDOW_LINES: u32 = 2_000;
 
-        let requested = Path::new(&args.path);
-        let resolved = if requested.is_absolute() {
-            requested.to_path_buf()
-        } else {
-            let base = match (args.thread, args.project) {
-                (Some(thread), _) => row(
-                    &mut *self.db.lock().await,
-                    "SELECT cwd FROM threads WHERE id = ?1",
-                    [thread.into()],
-                )
-                .await?
-                .ok_or(Error::NoThread(thread))?
-                .str(0)?,
-                (None, Some(project)) => {
-                    store::preferences(&mut *self.db.lock().await, &project).await?;
-                    project
-                }
-                (None, None) => {
-                    return Err(Error::invalid(
-                        "relative file path requires a thread or project",
-                    ));
-                }
-            };
-            Path::new(&base).join(requested)
+        let rel = RelPath::parse(&args.path).map_err(|error| Error::invalid(error.to_string()))?;
+        let root_dir = match args.root {
+            FileRoot::Thread { thread } => row(
+                &mut *self.db.lock().await,
+                "SELECT cwd FROM threads WHERE id = ?1",
+                [thread.into()],
+            )
+            .await?
+            .ok_or(Error::NoThread(thread))?
+            .str(0)?,
+            FileRoot::Project { project } => {
+                store::preferences(&mut *self.db.lock().await, &project).await?;
+                project
+            }
         };
 
-        let meta = tokio::fs::metadata(&resolved)
-            .await
-            .map_err(|error| Error::invalid(format!("couldn't read file: {error}")))?;
-        if !meta.is_file() {
-            return Err(Error::invalid("path is not a regular file"));
-        }
-        let size = meta.len();
-        let guessed = mime_guess::from_path(&resolved)
-            .first_raw()
-            .unwrap_or("application/octet-stream");
-        let is_image = guessed.starts_with("image/");
-        let limit = if is_image { IMAGE_LIMIT } else { TEXT_LIMIT };
-
-        let file = tokio::fs::File::open(&resolved)
-            .await
-            .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
-        let cap = usize::try_from(size).unwrap_or(limit).min(limit + 1);
-        let mut buf = Vec::with_capacity(cap);
-        file.take(u64::try_from(limit + 1).unwrap_or(u64::MAX))
-            .read_to_end(&mut buf)
-            .await
-            .map_err(|error| Error::invalid(format!("couldn't read file: {error}")))?;
-        let truncated = buf.len() > limit;
-        if truncated {
-            buf.truncate(limit);
-        }
-
-        let path_str = resolved.display().to_string();
-        if is_image {
-            if truncated {
+        let spec = args.window.map_or(
+            LineWindowSpec {
+                start: 1,
+                count: DEFAULT_WINDOW_LINES,
+            },
+            |window| LineWindowSpec {
+                start: window.start.max(1),
+                count: window.count.clamp(1, MAX_WINDOW_LINES),
+            },
+        );
+        let root_path = PathBuf::from(root_dir);
+        tokio::task::spawn_blocking(move || {
+            let root = Root::open(&root_path).map_err(|error| {
+                Error::invalid(format!("couldn't open workspace root: {error}"))
+            })?;
+            let file = root
+                .open_regular(&rel)
+                .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
+            let size = file.len();
+            let path_str = rel.to_string();
+            let guessed = mime_guess::from_path(rel.as_path())
+                .first_raw()
+                .unwrap_or("application/octet-stream");
+            if guessed.starts_with("image/") {
+                let read = file
+                    .read_bounded(IMAGE_LIMIT)
+                    .map_err(|error| Error::invalid(format!("couldn't read image: {error}")))?;
+                let mime = sniff_mime(rel.as_path(), &read.bytes);
+                let body = if read.truncated {
+                    FileBody::Binary { too_large: true }
+                } else {
+                    FileBody::Image {
+                        data: STANDARD.encode(&read.bytes),
+                    }
+                };
                 return Ok(FileContent {
                     path: path_str,
-                    mime: guessed.to_owned(),
-                    text: None,
-                    data: None,
-                    truncated: true,
-                    size,
+                    mime,
+                    size: read.size,
+                    body,
                 });
             }
-            return Ok(FileContent {
-                path: path_str,
-                mime: guessed.to_owned(),
-                text: None,
-                data: Some(STANDARD.encode(&buf)),
-                truncated: false,
-                size,
-            });
-        }
-
-        if let Ok(text) = String::from_utf8(buf) {
-            let mime = if guessed == "application/octet-stream" {
-                "text/plain"
-            } else {
-                guessed
-            };
-            return Ok(FileContent {
-                path: path_str,
-                mime: mime.to_owned(),
-                text: Some(text),
-                data: None,
-                truncated,
-                size,
-            });
-        }
-
-        Ok(FileContent {
-            path: path_str,
-            mime: guessed.to_owned(),
-            text: None,
-            data: None,
-            truncated,
-            size,
+            match file.read_line_window(spec, TEXT_LIMIT, MAX_SCAN_BYTES) {
+                Ok(window) => {
+                    let mime = if guessed == "application/octet-stream" {
+                        "text/plain"
+                    } else {
+                        guessed
+                    };
+                    Ok(FileContent {
+                        path: path_str,
+                        mime: mime.to_owned(),
+                        size: window.size,
+                        body: FileBody::Text {
+                            text: window.text,
+                            start_line: window.start_line,
+                            line_count: window.line_count,
+                            total_lines: window.total_lines,
+                            truncated: window.truncated,
+                            has_more: window.has_more,
+                        },
+                    })
+                }
+                Err(FsError::InvalidUtf8) => Ok(FileContent {
+                    path: path_str,
+                    mime: guessed.to_owned(),
+                    size,
+                    body: FileBody::Binary { too_large: false },
+                }),
+                Err(error) => Err(Error::invalid(format!("couldn't read file: {error}"))),
+            }
         })
+        .await
+        .map_err(|error| Error::unavailable(format!("file preview worker failed: {error}")))?
     }
 }
 

@@ -5,8 +5,8 @@ use rune::AppHandle;
 use viz_client::{
     Client, Result,
     protocol::{
-        EntryData, EntrySource, ForkThread, ReadAttachment, ReadEntryChunk, ReadFile, ThreadId,
-        TranscriptEntry,
+        EntryData, EntrySource, FileRoot, ForkThread, LineWindow, ReadAttachment, ReadEntryChunk,
+        ReadFile, ThreadId, TranscriptEntry,
     },
 };
 
@@ -49,19 +49,15 @@ impl Session<'_> {
     pub(super) fn read_file_preview(
         &self,
         request: u64,
-        thread: Option<ThreadId>,
-        project: Option<String>,
+        root: FileRoot,
         path: String,
+        window: Option<LineWindow>,
     ) {
         let ui: AppHandle<Desktop> = self.ui.clone();
         let client: Client = self.client.clone();
         tokio::spawn(async move {
             let result = client
-                .request(&ReadFile {
-                    thread,
-                    project,
-                    path,
-                })
+                .request(&ReadFile { root, path, window })
                 .await
                 .map_err(|error| error.to_string());
             ui.update(move |s, tx| {

@@ -453,16 +453,17 @@ pub enum ServerEffect {
         /// Stored entry id or live key selector.
         source: EntrySource,
     },
-    /// Read a file on the active environment for the in-app preview modal.
+    /// Read a file confined to a thread or project root for the in-app
+    /// preview modal.
     ReadFile {
         /// Monotonic preview request serial.
         request: u64,
-        /// Active thread for resolving relative paths.
-        thread: Option<ThreadId>,
-        /// Active project for resolving relative paths.
-        project: Option<String>,
-        /// Absolute or relative file path.
+        /// Workspace root confining the read.
+        root: viz_client::protocol::FileRoot,
+        /// Relative file path within `root`.
         path: String,
+        /// Optional 1-based line window for text previews.
+        window: Option<viz_client::protocol::LineWindow>,
     },
     /// Read a stored thread attachment (`thread.attachment`) for preview or
     /// inline image rendering.

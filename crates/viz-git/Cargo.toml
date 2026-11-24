@@ -10,7 +10,6 @@ publish.workspace = true
 workspace = true
 
 [dependencies]
-cap-std.workspace = true
 git2.workspace = true
 ignore.workspace = true
 notify.workspace = true
@@ -32,6 +31,4 @@ tokio = { workspace = true, features = [
 tokio-util = { workspace = true, features = ["rt"] }
 url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
-
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
+viz-fs.workspace = true

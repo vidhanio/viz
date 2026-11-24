@@ -435,11 +435,11 @@ impl Session<'_> {
             }
             ServerEffect::ReadFile {
                 request,
-                thread,
-                project,
+                root,
                 path,
+                window,
             } => {
-                self.read_file_preview(request, thread, project, path);
+                self.read_file_preview(request, root, path, window);
                 Ok(())
             }
             ServerEffect::ReadAttachment {

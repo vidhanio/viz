@@ -8955,41 +8955,102 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ReadFile",
-        "description": "Read a file for in-app preview (text or image) relative to a thread's\nworking directory, a project, or an absolute path on the environment.",
+        "description": "Read a file confined to a thread or project root for in-app preview.",
         "type": "object",
         "properties": {
-          "thread": {
-            "description": "Active thread whose working directory resolves relative paths.",
+          "root": {
+            "description": "Workspace root confining the file read.",
+            "$ref": "#/$defs/FileRoot"
+          },
+          "path": {
+            "description": "Relative path within `root` (no `..` or absolute paths).",
+            "type": "string"
+          },
+          "window": {
+            "description": "Optional 1-based line window for text files.",
             "anyOf": [
               {
-                "$ref": "#/$defs/ThreadId"
+                "$ref": "#/$defs/LineWindow"
               },
               {
                 "type": "null"
               }
             ]
-          },
-          "project": {
-            "description": "Project path resolving relative paths when no thread is selected.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "path": {
-            "description": "Absolute or workspace-relative file path.",
-            "type": "string"
           }
         },
         "required": [
+          "root",
           "path"
         ],
         "$defs": {
+          "FileRoot": {
+            "description": "Root directory confining a workspace file read.",
+            "oneOf": [
+              {
+                "description": "Confine reads to the thread's working directory.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "thread"
+                  },
+                  "thread": {
+                    "description": "Owning thread id.",
+                    "$ref": "#/$defs/ThreadId"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "thread"
+                ]
+              },
+              {
+                "description": "Confine reads to a registered project directory.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "project"
+                  },
+                  "project": {
+                    "description": "Registered project path.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "project"
+                ]
+              }
+            ]
+          },
           "ThreadId": {
             "description": "A thread id.",
             "type": "integer",
             "format": "uint64",
             "minimum": 1
+          },
+          "LineWindow": {
+            "description": "Bounded 1-based line window requested from a text file.",
+            "type": "object",
+            "properties": {
+              "start": {
+                "description": "1-based starting line number.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "count": {
+                "description": "Maximum number of lines to return.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "start",
+              "count"
+            ]
           }
         }
       },
@@ -9000,44 +9061,124 @@
         "type": "object",
         "properties": {
           "path": {
-            "description": "Resolved path on the environment.",
+            "description": "Normalized relative path within the requested root.",
             "type": "string"
           },
           "mime": {
             "description": "Detected MIME media type.",
             "type": "string"
           },
-          "text": {
-            "description": "UTF-8 text contents when the file is text.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "data": {
-            "description": "Base64-encoded bytes when the file is an image or supported binary\nmedia.",
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "truncated": {
-            "description": "Whether the returned payload was truncated to the preview size cap.",
-            "type": "boolean",
-            "default": false
-          },
           "size": {
             "description": "Total file size in bytes on disk.",
             "type": "integer",
             "format": "uint64",
             "minimum": 0
+          },
+          "body": {
+            "description": "Typed preview body.",
+            "$ref": "#/$defs/FileBody"
           }
         },
         "required": [
           "path",
           "mime",
-          "size"
-        ]
+          "size",
+          "body"
+        ],
+        "$defs": {
+          "FileBody": {
+            "description": "Typed content payload returned by `files.read`.",
+            "oneOf": [
+              {
+                "description": "UTF-8 text or source code (possibly windowed).",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "text"
+                  },
+                  "text": {
+                    "description": "Returned UTF-8 text slice.",
+                    "type": "string"
+                  },
+                  "start_line": {
+                    "description": "1-based line number of the first line in `text`.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "line_count": {
+                    "description": "Number of lines in `text`.",
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "total_lines": {
+                    "description": "Total line count when EOF was reached within scan bounds.",
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "uint32",
+                    "minimum": 0
+                  },
+                  "truncated": {
+                    "description": "Whether the returned content was capped by window, byte, or scan\nlimits.",
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "has_more": {
+                    "description": "Whether additional lines follow this window.",
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "kind",
+                  "text",
+                  "start_line",
+                  "line_count"
+                ]
+              },
+              {
+                "description": "Raster or vector image bytes.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "image"
+                  },
+                  "data": {
+                    "description": "Base64-encoded image bytes.",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "kind",
+                  "data"
+                ]
+              },
+              {
+                "description": "Non-text binary file or image exceeding the preview byte limit.",
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "const": "binary"
+                  },
+                  "too_large": {
+                    "description": "Whether an image exceeded the inline preview size ceiling.",
+                    "type": "boolean",
+                    "default": false
+                  }
+                },
+                "required": [
+                  "kind"
+                ]
+              }
+            ]
+          }
+        }
       }
     },
     "thread.attachment": {

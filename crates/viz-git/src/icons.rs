@@ -1,15 +1,9 @@
 //! Project icon discovery and root-confined file reads.
 
-use std::{
-    io::{self, Read},
-    path::{Component, Path},
-};
+use std::{io, path::Path};
 
-use cap_std::{
-    ambient_authority,
-    fs::{Dir, OpenOptions},
-};
 use tokio_util::sync::CancellationToken;
+use viz_fs::{FsError, RelPath, Root};
 
 use crate::{Error, blocking, check};
 
@@ -69,42 +63,29 @@ pub async fn read_icon(
     relative: &Path,
     cancel: &CancellationToken,
 ) -> Result<Option<Vec<u8>>, Error> {
-    if relative.as_os_str().is_empty()
-        || relative
-            .components()
-            .any(|part| !matches!(part, Component::Normal(_)))
-    {
-        return Err(Error::Invalid("relative icon path"));
-    }
-    let (root, relative) = (root.to_owned(), relative.to_owned());
+    let rel = RelPath::from_path(relative).map_err(|_| Error::Invalid("relative icon path"))?;
+    let root = root.to_owned();
     blocking(cancel, move |cancel| {
-        let dir = Dir::open_ambient_dir(root, ambient_authority())?;
-        let mut options = OpenOptions::new();
-        options.read(true);
-        #[cfg(unix)]
-        {
-            use cap_std::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NONBLOCK);
-        }
-        let file = match dir.open_with(relative, &options) {
+        let dir = Root::open(&root).map_err(map_fs_error)?;
+        let file = match dir.open_regular(&rel) {
             Ok(file) => file,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(error) => return Err(error.into()),
+            Err(FsError::Io(error)) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(map_fs_error(error)),
         };
-        let metadata = file.metadata()?;
-        if !metadata.is_file() {
-            return Err(Error::Invalid("regular icon file"));
-        }
-        if metadata.len() > ICON_LIMIT {
-            return Err(Error::Invalid("icon larger than 1 MiB"));
-        }
-        let mut bytes = Vec::new();
-        file.take(ICON_LIMIT + 1).read_to_end(&mut bytes)?;
+        let bytes = file.read_exact_bounded(ICON_LIMIT).map_err(map_fs_error)?;
         check(cancel)?;
-        if bytes.len() as u64 > ICON_LIMIT {
-            return Err(Error::Invalid("icon larger than 1 MiB"));
-        }
         Ok(Some(bytes))
     })
     .await
+}
+
+fn map_fs_error(error: FsError) -> Error {
+    match error {
+        FsError::InvalidPath(_) => Error::Invalid("relative icon path"),
+        FsError::NotRegularFile => Error::Invalid("regular icon file"),
+        FsError::Symlink => Error::Invalid("icon symlink"),
+        FsError::TooLarge { .. } => Error::Invalid("icon larger than 1 MiB"),
+        FsError::InvalidUtf8 => Error::Invalid("icon encoding"),
+        FsError::Io(io) => Error::Io(io),
+    }
 }
