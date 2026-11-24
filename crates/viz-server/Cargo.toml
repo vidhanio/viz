@@ -18,6 +18,7 @@ futures.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
 jsonrpsee-types.workspace = true
 listenfd.workspace = true
+mime_guess.workspace = true
 reqwest = { workspace = true, features = ["json", "rustls-no-provider"] }
 rusqlite.workspace = true
 rustls = { workspace = true, features = ["ring", "std", "tls12"] }

@@ -82,7 +82,7 @@ pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
     }
 
     if !user.attachments.is_empty() {
-        column = column.child(attachment_strip(&user.attachments, t));
+        column = column.child(attachment_strip(s, &user.attachments, t));
     }
 
     if !user.text.is_empty() || !user.context.is_empty() {
@@ -232,7 +232,8 @@ fn context_chips(
     strip
 }
 
-fn attachment_strip(attachments: &[PromptAttachment], t: &Theme) -> El {
+fn attachment_strip(s: &Desktop, attachments: &[PromptAttachment], t: &Theme) -> El {
+    let thread = s.model.selection.selected;
     let mut strip = row()
         .key("message-attachments")
         .gap(S6)
@@ -245,7 +246,29 @@ fn attachment_strip(attachments: &[PromptAttachment], t: &Theme) -> El {
         } else {
             rune_kit::file_icon(&file.name)
         };
-        let card = row()
+        let thumb = thread
+            .filter(|_| is_image)
+            .and_then(|thread_id| s.thread_attachment_image(thread_id, &file.id))
+            .filter(|img| img.is_ready() && img.error().is_none())
+            .map_or_else(
+                || {
+                    row()
+                        .size(32.0, 32.0)
+                        .center()
+                        .radius(RADIUS_SM)
+                        .fill(t.chip_fill)
+                        .a11y_hidden()
+                        .child(icon(glyph, ICON).color(t.muted))
+                },
+                |image| {
+                    el().size(32.0, 32.0)
+                        .radius(RADIUS_SM)
+                        .clip_rounded(RADIUS_SM)
+                        .pixels_fit(image.pixels(), rune::SurfaceFit::Fill)
+                        .a11y_hidden()
+                },
+            );
+        let mut card = row()
             .key(format!("attachment-{idx}"))
             .w(FILE_CARD_WIDTH)
             .py(S8)
@@ -256,15 +279,7 @@ fn attachment_strip(attachments: &[PromptAttachment], t: &Theme) -> El {
             .radius(RADIUS_CARD)
             .fill(t.mine)
             .border(HAIRLINE, t.hairline)
-            .child(
-                row()
-                    .size(32.0, 32.0)
-                    .center()
-                    .radius(RADIUS_SM)
-                    .fill(t.chip_fill)
-                    .a11y_hidden()
-                    .child(icon(glyph, ICON).color(t.muted)),
-            )
+            .child(thumb)
             .child(
                 col()
                     .grow(1.0)
@@ -280,6 +295,28 @@ fn attachment_strip(attachments: &[PromptAttachment], t: &Theme) -> El {
                     )
                     .child(text(&file.mime).font(t.micro).color(t.faint).truncate()),
             );
+        if let Some(thread) = thread {
+            let id = file.id.clone();
+            let name = file.name.clone();
+            let mime = file.mime.clone();
+            card = card
+                .role("button")
+                .label(format!("Preview {}", file.name))
+                .hover(t.hover_wash)
+                .focusable(true)
+                .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(
+                        Msg::Timeline(TimelineMsg::OpenAttachmentPreview {
+                            thread,
+                            id: id.clone(),
+                            name: name.clone(),
+                            mime: mime.clone(),
+                        }),
+                        tx,
+                    );
+                });
+        }
         strip = strip.child(card);
     }
     strip

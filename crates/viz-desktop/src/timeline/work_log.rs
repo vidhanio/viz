@@ -4,10 +4,10 @@
 
 use std::f32::consts::FRAC_PI_2;
 
-use rune::{El, Icon, ScrollFade, ScrollSpec, Tx, col, el, icon, row, text};
-use rune_kit::{ProgressCircle, ScrollBar, ScrollBarStyle};
+use rune::{El, Icon, Tx, col, el, icon, row, text};
+use rune_kit::ProgressCircle;
 
-use super::{inspector, subagents};
+use super::{file_preview, inspector, lane, subagents};
 use crate::{
     app::Desktop,
     model::{
@@ -16,23 +16,16 @@ use crate::{
         subagent_call, work_group_summary,
     },
     motion,
-    theme::{self, HAIRLINE, ICON, ICON_SMALL, RADIUS_SM, S2, S4, S6, S16, S24, Theme},
+    theme::{self, HAIRLINE, ICON, ICON_SMALL, RADIUS_SM, S2, S4, S6, S24, Theme},
     ui,
     update::{Msg, TimelineMsg},
 };
 
-/// Maximum height of a large collapsed-inspector work group before scrolling
-/// (`max-h: 288pt` / `18rem`).
-const GROUP_MAX_HEIGHT: f32 = 288.0;
-/// Expanded scroll ceiling when one or more child inspectors are open inside a
-/// large work group.
-const GROUP_EXPANDED_MAX_HEIGHT: f32 = 620.0;
-/// Entry count threshold before applying the bounded scroll container.
-const BOUNDED_ENTRY_THRESHOLD: usize = 10;
-
-/// Renders the work group summary header followed by all work-log rows of
-/// `turn` (in a bounded scroll viewport when the group is large).
-pub fn work_group(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
+/// Appends the work group summary header followed by every work-log row and
+/// open inspector directly onto the timeline's flat growth stack `list` so
+/// opening the fold links all rows into one smooth glide and toggling a single
+/// tool inspector moves only that inspector without disturbing sibling rows.
+pub fn append_work_group(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut list: El) -> El {
     let summary = work_group_summary(&turn.work);
     let clock = turn.ended_at.and_then(format_clock_hm);
     let mut header = row()
@@ -40,7 +33,8 @@ pub fn work_group(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
         .w_full()
         .min_h(S24)
         .px(S4)
-        .py(S2)
+        .pt(S6)
+        .pb(S4)
         .gap(S6)
         .center_y()
         .child(icon_slot(icon(&ui::WRENCH, ICON).color(t.faint)))
@@ -57,85 +51,69 @@ pub fn work_group(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
         header = header.child(text(clock).font(t.micro).color(t.faint));
     }
 
-    let any_child_open = turn.work.iter().any(|(item, _)| {
-        s.model.timeline.is_open(
-            s.model.selection.selected,
-            &s.model.disclosure.expanded,
-            item.key(),
-            None,
-            false,
-        )
-    });
-
-    let rows_list = motion::fold_container(
-        col()
-            .key(format!("{}-group-rows", turn.key))
-            .w_full()
-            .gap(S2)
-            .children(
-                turn.work
-                    .iter()
-                    .map(|(item, streaming)| entry_row(s, item, *streaming, t)),
-            ),
-    );
-
-    let body = if turn.work.len() > BOUNDED_ENTRY_THRESHOLD {
-        let cap = if any_child_open {
-            GROUP_EXPANDED_MAX_HEIGHT
-        } else {
-            GROUP_MAX_HEIGHT
-        };
-        col()
-            .key(format!("{}-group-scroll", turn.key))
-            .w_full()
-            .max_h(cap)
-            .min_h(0.0)
-            .scroll(ScrollSpec {
-                stick_bottom: false,
-            })
-            .scroll_fade(ScrollFade::strength(S16).linear())
-            .scroll_anchor()
-            .child(rows_list)
-            .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
-    } else {
-        rows_list
-    };
-
-    col()
-        .key(format!("{}-workgroup", turn.key))
-        .w_full()
-        .gap(S2)
-        .child(header)
-        .child(body)
+    list = list.child(motion::fold_row(lane(header)));
+    for &(item, streaming) in &turn.work {
+        list = append_entry_rows(s, item, streaming, true, t, list);
+    }
+    list.child(motion::fold_row(lane(
+        el().key(format!("{}-workgroup-end", turn.key))
+            .h(S4)
+            .a11y_hidden(),
+    )))
 }
 
-/// Renders one `WorkLogRow` (reasoning trace or tool call) plus its collapsible
-/// inspector panel when expanded.
-pub fn entry_row(s: &Desktop, item: &Item, streaming: bool, t: &Theme) -> El {
+/// Appends one `WorkLogRow` header and, when expanded, its inspector directly
+/// onto the timeline's flat growth stack `list`.
+pub fn append_entry_rows(
+    s: &Desktop,
+    item: &Item,
+    streaming: bool,
+    in_fold: bool,
+    t: &Theme,
+    list: El,
+) -> El {
     match item {
         Item::Thinking {
             key,
             text: body,
             ended_at,
             ..
-        } => thinking_row(s, key, body, *ended_at, streaming, t),
+        } => append_thinking_rows(s, key, body, *ended_at, streaming, in_fold, t, list),
         Item::Tool(tool) => match subagent_call(tool) {
             Some(call) if call != SubagentCall::Spawn && tool.status != ToolStatus::Failed => {
-                subagents::subagent_interaction_row(s, tool, call, t)
+                let row_el = lane(
+                    col()
+                        .key(tool.key.clone())
+                        .w_full()
+                        .pb(S2)
+                        .child(subagents::subagent_interaction_row(s, tool, call, t)),
+                );
+                let row_el = if in_fold {
+                    motion::fold_row(row_el)
+                } else {
+                    row_el.arrives_whole()
+                };
+                list.child(row_el)
             }
-            _ => tool_row(s, tool, t),
+            _ => append_tool_rows(s, tool, in_fold, t, list),
         },
-        _ => el().key(item.key()),
+        _ => list,
     }
 }
 
-fn thinking_row(
+#[expect(
+    clippy::too_many_arguments,
+    reason = "renders flat header and conditional fold inspector rows onto the timeline stack"
+)]
+fn append_thinking_rows(
     s: &Desktop,
     key: &str,
     body: &str,
     ended_at: Option<i64>,
     streaming: bool,
+    in_fold: bool,
     t: &Theme,
+    mut list: El,
 ) -> El {
     let trimmed = body.trim();
     let expandable = !trimmed.is_empty();
@@ -147,24 +125,35 @@ fn thinking_row(
             None,
             false,
         );
-    let head = thinking_header(key, trimmed, ended_at, streaming, expandable, open, t);
-
-    let mut stack = motion::fold_container(col().key(key.to_owned()).w_full()).child(head);
+    let head = lane(
+        col()
+            .key(key.to_owned())
+            .w_full()
+            .pb(S2)
+            .child(thinking_header(
+                key, trimmed, ended_at, streaming, expandable, open, t,
+            )),
+    );
+    list = list.child(if in_fold {
+        motion::fold_row(head)
+    } else {
+        head.arrives_whole()
+    });
     if open {
-        stack = stack.child(motion::fold_row(inspector::thought_inspector(
+        list = list.child(motion::fold_row(lane(inspector::thought_inspector(
             key, trimmed, streaming, t,
-        )));
+        ))));
     } else if streaming && expandable {
-        stack = stack.child(
+        list = list.child(lane(
             col()
                 .key(format!("{key}-live-preview"))
                 .w_full()
                 .pl(crate::theme::S28)
                 .pb(S4)
                 .child(inspector::thought_preview(trimmed, t)),
-        );
+        ));
     }
-    stack
+    list
 }
 
 fn thinking_header(
@@ -251,7 +240,7 @@ fn thinking_header(
     head
 }
 
-fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
+fn append_tool_rows(s: &Desktop, tool: &Tool, in_fold: bool, t: &Theme, mut list: El) -> El {
     let m = &s.model;
     let action = ToolAction::of(tool);
     let expandable = inspector::has_inspector(tool);
@@ -263,15 +252,30 @@ fn tool_row(s: &Desktop, tool: &Tool, t: &Theme) -> El {
             None,
             false,
         );
-    let head = tool_header(s, tool, action, expandable, open, t);
-
-    let mut stack = motion::fold_container(col().key(tool.key.clone()).w_full()).child(head);
+    let head = lane(
+        col()
+            .key(tool.key.clone())
+            .w_full()
+            .pb(S2)
+            .child(tool_header(s, tool, action, expandable, open, t)),
+    );
+    list = list.child(if in_fold {
+        motion::fold_row(head)
+    } else {
+        head.arrives_whole()
+    });
     if open {
-        stack = stack.child(motion::fold_row(inspector::tool_inspector(s, tool, t)));
+        list = list.child(motion::fold_row(lane(inspector::tool_inspector(
+            s, tool, t,
+        ))));
     }
-    stack
+    list
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "renders compact tool row header with icon, shimmer, diff stats, status, and click target"
+)]
 fn tool_header(
     s: &Desktop,
     tool: &Tool,
@@ -361,6 +365,26 @@ fn tool_header(
     }
     if expandable {
         head = make_foldable(head, tool.key.clone(), header_key, label, open, t);
+    } else if action.on_file() && !tool.summary.trim().is_empty() {
+        let preview_path = tool.summary.trim().to_owned();
+        let preview_lines = file_preview::extract_tool_line_range(tool.raw_input_pretty.as_deref());
+        head = head
+            .role("button")
+            .label(format!("Preview {label}"))
+            .hover(t.hover_wash)
+            .hover_group()
+            .focusable(true)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::OpenFilePreview {
+                        path: preview_path.clone(),
+                        lines: preview_lines,
+                    }),
+                    tx,
+                );
+            })
+            .child(file_preview::row_preview_cue(t));
     }
     head
 }

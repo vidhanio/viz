@@ -88,6 +88,20 @@ impl Desktop {
                 } => {
                     self.decode_project_icon(&environment, &project, &media_type, bytes);
                 }
+                Effect::DecodePreviewImage { media_type, bytes } => {
+                    self.decode_preview_image(&media_type, bytes);
+                }
+                Effect::ClearPreviewImage => {
+                    self.widgets.preview_image = None;
+                }
+                Effect::DecodeThreadAttachmentImage {
+                    thread,
+                    id,
+                    media_type,
+                    bytes,
+                } => {
+                    self.decode_thread_attachment_image(thread, id, &media_type, bytes);
+                }
                 Effect::Focus {
                     key,
                     select_all,

@@ -2,6 +2,7 @@
 //! links, fork/edit/reply actions, chunk loading, scroll state, and
 //! running tool timers.
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use viz_client::protocol::{
     EntryId, EntrySource, ForkPoint, ForkThread, Forked, SendInput, ThreadId,
 };
@@ -92,8 +93,32 @@ pub enum TimelineMsg {
         /// Text placed on the clipboard.
         text: String,
     },
-    /// Open an external link URL.
+    /// Open a link URL (`file://` and `viz-attachment://` open the in-app
+    /// preview modal; web URLs open externally).
     OpenUrl(String),
+    /// Always open a URL in the OS external handler.
+    OpenExternalUrl(String),
+    /// Open a workspace or absolute file in the in-app file/image preview
+    /// modal, optionally highlighting an inclusive 1-based line range.
+    OpenFilePreview {
+        /// Absolute or workspace-relative file path.
+        path: String,
+        /// Optional inclusive 1-based line range (`start..=end`).
+        lines: Option<(usize, usize)>,
+    },
+    /// Open a stored thread attachment in the preview modal / image lightbox.
+    OpenAttachmentPreview {
+        /// Owning thread id.
+        thread: ThreadId,
+        /// Attachment SHA-256 id.
+        id: String,
+        /// Display filename.
+        name: String,
+        /// MIME media type.
+        mime: String,
+    },
+    /// Close any open file or attachment preview modal.
+    CloseFilePreview,
     /// Dismiss an inline error banner by key.
     DismissError(String),
     /// Retry the most recent user prompt in the active thread.
@@ -280,7 +305,33 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             model.timeline.copied_key = Some(key);
             effects.push(Effect::CopyText(text));
         }
-        TimelineMsg::OpenUrl(url) => effects.push(Effect::OpenUrl(url)),
+        TimelineMsg::OpenUrl(url) => {
+            if let Some((path, lines)) = crate::timeline::file_preview::parse_file_link(&url) {
+                open_file_preview(model, path, lines, Some(url), &mut effects);
+            } else if let Some((thread, id)) =
+                crate::timeline::file_preview::parse_attachment_link(&url)
+            {
+                let (name, mime) = lookup_attachment_meta(model, thread, &id);
+                open_attachment_preview(model, thread, id, name, &mime, &mut effects);
+            } else {
+                effects.push(Effect::OpenUrl(url));
+            }
+        }
+        TimelineMsg::OpenExternalUrl(url) => effects.push(Effect::OpenUrl(url)),
+        TimelineMsg::OpenFilePreview { path, lines } => {
+            let open_url = crate::timeline::file_preview::path_to_file_url(&path);
+            open_file_preview(model, path, lines, open_url, &mut effects);
+        }
+        TimelineMsg::OpenAttachmentPreview {
+            thread,
+            id,
+            name,
+            mime,
+        } => open_attachment_preview(model, thread, id, name, &mime, &mut effects),
+        TimelineMsg::CloseFilePreview => {
+            model.timeline.file_preview = None;
+            effects.push(Effect::ClearPreviewImage);
+        }
         TimelineMsg::DismissError(key) => {
             model.timeline.dismissed_errors.insert(key);
         }
@@ -381,4 +432,143 @@ pub(super) fn apply_entry_chunk_loaded(
             });
         }
     }
+}
+
+fn open_file_preview(
+    model: &mut Model,
+    path: String,
+    lines: Option<(usize, usize)>,
+    open_url: Option<String>,
+    effects: &mut Vec<Effect>,
+) {
+    model.timeline.file_preview_seq = model.timeline.file_preview_seq.wrapping_add(1);
+    let request = model.timeline.file_preview_seq;
+    effects.push(Effect::ClearPreviewImage);
+    if !model.connected() {
+        model.timeline.file_preview = Some(crate::model::FilePreview {
+            request,
+            path,
+            lines,
+            open_url,
+            body: crate::model::FilePreviewBody::Error("Server is offline.".into()),
+        });
+        return;
+    }
+    let thread = model.selection.selected;
+    let project = model.project_path().map(str::to_owned);
+    model.timeline.file_preview = Some(crate::model::FilePreview {
+        request,
+        path: path.clone(),
+        lines,
+        open_url,
+        body: crate::model::FilePreviewBody::Loading,
+    });
+    effects.push(Effect::Server(ServerEffect::ReadFile {
+        request,
+        thread,
+        project,
+        path,
+    }));
+}
+
+fn open_attachment_preview(
+    model: &mut Model,
+    thread: ThreadId,
+    id: String,
+    name: String,
+    mime: &str,
+    effects: &mut Vec<Effect>,
+) {
+    model.timeline.file_preview_seq = model.timeline.file_preview_seq.wrapping_add(1);
+    let request = model.timeline.file_preview_seq;
+    effects.push(Effect::ClearPreviewImage);
+    model.timeline.file_preview = Some(crate::model::FilePreview {
+        request,
+        path: name,
+        lines: None,
+        open_url: None,
+        body: if mime.starts_with("image/") {
+            crate::model::FilePreviewBody::Image { size: 0 }
+        } else {
+            crate::model::FilePreviewBody::Loading
+        },
+    });
+    let key = (thread, id.clone());
+    if let Some(cached) = model.timeline.loaded_attachments.get(&key).cloned() {
+        apply_loaded_attachment_to_preview(model, request, &cached, effects);
+        return;
+    }
+    if !model.connected() {
+        if let Some(preview) = model.timeline.file_preview.as_mut() {
+            preview.body = crate::model::FilePreviewBody::Error("Server is offline.".into());
+        }
+        return;
+    }
+    model.timeline.pending_attachments.insert(key);
+    effects.push(Effect::Server(ServerEffect::ReadAttachment {
+        thread,
+        id,
+        preview_request: Some(request),
+    }));
+}
+
+pub(super) fn apply_loaded_attachment_to_preview(
+    model: &mut Model,
+    request: u64,
+    attachment: &viz_client::protocol::Attachment,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(preview) = model.timeline.file_preview.as_mut() else {
+        return;
+    };
+    if preview.request != request {
+        return;
+    }
+    let Ok(bytes) = STANDARD.decode(&attachment.data) else {
+        preview.body =
+            crate::model::FilePreviewBody::Error("Couldn’t decode attachment bytes".into());
+        return;
+    };
+    let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
+    if !attachment.name.is_empty() {
+        preview.path.clone_from(&attachment.name);
+    }
+    if attachment.mime.starts_with("image/") {
+        preview.body = crate::model::FilePreviewBody::Image { size };
+        effects.push(Effect::DecodePreviewImage {
+            media_type: attachment.mime.clone(),
+            bytes,
+        });
+    } else if let Ok(text) = String::from_utf8(bytes) {
+        preview.body = crate::model::FilePreviewBody::Text {
+            text,
+            truncated: false,
+            size,
+        };
+    } else {
+        preview.body = crate::model::FilePreviewBody::Binary {
+            mime: attachment.mime.clone(),
+            size,
+        };
+    }
+}
+
+fn lookup_attachment_meta(model: &Model, thread: ThreadId, id: &str) -> (String, String) {
+    if let Some(cached) = model
+        .timeline
+        .loaded_attachments
+        .get(&(thread, id.to_owned()))
+    {
+        return (cached.name.clone(), cached.mime.clone());
+    }
+    if let Some(open) = model.cache().open_threads.get(&thread) {
+        for item in &open.transcript.items {
+            if let Item::User(user) = item
+                && let Some(att) = user.attachments.iter().find(|a| a.id == id)
+            {
+                return (att.name.clone(), att.mime.clone());
+            }
+        }
+    }
+    (id.to_owned(), "application/octet-stream".into())
 }

@@ -2,18 +2,21 @@
 
 use std::{path::Path, sync::Arc, time::Duration};
 
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use schemars::JsonSchema;
 use serde::{Deserialize, Deserializer, Serialize};
+use tokio::io::AsyncReadExt as _;
 use viz_core::threads::{Changes, Patch};
 use viz_protocol::{
     BranchList, BrowseFolders, CancelClone, ConfigureThread, CreateFolder, CreateProject,
-    DeleteThread, Empty, FileList, ForkThread, GitHubRepositories, HarnessList, HarnessOptions,
-    HarnessOptionsResult, InitRepository, ListBranches, ListEntries, ListProjects, ListWorktrees,
-    MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone, ReadEntryChunk, ReadProject,
-    ReadProjectIcon, ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree,
-    RetitleThread, RunId, SearchFiles, SearchHits, SearchThreads, SendInput, StartClone,
-    SteerQueuedInput, StopThread, ThreadId, ThreadList, ThreadStateResult, TriageThread,
-    UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
+    DeleteThread, Empty, FileContent, FileList, ForkThread, GitHubRepositories, HarnessList,
+    HarnessOptions, HarnessOptionsResult, InitRepository, ListBranches, ListEntries, ListProjects,
+    ListWorktrees, MoveThread, ProjectList, ProjectResult, PromoteThread, ReadAttachment,
+    ReadClone, ReadEntryChunk, ReadFile, ReadProject, ReadProjectIcon, ReadThreadState,
+    RemoveProject, RemoveQueuedInput, RemoveWorktree, RetitleThread, RunId, SearchFiles,
+    SearchHits, SearchThreads, SendInput, StartClone, SteerQueuedInput, StopThread, ThreadId,
+    ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread,
+    WaitThread,
 };
 
 use super::{Workspace, runs, sql::row, store};
@@ -61,6 +64,15 @@ handlers! {
                 positions: found.positions,
             }).collect();
             Ok(FileList { files })
+        }
+        ReadFile, ReadFile, |workspace, args| {
+            workspace.read_file_preview(args).await
+        }
+        ReadAttachment, ReadAttachment, |workspace, ReadAttachment { thread, id }| {
+            let mut items = workspace.attachments(thread, &[id]).await?;
+            items
+                .pop()
+                .ok_or_else(|| Error::invalid("attachment not found"))
         }
         ListProjects, Empty, |workspace, _| {
             let projects = store::projects(&mut *workspace.db.lock().await).await?;
@@ -261,6 +273,111 @@ impl Workspace {
         drop(db);
         self.changed(Some(thread));
         Ok(())
+    }
+
+    async fn read_file_preview(&self, args: ReadFile) -> Result<FileContent, Error> {
+        const TEXT_LIMIT: usize = 512 * 1024;
+        const IMAGE_LIMIT: usize = 10 * 1024 * 1024;
+
+        let requested = Path::new(&args.path);
+        let resolved = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            let base = match (args.thread, args.project) {
+                (Some(thread), _) => row(
+                    &mut *self.db.lock().await,
+                    "SELECT cwd FROM threads WHERE id = ?1",
+                    [thread.into()],
+                )
+                .await?
+                .ok_or(Error::NoThread(thread))?
+                .str(0)?,
+                (None, Some(project)) => {
+                    store::preferences(&mut *self.db.lock().await, &project).await?;
+                    project
+                }
+                (None, None) => {
+                    return Err(Error::invalid(
+                        "relative file path requires a thread or project",
+                    ));
+                }
+            };
+            Path::new(&base).join(requested)
+        };
+
+        let meta = tokio::fs::metadata(&resolved)
+            .await
+            .map_err(|error| Error::invalid(format!("couldn't read file: {error}")))?;
+        if !meta.is_file() {
+            return Err(Error::invalid("path is not a regular file"));
+        }
+        let size = meta.len();
+        let guessed = mime_guess::from_path(&resolved)
+            .first_raw()
+            .unwrap_or("application/octet-stream");
+        let is_image = guessed.starts_with("image/");
+        let limit = if is_image { IMAGE_LIMIT } else { TEXT_LIMIT };
+
+        let file = tokio::fs::File::open(&resolved)
+            .await
+            .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
+        let cap = usize::try_from(size).unwrap_or(limit).min(limit + 1);
+        let mut buf = Vec::with_capacity(cap);
+        file.take(u64::try_from(limit + 1).unwrap_or(u64::MAX))
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|error| Error::invalid(format!("couldn't read file: {error}")))?;
+        let truncated = buf.len() > limit;
+        if truncated {
+            buf.truncate(limit);
+        }
+
+        let path_str = resolved.display().to_string();
+        if is_image {
+            if truncated {
+                return Ok(FileContent {
+                    path: path_str,
+                    mime: guessed.to_owned(),
+                    text: None,
+                    data: None,
+                    truncated: true,
+                    size,
+                });
+            }
+            return Ok(FileContent {
+                path: path_str,
+                mime: guessed.to_owned(),
+                text: None,
+                data: Some(STANDARD.encode(&buf)),
+                truncated: false,
+                size,
+            });
+        }
+
+        if let Ok(text) = String::from_utf8(buf) {
+            let mime = if guessed == "application/octet-stream" {
+                "text/plain"
+            } else {
+                guessed
+            };
+            return Ok(FileContent {
+                path: path_str,
+                mime: mime.to_owned(),
+                text: Some(text),
+                data: None,
+                truncated,
+                size,
+            });
+        }
+
+        Ok(FileContent {
+            path: path_str,
+            mime: guessed.to_owned(),
+            text: None,
+            data: None,
+            truncated,
+            size,
+        })
     }
 }
 

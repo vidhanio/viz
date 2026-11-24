@@ -8920,6 +8920,150 @@
         }
       }
     },
+    "files.read": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ReadFile",
+        "description": "Read a file for in-app preview (text or image) relative to a thread's\nworking directory, a project, or an absolute path on the environment.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "Active thread whose working directory resolves relative paths.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project": {
+            "description": "Project path resolving relative paths when no thread is selected.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "path": {
+            "description": "Absolute or workspace-relative file path.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "FileContent",
+        "description": "Preview payload returned by `files.read`.",
+        "type": "object",
+        "properties": {
+          "path": {
+            "description": "Resolved path on the environment.",
+            "type": "string"
+          },
+          "mime": {
+            "description": "Detected MIME media type.",
+            "type": "string"
+          },
+          "text": {
+            "description": "UTF-8 text contents when the file is text.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "data": {
+            "description": "Base64-encoded bytes when the file is an image or supported binary media.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "truncated": {
+            "description": "Whether the returned payload was truncated to the preview size cap.",
+            "type": "boolean",
+            "default": false
+          },
+          "size": {
+            "description": "Total file size in bytes on disk.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path",
+          "mime",
+          "size"
+        ]
+      }
+    },
+    "thread.attachment": {
+      "params": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "ReadAttachment",
+        "description": "Read one stored attachment belonging to a thread (`thread.attachment`).",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "Thread owning the attachment.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "id": {
+            "description": "SHA-256 attachment identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "thread",
+          "id"
+        ],
+        "$defs": {
+          "ThreadId": {
+            "description": "A thread id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          }
+        }
+      },
+      "result": {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "title": "Attachment",
+        "description": "A file attached to an input.",
+        "type": "object",
+        "properties": {
+          "name": {
+            "description": "Display name.",
+            "type": "string"
+          },
+          "mime": {
+            "description": "Media type.",
+            "type": "string"
+          },
+          "data": {
+            "description": "Base64 bytes, at most 20 MiB decoded.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "mime",
+          "data"
+        ]
+      }
+    },
     "thread.launch": {
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",

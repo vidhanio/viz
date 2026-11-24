@@ -83,8 +83,8 @@ pub use self::{
         subagent_call, subagent_title,
     },
     timeline::{
-        TimelineState, ToolAction, first_non_empty_line, humanize_tool, plural, relative_path,
-        split_path,
+        FilePreview, FilePreviewBody, TimelineState, ToolAction, first_non_empty_line,
+        humanize_tool, plural, relative_path, split_path,
     },
     tool_parse::is_command,
     transcript::{

@@ -2,9 +2,9 @@
 //! platform tasks into [`super::server::update`].
 
 use viz_client::protocol::{
-    ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileSearchMatch, Forked,
-    GitHubItem, Harness, Lifecycle, LiveDelta, Project, SearchHit, Task, ThreadId, ThreadState,
-    ThreadSummary,
+    Attachment, ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileContent,
+    FileSearchMatch, Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, SearchHit, Task,
+    ThreadId, ThreadState, ThreadSummary,
 };
 
 use crate::{
@@ -254,5 +254,23 @@ pub enum ServerMsg {
         source: EntrySource,
         /// Decoded full payload or error string.
         result: Result<LoadedEntry, String>,
+    },
+    /// `files.read` finished for the file preview modal.
+    FilePreviewLoaded {
+        /// Monotonic preview request serial.
+        request: u64,
+        /// Loaded file content or error string.
+        result: Result<FileContent, String>,
+    },
+    /// `thread.attachment` finished for a stored thread attachment.
+    ThreadAttachmentLoaded {
+        /// Owning thread id.
+        thread: ThreadId,
+        /// Attachment SHA-256 id.
+        id: String,
+        /// Optional preview modal request serial.
+        preview_request: Option<u64>,
+        /// Loaded attachment or error string.
+        result: Result<Attachment, String>,
     },
 }

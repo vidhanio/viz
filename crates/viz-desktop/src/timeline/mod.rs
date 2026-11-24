@@ -10,6 +10,7 @@ mod changed_files;
 mod diff_card;
 mod dividers;
 mod empty;
+pub mod file_preview;
 mod fold;
 mod inspector;
 mod plan_card;
@@ -30,11 +31,18 @@ use crate::{
     model::{Item, TurnView, project_turns},
     motion,
     theme::{
-        EMPTY_TOP, HAIRLINE, ICON_SMALL, RADIUS_PILL, S4, S6, S8, S12, S16, S24, S32, Size, Theme,
+        EMPTY_TOP, HAIRLINE, ICON_SMALL, RADIUS_PILL, READING_INSET, READING_WIDTH, S4, S6, S8,
+        S12, S16, S24, S32, Size, Theme,
     },
     ui,
     update::{Msg, TimelineMsg},
 };
+
+/// Constrains a direct child of the timeline's flat growth stack to the
+/// centered reading lane width.
+pub fn lane(child: El) -> El {
+    child.w_full().max_w(READING_WIDTH)
+}
 
 /// Distance in points from the scroll bottom before showing
 /// [`scroll_to_end_button`].
@@ -50,6 +58,10 @@ pub struct TimelineSlots {
 
 /// The scrolling timeline with a floating jump-to-latest pill and
 /// empty, loading, or offline content when applicable.
+#[expect(
+    clippy::too_many_lines,
+    reason = "builds the single timeline scroll viewport and flat growth stack"
+)]
 pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El>) -> El {
     let m = &s.model;
     let thread = m.transcript();
@@ -62,43 +74,57 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         && crate::model::requests::pending(m).next().is_none();
 
     let body = if m.is_loading() && m.connected() {
-        empty::loading(t)
+        ui::reading(empty::loading(t))
+            .key("timeline-body")
+            .min_h(0.0)
+            .pt(S24)
+            .pb(S32)
     } else if is_empty {
-        empty::empty_state(s, t, layer).pt(EMPTY_TOP)
+        ui::reading(empty::empty_state(s, t, layer).pt(EMPTY_TOP))
+            .key("timeline-body")
+            .min_h(0.0)
+            .pt(S24)
+            .pb(S32)
     } else {
-        let mut list = col().key("items").w_full();
+        let mut list = motion::fold_container(
+            col()
+                .key("timeline-body")
+                .w_full()
+                .px(READING_INSET)
+                .items_center()
+                .min_h(0.0)
+                .pt(S24)
+                .pb(S32),
+        )
+        .child_exit(motion::fade(motion::SETTLE_PAIR));
         if thread.before.is_some() {
-            list = list.child(load_earlier(s, t).pb(S12));
+            list = list.child(lane(load_earlier(s, t).pb(S12)));
         } else if let Some(source) = m
             .selection
             .selected
             .and_then(|id| m.summary(id))
             .and_then(|sum| sum.forked_from)
         {
-            list = list.child(dividers::forked_from_divider(s, source, t));
+            list = list.child(lane(dividers::forked_from_divider(s, source, t)));
         }
         let turns = project_turns(m, thread, m.busy());
         for (index, turn) in turns.iter().enumerate() {
             let is_latest = index + 1 == turns.len();
-            list = list.child(render_turn(s, turn, is_latest, t, layer));
+            list = append_turn(s, turn, is_latest, t, layer, list);
         }
         if turns.is_empty() && m.busy() {
-            list = list.child(bare_working(t));
+            list = list.child(lane(bare_working(t)));
         }
         if let Some(pending) = slots.pending_requests {
-            list = list.child(col().key("pending-requests").w_full().pt(S8).child(pending));
+            list = list.child(lane(
+                col().key("pending-requests").w_full().pt(S8).child(pending),
+            ));
         }
         if let Some(status) = status {
-            list = list.child(status);
+            list = list.child(lane(status));
         }
         list
     };
-
-    let body = ui::reading(body)
-        .key("timeline-body")
-        .min_h(0.0)
-        .pt(S24)
-        .pb(S32);
 
     let page = m.timeline_page_key();
     let switch = motion_switch(m.selection.switch);
@@ -150,18 +176,21 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         .children(jump_pill)
 }
 
-fn render_turn(
+#[expect(
+    clippy::too_many_lines,
+    reason = "appends every flat growth-stack row for one conversation turn"
+)]
+fn append_turn(
     s: &Desktop,
     turn: &TurnView<'_>,
     is_latest: bool,
     t: &Theme,
     layer: &mut Vec<El>,
+    mut list: El,
 ) -> El {
-    let mut section = col().key(turn.key.clone()).w_full().pb(S16).hover_group();
-
     if !turn.users.is_empty() {
         let len = turn.users.len();
-        let mut users = col().key("users").w_full().pb(S4);
+        let mut users = col().key(format!("{}-users", turn.key)).w_full().pb(S4);
         for (i, user) in turn.users.iter().enumerate() {
             let pos = match (len, i) {
                 (1, _) => StackPos::Single,
@@ -175,80 +204,122 @@ fn render_turn(
             }
             users = users.child(row_el);
         }
-        section = section.child(users);
+        list = list.child(lane(users).arrives_whole());
     }
 
     if turn.continued {
-        section = section.child(dividers::continued_divider(
+        list = list.child(lane(dividers::continued_divider(
             &format!("{}-continued", turn.key),
             t,
-        ));
+        )));
     }
 
     if let Some(result) = turn.task_result {
-        section = section.child(task_result::task_result(s, result, t));
+        list = list.child(lane(task_result::task_result(s, result, t)));
     }
 
     for notice in &turn.compactions {
-        section = section.child(dividers::compaction_divider(s, notice, t));
+        list = list.child(lane(dividers::compaction_divider(s, notice, t)));
     }
 
     if turn.live {
-        section = section.child(fold::live_working(s, turn, t));
-    } else if let Some(folded) = fold::completed_fold(s, turn, t) {
-        section = section.child(folded);
+        list = fold::append_live_working(s, turn, t, list);
+    } else if !turn.work.is_empty() {
+        list = fold::append_completed_fold(s, turn, t, list);
     }
 
     for plan in &turn.plans {
-        section = section.child(plan_card::plan_card(s, plan, t, layer));
+        list = list.child(lane(plan_card::plan_card(s, plan, t, layer)));
     }
 
     for media in &turn.media {
-        section = section.child(dividers::media_card(media, t));
+        list = list.child(lane(dividers::media_card(media, t)));
     }
 
     for (key, source) in &turn.omitted {
-        section = section.child(dividers::omitted_divider(s, key, source, t));
+        list = list.child(lane(dividers::omitted_divider(s, key, source, t)));
     }
 
-    for (item, streaming) in &turn.prose {
-        if let Item::Text {
-            key,
-            entry_id,
-            text: source,
-            more,
-            ..
-        } = item
-        {
-            section = section.child(assistant_row::prose(
-                s, key, *entry_id, source, *streaming, *more, t,
-            ));
+    let footer = assistant_row::turn_footer(s, turn, is_latest, t);
+    let has_streaming_prose = turn.prose.iter().any(|(_, streaming)| *streaming);
+    if has_streaming_prose && footer.is_none() {
+        for (item, streaming) in &turn.prose {
+            if let Item::Text {
+                key,
+                entry_id,
+                text: source,
+                more,
+                ..
+            } = item
+            {
+                list = list.child(lane(assistant_row::prose(
+                    s, key, *entry_id, source, *streaming, *more, t,
+                )));
+            }
         }
-    }
-
-    if let Some(files) = changed_files::changed_files_card(s, turn, t) {
-        section = section.child(files);
-    }
-
-    for (key, reason, words) in &turn.statuses {
-        let redundant_cancel =
-            *reason == "cancelled" && (!turn.work.is_empty() || turn.end.is_some());
-        if !redundant_cancel {
-            section = section.child(dividers::status_divider(key, reason, words, t));
+        if let Some(files) = changed_files::changed_files_card(s, turn, t) {
+            list = list.child(lane(files));
         }
-    }
-
-    for (key, kind, message) in &turn.notices {
-        if let Some(banner) = dividers::error_banner(s, key, *kind, message, t) {
-            section = section.child(banner);
+        for (key, reason, words) in &turn.statuses {
+            let redundant_cancel =
+                *reason == "cancelled" && (!turn.work.is_empty() || turn.end.is_some());
+            if !redundant_cancel {
+                list = list.child(lane(dividers::status_divider(key, reason, words, t)));
+            }
         }
+        for (key, kind, message) in &turn.notices {
+            if let Some(banner) = dividers::error_banner(s, key, *kind, message, t) {
+                list = list.child(lane(banner));
+            }
+        }
+        list = list.child(lane(
+            rune::el()
+                .key(format!("{}-pad", turn.key))
+                .h(S16)
+                .a11y_hidden(),
+        ));
+    } else {
+        let mut answer = col()
+            .key(format!("{}-answer", turn.key))
+            .w_full()
+            .pb(S16)
+            .hover_group();
+        for (item, streaming) in &turn.prose {
+            if let Item::Text {
+                key,
+                entry_id,
+                text: source,
+                more,
+                ..
+            } = item
+            {
+                answer = answer.child(assistant_row::prose(
+                    s, key, *entry_id, source, *streaming, *more, t,
+                ));
+            }
+        }
+        if let Some(files) = changed_files::changed_files_card(s, turn, t) {
+            answer = answer.child(files);
+        }
+        for (key, reason, words) in &turn.statuses {
+            let redundant_cancel =
+                *reason == "cancelled" && (!turn.work.is_empty() || turn.end.is_some());
+            if !redundant_cancel {
+                answer = answer.child(dividers::status_divider(key, reason, words, t));
+            }
+        }
+        for (key, kind, message) in &turn.notices {
+            if let Some(banner) = dividers::error_banner(s, key, *kind, message, t) {
+                answer = answer.child(banner);
+            }
+        }
+        if let Some(footer) = footer {
+            answer = answer.child(footer);
+        }
+        list = list.child(lane(answer));
     }
 
-    if let Some(footer) = assistant_row::turn_footer(s, turn, is_latest, t) {
-        section = section.child(footer);
-    }
-
-    section
+    list
 }
 
 fn bare_working(t: &Theme) -> El {

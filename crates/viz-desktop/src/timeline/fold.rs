@@ -5,7 +5,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use rune::{El, Tx, col, el, row, text};
 
-use super::work_log;
+use super::{lane, work_log};
 use crate::{
     app::Desktop,
     model::{
@@ -17,9 +17,9 @@ use crate::{
     update::{Msg, TimelineMsg},
 };
 
-/// Renders the live Working header and real-time active work rows for an
-/// in-progress turn.
-pub fn live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
+/// Appends the live Working header and real-time active work rows directly to
+/// the timeline's flat growth stack `list`.
+pub fn append_live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut list: El) -> El {
     let now = s.model.disclosure.tool_clock;
     let compacting = turn.compacting();
     let elapsed_ms = turn.elapsed_ms(now);
@@ -70,10 +70,14 @@ pub fn live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
         .child(ui::radar(ICON_SMALL, t.accent, t))
         .child(label_el);
 
-    let mut section =
-        motion::fold_container(col().key(format!("{}-working", turn.key)).w_full().pb(S6))
+    list = list.child(lane(
+        col()
+            .key(format!("{}-working", turn.key))
+            .w_full()
+            .pb(S6)
             .child(header_row)
-            .child(ui::rule(t).key("working-rule"));
+            .child(ui::rule(t).key("working-rule")),
+    ));
 
     if !turn.work.is_empty() {
         let mut active_indices = Vec::new();
@@ -90,11 +94,6 @@ pub fn live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
                 settled_indices.push(i);
             }
         }
-        let mut body = col()
-            .key(format!("{}-live-work", turn.key))
-            .w_full()
-            .pt(S6)
-            .gap(S2);
 
         if settled_indices.len() > 3 {
             let fold_key = format!("{}-live-earlier", turn.key);
@@ -107,31 +106,30 @@ pub fn live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> El {
             );
             let settled_slice: Vec<(&Item, bool)> =
                 settled_indices.iter().map(|&i| turn.work[i]).collect();
-            body = body.child(live_earlier_fold(s, &fold_key, &settled_slice, open, t));
+            list = append_live_earlier_fold(s, &fold_key, &settled_slice, open, t, list);
         } else {
             for i in settled_indices {
                 let (item, streaming) = turn.work[i];
-                body = body.child(work_log::entry_row(s, item, streaming, t));
+                list = work_log::append_entry_rows(s, item, streaming, false, t, list);
             }
         }
 
         for i in active_indices {
             let (item, streaming) = turn.work[i];
-            body = body.child(work_log::entry_row(s, item, streaming, t));
+            list = work_log::append_entry_rows(s, item, streaming, false, t, list);
         }
-
-        section = section.child(body);
     }
 
-    section
+    list
 }
 
-fn live_earlier_fold(
+fn append_live_earlier_fold(
     s: &Desktop,
     fold_key: &str,
     settled: &[(&Item, bool)],
     open: bool,
     t: &Theme,
+    mut list: El,
 ) -> El {
     let summary = work_group_summary(settled);
     let header_key = format!("{fold_key}-head");
@@ -181,29 +179,25 @@ fn live_earlier_fold(
                 .a11y_hidden(),
         );
 
-    let mut box_el = motion::fold_container(col().key(fold_key.to_owned()).w_full()).child(trigger);
+    list = list.child(lane(
+        col()
+            .key(fold_key.to_owned())
+            .w_full()
+            .pb(S2)
+            .child(trigger),
+    ));
     if open {
-        box_el = box_el.child(motion::fold_row(
-            col()
-                .key(format!("{fold_key}-body"))
-                .w_full()
-                .gap(S2)
-                .children(
-                    settled
-                        .iter()
-                        .map(|(item, streaming)| work_log::entry_row(s, item, *streaming, t)),
-                ),
-        ));
+        for &(item, streaming) in settled {
+            list = work_log::append_entry_rows(s, item, streaming, true, t, list);
+        }
     }
-    box_el
+    list
 }
 
-/// Renders the hairline-underlined Completed Turn Fold (`"Worked for 5s >"`)
-/// that collapses all intermediate reasoning and tool work once settled.
-pub fn completed_fold(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> Option<El> {
-    if turn.work.is_empty() {
-        return None;
-    }
+/// Appends the hairline-underlined Completed Turn Fold (`"Worked for 5s >"`)
+/// and, when expanded, its flat `fold_glide` work rows directly onto the
+/// timeline's single growth stack `list`.
+pub fn append_completed_fold(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut list: El) -> El {
     let m = &s.model;
     let fold_key = turn.fold_key();
     let legacy_key = turn.legacy_fold_key.as_deref();
@@ -288,22 +282,20 @@ pub fn completed_fold(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> Option<El>
         );
     }
 
-    let mut section = motion::fold_container(col().key(fold_key).w_full().pb(S6))
-        .child(header)
-        .child(ui::rule(t).key("fold-rule"));
+    list = list.child(lane(
+        col()
+            .key(fold_key)
+            .w_full()
+            .pb(S6)
+            .child(header)
+            .child(ui::rule(t).key("fold-rule")),
+    ));
 
     if open {
-        section = section.child(motion::fold_row(
-            col()
-                .key(format!("{}-fold-body", turn.key))
-                .w_full()
-                .pt(S6)
-                .pb(S4)
-                .child(work_log::work_group(s, turn, t)),
-        ));
+        list = work_log::append_work_group(s, turn, t, list);
     }
 
-    Some(section)
+    list
 }
 
 fn fold_label(turn: &TurnView<'_>) -> String {

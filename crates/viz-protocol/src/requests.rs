@@ -277,6 +277,50 @@ pub enum FileSearchKind {
     Directory,
 }
 
+/// Read a file for in-app preview (text or image) relative to a thread's
+/// working directory, a project, or an absolute path on the environment.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReadFile {
+    /// Active thread whose working directory resolves relative paths.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread: Option<ThreadId>,
+    /// Project path resolving relative paths when no thread is selected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    /// Absolute or workspace-relative file path.
+    pub path: String,
+}
+
+/// Preview payload returned by `files.read`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct FileContent {
+    /// Resolved path on the environment.
+    pub path: String,
+    /// Detected MIME media type.
+    pub mime: String,
+    /// UTF-8 text contents when the file is text.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Base64-encoded bytes when the file is an image or supported binary
+    /// media.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<String>,
+    /// Whether the returned payload was truncated to the preview size cap.
+    #[serde(default)]
+    pub truncated: bool,
+    /// Total file size in bytes on disk.
+    pub size: u64,
+}
+
+/// Read one stored attachment belonging to a thread (`thread.attachment`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ReadAttachment {
+    /// Thread owning the attachment.
+    pub thread: ThreadId,
+    /// SHA-256 attachment identifier.
+    pub id: String,
+}
+
 /// `thread.send` params.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct SendInput {

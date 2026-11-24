@@ -28,6 +28,7 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 toml.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter"] }
+url.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 viz-client.workspace = true
 viz-config.workspace = true

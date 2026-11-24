@@ -22,10 +22,11 @@ const REASONING_MAX_H: f32 = 384.0;
 /// Returns whether `tool` has inspectable detail content.
 #[must_use]
 pub fn has_inspector(tool: &Tool) -> bool {
-    !tool.output.is_empty()
+    let action = ToolAction::of(tool);
+    !tool.output.trim().is_empty()
         || !tool.diffs.is_empty()
         || !tool.search_matches.is_empty()
-        || tool.raw_input_pretty.is_some()
+        || (action == ToolAction::Other && tool.raw_input_pretty.is_some())
         || tool.more
         || tool.exit_code.is_some_and(|code| code != 0)
         || tool.exit_signal.is_some()

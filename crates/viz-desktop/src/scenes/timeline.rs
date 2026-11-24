@@ -29,9 +29,46 @@ pub(super) fn populated(s: &mut Desktop) {
 
 /// Expanded `WorkLog` showing summary header, reasoning inspector, inline diff
 /// card, ANSI-coloured command output with exit footer & lazy chunk bar,
-/// structured search matches, and MCP JSON I/O.
+/// structured search matches, clickable no-output file read, and MCP JSON I/O.
 pub(super) fn expanded(s: &mut Desktop) {
     seed_expanded(&mut s.model);
+    s.sync_widgets_from_model();
+}
+
+/// Centered file preview modal showing syntax-highlighted Rust source with a
+/// highlighted `#L8-L13` range badge and gutter accent.
+pub(super) fn file_preview(s: &mut Desktop) {
+    seed_populated(&mut s.model);
+    let sample = r"//! Prompt assembly helpers for ACP harnesses.
+
+use viz_protocol::{Attachment, PromptContext};
+
+/// Builds the user prompt text and typed ACP content blocks.
+pub fn build_prompt(
+    text: &str,
+    attachments: &[Attachment],
+    context: &[PromptContext],
+) -> Vec<ContentBlock> {
+    let mut blocks = Vec::new();
+    let body = append_attachment_refs(text, attachments);
+    blocks.push(ContentBlock::text(body));
+    for attachment in attachments {
+        push_media_block(&mut blocks, attachment);
+    }
+    blocks
+}
+";
+    s.model.timeline.file_preview = Some(crate::model::FilePreview {
+        request: 1,
+        path: "/work/workbench/crates/viz-acp/src/prompt.rs".into(),
+        lines: Some((6, 13)),
+        open_url: Some("file:///work/workbench/crates/viz-acp/src/prompt.rs#L6-L13".into()),
+        body: crate::model::FilePreviewBody::Text {
+            text: sample.into(),
+            truncated: false,
+            size: sample.len() as u64,
+        },
+    });
     s.sync_widgets_from_model();
 }
 
@@ -222,6 +259,10 @@ fn populated_turn_two() -> Vec<EntryData> {
     ]
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "seeds every tool inspector variant in one deterministic timeline fixture"
+)]
 fn seed_expanded(m: &mut Model) {
     seed_workspace(m);
     m.disclosure.expanded.clear();
@@ -290,6 +331,13 @@ fn seed_expanded(m: &mut Model) {
     mcp_tool.started_at = Some(BASE_TS + 8_500);
     mcp_tool.ended_at = Some(BASE_TS + 9_200);
 
+    let mut read_tool = preview_tool("read-1", "Read File", "read", ToolCallStatus::Completed);
+    read_tool.raw_input = Some(json_value(
+        r#"{"path":"/work/workbench/crates/viz-acp/src/prompt.rs","StartLine":6,"EndLine":13}"#,
+    ));
+    read_tool.started_at = Some(BASE_TS + 950);
+    read_tool.ended_at = Some(BASE_TS + 1_000);
+
     let entries = [
         prompt("Fix CRLF preservation and inspect the failing check."),
         timed_text(
@@ -299,6 +347,7 @@ fn seed_expanded(m: &mut Model) {
             BASE_TS,
             BASE_TS + 900,
         ),
+        preview_tool_entry(read_tool),
         preview_tool_entry(search_tool),
         preview_tool_entry(edit_tool),
         preview_tool_entry(cmd_tool),

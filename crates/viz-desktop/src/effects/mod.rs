@@ -89,6 +89,28 @@ pub enum Effect {
         /// Decoded raw image bytes.
         bytes: Vec<u8>,
     },
+    /// Decode fetched file/attachment preview image bytes into the lightbox
+    /// handle.
+    DecodePreviewImage {
+        /// MIME media type.
+        media_type: String,
+        /// Decoded raw image bytes.
+        bytes: Vec<u8>,
+    },
+    /// Clear any active preview image handle.
+    ClearPreviewImage,
+    /// Decode fetched stored thread attachment image bytes for inline Markdown
+    /// rendering.
+    DecodeThreadAttachmentImage {
+        /// Owning thread id.
+        thread: ThreadId,
+        /// Attachment SHA-256 id.
+        id: String,
+        /// MIME media type.
+        media_type: String,
+        /// Decoded raw image bytes.
+        bytes: Vec<u8>,
+    },
     /// Move keyboard focus to element `key`.
     Focus {
         /// Element key to focus.
@@ -427,6 +449,27 @@ pub enum ServerEffect {
         key: String,
         /// Stored entry id or live key selector.
         source: EntrySource,
+    },
+    /// Read a file on the active environment for the in-app preview modal.
+    ReadFile {
+        /// Monotonic preview request serial.
+        request: u64,
+        /// Active thread for resolving relative paths.
+        thread: Option<ThreadId>,
+        /// Active project for resolving relative paths.
+        project: Option<String>,
+        /// Absolute or relative file path.
+        path: String,
+    },
+    /// Read a stored thread attachment (`thread.attachment`) for preview or
+    /// inline image rendering.
+    ReadAttachment {
+        /// Thread owning the attachment.
+        thread: ThreadId,
+        /// SHA-256 attachment id.
+        id: String,
+        /// Optional preview request serial when opened directly in the modal.
+        preview_request: Option<u64>,
     },
     /// Reconnect immediately instead of waiting for the retry timer.
     Reconnect,

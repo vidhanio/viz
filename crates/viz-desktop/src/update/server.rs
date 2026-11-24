@@ -1,7 +1,8 @@
 //! Pure transitions for server responses, push notifications, and optimistic
 //! rollbacks.
 
-use viz_client::protocol::{ConfigOption, Harness};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use viz_client::protocol::{ConfigOption, Harness, ThreadId};
 
 pub use super::server_msg::ServerMsg;
 use super::{
@@ -299,8 +300,137 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             source,
             result,
         } => apply_entry_chunk_loaded(model, thread, &key, &source, result, &mut effects),
+        ServerMsg::FilePreviewLoaded { request, result } => {
+            apply_file_preview_loaded(model, request, result, &mut effects);
+        }
+        ServerMsg::ThreadAttachmentLoaded {
+            thread,
+            id,
+            preview_request,
+            result,
+        } => {
+            apply_thread_attachment_loaded(
+                model,
+                thread,
+                id,
+                preview_request,
+                result,
+                &mut effects,
+            );
+        }
     }
     effects
+}
+
+fn apply_file_preview_loaded(
+    model: &mut Model,
+    request: u64,
+    result: Result<viz_client::protocol::FileContent, String>,
+    effects: &mut Vec<Effect>,
+) {
+    let Some(preview) = model.timeline.file_preview.as_mut() else {
+        return;
+    };
+    if preview.request != request {
+        return;
+    }
+    match result {
+        Ok(content) => {
+            preview.path.clone_from(&content.path);
+            if preview.open_url.is_none() {
+                preview.open_url = crate::timeline::file_preview::path_to_file_url(&content.path);
+            }
+            if let Some(text) = content.text {
+                let target_line = preview.lines.map(|(start, _)| start);
+                preview.body = crate::model::FilePreviewBody::Text {
+                    text,
+                    truncated: content.truncated,
+                    size: content.size,
+                };
+                if let Some(start) = target_line {
+                    effects.push(Effect::ScrollCenterInstant {
+                        list: crate::timeline::file_preview::PREVIEW_SCROLL_KEY,
+                        item: format!("preview-line-{start}"),
+                    });
+                }
+            } else if content.mime.starts_with("image/")
+                && let Some(data) = content.data
+            {
+                if let Ok(bytes) = STANDARD.decode(&data) {
+                    preview.body = crate::model::FilePreviewBody::Image { size: content.size };
+                    effects.push(Effect::DecodePreviewImage {
+                        media_type: content.mime,
+                        bytes,
+                    });
+                } else {
+                    preview.body =
+                        crate::model::FilePreviewBody::Error("Couldn’t decode image bytes".into());
+                }
+            } else {
+                preview.body = crate::model::FilePreviewBody::Binary {
+                    mime: content.mime,
+                    size: content.size,
+                };
+            }
+        }
+        Err(error) => {
+            preview.body = crate::model::FilePreviewBody::Error(error);
+        }
+    }
+}
+
+fn apply_thread_attachment_loaded(
+    model: &mut Model,
+    thread: ThreadId,
+    id: String,
+    preview_request: Option<u64>,
+    result: Result<viz_client::protocol::Attachment, String>,
+    effects: &mut Vec<Effect>,
+) {
+    model
+        .timeline
+        .pending_attachments
+        .remove(&(thread, id.clone()));
+    match result {
+        Ok(attachment) => {
+            if attachment.mime.starts_with("image/")
+                && let Ok(bytes) = STANDARD.decode(&attachment.data)
+            {
+                effects.push(Effect::DecodeThreadAttachmentImage {
+                    thread,
+                    id: id.clone(),
+                    media_type: attachment.mime.clone(),
+                    bytes,
+                });
+            }
+            if let Some(req) = preview_request
+                && model
+                    .timeline
+                    .file_preview
+                    .as_ref()
+                    .is_some_and(|p| p.request == req)
+            {
+                super::timeline::apply_loaded_attachment_to_preview(
+                    model,
+                    req,
+                    &attachment,
+                    effects,
+                );
+            }
+            model
+                .timeline
+                .loaded_attachments
+                .insert((thread, id), attachment);
+        }
+        Err(error) => {
+            if let Some(req) = preview_request
+                && let Some(preview) = model.timeline.file_preview.as_mut()
+                && preview.request == req
+            {
+                preview.body = crate::model::FilePreviewBody::Error(error);
+            }
+        }
+    }
 }
 
 /// Refreshes harness metadata while keeping profiles learned by model-specific

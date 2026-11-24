@@ -74,6 +74,11 @@ pub struct ShellWidgets {
     pub math: rune_kit::math::Client,
     /// Decoded project icon images keyed by `"{env}\0{project_path}"`.
     pub project_icons: HashMap<String, Image>,
+    /// Decoded image currently shown in the file/attachment preview lightbox.
+    pub preview_image: Option<Image>,
+    /// Decoded sent-message attachment images keyed by `(thread,
+    /// attachment_id)`.
+    pub thread_attachment_images: HashMap<(viz_client::protocol::ThreadId, String), Image>,
     /// Decoded images for the active draft, in attachment order.
     pub attachment_images: crate::attachments::DraftImages,
     /// Latest `[offset_y, max_y]` of the active timeline scroll viewport.
@@ -129,6 +134,8 @@ impl Default for ShellWidgets {
             images: None,
             math: rune_kit::math::Client::default(),
             project_icons: HashMap::new(),
+            preview_image: None,
+            thread_attachment_images: HashMap::new(),
             attachment_images: crate::attachments::DraftImages::default(),
             timeline_scroll: rune::Live::new([f32::MAX, 0.0]),
             composer_scroll: rune::Live::new([0.0, 0.0]),
@@ -317,6 +324,54 @@ impl Desktop {
         let image = cache.load_mime(bytes, media_type, 24.0, 2.0);
         let key = format!("{environment}\0{project}");
         self.widgets.project_icons.insert(key, image);
+    }
+
+    /// Returns the decoded image for the open file/attachment preview overlay.
+    #[must_use]
+    pub const fn preview_image(&self) -> Option<&Image> {
+        self.widgets.preview_image.as_ref()
+    }
+
+    /// Decodes fetched image bytes for the open file/attachment preview
+    /// overlay.
+    pub(crate) fn decode_preview_image(&mut self, media_type: &str, bytes: Vec<u8>) {
+        self.widgets.image_zoom.reset();
+        let cache = self
+            .widgets
+            .images
+            .get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
+        let image = cache.load_mime(bytes, media_type, 2048.0, 2.0);
+        self.widgets.preview_image = Some(image);
+    }
+
+    /// Returns the decoded image for a stored thread attachment, if fetched.
+    #[must_use]
+    pub fn thread_attachment_image(
+        &self,
+        thread: viz_client::protocol::ThreadId,
+        id: &str,
+    ) -> Option<&Image> {
+        self.widgets
+            .thread_attachment_images
+            .get(&(thread, id.to_owned()))
+    }
+
+    /// Decodes fetched bytes for a stored thread attachment image.
+    pub(crate) fn decode_thread_attachment_image(
+        &mut self,
+        thread: viz_client::protocol::ThreadId,
+        id: String,
+        media_type: &str,
+        bytes: Vec<u8>,
+    ) {
+        let cache = self
+            .widgets
+            .images
+            .get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
+        let image = cache.load_mime(bytes, media_type, 1024.0, 2.0);
+        self.widgets
+            .thread_attachment_images
+            .insert((thread, id), image);
     }
 
     pub(crate) fn prefs_path(&self) -> Option<&Path> {

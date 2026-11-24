@@ -128,6 +128,27 @@ fn search_hit_row(s: &Desktop, index: usize, hit: &SearchMatch, t: &Theme) -> El
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.clone())), tx);
             });
+    } else if !hit.target.trim().is_empty() {
+        let path = hit.target.clone();
+        let lines = hit
+            .line
+            .and_then(|n| usize::try_from(n).ok())
+            .map(|n| (n, n));
+        r = r
+            .role("button")
+            .label(format!("Preview {}", hit.target))
+            .hover(t.hover_wash)
+            .focusable(true)
+            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
+            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                s.dispatch(
+                    Msg::Timeline(TimelineMsg::OpenFilePreview {
+                        path: path.clone(),
+                        lines,
+                    }),
+                    tx,
+                );
+            });
     }
     r
 }

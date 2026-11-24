@@ -429,6 +429,23 @@ impl Session<'_> {
                 self.read_entry_chunk(thread, key, source);
                 Ok(())
             }
+            ServerEffect::ReadFile {
+                request,
+                thread,
+                project,
+                path,
+            } => {
+                self.read_file_preview(request, thread, project, path);
+                Ok(())
+            }
+            ServerEffect::ReadAttachment {
+                thread,
+                id,
+                preview_request,
+            } => {
+                self.read_thread_attachment(thread, id, preview_request);
+                Ok(())
+            }
             ServerEffect::Reconnect | ServerEffect::Git { .. } | ServerEffect::Configure { .. } => {
                 Ok(())
             }

@@ -118,6 +118,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     sidebar::overlays(s, t, &mut overlays);
     palette::mount(s, t, &mut overlays);
     composer::attachments::lightbox(s, reduced, t, &mut overlays);
+    timeline::file_preview::modal(s, reduced, t, &mut overlays);
     let slots = ShellSlots {
         sidebar,
         toolbar,

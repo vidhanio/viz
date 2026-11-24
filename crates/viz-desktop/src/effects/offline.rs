@@ -115,6 +115,30 @@ pub(super) fn handle(
                 },
             );
         }
+        ServerEffect::ReadFile { request, .. } => {
+            dispatch_ui(
+                ui,
+                ServerMsg::FilePreviewLoaded {
+                    request,
+                    result: Err("Server disconnected".into()),
+                },
+            );
+        }
+        ServerEffect::ReadAttachment {
+            thread,
+            id,
+            preview_request,
+        } => {
+            dispatch_ui(
+                ui,
+                ServerMsg::ThreadAttachmentLoaded {
+                    thread,
+                    id,
+                    preview_request,
+                    result: Err("Server disconnected".into()),
+                },
+            );
+        }
         ServerEffect::Update { op_id, .. }
         | ServerEffect::Project {
             op_id: Some(op_id), ..

@@ -4,7 +4,10 @@
 use rune::AppHandle;
 use viz_client::{
     Client, Result,
-    protocol::{EntryData, EntrySource, ForkThread, ReadEntryChunk, ThreadId, TranscriptEntry},
+    protocol::{
+        EntryData, EntrySource, ForkThread, ReadAttachment, ReadEntryChunk, ReadFile, ThreadId,
+        TranscriptEntry,
+    },
 };
 
 use super::server::Session;
@@ -35,6 +38,63 @@ impl Session<'_> {
                         thread,
                         key,
                         source,
+                        result,
+                    }),
+                    tx,
+                );
+            });
+        });
+    }
+
+    pub(super) fn read_file_preview(
+        &self,
+        request: u64,
+        thread: Option<ThreadId>,
+        project: Option<String>,
+        path: String,
+    ) {
+        let ui: AppHandle<Desktop> = self.ui.clone();
+        let client: Client = self.client.clone();
+        tokio::spawn(async move {
+            let result = client
+                .request(&ReadFile {
+                    thread,
+                    project,
+                    path,
+                })
+                .await
+                .map_err(|error| error.to_string());
+            ui.update(move |s, tx| {
+                s.dispatch(
+                    Msg::Server(ServerMsg::FilePreviewLoaded { request, result }),
+                    tx,
+                );
+            });
+        });
+    }
+
+    pub(super) fn read_thread_attachment(
+        &self,
+        thread: ThreadId,
+        id: String,
+        preview_request: Option<u64>,
+    ) {
+        let ui: AppHandle<Desktop> = self.ui.clone();
+        let client: Client = self.client.clone();
+        tokio::spawn(async move {
+            let result = client
+                .request(&ReadAttachment {
+                    thread,
+                    id: id.clone(),
+                })
+                .await
+                .map_err(|error| error.to_string());
+            ui.update(move |s, tx| {
+                s.dispatch(
+                    Msg::Server(ServerMsg::ThreadAttachmentLoaded {
+                        thread,
+                        id,
+                        preview_request,
                         result,
                     }),
                     tx,

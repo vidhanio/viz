@@ -4,9 +4,44 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use viz_client::protocol::ThreadId;
+use viz_client::protocol::{Attachment, ThreadId};
 
 use super::{Model, Tool, is_command};
+
+/// Active file or attachment preview overlay state.
+#[derive(Debug, Clone)]
+pub struct FilePreview {
+    /// Monotonic request serial used to ignore stale responses.
+    pub request: u64,
+    /// Display path or attachment filename.
+    pub path: String,
+    /// Optional 1-based inclusive line range (`start..=end`) highlighted and
+    /// scrolled into view.
+    pub lines: Option<(usize, usize)>,
+    /// Optional external `file://` URL offered for opening in the OS handler.
+    pub open_url: Option<String>,
+    /// Loaded content or pending/error status.
+    pub body: FilePreviewBody,
+}
+
+/// Content state of [`FilePreview`].
+#[derive(Debug, Clone)]
+pub enum FilePreviewBody {
+    /// Waiting for `files.read` or `thread.attachment`.
+    Loading,
+    /// UTF-8 text or source code.
+    Text {
+        text: String,
+        truncated: bool,
+        size: u64,
+    },
+    /// Raster or vector image decoded into `ShellWidgets::preview_image`.
+    Image { size: u64 },
+    /// Non-text binary file preview summary.
+    Binary { mime: String, size: u64 },
+    /// Error reading or decoding the file.
+    Error(String),
+}
 
 /// Client-side timeline state persisted in session memory across thread
 /// switches.
@@ -36,6 +71,14 @@ pub struct TimelineState {
     pub dismissed_errors: HashSet<String>,
     /// File selected in the diff inspector.
     pub selected_diff_file: Option<String>,
+    /// Open file or attachment preview overlay, if any.
+    pub file_preview: Option<FilePreview>,
+    /// Monotonic serial for [`Self::file_preview`] requests.
+    pub file_preview_seq: u64,
+    /// Stored thread attachments fetched lazily for inline Markdown previews.
+    pub loaded_attachments: HashMap<(ThreadId, String), Attachment>,
+    /// In-flight `(thread, attachment_id)` fetches to avoid duplicate RPCs.
+    pub pending_attachments: HashSet<(ThreadId, String)>,
 }
 
 impl TimelineState {
