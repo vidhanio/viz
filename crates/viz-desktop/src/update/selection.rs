@@ -355,7 +355,6 @@ pub(super) fn clear_selection(model: &mut Model, effects: &mut Vec<Effect>) {
 }
 
 pub(super) fn reset_active_view(model: &mut Model) {
-    model.disclosure.expanded.clear();
     model.timeline.reset_viewport();
     model.composer.completion.reset();
     model.composer.open_picker = None;

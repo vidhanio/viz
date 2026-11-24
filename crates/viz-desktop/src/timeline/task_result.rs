@@ -20,14 +20,7 @@ pub fn task_result(s: &Desktop, result: &TaskResult, t: &Theme) -> El {
     let m = &s.model;
     let fold_key = format!("{}-detail", result.key);
     let has_detail = !result.detail.is_empty();
-    let open = has_detail
-        && m.timeline.is_open(
-            m.selection.selected,
-            &m.disclosure.expanded,
-            &fold_key,
-            Some(&result.key),
-            false,
-        );
+    let open = has_detail && m.timeline.is_open(m.selection.selected, &fold_key, false);
     let heading = task_result_heading(s, result, fold_key, has_detail, open, t);
 
     let mut card = col()
@@ -120,7 +113,6 @@ fn task_result_heading(
         );
 
     if has_detail {
-        let legacy = result.key.clone();
         heading = heading
             .role("button")
             .expanded(open)
@@ -132,7 +124,6 @@ fn task_result_heading(
                 s.dispatch(
                     Msg::Timeline(TimelineMsg::ToggleFold {
                         key: fold_key.clone(),
-                        legacy_key: Some(legacy.clone()),
                         default_open: false,
                         anchor: Some(header_key.clone()),
                     }),

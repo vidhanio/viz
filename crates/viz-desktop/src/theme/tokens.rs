@@ -1,4 +1,4 @@
-//! Spacing, radii, sizing, and layout geometry tokens from `tokens.md`.
+//! Spacing, radii, sizing, and layout geometry tokens.
 //!
 //! Views read these through `ui` components; bare layout constants in feature
 //! views are bugs.
@@ -47,8 +47,6 @@ pub const DOT: f32 = 6.0;
 pub const RADIUS_XS: f32 = S4;
 /// Menu/list items, badges, inline code, and small chips (6pt).
 pub const RADIUS_SM: f32 = S6;
-/// Alias for [`RADIUS_SM`] used by legacy call sites.
-pub const RADIUS_INNER: f32 = RADIUS_SM;
 /// Standard buttons, inputs, triggers, code blocks, and small popovers (8pt).
 pub const RADIUS_CONTROL: f32 = S8;
 /// Thread cards, hover cards, and toasts (12pt).
@@ -113,8 +111,7 @@ pub const EMPTY_TOP: f32 = S32 * 4.0;
 /// Maximum text measure for centered empty states.
 pub const EMPTY_WIDTH: f32 = 360.0;
 
-/// Control size ladder from `tokens.md` §2 (`16`, `20`, `24`, `28`, `32`,
-/// `36`).
+/// Control size ladder (`16`, `20`, `24`, `28`, `32`, `36`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Size {
     /// 16pt icon-only hit target (`icon-tiny`).

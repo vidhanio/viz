@@ -23,7 +23,7 @@ const SETTLED_MAX_HEIGHT: f32 = 120.0;
 /// Primary scrollable shelves: Drafts, Pinned, Working, Active, Snoozed.
 #[expect(
     clippy::too_many_lines,
-    reason = "single top-to-bottom triage shelf pipeline matching sidebar.md §3 ordering"
+    reason = "single top-to-bottom triage shelf pipeline matching sidebar shelf ordering"
 )]
 pub(super) fn primary_shelves(
     s: &Desktop,

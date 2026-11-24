@@ -47,8 +47,8 @@ pub(super) fn seed_workspace(m: &mut Model) {
     open.state = Some(thread_state());
     open.transcript = transcript(&[]);
     open.loading = false;
-    toggle(m, "acp-1-write-1-activity");
-    toggle(m, "acp-1-write-1");
+    open_fold(m, "turn-e1-0-fold");
+    open_fold(m, "acp-1-write-1");
 }
 
 /// Switches selection in a preview model, mirroring `Desktop::show` semantics.
@@ -64,7 +64,7 @@ pub(super) fn select_preview(m: &mut Model, thread: ThreadId) {
         m.selection.new_thread = None;
         m.selection.selected = Some(thread);
         m.composer.draft_focused = false;
-        m.disclosure.expanded.clear();
+        m.timeline.clear_folds(Some(thread));
         m.composer.completion.reset();
         m.composer.open_picker = None;
         let open = m.cache_mut().open_thread_mut(thread);
@@ -75,10 +75,9 @@ pub(super) fn select_preview(m: &mut Model, thread: ThreadId) {
     }
 }
 
-pub(super) fn toggle(m: &mut Model, key: &str) {
-    if !m.disclosure.expanded.remove(key) {
-        m.disclosure.expanded.insert(key.to_owned());
-    }
+pub(super) fn open_fold(m: &mut Model, key: &str) {
+    m.timeline
+        .set_fold(m.selection.selected, key.to_owned(), true);
 }
 
 pub(super) fn seed_activity(m: &mut Model) {
@@ -106,8 +105,9 @@ pub(super) fn seed_activity(m: &mut Model) {
         ],
         None,
     );
-    toggle(m, "acp-1-search-1-activity");
-    toggle(m, "acp-1-run-1");
+    m.timeline.clear_folds(Some(THREAD));
+    open_fold(m, "turn-e1-0-fold");
+    open_fold(m, "acp-1-run-1");
 }
 
 pub(super) fn seed_worklog(m: &mut Model) {
@@ -194,8 +194,14 @@ pub(super) fn seed_worklog(m: &mut Model) {
         ],
         None,
     );
-    for key in ["1:0-activity", "acp-1-edit-1", "acp-1-test-1", "e10"] {
-        toggle(m, key);
+    m.timeline.clear_folds(Some(THREAD));
+    for key in [
+        "turn-e1-0-fold",
+        "acp-1-edit-1",
+        "acp-1-test-1",
+        "e10-detail",
+    ] {
+        open_fold(m, key);
     }
 }
 
@@ -294,7 +300,8 @@ pub(super) fn seed_thread_details_subagents(m: &mut Model) {
 
 pub(super) fn seed_agents(m: &mut Model) {
     seed_subagents(m);
-    toggle(m, "acp-1-spawn-1-activity");
+    m.timeline.clear_folds(Some(THREAD));
+    open_fold(m, "turn-e1-0-fold");
 }
 
 pub(super) fn seed_subagent(m: &mut Model) {

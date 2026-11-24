@@ -8,7 +8,7 @@ use rune_kit::{
 
 use super::palette::legible;
 
-/// Complete 17-slot typography scale matching `tokens.md`.
+/// Complete 17-slot typography scale.
 pub(super) struct Typography {
     pub(super) hero: TextStyle,
     pub(super) hero_narrow: TextStyle,

@@ -97,13 +97,10 @@ pub fn append_live_working(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut list
 
         if settled_indices.len() > 3 {
             let fold_key = format!("{}-live-earlier", turn.key);
-            let open = s.model.timeline.is_open(
-                s.model.selection.selected,
-                &s.model.disclosure.expanded,
-                &fold_key,
-                None,
-                false,
-            );
+            let open = s
+                .model
+                .timeline
+                .is_open(s.model.selection.selected, &fold_key, false);
             let settled_slice: Vec<(&Item, bool)> =
                 settled_indices.iter().map(|&i| turn.work[i]).collect();
             list = append_live_earlier_fold(s, &fold_key, &settled_slice, open, t, list);
@@ -155,7 +152,6 @@ fn append_live_earlier_fold(
             s.dispatch(
                 Msg::Timeline(TimelineMsg::ToggleFold {
                     key: toggle_key.clone(),
-                    legacy_key: None,
                     default_open: false,
                     anchor: Some(anchor.clone()),
                 }),
@@ -200,15 +196,10 @@ fn append_live_earlier_fold(
 pub fn append_completed_fold(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut list: El) -> El {
     let m = &s.model;
     let fold_key = turn.fold_key();
-    let legacy_key = turn.legacy_fold_key.as_deref();
     let default_open = turn.interrupted;
-    let open = m.timeline.is_open(
-        m.selection.selected,
-        &m.disclosure.expanded,
-        &fold_key,
-        legacy_key,
-        default_open,
-    );
+    let open = m
+        .timeline
+        .is_open(m.selection.selected, &fold_key, default_open);
 
     let label = fold_label(turn);
     let failures = turn
@@ -220,7 +211,6 @@ pub fn append_completed_fold(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut li
 
     let header_key = format!("{fold_key}-header");
     let toggle_key = fold_key.clone();
-    let toggle_legacy = turn.legacy_fold_key.clone();
     let anchor = header_key.clone();
 
     let mut header = row()
@@ -242,7 +232,6 @@ pub fn append_completed_fold(s: &Desktop, turn: &TurnView<'_>, t: &Theme, mut li
             s.dispatch(
                 Msg::Timeline(TimelineMsg::ToggleFold {
                     key: toggle_key.clone(),
-                    legacy_key: toggle_legacy.clone(),
                     default_open,
                     anchor: Some(anchor.clone()),
                 }),

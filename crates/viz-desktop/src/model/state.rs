@@ -2,7 +2,7 @@
 //!
 //! Zero Rune types, channels, or I/O handles live here.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 
 use viz_client::protocol::{
     AccessMode, Environment, Harness, OptionValue, Project, ThreadId, ThreadSummary, WorktreeTarget,
@@ -184,7 +184,7 @@ pub struct PanelsState {
     pub sidebar: PaneLayout,
     /// Whether the header thread-details popover is currently open.
     pub details_open: bool,
-    /// Trailing docked diff inspector slot (populated in Phase 1 Track G).
+    /// Trailing docked diff inspector slot.
     pub diff: PaneLayout,
     /// Last drawn window width in points, used for responsive layout choices.
     pub window_width: f32,
@@ -348,11 +348,9 @@ impl SidebarState {
     }
 }
 
-/// Disclosure toggles, tool timeout ticker, and window focus tracking.
+/// Tool timeout ticker and window focus tracking.
 #[derive(Debug, Clone)]
 pub struct DisclosureState {
-    /// Expanded timeline rows and tucked decks, by stable key.
-    pub expanded: HashSet<String>,
     /// Wall-clock timestamp in Unix ms for running tool timeout rings.
     pub tool_clock: i64,
     /// Whether the desktop window currently has OS focus.
@@ -362,7 +360,6 @@ pub struct DisclosureState {
 impl Default for DisclosureState {
     fn default() -> Self {
         Self {
-            expanded: HashSet::new(),
             tool_clock: 0,
             focused: true,
         }

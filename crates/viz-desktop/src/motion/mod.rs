@@ -28,7 +28,7 @@ mod widgets;
 
 #[expect(
     unused_imports,
-    reason = "motion tokens and transitions form the shared Phase 1 motion API"
+    reason = "motion tokens and transitions form the shared desktop motion API"
 )]
 pub use self::{
     fx::FxCompositor,

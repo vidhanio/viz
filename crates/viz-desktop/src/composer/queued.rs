@@ -1,5 +1,5 @@
 //! Right-aligned dashed queued-messages stack rendered directly above the
-//! composer dock while inputs wait for their turn (`composer.md` §6).
+//! composer dock while inputs wait for their turn.
 
 use rune::{Color, El, col, el, row, text};
 use rune_kit::IconButtonVariant;

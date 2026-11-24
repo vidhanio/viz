@@ -1,5 +1,5 @@
 //! Inline unified diff preview cards for file-modifying tool inspectors, with
-//! word-level change highlights and Track G `"Open diff"` seam.
+//! word-level change highlights and `"Open diff"` actions.
 
 use rune::{El, ScrollSpec, Span, Tx, col, icon, rich, row, text};
 use rune_kit::{

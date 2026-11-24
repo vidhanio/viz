@@ -1,4 +1,4 @@
-//! Centered new-thread Home / Draft Hero screen (`home.md`):
+//! Centered new-thread Home / Draft Hero screen:
 //!
 //! - **State A (No project)**: `"What should we work on?"` + quiet `"No
 //!   project"` trigger opening a flat `288px` searchable Project Picker
@@ -343,7 +343,7 @@ fn state_b_stacked_heading(
         .child(trigger)
 }
 
-/// State C: Zero projects configured on first launch (`home.md` §2).
+/// State C: Zero projects configured on first launch.
 fn zero_projects_hero(t: &Theme) -> El {
     let add = rune_kit::Button::new("Add project")
         .variant(ButtonVariant::Submit)

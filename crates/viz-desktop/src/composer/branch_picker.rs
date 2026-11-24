@@ -1,5 +1,5 @@
 //! Searchable branch / base-ref combobox for the Home bottom Context Strip,
-//! reusing Track G's cached project checkouts.
+//! reusing cached project checkouts.
 
 use rune::{El, Key, KeyEvent, Tx, icon, text};
 use rune_kit::{Placement, scrim};

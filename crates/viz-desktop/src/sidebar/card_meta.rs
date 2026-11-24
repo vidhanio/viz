@@ -9,7 +9,7 @@ use crate::{
 };
 
 /// Crisp `2px` `accent` horizontal drop insertion bar with a `4px` left end
-/// cap (`sidebar.md` §4 & §7).
+/// cap.
 pub(super) fn drop_indicator(key: impl Into<String>, t: &Theme) -> El {
     row()
         .key(key)

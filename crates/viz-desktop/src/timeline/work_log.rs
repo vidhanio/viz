@@ -118,13 +118,9 @@ fn append_thinking_rows(
     let trimmed = body.trim();
     let expandable = !trimmed.is_empty();
     let open = expandable
-        && s.model.timeline.is_open(
-            s.model.selection.selected,
-            &s.model.disclosure.expanded,
-            key,
-            None,
-            false,
-        );
+        && s.model
+            .timeline
+            .is_open(s.model.selection.selected, key, false);
     let head = lane(
         col()
             .key(key.to_owned())
@@ -244,14 +240,7 @@ fn append_tool_rows(s: &Desktop, tool: &Tool, in_fold: bool, t: &Theme, mut list
     let m = &s.model;
     let action = ToolAction::of(tool);
     let expandable = inspector::has_inspector(tool);
-    let open = expandable
-        && m.timeline.is_open(
-            m.selection.selected,
-            &m.disclosure.expanded,
-            &tool.key,
-            None,
-            false,
-        );
+    let open = expandable && m.timeline.is_open(m.selection.selected, &tool.key, false);
     let head = lane(
         col()
             .key(tool.key.clone())
@@ -408,7 +397,6 @@ fn make_foldable(
             s.dispatch(
                 Msg::Timeline(TimelineMsg::ToggleFold {
                     key: toggle_key.clone(),
-                    legacy_key: None,
                     default_open: false,
                     anchor: Some(anchor.clone()),
                 }),
@@ -424,7 +412,7 @@ fn make_foldable(
         )
 }
 
-/// Fixed `24×24pt` centered leading icon slot matching `timeline.md` §4B.
+/// Fixed `24×24pt` centered leading icon slot for work-log rows.
 pub fn icon_slot(glyph: El) -> El {
     el().size(S24, S24).center().a11y_hidden().child(glyph)
 }

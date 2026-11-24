@@ -21,7 +21,7 @@ use rune_kit::Loader;
 
 #[expect(
     unused_imports,
-    reason = "complete ui component API is exported for Phase 1 feature tracks and gallery"
+    reason = "complete ui component API is exported for feature views and gallery"
 )]
 pub use self::{
     badge::{Tone, diff_stat, diff_stat_rolling, dot, tooltip_text, with_tooltip},

@@ -28,13 +28,9 @@ pub fn compaction_divider(s: &Desktop, notice: &CompactionNotice, t: &Theme) -> 
     let fold_key = format!("{}-summary", notice.key);
     let has_summary = !notice.summary.trim().is_empty();
     let open = has_summary
-        && s.model.timeline.is_open(
-            s.model.selection.selected,
-            &s.model.disclosure.expanded,
-            &fold_key,
-            None,
-            false,
-        );
+        && s.model
+            .timeline
+            .is_open(s.model.selection.selected, &fold_key, false);
     let failed = notice.status == CompactionStatus::Failed;
     let rule_color = if failed {
         t.danger.alpha(0.30)
@@ -193,7 +189,6 @@ fn compaction_pill(
                 s.dispatch(
                     Msg::Timeline(TimelineMsg::ToggleFold {
                         key: fold_key.clone(),
-                        legacy_key: None,
                         default_open: false,
                         anchor: None,
                     }),

@@ -24,7 +24,7 @@ const MAX_SEARCH_MATCHES: usize = 60;
 #[must_use]
 #[expect(
     clippy::too_many_lines,
-    reason = "projects every rich Track A ToolCall field in one cohesive pass"
+    reason = "projects every ToolCall field into the timeline view model in one cohesive pass"
 )]
 pub(super) fn parse_tool(turn: Option<&str>, record: &ToolCall) -> Tool {
     let name = match record.name.as_deref() {

@@ -1,5 +1,5 @@
-//! Headless preview scenes verifying Track L's rich timeline turns, expanded
-//! work logs, and live working state across dark and light base16 themes.
+//! Headless preview scenes verifying rich timeline turns, expanded work logs,
+//! and live working state across dark and light base16 themes.
 
 use serde_json::Value;
 use viz_client::protocol::{
@@ -78,7 +78,7 @@ pub fn build_prompt(
 /// bubble width, and clickable `file://` pills inside assistant prose.
 pub(super) fn user_markdown(s: &mut Desktop) {
     seed_workspace(&mut s.model);
-    s.model.disclosure.expanded.clear();
+    s.model.timeline.clear_folds(Some(THREAD));
     s.model.disclosure.tool_clock = BASE_TS + 30_000;
 
     let sample_svg =
@@ -190,7 +190,7 @@ pub(super) fn status_line(s: &mut Desktop) {
 
 fn seed_populated(m: &mut Model) {
     seed_workspace(m);
-    m.disclosure.expanded.clear();
+    m.timeline.clear_folds(Some(THREAD));
     m.disclosure.tool_clock = BASE_TS + 60_000;
     if let Some(thread) = m.cache_mut().summary_mut(THREAD) {
         thread.model = Some("Claude Opus 4.7".into());
@@ -345,7 +345,7 @@ fn populated_turn_two() -> Vec<EntryData> {
 )]
 fn seed_expanded(m: &mut Model) {
     seed_workspace(m);
-    m.disclosure.expanded.clear();
+    m.timeline.clear_folds(Some(THREAD));
     m.disclosure.tool_clock = BASE_TS + 30_000;
 
     let ansi_out = "\x1b[1mrunning 4 checks\x1b[0m\n\
@@ -457,7 +457,7 @@ fn seed_expanded(m: &mut Model) {
 
 fn seed_working(m: &mut Model) {
     seed_workspace(m);
-    m.disclosure.expanded.clear();
+    m.timeline.clear_folds(Some(THREAD));
     let now = now_ms();
     let start = now - 14_000;
     m.disclosure.tool_clock = now;

@@ -279,7 +279,7 @@ fn infer_skill_origin(name: &str, description: &str) -> SkillOrigin {
     }
 }
 
-/// Scores a slash command or skill against `query` following `composer.md` §4:
+/// Scores a slash command or skill against `query`:
 /// exact (`0`) < prefix (`2`) < word-boundary (`4`) < substring (`6`) <
 /// description match (`20`) < fuzzy (`100`).
 #[must_use]

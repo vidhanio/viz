@@ -1,4 +1,4 @@
-//! Preview scenes for Phase 1 Track H: centered Home hero states, Project
+//! Preview scenes for centered Home hero states, Project
 //! Picker, Home context strip, inline `Mark::Pill` chips, two-row attachment
 //! strip, tucked `@`/`/`/`$`/`#` completion drawers, and active-run Steer/Queue
 //! CTA + dashed queued deck.

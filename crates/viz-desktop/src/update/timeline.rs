@@ -23,8 +23,6 @@ pub enum TimelineMsg {
     ToggleFold {
         /// Primary stable disclosure key.
         key: String,
-        /// Optional legacy `-activity` key checked for scene compatibility.
-        legacy_key: Option<String>,
         /// Default expanded state when no override is stored.
         default_open: bool,
         /// Optional header element key kept stationary under the pointer.
@@ -68,11 +66,9 @@ pub enum TimelineMsg {
     ForkThrough(EntryId),
     /// Quote an assistant response excerpt into the composer draft.
     ReplyTo(String),
-    /// Hook for restoring a Git checkpoint prior to a user prompt (wired by
-    /// Track G).
+    /// Restore a Git checkpoint prior to a user prompt.
     RestoreCheckpoint(EntryId),
-    /// Open the docked Diff panel, optionally focused on `path` (seam for Track
-    /// G).
+    /// Open the docked Diff panel, optionally focused on `path`.
     OpenDiff {
         /// Optional relative file path to reveal in the Diff panel.
         path: Option<String>,
@@ -138,18 +134,11 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         TimelineMsg::CancelTask(id) => effects.push(Effect::Server(ServerEffect::CancelTask(id))),
         TimelineMsg::ToggleFold {
             key,
-            legacy_key,
             default_open,
             anchor,
         } => {
             let thread = model.selection.selected;
-            let current = model.timeline.is_open(
-                thread,
-                &model.disclosure.expanded,
-                &key,
-                legacy_key.as_deref(),
-                default_open,
-            );
+            let current = model.timeline.is_open(thread, &key, default_open);
             model.timeline.set_fold(thread, key, !current);
             if let Some(anchor) = anchor {
                 effects.push(Effect::KeepOnScreen(anchor));

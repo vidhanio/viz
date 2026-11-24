@@ -8,8 +8,7 @@ use crate::{
     app::Desktop,
     motion::{self, Switch},
     theme::{
-        HAIRLINE, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_INNER, S4, S6, S8, S12, Size,
-        Theme,
+        HAIRLINE, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_SM, S4, S6, S8, S12, Size, Theme,
     },
     ui,
 };
@@ -78,7 +77,7 @@ fn provider_rail(selected: usize, t: &Theme) -> El {
                 .px(S6)
                 .gap(S6)
                 .center_y()
-                .radius(RADIUS_INNER)
+                .radius(RADIUS_SM)
                 .fill(if active {
                     t.selected
                 } else {

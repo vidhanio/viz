@@ -29,7 +29,7 @@ pub(super) fn cards(s: &mut Desktop) {
 
 fn seed_cards(m: &mut Model) {
     seed_workspace(m);
-    m.disclosure.expanded.clear();
+    m.timeline.clear_folds(Some(THREAD));
     m.disclosure.tool_clock = BASE_TS + 50_000;
 
     let mut threads = list();

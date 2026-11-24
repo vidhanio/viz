@@ -1,6 +1,6 @@
 //! Turn-level `ChangedFilesTree` card with compacted folders
 //! (`rune-kit::FileTree`), file icons, per-file `+N -M` diff stats,
-//! expand/collapse-all, and Track G `"Open diff"` seam.
+//! expand/collapse-all, and `"Open diff"` actions.
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -39,15 +39,9 @@ pub fn changed_files_card(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> Option
     collect_folder_keys(&tree, None, &prefix, &mut folder_keys);
 
     let m = &s.model;
-    let all_open = folder_keys.iter().all(|key| {
-        m.timeline.is_open(
-            m.selection.selected,
-            &m.disclosure.expanded,
-            key,
-            None,
-            true,
-        )
-    });
+    let all_open = folder_keys
+        .iter()
+        .all(|key| m.timeline.is_open(m.selection.selected, key, true));
     let header = changed_files_header(turn, folder_keys, all_open, t);
     let mut rows = Vec::new();
     render_branch(s, &tree, None, 0, &prefix, &mut rows, t);
@@ -185,13 +179,7 @@ fn render_branch(
         };
         if node.dir {
             let fold_key = format!("{prefix}-dir-{}", node.path);
-            let open = m.timeline.is_open(
-                m.selection.selected,
-                &m.disclosure.expanded,
-                &fold_key,
-                None,
-                true,
-            );
+            let open = m.timeline.is_open(m.selection.selected, &fold_key, true);
             out.push(folder_row(node, fold_key, open, indent, t));
             if open {
                 render_branch(s, tree, Some(id), depth + 1, prefix, out, t);
@@ -233,7 +221,6 @@ fn folder_row(
             s.dispatch(
                 Msg::Timeline(TimelineMsg::ToggleFold {
                     key: fold_key.clone(),
-                    legacy_key: None,
                     default_open: true,
                     anchor: Some(anchor.clone()),
                 }),

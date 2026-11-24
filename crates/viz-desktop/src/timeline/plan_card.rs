@@ -194,13 +194,9 @@ fn markdown_body(s: &Desktop, key: &str, source: &str, t: &Theme) -> El {
     let collapsible = should_collapse_plan(source);
     let fold_key = format!("{key}-expanded");
     let expanded = !collapsible
-        || s.model.timeline.is_open(
-            s.model.selection.selected,
-            &s.model.disclosure.expanded,
-            &fold_key,
-            None,
-            false,
-        );
+        || s.model
+            .timeline
+            .is_open(s.model.selection.selected, &fold_key, false);
     let cwd = s.model.thread_state().map(|st| st.cwd.as_str());
     let md = super::markdown::with_file_pills(
         Markdown::new(source.to_owned())
@@ -249,7 +245,6 @@ fn markdown_body(s: &Desktop, key: &str, source: &str, t: &Theme) -> El {
                 s.dispatch(
                     Msg::Timeline(TimelineMsg::ToggleFold {
                         key: toggle_key.clone(),
-                        legacy_key: None,
                         default_open: false,
                         anchor: None,
                     }),

@@ -49,9 +49,6 @@ pub struct TurnView<'a> {
     pub started_at: Option<i64>,
     /// Latest known timestamp in Unix ms for completed duration & clock labels.
     pub ended_at: Option<i64>,
-    /// Legacy first-activity key (`"{first}-activity"`) for fixture fold
-    /// compatibility.
-    pub legacy_fold_key: Option<String>,
 }
 
 impl TurnView<'_> {
@@ -192,12 +189,6 @@ pub fn project_turns<'a>(
                 .statuses
                 .iter()
                 .any(|(_, reason, _)| *reason == "cancelled");
-        if turn.legacy_fold_key.is_none() {
-            turn.legacy_fold_key = turn
-                .work
-                .first()
-                .map(|(item, _)| format!("{}-activity", item.key()));
-        }
     }
 
     if let Some(last) = turns.last_mut() {
@@ -234,7 +225,6 @@ fn new_turn(key: String, user: Option<&User>) -> TurnView<'_> {
         interrupted: false,
         started_at: None,
         ended_at: None,
-        legacy_fold_key: None,
     }
 }
 

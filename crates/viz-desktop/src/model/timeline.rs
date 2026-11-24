@@ -92,24 +92,10 @@ impl TimelineState {
     }
 
     /// Resolves whether a collapsible timeline element `key` is currently open,
-    /// honoring per-thread overrides, legacy `disclosure.expanded` fixture
-    /// keys, and `default_open`.
+    /// honoring per-thread overrides and `default_open`.
     #[must_use]
-    pub fn is_open(
-        &self,
-        thread: Option<ThreadId>,
-        disclosure: &HashSet<String>,
-        key: &str,
-        legacy_key: Option<&str>,
-        default_open: bool,
-    ) -> bool {
-        if let Some(explicit) = self.fold_override(thread, key) {
-            return explicit;
-        }
-        if disclosure.contains(key) || legacy_key.is_some_and(|k| disclosure.contains(k)) {
-            return !default_open;
-        }
-        default_open
+    pub fn is_open(&self, thread: Option<ThreadId>, key: &str, default_open: bool) -> bool {
+        self.fold_override(thread, key).unwrap_or(default_open)
     }
 
     /// Sets an explicit open/closed state for `key` on `thread`.
@@ -124,6 +110,16 @@ impl TimelineState {
             None => {
                 self.draft_folds.insert(key, open);
             }
+        }
+    }
+
+    /// Clears recorded fold overrides for `thread`.
+    pub fn clear_folds(&mut self, thread: Option<ThreadId>) {
+        match thread {
+            Some(id) => {
+                self.folds_by_thread.remove(&id);
+            }
+            None => self.draft_folds.clear(),
         }
     }
 

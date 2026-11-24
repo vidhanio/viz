@@ -78,9 +78,7 @@ pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
     let thread = m.selection.selected;
     let fold_key = format!("{}-full", user.key);
     let collapsible = should_collapse(&user.text);
-    let expanded = !collapsible
-        || m.timeline
-            .is_open(thread, &m.disclosure.expanded, &fold_key, None, false);
+    let expanded = !collapsible || m.timeline.is_open(thread, &fold_key, false);
 
     let labels = attachment_ref_labels(user.attachments.iter().map(|a| a.mime.as_str()));
     let unreferenced_attachments: Vec<&PromptAttachment> = user
@@ -224,7 +222,6 @@ fn bubble(
                         s.dispatch(
                             Msg::Timeline(TimelineMsg::ToggleFold {
                                 key: toggle_key.clone(),
-                                legacy_key: None,
                                 default_open: false,
                                 anchor: Some(anchor_key.clone()),
                             }),

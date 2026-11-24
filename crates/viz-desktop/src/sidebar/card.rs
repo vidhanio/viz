@@ -18,7 +18,7 @@ use crate::{
 };
 
 /// Pointer rest delay before opening the right-anchored thread hover preview
-/// card (`sidebar.md` §5, `motion.md` `OV-03`).
+/// card.
 const HOVER_CARD_DELAY: Duration = Duration::from_millis(450);
 
 /// Renders one flat triage row.

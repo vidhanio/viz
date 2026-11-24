@@ -1,6 +1,5 @@
 //! Home screen bottom Context Strip: environment selector, Git worktree mode
-//! selector (reusing Track G checkouts), branch / base-ref selector, and right
-//! Access Mode trigger (`home.md` §4).
+//! selector, branch / base-ref selector, and right Access Mode trigger.
 
 use std::path::Path;
 
@@ -24,7 +23,7 @@ const MODE_POPOVER_WIDTH: f32 = 256.0;
 const COMPACT_STRIP_WIDTH: f32 = 460.0;
 
 /// Single-line metadata strip rendered directly underneath the composer card on
-/// the Home / draft screen (`home.md` §4).
+/// the Home / draft screen.
 pub fn home_strip(s: &Desktop, compact_width: f32, t: &Theme, layer: &mut Vec<El>) -> El {
     let m = &s.model;
     let compact = compact_width < COMPACT_STRIP_WIDTH;

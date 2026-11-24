@@ -8,7 +8,7 @@ use crate::{
     app::Desktop,
     motion,
     theme::{
-        HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_INNER, S2, S4, S6, S8, S12,
+        HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_SM, S2, S4, S6, S8, S12,
         S16, Size, Theme,
     },
     ui,
@@ -147,7 +147,7 @@ fn tucked_files_drawer(t: &Theme) -> El {
                 .py(S4)
                 .gap(S6)
                 .center_y()
-                .radius(RADIUS_INNER)
+                .radius(RADIUS_SM)
                 .transition(motion::row_enter(motion::TRAVEL_MICRO))
                 .enter_delay(motion::stagger_delay(i, DRAWER_FILES.len()))
                 .child(icon(&ui::FILE, ICON_SMALL).color(t.faint).a11y_hidden())
@@ -170,7 +170,7 @@ fn tucked_files_drawer(t: &Theme) -> El {
             .py(S2)
             .gap(S4)
             .center_y()
-            .radius(RADIUS_INNER)
+            .radius(RADIUS_SM)
             .fill(t.chip_fill)
             .transition(motion::chip_enter())
             .child(icon(&ui::PAPERCLIP, 10.0).color(t.muted).a11y_hidden())
@@ -292,7 +292,7 @@ fn diff_line(line: &str, added: bool, t: &Theme) -> El {
         .w_full()
         .px(S6)
         .py(S2)
-        .radius(RADIUS_INNER)
+        .radius(RADIUS_SM)
         .fill(if added { t.added } else { t.removed })
         .child(
             text(line)

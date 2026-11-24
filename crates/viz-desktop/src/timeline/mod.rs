@@ -53,7 +53,7 @@ const FAR_FROM_BOTTOM_PX: f32 = 120.0;
 #[derive(Default)]
 pub struct TimelineSlots {
     /// Interactive approval or question card rendered directly beneath the
-    /// active turn (wired by Phase 1 Track X).
+    /// active turn.
     pub pending_requests: Option<El>,
 }
 
