@@ -30,11 +30,26 @@ const MODAL_MAX_W: f32 = 880.0;
 /// Maximum height of the code preview modal sheet (points).
 const MODAL_MAX_H: f32 = 720.0;
 
-/// Parses a `file://` URL into `(path, Option<(start_line, end_line)>)`,
-/// decoding percent-escapes and `#L10` / `#L10-L25` / `:10` / `:10-25`
-/// fragments.
+/// Parses a `file://` or workspace-relative `viz-file://` URL into
+/// `(path, Option<(start_line, end_line)>)`, decoding percent-escapes and
+/// `#L10` / `#L10-L25` / `:10` / `:10-25` fragments.
 #[must_use]
 pub fn parse_file_link(raw: &str) -> Option<(String, Option<(usize, usize)>)> {
+    if let Some(rest) = raw.strip_prefix("viz-file://") {
+        let (path_part, frag) = rest
+            .split_once('#')
+            .map_or((rest, None), |(p, f)| (p, Some(f)));
+        let mut lines = frag.and_then(parse_line_fragment);
+        let mut path = percent_decode(path_part);
+        if lines.is_none()
+            && let Some((stripped, suffix_lines)) = split_colon_lines(&path)
+        {
+            let len = stripped.len();
+            path.truncate(len);
+            lines = Some(suffix_lines);
+        }
+        return (!path.is_empty()).then_some((path, lines));
+    }
     if !raw.starts_with("file://") {
         return None;
     }
@@ -52,6 +67,34 @@ pub fn parse_file_link(raw: &str) -> Option<(String, Option<(usize, usize)>)> {
         lines = Some(suffix_lines);
     }
     (!path.is_empty()).then_some((path, lines))
+}
+
+fn percent_decode(input: &str) -> String {
+    let bytes = input.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(hi), Some(lo)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2]))
+        {
+            out.push((hi << 4) | lo);
+            i += 3;
+            continue;
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8(out).unwrap_or_else(|_| input.to_owned())
+}
+
+const fn hex_val(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 /// Parses a `viz-attachment://<thread>/<id>` URL into `(ThreadId, id)`.

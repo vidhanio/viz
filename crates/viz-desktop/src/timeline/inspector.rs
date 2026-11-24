@@ -126,9 +126,7 @@ fn activity_markdown(
         .scroll_wide(interactive)
         .copy_source(interactive);
     if interactive {
-        markdown = markdown.on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
-            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
-        });
+        markdown = super::markdown::with_file_pills(markdown, None, t);
     }
     markdown.build(&t.k).w_full()
 }

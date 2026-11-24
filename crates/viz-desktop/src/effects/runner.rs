@@ -284,6 +284,29 @@ impl Desktop {
                 }
                 self.sync_draft_text();
             }
+            EditSync::InsertAtDraftCaret(snippet) => {
+                let draft = &mut self.widgets.draft;
+                let start = draft.anchor.min(draft.focus).min(draft.text.len());
+                let end = draft.anchor.max(draft.focus).min(draft.text.len());
+                let need_leading_space = draft.text[..start]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|ch| !ch.is_whitespace());
+                let need_trailing_space = draft.text[end..]
+                    .chars()
+                    .next()
+                    .is_none_or(|ch| !ch.is_whitespace());
+                let mut insertion = String::with_capacity(snippet.len() + 2);
+                if need_leading_space {
+                    insertion.push(' ');
+                }
+                insertion.push_str(&snippet);
+                if need_trailing_space {
+                    insertion.push(' ');
+                }
+                draft.insert(&insertion);
+                self.sync_draft_text();
+            }
             EditSync::InsertDraftPill {
                 start,
                 end,

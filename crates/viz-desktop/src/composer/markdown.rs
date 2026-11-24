@@ -53,6 +53,7 @@ pub fn decorate(edit: &TextEdit, t: &Theme) -> Decorations {
     };
 
     let mut code_ranges: Vec<Range<usize>> = Vec::new();
+    let caret = edit.focus;
     let parser = Parser::new_with_broken_link_callback(src, opts, Some(&mut broken));
 
     for (event, range) in parser.into_offset_iter() {
@@ -96,10 +97,10 @@ pub fn decorate(edit: &TextEdit, t: &Theme) -> Decorations {
                 style_inline_code(text, range, t, &mut out);
             }
             Event::Start(Tag::Link { dest_url, .. }) => {
-                style_link(text, range, &dest_url, t, &mut out);
+                style_link(text, range, &dest_url, caret, t, &mut out);
             }
             Event::Start(Tag::Image { .. }) => {
-                style_image(text, range, t, &mut out);
+                style_image(text, range, caret, t, &mut out);
             }
             Event::Start(Tag::CodeBlock(kind)) => {
                 code_ranges.push(range.clone());
@@ -355,22 +356,41 @@ fn style_inline_code(text: &str, range: Range<usize>, t: &Theme, out: &mut Decor
     }
 }
 
-fn style_link(text: &str, range: Range<usize>, dest_url: &str, t: &Theme, out: &mut Decorations) {
+fn style_link(
+    text: &str,
+    range: Range<usize>,
+    dest_url: &str,
+    caret: usize,
+    t: &Theme,
+    out: &mut Decorations,
+) {
     let slice = &text[range.clone()];
-    let is_file_or_ref = dest_url.starts_with("file://") || dest_url.starts_with("viz-ref://");
+    let is_file = dest_url.starts_with("file://");
+    let is_ref = dest_url.starts_with("viz-ref://");
+    let editing = caret >= range.start && caret <= range.end;
+    let syntax_ink = if editing { t.muted } else { t.faint };
     if slice.starts_with('[')
         && let Some(close_bracket) = find_closing_bracket(slice)
     {
         let label_start = range.start + 1;
         let label_end = range.start + close_bracket;
-        if is_file_or_ref {
+        if is_file || is_ref {
+            let pill_bg = if is_file {
+                t.info.alpha(if editing { 0.18 } else { 0.12 })
+            } else {
+                t.accent.alpha(if editing { 0.18 } else { 0.12 })
+            };
             out.spans
-                .push(Span::new(range.start, range.end).bg(t.chip_fill, 2.0));
+                .push(Span::new(range.start, range.end).bg(pill_bg, 3.0));
         }
         out.spans
-            .push(Span::new(range.start, label_start).color(t.faint));
+            .push(Span::new(range.start, label_start).color(syntax_ink));
         if label_start < label_end {
-            let span = if is_file_or_ref {
+            let span = if is_file {
+                Span::new(label_start, label_end)
+                    .weight(500.0)
+                    .color(t.info)
+            } else if is_ref {
                 Span::new(label_start, label_end)
                     .weight(500.0)
                     .color(t.accent_text)
@@ -382,21 +402,29 @@ fn style_link(text: &str, range: Range<usize>, dest_url: &str, t: &Theme, out: &
             out.spans.push(span);
         }
         out.spans
-            .push(Span::new(label_end, range.end).color(t.faint));
+            .push(Span::new(label_end, range.end).color(syntax_ink));
         return;
     }
     out.spans.push(
         Span::new(range.start, range.end)
-            .color(t.accent_text)
+            .color(if is_file { t.info } else { t.accent_text })
             .underline(t.accent_text.alpha(0.55)),
     );
 }
 
-fn style_image(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations) {
+fn style_image(text: &str, range: Range<usize>, caret: usize, t: &Theme, out: &mut Decorations) {
     let slice = &text[range.clone()];
-    let chip_bg = t.accent.alpha(if t.k.dark { 0.14 } else { 0.10 });
+    let editing = caret >= range.start && caret <= range.end;
+    let syntax_ink = if editing { t.muted } else { t.faint };
+    let chip_bg = t.accent.alpha(if editing {
+        0.20
+    } else if t.k.dark {
+        0.14
+    } else {
+        0.10
+    });
     out.spans
-        .push(Span::new(range.start, range.end).bg(chip_bg, 2.0));
+        .push(Span::new(range.start, range.end).bg(chip_bg, 3.0));
     if slice.starts_with("![")
         && let Some(close_bracket) = find_closing_bracket(&slice[1..])
     {
@@ -404,7 +432,7 @@ fn style_image(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations
         let alt_start = range.start + 2;
         let alt_end = range.start + close_pos;
         out.spans
-            .push(Span::new(range.start, alt_start).color(t.faint));
+            .push(Span::new(range.start, alt_start).color(syntax_ink));
         if alt_start < alt_end {
             out.spans.push(
                 Span::new(alt_start, alt_end)
@@ -413,7 +441,7 @@ fn style_image(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations
             );
         }
         out.spans
-            .push(Span::new(alt_end, range.end).mono().color(t.faint));
+            .push(Span::new(alt_end, range.end).mono().color(syntax_ink));
     } else {
         out.spans
             .push(Span::new(range.start, range.end).color(t.accent_text));

@@ -2,8 +2,8 @@
 //! send recovery, attachment ingestion, and optimistic rollback.
 
 use viz_client::protocol::{
-    Entry, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, ThreadId, ThreadState,
-    ThreadStatus, ThreadSummary,
+    Entry, EntryData, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, ThreadId, ThreadState,
+    ThreadStatus, ThreadSummary, attachment_inline_md, attachment_ref_labels,
 };
 
 use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
@@ -131,8 +131,14 @@ pub(super) fn apply_thread_view(
         open.transcript.append(entries.iter());
     }
     if !entries.is_empty() {
-        open.entries.push_back(entries);
+        queue_entry_image_attachments(model, thread, &entries, effects);
+        model
+            .cache_mut()
+            .open_thread_mut(thread)
+            .entries
+            .push_back(entries);
     }
+    let open = model.cache_mut().open_thread_mut(thread);
     let live = open.state.as_ref().and_then(|state| state.live.as_ref());
     open.transcript.sync_acp(live);
     if model.selection.selected == Some(thread) {
@@ -164,6 +170,8 @@ pub(super) fn apply_earlier_loaded(
         if let Some(first_key) = first_key {
             effects.push(Effect::KeepOnScreen(first_key));
         }
+        queue_entry_image_attachments(model, thread, &page.entries, effects);
+        let open = model.cache_mut().open_thread_mut(thread);
         open.entries.push_front(page.entries);
         open.transcript = Transcript::from_entries(open.entries.iter().flatten(), page.before);
         let live = open.state.as_ref().and_then(|state| state.live.as_ref());
@@ -353,7 +361,7 @@ pub(super) fn apply_attachments_loaded(
     let mut errors = loaded.errors;
     if !loaded.attachments.is_empty() {
         let env = model.active_env_key().to_owned();
-        let existing = match target {
+        let (is_active, draft) = match target {
             AttachmentTarget::Draft(id) => {
                 if model
                     .selection
@@ -363,23 +371,24 @@ pub(super) fn apply_attachments_loaded(
                 {
                     return;
                 }
-                &mut model.composer.draft.attachments
+                (true, &mut model.composer.draft)
             }
             AttachmentTarget::Thread(id) if model.selection.selected == Some(id) => {
-                &mut model.composer.draft.attachments
+                (true, &mut model.composer.draft)
             }
-            AttachmentTarget::Thread(id) => {
-                &mut model
+            AttachmentTarget::Thread(id) => (
+                false,
+                model
                     .composer
                     .drafts_by_env
                     .entry(env)
                     .or_default()
                     .entry(id)
-                    .or_default()
-                    .attachments
-            }
+                    .or_default(),
+            ),
         };
-        let existing = std::sync::Arc::make_mut(existing);
+        let existing = std::sync::Arc::make_mut(&mut draft.attachments);
+        let prior_len = existing.len();
         let mut size: usize = existing.iter().map(|file| file.data.len()).sum();
         for file in loaded.attachments {
             if size + file.data.len() > ATTACHMENT_ENCODED_LIMIT {
@@ -390,6 +399,23 @@ pub(super) fn apply_attachments_loaded(
             } else {
                 size += file.data.len();
                 existing.push(file);
+            }
+        }
+        if existing.len() > prior_len {
+            let labels = attachment_ref_labels(existing.iter().map(|file| file.mime.as_str()));
+            let snippet = existing[prior_len..]
+                .iter()
+                .zip(&labels[prior_len..])
+                .map(|(file, label)| attachment_inline_md(&file.name, &file.mime, label))
+                .collect::<Vec<_>>()
+                .join(" ");
+            if is_active {
+                effects.push(Effect::SyncEdit(EditSync::InsertAtDraftCaret(snippet)));
+            } else {
+                if !draft.text.is_empty() && !draft.text.ends_with(char::is_whitespace) {
+                    draft.text.push(' ');
+                }
+                draft.text.push_str(&snippet);
             }
         }
     }
@@ -455,4 +481,34 @@ fn prepend_draft(draft: &mut DraftData, mut recovery: DraftData) {
         std::sync::Arc::make_mut(&mut recovery.attachments).extend(appended);
     }
     *draft = recovery;
+}
+
+fn queue_entry_image_attachments(
+    model: &mut Model,
+    thread: ThreadId,
+    entries: &[Entry],
+    effects: &mut Vec<Effect>,
+) {
+    if !model.connected() {
+        return;
+    }
+    for entry in entries {
+        if let EntryData::Prompt { attachments, .. } = &entry.data {
+            for att in attachments {
+                if !att.mime.starts_with("image/") {
+                    continue;
+                }
+                let key = (thread, att.id.clone());
+                if !model.timeline.loaded_attachments.contains_key(&key)
+                    && model.timeline.pending_attachments.insert(key)
+                {
+                    effects.push(Effect::Server(ServerEffect::ReadAttachment {
+                        thread,
+                        id: att.id.clone(),
+                        preview_request: None,
+                    }));
+                }
+            }
+        }
+    }
 }

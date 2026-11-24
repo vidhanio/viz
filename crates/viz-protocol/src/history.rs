@@ -27,6 +27,50 @@ impl fmt::Debug for Attachment {
     }
 }
 
+/// Assigns deterministic Markdown reference labels (`img-N`, `file-N`) in slice
+/// order.
+///
+/// Images receive `img-1`, `img-2`, … and non-image files receive `file-1`,
+/// `file-2`, … so the composer, transcript UI, and ACP prompts agree on every
+/// label.
+#[must_use]
+pub fn attachment_ref_labels<'a>(mimes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut img_idx = 0usize;
+    let mut file_idx = 0usize;
+    mimes
+        .into_iter()
+        .map(|mime| {
+            if mime.starts_with("image/") {
+                img_idx += 1;
+                format!("img-{img_idx}")
+            } else {
+                file_idx += 1;
+                format!("file-{file_idx}")
+            }
+        })
+        .collect()
+}
+
+/// Formats the canonical inline Markdown reference for an attachment
+/// (`![name][img-1]` for images, `[name][file-1]` for non-image files).
+#[must_use]
+pub fn attachment_inline_md(name: &str, mime: &str, label: &str) -> String {
+    let safe_name = name.replace(['[', ']', '\n', '\r'], " ");
+    if mime.starts_with("image/") {
+        format!("![{safe_name}][{label}]")
+    } else {
+        format!("[{safe_name}][{label}]")
+    }
+}
+
+/// Whether Markdown `text` already contains a reference using `label`
+/// (case-insensitive per CommonMark link label matching).
+#[must_use]
+pub fn text_references_label(text: &str, label: &str) -> bool {
+    let needle = format!("[{}]", label.to_ascii_lowercase());
+    text.to_ascii_lowercase().contains(&needle)
+}
+
 /// Attachment capabilities of a thread's runner.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct AttachmentCapabilities {

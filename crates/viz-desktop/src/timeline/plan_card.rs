@@ -201,15 +201,17 @@ fn markdown_body(s: &Desktop, key: &str, source: &str, t: &Theme) -> El {
             None,
             false,
         );
-    let md = Markdown::new(source.to_owned())
-        .style(t.markdown().body_font(t.ui))
-        .selectable(true)
-        .copy_source(true)
-        .on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
-            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
-        })
-        .build(&t.k)
-        .w_full();
+    let cwd = s.model.thread_state().map(|st| st.cwd.as_str());
+    let md = super::markdown::with_file_pills(
+        Markdown::new(source.to_owned())
+            .style(t.markdown().body_font(t.ui))
+            .selectable(true)
+            .copy_source(true),
+        cwd,
+        t,
+    )
+    .build(&t.k)
+    .w_full();
 
     let mut content = col().w_full().padding(CARD_INSET).child(md);
     if collapsible && !expanded {

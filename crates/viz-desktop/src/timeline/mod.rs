@@ -13,6 +13,7 @@ mod empty;
 pub mod file_preview;
 mod fold;
 mod inspector;
+mod markdown;
 mod plan_card;
 mod search_card;
 mod status_line;

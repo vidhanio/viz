@@ -43,6 +43,7 @@ pub const SCENES: &[Scene] = &[
     ("timeline-working", timeline::working),
     ("timeline-status", timeline::status_line),
     ("file-preview", timeline::file_preview),
+    ("user-markdown", timeline::user_markdown),
     ("timeline-cards", timeline_cards::cards),
     ("selectors", model_picker::claude),
     ("model-search", model_picker::search),

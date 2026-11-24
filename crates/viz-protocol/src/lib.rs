@@ -52,7 +52,8 @@ pub use history::{
     Attachment, AttachmentCapabilities, Entry, EntryChunk, EntryData, EntryPage, EntrySource,
     ListEntries, PlanEntry, PlanPriority, PlanStatus, PromptAttachment, PromptContext, QueuedInput,
     ReadEntryChunk, RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads,
-    SteerQueuedInput, TurnTokens, TurnUsage, UpdateQueuedInput, UsageCost,
+    SteerQueuedInput, TurnTokens, TurnUsage, UpdateQueuedInput, UsageCost, attachment_inline_md,
+    attachment_ref_labels, text_references_label,
 };
 pub use ids::{EntryId, RequestId, RunId, TaskId, ThreadId};
 pub use interactions::{

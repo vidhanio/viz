@@ -4,7 +4,9 @@ use std::{fmt::Write as _, path::Path};
 
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use url::Url;
-use viz_protocol::PromptContext;
+use viz_protocol::{
+    PromptContext, attachment_inline_md, attachment_ref_labels, text_references_label,
+};
 
 use crate::{
     Capabilities, Error,
@@ -51,15 +53,32 @@ pub fn build_prompt(
 ) -> Result<Vec<ContentBlock>> {
     let mut description = text.to_owned();
     if !attachments.is_empty() {
-        description.push_str("\n\nAttachments (local files):");
-    }
-    for (attachment, _) in attachments {
-        let _ = write!(
-            description,
-            "\n- {}: {}",
-            attachment.name,
-            attachment.path.display()
-        );
+        let labels = attachment_ref_labels(attachments.iter().map(|(a, _)| a.mime.as_str()));
+        let unreferenced: Vec<String> = attachments
+            .iter()
+            .zip(&labels)
+            .filter(|(_, label)| !text_references_label(text, label))
+            .map(|((attachment, _), label)| {
+                attachment_inline_md(&attachment.name, &attachment.mime, label)
+            })
+            .collect();
+        if !unreferenced.is_empty() {
+            if !description.trim().is_empty() {
+                description.push_str("\n\n");
+            }
+            description.push_str(&unreferenced.join(" "));
+        }
+        if !description.is_empty() {
+            description.push_str("\n\n");
+        }
+        for (idx, ((attachment, _), label)) in attachments.iter().zip(&labels).enumerate() {
+            let uri = file_uri(&attachment.path)?;
+            let escaped_title = attachment.name.replace('\\', "\\\\").replace('"', "\\\"");
+            if idx > 0 {
+                description.push('\n');
+            }
+            let _ = write!(description, "[{label}]: <{uri}> \"{escaped_title}\"");
+        }
     }
     let mut blocks = vec![ContentBlock::Text(TextContent::new(description))];
     validate_context(context, capabilities)?;

@@ -43,17 +43,19 @@ pub fn task_result(s: &Desktop, result: &TaskResult, t: &Theme) -> El {
     .child(heading);
 
     if open {
+        let cwd = s.model.thread_state().map(|st| st.cwd.as_str());
         card = card.child(motion::fold_row(
             col().key("detail").w_full().child(ui::rule(t)).child(
                 col().w_full().padding(S12).child(
-                    Markdown::new(result.detail.clone())
-                        .style(t.markdown().body_font(t.ui).text(t.muted).link(t.text))
-                        .selectable(true)
-                        .on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
-                            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
-                        })
-                        .build(&t.k)
-                        .w_full(),
+                    super::markdown::with_file_pills(
+                        Markdown::new(result.detail.clone())
+                            .style(t.markdown().body_font(t.ui).text(t.muted).link(t.text))
+                            .selectable(true),
+                        cwd,
+                        t,
+                    )
+                    .build(&t.k)
+                    .w_full(),
                 ),
             ),
         ));

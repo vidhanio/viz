@@ -224,6 +224,9 @@ pub enum EditSync {
         /// Replacement text.
         insertion: String,
     },
+    /// Insert `text` at the composer draft's current caret with automatic
+    /// surrounding whitespace so inline attachment references flow cleanly.
+    InsertAtDraftCaret(String),
     /// Replace a byte range in the draft with an atomic [`rune::Mark::Pill`].
     InsertDraftPill {
         /// Start byte offset of the trigger token.

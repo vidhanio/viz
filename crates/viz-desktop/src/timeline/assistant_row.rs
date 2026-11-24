@@ -42,24 +42,26 @@ pub fn prose(
     let t_frame = Theme::get(t.k.dark);
 
     let style = assistant_markdown_style(t);
-    let mut md = Markdown::new(source.to_owned())
-        .style(style)
-        .streaming(streaming)
-        .selectable(true)
-        .copy_source(true)
-        .scroll_wide(true)
-        .on_link_tx(|s: &mut Desktop, url: &str, tx: &mut Tx| {
-            s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.to_owned())), tx);
-        })
-        .code_wrap(move |index, _| wrapped_set.contains(&format!("{msg_key_wrap}-code-{index}")))
-        .code_frame(move |card, frame| {
-            code_frame_card(card, frame, &msg_key, copied_key.as_deref(), t_frame)
-        })
-        .build(&t.k)
-        .key(key.to_owned())
-        .w_full()
-        .px(S4)
-        .py(S2);
+    let cwd = s.model.thread_state().map(|st| st.cwd.as_str());
+    let mut md = super::markdown::with_file_pills(
+        Markdown::new(source.to_owned())
+            .style(style)
+            .streaming(streaming)
+            .selectable(true)
+            .copy_source(true)
+            .scroll_wide(true),
+        cwd,
+        t,
+    )
+    .code_wrap(move |index, _| wrapped_set.contains(&format!("{msg_key_wrap}-code-{index}")))
+    .code_frame(move |card, frame| {
+        code_frame_card(card, frame, &msg_key, copied_key.as_deref(), t_frame)
+    })
+    .build(&t.k)
+    .key(key.to_owned())
+    .w_full()
+    .px(S4)
+    .py(S2);
     if streaming {
         md = md.streaming(true);
     }

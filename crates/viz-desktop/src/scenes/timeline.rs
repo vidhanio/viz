@@ -72,6 +72,86 @@ pub fn build_prompt(
     s.sync_widgets_from_model();
 }
 
+/// Showcases rich Markdown rendering inside sent user bubbles (headings, bold,
+/// code, inline `@file` pill, `[spec.pdf][file-1]` attachment pill, inline
+/// embedded `![Clipboard.png][img-1]` image), compact fit-content `"continue"`
+/// bubble width, and clickable `file://` pills inside assistant prose.
+pub(super) fn user_markdown(s: &mut Desktop) {
+    seed_workspace(&mut s.model);
+    s.model.disclosure.expanded.clear();
+    s.model.disclosure.tool_clock = BASE_TS + 30_000;
+
+    let sample_svg =
+        b"<svg xmlns='http://www.w3.org/2000/svg' width='320' height='120' viewBox='0 0 320 120'>\
+        <rect width='320' height='120' rx='12' fill='#1c2128'/>\
+        <rect x='14' y='16' width='292' height='26' rx='6' fill='#262c36'/>\
+        <circle cx='30' cy='29' r='5' fill='#f85149'/>\
+        <circle cx='46' cy='29' r='5' fill='#d29922'/>\
+        <circle cx='62' cy='29' r='5' fill='#3fb950'/>\
+        <rect x='14' y='54' width='180' height='14' rx='4' fill='#58a6ff' fill-opacity='0.75'/>\
+        <rect x='14' y='78' width='250' height='10' rx='3' fill='#8b949e' fill-opacity='0.5'/>\
+        <rect x='14' y='96' width='140' height='10' rx='3' fill='#8b949e' fill-opacity='0.35'/>\
+        </svg>";
+
+    let entries = vec![
+        EntryData::Prompt {
+            text: "continue".into(),
+            attachments: Vec::new(),
+            context: Vec::new(),
+            origin: None,
+        },
+        timed_text(
+            "1:1",
+            "Looked at [prompt.rs#L6-L13](file:///work/workbench/crates/viz-acp/src/prompt.rs#L6-L13) and [user_row.rs](file:///work/workbench/crates/viz-desktop/src/timeline/user_row.rs) — everything aligns cleanly.",
+            false,
+            BASE_TS,
+            BASE_TS + 1_200,
+        ),
+        run_end(Some("end_turn"), Some(usage(1_800, 220, 0.02)), None),
+        EntryData::Prompt {
+            text: "### Check this layout bug\n\n\
+                Please compare @markdown.rs against [export-spec.pdf][file-1]:\n\
+                - **Bold**, *italic*, ~~old width~~, and `inline_code`\n\
+                - Inline screenshot right here:\n\n\
+                ![Clipboard.png][img-1]"
+                .into(),
+            attachments: vec![
+                PromptAttachment {
+                    id: "demo-img-1".into(),
+                    name: "Clipboard.png".into(),
+                    mime: "image/svg+xml".into(),
+                },
+                PromptAttachment {
+                    id: "demo-file-1".into(),
+                    name: "export-spec.pdf".into(),
+                    mime: "application/pdf".into(),
+                },
+            ],
+            context: vec![PromptContext::File {
+                path: "crates/export/src/markdown.rs".into(),
+            }],
+            origin: None,
+        },
+        timed_text(
+            "2:1",
+            "Got it — I checked [markdown.rs](file:///work/workbench/crates/export/src/markdown.rs#L12-L24) and matched the screenshot.",
+            false,
+            BASE_TS + 2_000,
+            BASE_TS + 3_500,
+        ),
+        run_end(Some("end_turn"), Some(usage(2_400, 310, 0.03)), None),
+    ];
+
+    s.model.cache_mut().open_thread_mut(THREAD).transcript = preview_thread(entries, None);
+    s.decode_thread_attachment_image(
+        THREAD,
+        "demo-img-1".into(),
+        "image/svg+xml",
+        sample_svg.to_vec(),
+    );
+    s.sync_widgets_from_model();
+}
+
 /// Active live turn with ticking Working header, collapsed earlier steps,
 /// streaming thinking preview, running ANSI command with timeout ring, and
 /// streaming assistant prose.
