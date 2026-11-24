@@ -2,12 +2,14 @@
 //! bearer token.
 
 mod client;
+mod content;
 mod endpoint;
 mod error;
 pub use viz_protocol as protocol;
 
 pub use crate::{
     client::{Client, Connection},
+    content::{ContentClient, DownloadedContent},
     endpoint::{Endpoint, ResolveEndpointError},
     error::{Error, Result},
 };

@@ -333,6 +333,7 @@ async fn start(db: &mut Connection, thread: ThreadId, id: RunId) -> Result<Claim
             origin,
             attachments,
             context: context.clone(),
+            truncated: false,
         };
         let entry = store::append(db, thread, &data).await?;
         exec(

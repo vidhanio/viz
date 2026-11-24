@@ -18,6 +18,7 @@ pub(in crate::workspace) async fn publish(
     thread: ThreadId,
     session: &str,
     output: Output,
+    chunks: &super::EntryChunkCache,
 ) -> Result<Option<(String, ToolCallStatus)>, Error> {
     let (entry, patch) = match output {
         Output::Entry(entry) => (NewEntry::Transcript(*entry), None),
@@ -52,6 +53,7 @@ pub(in crate::workspace) async fn publish(
                     [id.into(), json(&NewEntry::Transcript(original))?.into()],
                 )
                 .await?;
+                chunks.invalidate_stored(thread, id);
                 if title_changed {
                     exec(
                         db,
@@ -169,8 +171,10 @@ pub(in crate::workspace) async fn entries(
     before: Option<EntryId>,
     limit: usize,
 ) -> Result<EntryPage, Error> {
+    const PAGE_BUDGET: usize = viz_protocol::limits::PAGE_WIRE_BYTES;
+
     require(db, thread).await?;
-    let mut entries = if let Some(before) = before {
+    let fetched = if let Some(before) = before {
         rows(
             db,
             "SELECT id, data FROM entries
@@ -193,38 +197,59 @@ pub(in crate::workspace) async fn entries(
         .map(decode_entry)
         .collect::<Result<Vec<_>, _>>()?
     };
-    let before = if entries.len() > limit {
-        entries.pop();
+    let mut entries = Vec::with_capacity(fetched.len().min(limit));
+    let mut bytes = 0usize;
+    let mut has_more = fetched.len() > limit;
+    for mut entry in fetched.into_iter().take(limit) {
+        let size = preview(&mut entry)?;
+        if !entries.is_empty() && bytes.saturating_add(size) > PAGE_BUDGET {
+            has_more = true;
+            break;
+        }
+        bytes = bytes.saturating_add(size);
+        entries.push(entry);
+    }
+    let before = if has_more {
         entries.last().map(|entry| entry.id)
     } else {
         None
     };
     entries.reverse();
-    for entry in &mut entries {
-        preview(entry)?;
-    }
     Ok(EntryPage { entries, before })
 }
 
+/// Reads incremental entries after `after`, stopping early when either `limit`
+/// or `PAGE_WIRE_BYTES` is reached. Returns `(entries, has_more)`.
 pub(in crate::workspace) async fn entries_after(
     db: &mut Connection,
     thread: ThreadId,
     after: Option<EntryId>,
     limit: usize,
-) -> Result<Vec<Entry>, Error> {
+) -> Result<(Vec<Entry>, bool), Error> {
+    const PAGE_BUDGET: usize = viz_protocol::limits::PAGE_WIRE_BYTES;
+
     require(db, thread).await?;
-    rows(
+    let fetched = rows(
         db,
         "SELECT id, data FROM entries WHERE thread = ?1 AND id > coalesce(?2, 0) ORDER BY id LIMIT ?3",
-        [thread.into(), after.into(), limit.into()],
+        [thread.into(), after.into(), (limit + 1).into()],
     )
     .await?
-    .map(|row| {
-        let mut entry = decode_entry(row)?;
-        preview(&mut entry)?;
-        Ok(entry)
-    })
-    .collect()
+    .map(decode_entry)
+    .collect::<Result<Vec<_>, _>>()?;
+    let mut entries = Vec::with_capacity(fetched.len().min(limit));
+    let mut bytes = 0usize;
+    let mut has_more = fetched.len() > limit;
+    for mut entry in fetched.into_iter().take(limit) {
+        let size = preview(&mut entry)?;
+        if !entries.is_empty() && bytes.saturating_add(size) > PAGE_BUDGET {
+            has_more = true;
+            break;
+        }
+        bytes = bytes.saturating_add(size);
+        entries.push(entry);
+    }
+    Ok((entries, has_more))
 }
 
 fn decode_entry(mut row: Row) -> Result<Entry, Error> {

@@ -200,6 +200,11 @@ pub enum EntryData {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         context: Vec<PromptContext>,
         origin: Option<Origin>,
+        /// Whether `text` was trimmed on the wire to stay within entry byte
+        /// budgets while preserving `attachments`, `context`, and `origin`.
+        /// Load the complete entry through `thread.entry_chunk`.
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        truncated: bool,
     },
     Transcript(TranscriptEntry),
     /// The full row is available through `thread.entry_chunk`.

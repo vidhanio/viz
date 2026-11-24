@@ -20,6 +20,17 @@ pub const ATTACHMENT_ENCODED_LIMIT: usize = ATTACHMENT_TOTAL_BYTES.div_ceil(3) *
 /// Maximum raw bytes returned in one streamed content chunk (`256 KiB`).
 pub const CONTENT_CHUNK_BYTES: usize = 256 * KIB;
 
+/// Maximum JSON header bytes permitted in one binary content-plane envelope
+/// (`8 KiB`).
+pub const MAX_CONTENT_HEADER_BYTES: usize = 8 * KIB;
+
+/// Maximum total binary content-plane frame size (`4 + 8 KiB + 256 KiB`).
+pub const MAX_CONTENT_FRAME_BYTES: usize = 4 + MAX_CONTENT_HEADER_BYTES + CONTENT_CHUNK_BYTES;
+
+/// Maximum serialized entry bytes returned in one transcript page before
+/// truncating pagination (`2 MiB`).
+pub const PAGE_WIRE_BYTES: usize = 2 * MIB;
+
 /// Maximum UTF-8 bytes returned inline for a text file preview (`512 KiB`).
 pub const PREVIEW_TEXT_BYTES: usize = 512 * KIB;
 

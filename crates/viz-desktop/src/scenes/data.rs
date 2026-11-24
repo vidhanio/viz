@@ -157,6 +157,7 @@ pub(super) fn transcript(attachments: &[&str]) -> Transcript {
                 attachments,
                 context: Vec::new(),
                 origin: None,
+                truncated: false,
             },
             response(
                 "The export drops the final newline when it joins blocks. I’ll fix that at the boundary.",
@@ -332,6 +333,7 @@ pub(super) fn prompt(text: &str) -> EntryData {
         attachments: Vec::new(),
         context: Vec::new(),
         origin: None,
+        truncated: false,
     }
 }
 

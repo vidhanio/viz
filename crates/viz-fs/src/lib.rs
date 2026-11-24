@@ -10,7 +10,7 @@
 use std::{
     ffi::OsStr,
     fmt,
-    io::{self, BufRead as _, BufReader, Read as _, Write as _},
+    io::{self, BufRead as _, BufReader, Read as _, Seek as _, SeekFrom, Write as _},
     path::{Component, Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
@@ -408,6 +408,26 @@ impl RegularFile {
             truncated,
             size: self.size,
         })
+    }
+
+    /// Reads at most `len` bytes starting at `offset`, returning `(bytes,
+    /// total_size)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`FsError::Io`] on seek or read failure.
+    pub fn read_range(mut self, offset: u64, len: usize) -> Result<(Vec<u8>, u64), FsError> {
+        let total = self.size;
+        if offset >= total || len == 0 {
+            return Ok((Vec::new(), total));
+        }
+        self.file.seek(SeekFrom::Start(offset))?;
+        let remaining = usize::try_from(total - offset).unwrap_or(len).min(len);
+        let mut bytes = Vec::with_capacity(remaining);
+        self.file
+            .take(u64::try_from(len).unwrap_or(u64::MAX))
+            .read_to_end(&mut bytes)?;
+        Ok((bytes, total))
     }
 
     /// Reads the entire file, failing with [`FsError::TooLarge`] if it exceeds

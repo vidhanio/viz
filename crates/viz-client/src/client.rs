@@ -133,6 +133,7 @@ impl Client {
                 protocol: PROTOCOL_VERSION,
                 client: info,
                 environment,
+                channel: viz_protocol::ConnectionChannel::Control,
             })
             .await?;
         if hello.protocol != PROTOCOL_VERSION {

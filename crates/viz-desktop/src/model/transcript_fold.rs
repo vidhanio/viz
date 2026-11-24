@@ -199,6 +199,24 @@ impl Transcript {
                     _ => {}
                 }
             }
+            EntryData::Prompt {
+                text,
+                attachments,
+                context,
+                origin,
+                ..
+            } => {
+                if let Some(Item::User(user)) = self
+                    .items
+                    .iter_mut()
+                    .find(|item| matches!(item, Item::User(u) if u.entry_id == Some(id)))
+                {
+                    user.text = text;
+                    user.attachments = attachments;
+                    user.context = context;
+                    user.origin = origin;
+                }
+            }
             EntryData::ToolUpdate { entry, record } => self.update_tool(entry, &record),
             _ => {}
         }
@@ -229,6 +247,7 @@ impl Transcript {
                 attachments,
                 context,
                 origin,
+                ..
             } => {
                 let steered = self.acp_turn.is_some() && !self.ended_run;
                 if !text.trim().is_empty() || !attachments.is_empty() || !context.is_empty() {

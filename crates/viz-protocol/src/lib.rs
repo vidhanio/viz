@@ -5,6 +5,7 @@
 
 mod catalog;
 mod connections;
+pub mod content;
 mod folders;
 mod fork;
 mod form;
@@ -32,6 +33,10 @@ pub use connections::{
     ReadThreadState, Run, RunKind, RunStatus, Task, TaskList, TaskResult, TaskStatus,
     TaskStatusRequest, TaskStatusResult, ThreadStateResult, Unwatch, WaitResult, WaitThread, Watch,
     Watching,
+};
+pub use content::{
+    CONTENT_PROTOCOL_VERSION, ConnectionChannel, ContentFrameError, ContentRequest,
+    ContentResponse, ContentVariant, decode_content_frame, encode_content_frame,
 };
 pub use folders::{
     BrowseFolders, CancelClone, CloneId, ClonePhase, CloneState, CloneStatus, CreateFolder,
@@ -255,6 +260,9 @@ pub struct HelloParams {
     pub client: ClientInfo,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub environment: Option<String>,
+    /// Traffic class for this WebSocket connection (defaults to control).
+    #[serde(default, skip_serializing_if = "ConnectionChannel::is_control")]
+    pub channel: ConnectionChannel,
 }
 
 /// `hello` result.

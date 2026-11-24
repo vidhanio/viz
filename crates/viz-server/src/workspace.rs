@@ -27,6 +27,7 @@ mod sessions;
 pub(crate) mod sql;
 mod store;
 mod thread;
+mod thumbs;
 mod triage;
 mod worker;
 mod worktree;
@@ -77,6 +78,8 @@ pub(crate) struct Workspace {
     cwd: PathBuf,
     dir: PathBuf,
     blobs: blobs::BlobStore,
+    thumbs: thumbs::ThumbCache,
+    entry_chunks: store::EntryChunkCache,
     /// Canonical parent of the worktrees viz creates. A checkout below it
     /// also needs a matching ownership marker before viz can remove it.
     worktrees: PathBuf,
@@ -155,6 +158,8 @@ impl Workspace {
             cwd: config.cwd.clone(),
             dir,
             blobs,
+            thumbs: thumbs::ThumbCache::default(),
+            entry_chunks: store::EntryChunkCache::default(),
             worktrees,
             default_harness: config.default_harness.clone(),
             harnesses: config.harnesses.clone(),
@@ -233,8 +238,8 @@ impl Workspace {
         limit: usize,
     ) -> Result<(Vec<Entry>, Option<ThreadState>), Error> {
         let mut db = self.db.lock().await;
-        let entries = store::entries_after(&mut db, thread, after, limit).await?;
-        if entries.len() == limit {
+        let (entries, has_more) = store::entries_after(&mut db, thread, after, limit).await?;
+        if has_more {
             return Ok((entries, None));
         }
         let mut state = store::state(&mut db, thread).await?;
@@ -322,6 +327,184 @@ impl Workspace {
     ) -> Result<viz_protocol::BlobInfo, Error> {
         let mut db = self.db.lock().await;
         attachments::stat(&mut db, thread, id).await
+    }
+
+    pub(crate) async fn read_blob(&self, blob_id: &str, max_bytes: u64) -> Result<Vec<u8>, Error> {
+        self.blobs
+            .read(
+                blob_id,
+                max_bytes.min(viz_protocol::limits::ATTACHMENT_TOTAL_BYTES as u64),
+            )
+            .await
+    }
+
+    /// Validates and persists a blob pushed by an authenticated peer
+    /// (`PUT /v2/blobs/{sha}`), marking it staged for GC until `task.receive`
+    /// attaches it to a thread.
+    pub(crate) async fn receive_peer_blob(
+        &self,
+        expected_sha: &str,
+        bytes: Vec<u8>,
+    ) -> Result<(), Error> {
+        if !blobs::is_valid_blob_id(expected_sha) {
+            return Err(Error::invalid("invalid blob sha256"));
+        }
+        if bytes.len() > viz_protocol::limits::ATTACHMENT_TOTAL_BYTES {
+            return Err(Error::invalid("blob exceeds 20 MiB limit"));
+        }
+        let actual = blobs::sha256_hex(&bytes);
+        if actual != expected_sha {
+            return Err(Error::invalid("blob digest does not match path sha256"));
+        }
+        let (blob_id, size, permit) = self.blobs.put(bytes).await?;
+        let now = store::now();
+        {
+            let mut db = self.db.lock().await;
+            exec(
+                &mut db,
+                "INSERT INTO blobs (id, size, mime, created_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT DO NOTHING",
+                [
+                    blob_id.as_str().into(),
+                    size.into(),
+                    "application/octet-stream".into(),
+                    now.into(),
+                ],
+            )
+            .await?;
+            drop(db);
+        }
+        self.blobs.mark_peer_staged(&blob_id);
+        drop(permit);
+        Ok(())
+    }
+
+    pub(crate) async fn prepare_delegated_attachments(
+        &self,
+        parent: ThreadId,
+        uploads: Vec<Attachment>,
+        stored_ids: &[String],
+    ) -> Result<Vec<viz_protocol::peer::PeerAttachment>, Error> {
+        attachments::prepare_delegated(self, parent, uploads, stored_ids).await
+    }
+
+    pub(crate) async fn store_uploaded_attachment(
+        &self,
+        thread: ThreadId,
+        name: String,
+        mime: String,
+        bytes: Vec<u8>,
+    ) -> Result<viz_protocol::BlobInfo, Error> {
+        attachments::store_raw(self, thread, name, mime, bytes).await
+    }
+
+    /// Reads one content-plane chunk for a thread-owned attachment, either raw
+    /// bytes or a cached server-rendered preview thumbnail.
+    pub(crate) async fn read_attachment_chunk(
+        &self,
+        thread: ThreadId,
+        attachment: &str,
+        variant: viz_protocol::ContentVariant,
+        offset: u64,
+        len: usize,
+    ) -> Result<(Vec<u8>, u64, String), Error> {
+        let info = self.stat_blob(thread, attachment).await?;
+        match variant {
+            viz_protocol::ContentVariant::Original => {
+                let (bytes, total) = self.blobs.read_range(&info.blob, offset, len).await?;
+                Ok((bytes, total, info.mime))
+            }
+            viz_protocol::ContentVariant::Preview { max_px } => {
+                let rendered = if let Some(hit) = self.thumbs.get(&info.blob, max_px) {
+                    hit
+                } else {
+                    let raw = self
+                        .blobs
+                        .read(
+                            &info.blob,
+                            info.size
+                                .min(viz_protocol::limits::ATTACHMENT_TOTAL_BYTES as u64),
+                        )
+                        .await?;
+                    self.thumbs
+                        .render(info.blob, info.mime, raw, max_px)
+                        .await?
+                };
+                Ok(slice_rendered(&rendered, offset, len))
+            }
+        }
+    }
+
+    /// Reads one content-plane chunk for a file confined inside a thread or
+    /// project root, either raw bytes or a cached server-rendered preview
+    /// thumbnail.
+    pub(crate) async fn read_file_chunk(
+        &self,
+        root: viz_protocol::FileRoot,
+        path: &str,
+        variant: viz_protocol::ContentVariant,
+        offset: u64,
+        len: usize,
+    ) -> Result<(Vec<u8>, u64, String), Error> {
+        let rel =
+            viz_fs::RelPath::parse(path).map_err(|error| Error::invalid(error.to_string()))?;
+        let root_dir = match root {
+            viz_protocol::FileRoot::Thread { thread } => row(
+                &mut *self.db.lock().await,
+                "SELECT cwd FROM threads WHERE id = ?1",
+                [thread.into()],
+            )
+            .await?
+            .ok_or(Error::NoThread(thread))?
+            .str(0)?,
+            viz_protocol::FileRoot::Project { project } => {
+                store::preferences(&mut *self.db.lock().await, &project).await?;
+                project
+            }
+        };
+        let root_path = PathBuf::from(root_dir);
+        match variant {
+            viz_protocol::ContentVariant::Original => tokio::task::spawn_blocking(move || {
+                let root = viz_fs::Root::open(&root_path)
+                    .map_err(|error| Error::invalid(format!("couldn't open root: {error}")))?;
+                let file = root
+                    .open_regular(&rel)
+                    .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
+                let (bytes, total) = file
+                    .read_range(offset, len)
+                    .map_err(|error| Error::invalid(format!("couldn't read file: {error}")))?;
+                let mime = if offset == 0 {
+                    viz_fs::sniff_mime(rel.as_path(), &bytes)
+                } else {
+                    mime_guess::from_path(rel.as_path())
+                        .first_raw()
+                        .unwrap_or("application/octet-stream")
+                        .to_owned()
+                };
+                Ok((bytes, total, mime))
+            })
+            .await
+            .map_err(|error| Error::unavailable(format!("file reader failed: {error}")))?,
+            viz_protocol::ContentVariant::Preview { max_px } => {
+                let (raw, mime) = tokio::task::spawn_blocking(move || {
+                    let root = viz_fs::Root::open(&root_path)
+                        .map_err(|error| Error::invalid(format!("couldn't open root: {error}")))?;
+                    let file = root
+                        .open_regular(&rel)
+                        .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
+                    let raw = file
+                        .read_exact_bounded(viz_protocol::limits::PREVIEW_IMAGE_BYTES as u64)
+                        .map_err(|error| Error::invalid(format!("couldn't read image: {error}")))?;
+                    let mime = viz_fs::sniff_mime(rel.as_path(), &raw);
+                    Ok::<_, Error>((raw, mime))
+                })
+                .await
+                .map_err(|error| Error::unavailable(format!("file reader failed: {error}")))??;
+                let key = blobs::sha256_hex(&raw);
+                let rendered = self.thumbs.render(key, mime, raw, max_px).await?;
+                Ok(slice_rendered(&rendered, offset, len))
+            }
+        }
     }
 
     fn attachment_dir(&self, thread: ThreadId) -> PathBuf {
@@ -452,4 +635,21 @@ impl Workspace {
     fn default_cwd(&self) -> &Path {
         &self.cwd
     }
+}
+
+fn slice_rendered(
+    rendered: &thumbs::RenderedImage,
+    offset: u64,
+    len: usize,
+) -> (Vec<u8>, u64, String) {
+    let total = rendered.bytes.len() as u64;
+    let start = usize::try_from(offset)
+        .unwrap_or(rendered.bytes.len())
+        .min(rendered.bytes.len());
+    let end = start.saturating_add(len).min(rendered.bytes.len());
+    (
+        rendered.bytes[start..end].to_vec(),
+        total,
+        rendered.mime.clone(),
+    )
 }

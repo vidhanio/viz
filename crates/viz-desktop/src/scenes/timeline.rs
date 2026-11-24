@@ -101,6 +101,7 @@ pub(super) fn user_markdown(s: &mut Desktop) {
             attachments: Vec::new(),
             context: Vec::new(),
             origin: None,
+            truncated: false,
         },
         timed_text(
             "1:1",
@@ -133,6 +134,7 @@ pub(super) fn user_markdown(s: &mut Desktop) {
                 path: "crates/export/src/markdown.rs".into(),
             }],
             origin: None,
+            truncated: false,
         },
         timed_text(
             "2:1",
@@ -222,6 +224,7 @@ fn populated_turn_one() -> Vec<EntryData> {
             attachments: Vec::new(),
             context: Vec::new(),
             origin: None,
+            truncated: false,
         },
         timed_tool(
             "cmd-check",
@@ -278,6 +281,7 @@ fn populated_turn_two() -> Vec<EntryData> {
                 },
             ],
             origin: None,
+            truncated: false,
         },
         prompt("Keep the public `join_blocks` signature unchanged if possible."),
         timed_tool(

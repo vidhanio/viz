@@ -1,11 +1,19 @@
 //! Bounds transcript payloads at the wire edge and reads their full data by
-//! revision.
+//! revision through a bounded in-memory LRU chunk cache.
+
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest as _, Sha256};
 use viz_protocol::{
-    Body, Entry, EntryChunk, EntryData, EntrySource, LiveTurn, ReadEntryChunk, ToolCall,
-    TranscriptEntry,
+    Body, Entry, EntryChunk, EntryData, EntryId, EntrySource, LiveTurn, ReadEntryChunk, ThreadId,
+    ToolCall, TranscriptEntry,
 };
 
 use super::{
@@ -14,19 +22,136 @@ use super::{
 };
 use crate::error::Error;
 
-/// A 200-entry page stays below typical host message limits.
+/// A single entry stays bounded before deferring to `thread.entry_chunk`.
 const INLINE_BYTES: usize = viz_protocol::limits::INLINE_ENTRY_BYTES;
 /// A returned JSON string stays bounded even after outer JSON escaping.
 const CHUNK_BYTES: usize = viz_protocol::limits::INLINE_ENTRY_BYTES;
+const CHUNK_CACHE_ENTRIES: usize = 16;
+const CHUNK_CACHE_BYTES: usize = 16 * viz_protocol::limits::MIB;
 
-pub(in crate::workspace) fn preview(entry: &mut Entry) -> Result<(), Error> {
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CacheKey {
+    Stored { thread: ThreadId, entry: EntryId },
+    Live { thread: ThreadId, key: String },
+}
+
+#[derive(Debug)]
+struct CachedPayload {
+    revision: String,
+    data: Arc<String>,
+    last_used: u64,
+}
+
+#[derive(Debug, Default)]
+struct CacheInner {
+    entries: HashMap<CacheKey, CachedPayload>,
+    total_bytes: usize,
+}
+
+/// Bounded LRU cache of serialized full entries so sequential
+/// `thread.entry_chunk` pulls stay `O(chunk)` instead of re-reading SQLite and
+/// re-hashing the whole entry on every chunk.
+#[derive(Debug, Default)]
+pub(in crate::workspace) struct EntryChunkCache {
+    inner: Mutex<CacheInner>,
+    clock: AtomicU64,
+}
+
+impl EntryChunkCache {
+    fn get(&self, key: &CacheKey, revision: &str) -> Option<Arc<String>> {
+        let tick = self.clock.fetch_add(1, Ordering::Relaxed);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let found = inner
+            .entries
+            .get_mut(key)
+            .filter(|entry| entry.revision == revision)
+            .map(|entry| {
+                entry.last_used = tick;
+                Arc::clone(&entry.data)
+            });
+        drop(inner);
+        found
+    }
+
+    fn insert(&self, key: CacheKey, revision: String, data: Arc<String>) {
+        let size = data.len();
+        if size > CHUNK_CACHE_BYTES {
+            return;
+        }
+        let tick = self.clock.fetch_add(1, Ordering::Relaxed);
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(old) = inner.entries.remove(&key) {
+            inner.total_bytes = inner.total_bytes.saturating_sub(old.data.len());
+        }
+        while (inner.entries.len() >= CHUNK_CACHE_ENTRIES
+            || inner.total_bytes.saturating_add(size) > CHUNK_CACHE_BYTES)
+            && let Some(oldest) = inner
+                .entries
+                .iter()
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(k, _)| k.clone())
+        {
+            if let Some(evicted) = inner.entries.remove(&oldest) {
+                inner.total_bytes = inner.total_bytes.saturating_sub(evicted.data.len());
+            }
+        }
+        inner.total_bytes = inner.total_bytes.saturating_add(size);
+        inner.entries.insert(
+            key,
+            CachedPayload {
+                revision,
+                data,
+                last_used: tick,
+            },
+        );
+    }
+
+    /// Invalidates a cached stored entry after a tool patch mutates its JSON.
+    pub(in crate::workspace) fn invalidate_stored(&self, thread: ThreadId, entry: EntryId) {
+        let mut inner = self
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(removed) = inner.entries.remove(&CacheKey::Stored { thread, entry }) {
+            inner.total_bytes = inner.total_bytes.saturating_sub(removed.data.len());
+        }
+    }
+}
+
+/// Trims oversized entry payloads for wire transmission and returns the
+/// resulting serialized byte size for page budgeting.
+///
+/// Oversized `Prompt` entries truncate their `text` and set `truncated = true`
+/// while preserving `attachments`, `context`, and `origin` metadata so the UI
+/// never loses pills or attachments when long prompts defer to chunk loading.
+pub(in crate::workspace) fn preview(entry: &mut Entry) -> Result<usize, Error> {
     match &mut entry.data {
         EntryData::Transcript(segment) => segment_preview(segment),
         EntryData::ToolUpdate { record, .. } => tool_preview(record),
+        EntryData::Prompt { .. } => {
+            if json(&entry.data)?.len() > INLINE_BYTES {
+                if let EntryData::Prompt {
+                    text, truncated, ..
+                } = &mut entry.data
+                {
+                    truncate(text);
+                    *truncated = true;
+                }
+                if json(&entry.data)?.len() > INLINE_BYTES {
+                    entry.data = EntryData::Omitted;
+                }
+            }
+        }
         data if json(data)?.len() > INLINE_BYTES => *data = EntryData::Omitted,
         _ => {}
     }
-    Ok(())
+    Ok(json(entry)?.len())
 }
 
 pub(in crate::workspace) fn live_preview(mut live: LiveTurn) -> LiveTurn {
@@ -103,38 +228,59 @@ pub(in crate::workspace) async fn chunk(
         offset,
         revision,
     } = request;
-    let data = match source {
-        EntrySource::Stored { entry } => {
-            let mut db = workspace.db.lock().await;
-            row(
-                &mut db,
-                "SELECT data FROM entries WHERE thread = ?1 AND id = ?2",
-                [thread.into(), entry.into()],
-            )
-            .await?
-            .ok_or_else(|| Error::not_found(format!("no entry {entry} in thread {thread}")))?
-            .str(0)?
-        }
-        EntrySource::Live { key } => {
-            let live = workspace.updates.raw_live(thread).ok_or_else(|| {
-                Error::not_found(format!("no live transcript in thread {thread}"))
-            })?;
-            let entry = live
-                .entries
-                .iter()
-                .find(|entry| entry.key == key)
-                .ok_or_else(|| {
-                    Error::not_found(format!("no live entry {key} in thread {thread}"))
-                })?;
-            json(entry)?
-        }
+    let cache_key = match &source {
+        EntrySource::Stored { entry } => CacheKey::Stored {
+            thread,
+            entry: *entry,
+        },
+        EntrySource::Live { key } => CacheKey::Live {
+            thread,
+            key: key.clone(),
+        },
     };
-    let actual = URL_SAFE_NO_PAD.encode(Sha256::digest(data.as_bytes()));
-    if revision.is_some_and(|revision| revision != actual) {
-        return Err(Error::unavailable(
-            "entry changed between reads; restart at offset zero",
-        ));
-    }
+    let (actual, data) = if let Some(ref wanted) = revision
+        && let Some(cached) = workspace.entry_chunks.get(&cache_key, wanted)
+    {
+        (wanted.clone(), cached)
+    } else {
+        let raw = match source {
+            EntrySource::Stored { entry } => {
+                let mut db = workspace.db.lock().await;
+                row(
+                    &mut db,
+                    "SELECT data FROM entries WHERE thread = ?1 AND id = ?2",
+                    [thread.into(), entry.into()],
+                )
+                .await?
+                .ok_or_else(|| Error::not_found(format!("no entry {entry} in thread {thread}")))?
+                .str(0)?
+            }
+            EntrySource::Live { key } => {
+                let live = workspace.updates.raw_live(thread).ok_or_else(|| {
+                    Error::not_found(format!("no live transcript in thread {thread}"))
+                })?;
+                let entry = live
+                    .entries
+                    .iter()
+                    .find(|entry| entry.key == key)
+                    .ok_or_else(|| {
+                        Error::not_found(format!("no live entry {key} in thread {thread}"))
+                    })?;
+                json(entry)?
+            }
+        };
+        let actual = URL_SAFE_NO_PAD.encode(Sha256::digest(raw.as_bytes()));
+        if revision.is_some_and(|revision| revision != actual) {
+            return Err(Error::unavailable(
+                "entry changed between reads; restart at offset zero",
+            ));
+        }
+        let shared = Arc::new(raw);
+        workspace
+            .entry_chunks
+            .insert(cache_key, actual.clone(), Arc::clone(&shared));
+        (actual, shared)
+    };
     let start = usize::try_from(offset).map_err(|_| Error::invalid("invalid entry offset"))?;
     if !data.is_char_boundary(start) {
         return Err(Error::invalid(

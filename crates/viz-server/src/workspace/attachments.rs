@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use viz_protocol::{BlobInfo, RunId, ThreadId};
+use viz_protocol::{BlobInfo, RunId, ThreadId, peer::PeerAttachment};
 
 use super::{
     Workspace,
@@ -136,6 +136,146 @@ pub(super) async fn commit(
         });
     }
     Ok(attachments)
+}
+
+/// Links peer-pushed content-addressed blobs into `thread_attachments` inside
+/// `db`, verifying each blob exists in `blobs`, matches its declared size, and
+/// stays within the unified prompt byte budget.
+pub(super) async fn link_peer(
+    db: &mut Connection,
+    thread: ThreadId,
+    refs: &[PeerAttachment],
+) -> Result<Vec<PromptAttachment>, Error> {
+    let mut remaining = TOTAL_LIMIT;
+    let mut attachments = Vec::with_capacity(refs.len());
+    for item in refs {
+        validate_name(&item.name)?;
+        if !super::blobs::is_valid_blob_id(&item.blob) {
+            return Err(Error::invalid("invalid peer blob identifier"));
+        }
+        let stored_size = row(
+            db,
+            "SELECT size FROM blobs WHERE id = ?1",
+            [item.blob.as_str().into()],
+        )
+        .await?
+        .ok_or_else(|| Error::unavailable(format!("blob {} has not been pushed yet", item.blob)))?
+        .u64(0)?;
+        if stored_size != item.size {
+            return Err(Error::invalid("peer attachment size mismatch"));
+        }
+        let size = usize::try_from(stored_size).map_err(|_| too_large())?;
+        remaining = remaining.checked_sub(size).ok_or_else(too_large)?;
+        exec(
+            db,
+            "INSERT INTO thread_attachments (thread, id, blob, name, mime)
+             VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(thread, id) DO UPDATE SET name = excluded.name, mime = excluded.mime",
+            [
+                thread.into(),
+                item.blob.as_str().into(),
+                item.blob.as_str().into(),
+                item.name.as_str().into(),
+                item.mime.as_str().into(),
+            ],
+        )
+        .await?;
+        attachments.push(PromptAttachment {
+            id: item.blob.clone(),
+            name: item.name.clone(),
+            mime: item.mime.clone(),
+        });
+    }
+    Ok(attachments)
+}
+
+/// Validates and stores raw uploaded attachment bytes for `thread`, returning
+/// its persisted [`BlobInfo`].
+pub(super) async fn store_raw(
+    workspace: &Workspace,
+    thread: ThreadId,
+    name: String,
+    mime: String,
+    bytes: Vec<u8>,
+) -> Result<BlobInfo, Error> {
+    validate_name(&name)?;
+    if bytes.len() > TOTAL_LIMIT {
+        return Err(too_large());
+    }
+    let (blob_id, size, permit) = workspace.blobs.put(bytes).await?;
+    let now = store::now();
+    let mut db = workspace.db.lock().await;
+    let mut tx = db.transaction().await?;
+    store::require(&mut tx, thread).await?;
+    exec(
+        &mut tx,
+        "INSERT INTO blobs (id, size, mime, created_at) VALUES (?1, ?2, ?3, ?4)
+         ON CONFLICT DO NOTHING",
+        [
+            blob_id.as_str().into(),
+            size.into(),
+            mime.as_str().into(),
+            now.into(),
+        ],
+    )
+    .await?;
+    exec(
+        &mut tx,
+        "INSERT INTO thread_attachments (thread, id, blob, name, mime)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(thread, id) DO UPDATE SET name = excluded.name, mime = excluded.mime",
+        [
+            thread.into(),
+            blob_id.as_str().into(),
+            blob_id.as_str().into(),
+            name.as_str().into(),
+            mime.as_str().into(),
+        ],
+    )
+    .await?;
+    tx.commit().await?;
+    drop(db);
+    drop(permit);
+    Ok(BlobInfo {
+        id: blob_id.clone(),
+        blob: blob_id,
+        name,
+        mime,
+        size,
+    })
+}
+
+/// Converts a parent thread's newly supplied and stored attachments into
+/// content-addressed [`PeerAttachment`] references for durable delegation,
+/// enforcing the unified prompt byte budget.
+pub(super) async fn prepare_delegated(
+    workspace: &Workspace,
+    parent: ThreadId,
+    uploads: Vec<Attachment>,
+    stored_ids: &[String],
+) -> Result<Vec<PeerAttachment>, Error> {
+    if uploads.is_empty() && stored_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let staged = stage(workspace, uploads).await?;
+    let mut db = workspace.db.lock().await;
+    let mut tx = db.transaction().await?;
+    store::require(&mut tx, parent).await?;
+    let refs = commit(&mut tx, parent, &staged, stored_ids).await?;
+    let mut out = Vec::with_capacity(refs.len());
+    for item in refs {
+        let info = owned(&mut tx, parent, &item.id).await?;
+        out.push(PeerAttachment {
+            blob: info.blob,
+            name: item.name,
+            mime: item.mime,
+            size: info.size,
+        });
+    }
+    tx.commit().await?;
+    drop(db);
+    drop(staged);
+    Ok(out)
 }
 
 /// Returns thread-scoped attachment metadata without leaking whether a blob

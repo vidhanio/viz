@@ -32,6 +32,12 @@ git2 = { version = "0.21", default-features = false }
 http = "1"
 http-body-util = "0.1"
 ignore = "0.4"
+image = { version = "0.25", default-features = false, features = [
+  "png",
+  "jpeg",
+  "gif",
+  "webp",
+] }
 jsonrpsee-types = "0.26"
 libc = "0.2"
 listenfd = "1"

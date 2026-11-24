@@ -1,6 +1,7 @@
 //! Authenticated HTTP peer calls and incremental WebSocket sessions over
 //! local Unix domain sockets and optional authenticated TCP listeners.
 
+mod content;
 mod peer_rpc;
 mod socket;
 
@@ -10,14 +11,16 @@ use anyhow::{Context, Result};
 use axum::{
     Extension, Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Request as HttpRequest, State, WebSocketUpgrade},
+    extract::{
+        DefaultBodyLimit, Path as AxumPath, Request as HttpRequest, State, WebSocketUpgrade,
+    },
     http::{
         HeaderMap, Method as HttpMethod, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE, ORIGIN},
     },
     middleware::{self, Next},
     response::{IntoResponse, Response as HttpResponse},
-    routing::get,
+    routing::{get, put},
 };
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
@@ -32,8 +35,8 @@ use crate::{
     rpc::{self, Route, handlers},
     tasks::{self, Tasks},
     wire::{
-        HEALTH_PATH, Hello, HelloParams, Id, PROTOCOL_VERSION, RPC_PATH, Request, Response, encode,
-        params, raw_params,
+        BLOBS_PATH, HEALTH_PATH, Hello, HelloParams, Id, PROTOCOL_VERSION, RPC_PATH, Request,
+        Response, encode, params, raw_params,
     },
     workspace::{self, Workspace},
 };
@@ -124,6 +127,7 @@ impl Listener {
         Router::new()
             .route(HEALTH_PATH, get(health))
             .route(RPC_PATH, get(upgrade).post(peer_rpc))
+            .route(BLOBS_PATH, put(peer_put_blob))
             .layer(middleware::from_fn_with_state(guard_state, guard))
             .layer(DefaultBodyLimit::max(MAX_FRAME))
             .with_state(self)
@@ -352,6 +356,58 @@ async fn peer_rpc(
             .into_response();
     };
     Json(Response::new(request.id, response)).into_response()
+}
+
+async fn peer_put_blob(
+    State(listener): State<Listener>,
+    Extension(principal): Extension<Principal>,
+    AxumPath(sha): AxumPath<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> HttpResponse {
+    let Principal::Peer(_) = principal else {
+        return (
+            StatusCode::FORBIDDEN,
+            "blob upload is restricted to authenticated peers",
+        )
+            .into_response();
+    };
+    let octet_stream = headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| {
+            media
+                .trim()
+                .eq_ignore_ascii_case("application/octet-stream")
+        });
+    if !octet_stream {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "expected Content-Type: application/octet-stream",
+        )
+            .into_response();
+    }
+    if body.len() > viz_protocol::limits::ATTACHMENT_TOTAL_BYTES {
+        return (StatusCode::PAYLOAD_TOO_LARGE, "blob exceeds 20 MiB limit").into_response();
+    }
+    match listener
+        .server
+        .workspace
+        .receive_peer_blob(&sha, body.to_vec())
+        .await
+    {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => {
+            let status = match error.kind() {
+                crate::error::Kind::Invalid => StatusCode::BAD_REQUEST,
+                crate::error::Kind::NotFound => StatusCode::NOT_FOUND,
+                crate::error::Kind::Unavailable => StatusCode::SERVICE_UNAVAILABLE,
+                crate::error::Kind::Internal => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, error.to_string()).into_response()
+        }
+    }
 }
 
 fn parse_request(data: &[u8]) -> Result<Request<'_>, RequestError> {

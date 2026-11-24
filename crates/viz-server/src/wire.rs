@@ -17,6 +17,7 @@ use crate::error::{Error, Kind, RequestError};
 
 pub(crate) const RPC_PATH: &str = "/v2/rpc";
 pub(crate) const HEALTH_PATH: &str = "/v2/health";
+pub(crate) const BLOBS_PATH: &str = "/v2/blobs/{sha}";
 
 pub(crate) use viz_acp::StoredAttachment;
 
@@ -39,7 +40,7 @@ pub(crate) fn peer_error(code: i32, message: &str) -> Error {
     }
 }
 
-const fn error_code(error: &Error) -> i32 {
+pub(crate) const fn error_code(error: &Error) -> i32 {
     match error {
         Error::Peer { code, .. } => *code,
         Error::Request(request) => match request {

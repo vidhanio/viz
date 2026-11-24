@@ -3,7 +3,7 @@
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use super::{Attachment, Method, Run, RunId, TaskId, ThreadId, WorktreeTarget, private};
+use super::{Method, Run, RunId, TaskId, ThreadId, WorktreeTarget, private};
 
 /// A method restricted to configured peers.
 pub trait PeerMethod: Method + DeserializeOwned + Send {
@@ -11,6 +11,20 @@ pub trait PeerMethod: Method + DeserializeOwned + Send {
     fn source(&self) -> Option<&str> {
         None
     }
+}
+
+/// Content-addressed attachment reference pushed to a peer via
+/// `PUT /v2/blobs/{sha}` before `task.receive`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PeerAttachment {
+    /// Lowercase SHA-256 hex digest of the pushed blob bytes.
+    pub blob: String,
+    /// Original filename.
+    pub name: String,
+    /// MIME media type.
+    pub mime: String,
+    /// Decoded byte length.
+    pub size: u64,
 }
 
 /// An offer may be retried with the same environment and task key.
@@ -29,7 +43,7 @@ pub struct ReceiveTask {
     #[serde(flatten)]
     pub target: TaskTarget,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<Attachment>,
+    pub attachments: Vec<PeerAttachment>,
 }
 
 /// Placement and initial runner options for an offered task.

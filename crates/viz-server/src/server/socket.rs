@@ -21,7 +21,8 @@ use tokio_tungstenite::{
 };
 use tokio_util::sync::CancellationToken;
 use viz_protocol::{
-    Empty, ListEnvironments, Method, SendInput, Unwatch, UnwatchGit, Watch, WatchGit, Watching,
+    ConnectionChannel, Empty, ListEnvironments, Method, SendInput, Unwatch, UnwatchGit, Watch,
+    WatchGit, Watching,
 };
 
 use super::{Principal, Server, parse_request, peer_rpc};
@@ -105,7 +106,10 @@ pub(super) async fn connect(
     socket
         .send(json_message(&Response::new(request.id, Ok(hello)))?)
         .await?;
-    local_session(socket, server, params.client).await
+    match params.channel {
+        ConnectionChannel::Control => local_session(socket, server, params.client).await,
+        ConnectionChannel::Content => super::content::session(socket, server).await,
+    }
 }
 
 #[derive(Serialize)]
@@ -668,6 +672,7 @@ async fn proxy(
             return Ok(());
         }
     };
+    let channel = params.channel;
     server.peers.mark(environment, true);
     socket
         .send(json_message(&Response::new(id, Ok(response)))?)
@@ -677,15 +682,8 @@ async fn proxy(
             () = server.stop.cancelled() => break,
             incoming = socket.next() => {
                 let Some(incoming) = incoming else { break; };
-                let incoming = incoming?;
-                if matches!(incoming, Message::Close(_)) { break; }
-                if !matches!(incoming, Message::Text(_) | Message::Binary(_)) { continue; }
-                let bytes = incoming.into_data();
-                if let Ok(request) = parse_request(&bytes) && request.method == ListEnvironments::NAME {
-                    let result = server.call(request.method_name(), raw_params(&request)).await;
-                    socket.send(json_message(&Response::new(request.id, result))?).await?;
-                } else {
-                    link.send(PeerMessage::Binary(bytes)).await?;
+                if !forward_proxy_frame(incoming?, channel, server, &mut socket, &mut link).await? {
+                    break;
                 }
             }
             incoming = link.next() => match incoming {
@@ -698,4 +696,51 @@ async fn proxy(
     }
     let _ = link.close(None).await;
     Ok(())
+}
+
+async fn forward_proxy_frame<S>(
+    incoming: Message,
+    channel: ConnectionChannel,
+    server: &Server,
+    socket: &mut WebSocket,
+    link: &mut tokio_tungstenite::WebSocketStream<S>,
+) -> Result<bool>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    match incoming {
+        Message::Close(_) => return Ok(false),
+        Message::Text(text) => {
+            if channel == ConnectionChannel::Control
+                && let Ok(request) = parse_request(text.as_bytes())
+                && request.method == ListEnvironments::NAME
+            {
+                let result = server
+                    .call(request.method_name(), raw_params(&request))
+                    .await;
+                socket
+                    .send(json_message(&Response::new(request.id, result))?)
+                    .await?;
+            } else {
+                link.send(PeerMessage::Text(text.as_str().into())).await?;
+            }
+        }
+        Message::Binary(bytes) => {
+            if channel == ConnectionChannel::Control
+                && let Ok(request) = parse_request(&bytes)
+                && request.method == ListEnvironments::NAME
+            {
+                let result = server
+                    .call(request.method_name(), raw_params(&request))
+                    .await;
+                socket
+                    .send(json_message(&Response::new(request.id, result))?)
+                    .await?;
+            } else {
+                link.send(PeerMessage::Binary(bytes)).await?;
+            }
+        }
+        Message::Ping(_) | Message::Pong(_) => {}
+    }
+    Ok(true)
 }

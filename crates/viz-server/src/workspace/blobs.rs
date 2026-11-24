@@ -11,6 +11,7 @@ use std::{
     os::unix::fs::{DirBuilderExt as _, OpenOptionsExt as _},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
 use anyhow::Context as _;
@@ -21,13 +22,16 @@ use viz_fs::{FsError, RelPath, Root};
 use super::sql::{Connection, exec, rows};
 use crate::error::Error;
 
+const PEER_STAGE_TTL: Duration = Duration::from_secs(300);
+
 /// On-disk content-addressed blob directory coupled with an in-flight write
-/// permit map so garbage collection never unlinks a blob before its SQLite
-/// reference commits.
+/// permit map and peer-stage grace set so garbage collection never unlinks a
+/// blob before its SQLite reference commits.
 #[derive(Debug)]
 pub(crate) struct BlobStore {
     root: PathBuf,
     in_flight: Arc<Mutex<HashMap<String, usize>>>,
+    peer_staged: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 /// RAII permit keeping a freshly staged blob immune from garbage collection
@@ -102,7 +106,20 @@ impl BlobStore {
         Ok(Self {
             root,
             in_flight: Arc::new(Mutex::new(HashMap::new())),
+            peer_staged: Arc::new(Mutex::new(HashMap::new())),
         })
+    }
+
+    /// Marks `blob_id` as recently pushed by a peer (`PUT /v2/blobs/{sha}`)
+    /// so background GC preserves it during the brief window before
+    /// `task.receive` links it into `thread_attachments`.
+    pub(crate) fn mark_peer_staged(&self, blob_id: &str) {
+        let mut staged = self
+            .peer_staged
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        staged.retain(|_, when| when.elapsed() < PEER_STAGE_TTL);
+        staged.insert(blob_id.to_owned(), Instant::now());
     }
 
     /// Acquires a GC-blocking write permit for `blob_id`.
@@ -140,6 +157,32 @@ impl BlobStore {
         .map_err(|error| Error::unavailable(format!("blob writer failed: {error}")))?
         .map_err(|error| Error::unavailable(format!("writing blob: {error}")))?;
         Ok((blob_id, size, permit))
+    }
+
+    /// Reads a byte range `[offset, offset + len)` from an immutable blob on
+    /// disk without buffering the entire file in memory or holding any SQLite
+    /// lock. Returns `(chunk_bytes, total_size)`.
+    pub(crate) async fn read_range(
+        &self,
+        blob_id: &str,
+        offset: u64,
+        len: usize,
+    ) -> Result<(Vec<u8>, u64), Error> {
+        let rel = blob_rel_path(blob_id)?;
+        let root_path = self.root.clone();
+        tokio::task::spawn_blocking(move || {
+            let root = Root::open(&root_path)?;
+            let file = root.open_regular_nofollow(&rel, false)?;
+            file.read_range(offset, len)
+        })
+        .await
+        .map_err(|error| Error::unavailable(format!("blob reader failed: {error}")))?
+        .map_err(|error| match error {
+            FsError::Io(ref io_err) if io_err.kind() == io::ErrorKind::NotFound => {
+                Error::not_found(format!("blob {blob_id} is missing from disk"))
+            }
+            other => Error::unavailable(format!("reading blob {blob_id}: {other}")),
+        })
     }
 
     /// Reads an immutable blob from disk with a strict byte ceiling, outside
@@ -225,13 +268,21 @@ impl BlobStore {
             if candidates.is_empty() {
                 return Ok(0);
             }
-            let active: HashSet<String> = self
+            let mut active: HashSet<String> = self
                 .in_flight
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .keys()
                 .cloned()
                 .collect();
+            {
+                let mut staged = self
+                    .peer_staged
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                staged.retain(|_, when| when.elapsed() < PEER_STAGE_TTL);
+                active.extend(staged.keys().cloned());
+            }
             let mut tx = db.transaction().await?;
             let mut deleted = Vec::new();
             for id in candidates {

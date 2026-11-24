@@ -165,7 +165,7 @@ impl Tasks {
         &self,
         parent: ThreadId,
         turn: Option<RunId>,
-        mut input: DelegateInput,
+        input: DelegateInput,
     ) -> Result<Task, Error> {
         let environment = input.environment.as_deref().unwrap_or(&self.peers.local);
         if environment != self.peers.local && self.peers.get(environment).is_none() {
@@ -180,13 +180,10 @@ impl Tasks {
                 return self.admitted(&id, parent).await;
             }
         }
-        if !input.attachment_ids.is_empty() {
-            input.attachments.extend(
-                self.workspace
-                    .attachments(parent, &input.attachment_ids)
-                    .await?,
-            );
-        }
+        let attachments = self
+            .workspace
+            .prepare_delegated_attachments(parent, input.attachments, &input.attachment_ids)
+            .await?;
 
         let (id, awaited) = {
             let mut db = self.workspace.db.lock().await;
@@ -219,7 +216,7 @@ impl Tasks {
                     },
                     title: input.title,
                     text: input.text,
-                    attachments: input.attachments,
+                    attachments,
                 })?;
                 let awaited = turn.map(|_| self.await_admission(&id));
                 store::insert(

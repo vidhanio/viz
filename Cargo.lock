@@ -6390,6 +6390,7 @@ dependencies = [
  "clap",
  "futures",
  "futures-util",
+ "image",
  "jsonrpsee-types",
  "listenfd",
  "mime_guess",

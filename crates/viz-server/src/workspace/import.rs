@@ -99,11 +99,12 @@ impl Workspace {
                     attachments: Vec::new(),
                     context: Vec::new(),
                     origin: None,
+                    truncated: false,
                 },
             )
             .await?;
             for entry in turn.entries {
-                store::publish(&mut tx, thread, &input.session, entry).await?;
+                store::publish(&mut tx, thread, &input.session, entry, &self.entry_chunks).await?;
             }
             let end = store::append(
                 &mut tx,

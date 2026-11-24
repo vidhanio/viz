@@ -122,12 +122,11 @@ impl Workspace {
 
     async fn receive_tx(
         self: &Arc<Self>,
-        mut args: ReceiveTask,
+        args: ReceiveTask,
         placement: Option<&Placement>,
         parent: Option<&Parent>,
         scratch: Option<&super::scratch::PreparedScratch>,
     ) -> Result<(Received, bool), Error> {
-        let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let key = (args.origin_environment.as_str(), &args.task);
@@ -153,7 +152,7 @@ impl Workspace {
         let thread = self
             .task_thread(&mut tx, &args, placement, parent, scratch)
             .await?;
-        let attachments = attachments::commit(&mut tx, thread, &staged, &[]).await?;
+        let attachments = attachments::link_peer(&mut tx, thread, &args.attachments).await?;
         let run = runs::enqueue(
             &mut tx,
             thread,
@@ -175,7 +174,6 @@ impl Workspace {
         )
         .await?;
         tx.commit().await?;
-        drop(staged);
         self.kick(thread, false);
         drop(db);
         self.relist(thread);

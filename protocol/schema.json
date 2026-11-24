@@ -23,6 +23,10 @@
               "string",
               "null"
             ]
+          },
+          "channel": {
+            "description": "Traffic class for this WebSocket connection (defaults to control).",
+            "$ref": "#/$defs/ConnectionChannel"
           }
         },
         "required": [
@@ -65,6 +69,21 @@
                 "description": "One-off command-line client.",
                 "type": "string",
                 "const": "cli"
+              }
+            ]
+          },
+          "ConnectionChannel": {
+            "description": "Which traffic class a WebSocket carries after `hello`.",
+            "oneOf": [
+              {
+                "description": "Control plane: JSON-RPC requests, responses, and incremental watch\nnotifications.",
+                "type": "string",
+                "const": "control"
+              },
+              {
+                "description": "Bulk content plane: pull-based binary chunked blob/file transfers and\nserver-rendered image thumbnails.",
+                "type": "string",
+                "const": "content"
               }
             ]
           }
@@ -10474,6 +10493,10 @@
                             "type": "null"
                           }
                         ]
+                      },
+                      "truncated": {
+                        "description": "Whether `text` was trimmed on the wire to stay within entry byte\nbudgets while preserving `attachments`, `context`, and `origin`.\nLoad the complete entry through `thread.entry_chunk`.",
+                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -13526,6 +13549,10 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "truncated": {
+                    "description": "Whether `text` was trimmed on the wire to stay within entry byte\nbudgets while preserving `attachments`, `context`, and `origin`.\nLoad the complete entry through `thread.entry_chunk`.",
+                    "type": "boolean"
                   }
                 },
                 "required": [

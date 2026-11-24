@@ -194,9 +194,35 @@ impl Tasks {
         let result = if self.is_local(target) {
             self.workspace.receive(request).await
         } else {
-            self.peers
-                .call::<ReceiveTask>(target, &request, Duration::ZERO)
-                .await
+            let mut upload_err = None;
+            for attachment in &request.attachments {
+                match self
+                    .workspace
+                    .read_blob(&attachment.blob, attachment.size)
+                    .await
+                {
+                    Ok(bytes) => {
+                        if let Err(error) =
+                            self.peers.push_blob(target, &attachment.blob, bytes).await
+                        {
+                            upload_err = Some(error);
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        upload_err = Some(error);
+                        break;
+                    }
+                }
+            }
+            match upload_err {
+                Some(error) => Err(error),
+                None => {
+                    self.peers
+                        .call::<ReceiveTask>(target, &request, Duration::ZERO)
+                        .await
+                }
+            }
         };
         match result {
             Ok(receipt) => self.apply(id, Command::Admitted(receipt)).await?,

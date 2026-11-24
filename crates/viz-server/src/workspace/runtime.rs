@@ -320,7 +320,9 @@ impl Workspace {
                 relist = persist_snapshot(&mut tx, thread, snapshot, None).await?;
             }
             for entry in entries {
-                if let Some(patch) = store::publish(&mut tx, thread, session, entry).await? {
+                if let Some(patch) =
+                    store::publish(&mut tx, thread, session, entry, &self.entry_chunks).await?
+                {
                     patches.push(patch);
                 }
             }

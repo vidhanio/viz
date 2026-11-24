@@ -195,6 +195,53 @@ impl Peers {
         )
     }
 
+    /// Pushes content-addressed raw blob bytes to peer `id` via
+    /// `PUT /v2/blobs/{sha}` before sending a `task.receive` referencing `sha`.
+    pub(crate) async fn push_blob(&self, id: &str, sha: &str, bytes: Vec<u8>) -> Result<(), Error> {
+        let peer = self
+            .get(id)
+            .ok_or_else(|| Error::unavailable(format!("unknown environment {id}")))?;
+        let _permit = peer
+            .permits
+            .acquire()
+            .await
+            .map_err(|_| Error::unavailable("peer concurrency closed"))?;
+        let mut url = peer.url.clone();
+        let base_path = peer.base_url.path().trim_end_matches('/');
+        url.set_path(&format!("{base_path}/v2/blobs/{sha}"));
+        let response = self
+            .client
+            .put(url)
+            .bearer_auth(&peer.token)
+            .header("x-viz-environment", &peer.destination)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(bytes)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .map_err(|_| {
+                peer.mark(false);
+                Error::unavailable(format!("uploading blob to environment {id}"))
+            })?;
+        if response.status().is_success() {
+            peer.mark(true);
+            return Ok(());
+        }
+        let status = response.status();
+        let message = response.text().await.unwrap_or_default();
+        if status.is_client_error() {
+            peer.mark(true);
+            Err(Error::invalid(format!(
+                "environment {id} rejected blob upload ({status}): {message}"
+            )))
+        } else {
+            peer.mark(false);
+            Err(Error::unavailable(format!(
+                "environment {id} failed blob upload ({status}): {message}"
+            )))
+        }
+    }
+
     async fn probe(&self, id: &str, peer: &Peer) -> bool {
         if let Some(reachable) = peer.recent() {
             return reachable;
@@ -210,6 +257,7 @@ impl Peers {
                 kind: ClientKind::Cli,
                 name: "viz-peer".into(),
             },
+            channel: viz_protocol::ConnectionChannel::Control,
         };
         let reachable = self
             .request::<HelloParams>(peer, &params, PROBE_TIMEOUT)
