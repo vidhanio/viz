@@ -391,17 +391,23 @@ impl Session<'_> {
         Ok(())
     }
 
-    pub(super) async fn refresh_list(&self) -> Result<()> {
-        let (threads, mut projects, ()) = tokio::try_join!(
-            self.client.list_threads(),
-            self.client.list_projects(),
-            self.refresh_tasks(),
+    pub(super) async fn refresh_list(&mut self) -> Result<()> {
+        let list_tasks = ListTasks::default();
+        let (thread_list, project_list, task_list) = tokio::try_join!(
+            self.client.list_threads_snapshot(),
+            self.client.list_projects_snapshot(),
+            self.client.request(&list_tasks),
         )?;
+        let rev = thread_list.rev.min(project_list.rev).min(task_list.rev);
+        self.workspace_rev = rev;
+        let mut projects = project_list.projects;
         projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
         self.dispatch(ServerMsg::WorkspaceSynced {
             environment: self.environment.to_string(),
+            rev,
             projects,
-            threads,
+            threads: thread_list.threads,
+            tasks: task_list.tasks,
         });
         Ok(())
     }

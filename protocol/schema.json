@@ -212,6 +212,12 @@
         "title": "TaskList",
         "type": "object",
         "properties": {
+          "rev": {
+            "description": "Monotonic workspace revision at or before this snapshot was read.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "tasks": {
             "type": "array",
             "items": {
@@ -220,6 +226,7 @@
           }
         },
         "required": [
+          "rev",
           "tasks"
         ],
         "$defs": {
@@ -3465,6 +3472,12 @@
         "description": "`threads.list` result.",
         "type": "object",
         "properties": {
+          "rev": {
+            "description": "Monotonic workspace revision at or before this snapshot was read.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "threads": {
             "description": "Every thread, in the order of [`Shelf`] and of each shelf.",
             "type": "array",
@@ -3474,6 +3487,7 @@
           }
         },
         "required": [
+          "rev",
           "threads"
         ],
         "$defs": {
@@ -4821,6 +4835,12 @@
         "description": "Projects returned by `projects.list`.",
         "type": "object",
         "properties": {
+          "rev": {
+            "description": "Monotonic workspace revision at or before this snapshot was read.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
           "projects": {
             "description": "All projects.",
             "type": "array",
@@ -4830,6 +4850,7 @@
           }
         },
         "required": [
+          "rev",
           "projects"
         ],
         "$defs": {
@@ -13590,30 +13611,41 @@
         ]
       },
       {
+        "description": "Coalesced revisioned workspace entity deltas (threads, projects, tasks).",
         "type": "object",
         "properties": {
           "method": {
             "type": "string",
-            "const": "threads.changed"
+            "const": "workspace.delta"
           },
           "params": {
-            "$ref": "#/$defs/Empty"
-          }
-        },
-        "required": [
-          "method",
-          "params"
-        ]
-      },
-      {
-        "type": "object",
-        "properties": {
-          "method": {
-            "type": "string",
-            "const": "tasks.changed"
-          },
-          "params": {
-            "$ref": "#/$defs/Empty"
+            "type": "object",
+            "properties": {
+              "baseRev": {
+                "description": "Monotonic workspace revision immediately preceding `changes`.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "rev": {
+                "description": "Monotonic workspace revision after applying `changes`.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "changes": {
+                "description": "Deduplicated entity updates advancing from `base_rev` to `rev`.",
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/WorkspaceChange"
+                }
+              }
+            },
+            "required": [
+              "baseRev",
+              "rev",
+              "changes"
+            ]
           }
         },
         "required": [
@@ -15937,6 +15969,886 @@
           "upsert",
           "remove"
         ]
+      },
+      "WorkspaceChange": {
+        "description": "One incremental workspace entity mutation delivered inside\n[`Notification::WorkspaceDelta`].",
+        "oneOf": [
+          {
+            "description": "A thread was created or its summary fields changed.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "thread_upsert"
+              },
+              "thread": {
+                "$ref": "#/$defs/ThreadSummary"
+              }
+            },
+            "required": [
+              "kind",
+              "thread"
+            ]
+          },
+          {
+            "description": "A thread was deleted.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "thread_removed"
+              },
+              "thread": {
+                "$ref": "#/$defs/ThreadId"
+              }
+            },
+            "required": [
+              "kind",
+              "thread"
+            ]
+          },
+          {
+            "description": "A project was created or updated.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "project_upsert"
+              },
+              "project": {
+                "$ref": "#/$defs/Project"
+              }
+            },
+            "required": [
+              "kind",
+              "project"
+            ]
+          },
+          {
+            "description": "A project was removed.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "project_removed"
+              },
+              "project": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "project"
+            ]
+          },
+          {
+            "description": "A delegated task was created or updated.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "task_upsert"
+              },
+              "task": {
+                "$ref": "#/$defs/Task"
+              }
+            },
+            "required": [
+              "kind",
+              "task"
+            ]
+          },
+          {
+            "description": "A delegated task was dismissed or removed.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "task_removed"
+              },
+              "task": {
+                "$ref": "#/$defs/TaskId"
+              }
+            },
+            "required": [
+              "kind",
+              "task"
+            ]
+          },
+          {
+            "description": "Broadcast lagged or a bulk change occurred; resync snapshots without\nclosing the WebSocket.",
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "resync"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          }
+        ]
+      },
+      "ThreadSummary": {
+        "description": "A `threads.list` item.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Its id.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "title": {
+            "description": "A user rename, an ACP session title, or a title from the first prompt.",
+            "type": "string"
+          },
+          "parent": {
+            "description": "For a subagent: the thread that started it.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "parentEnvironment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "forkedFrom": {
+            "description": "The thread this one continues a copy of.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ForkSource"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "project": {
+            "description": "The project directory this thread belongs to, if any.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "worktree": {
+            "description": "The project's linked Git worktree the thread runs in; `None` in the\nproject's own checkout.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadWorktree"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pullRequest": {
+            "description": "The most recently observed pull request for this checkout branch.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/GitHubPull"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "harness": {
+            "description": "Configuration key of the ACP harness.",
+            "type": "string"
+          },
+          "harnessName": {
+            "description": "Display name of the ACP harness.",
+            "type": "string"
+          },
+          "status": {
+            "description": "What this thread is doing.",
+            "$ref": "#/$defs/ThreadStatus"
+          },
+          "lifecycle": {
+            "description": "Where it stands in the user's triage.",
+            "$ref": "#/$defs/Lifecycle"
+          },
+          "shelf": {
+            "description": "The part of the list it belongs in.",
+            "$ref": "#/$defs/Shelf"
+          },
+          "attention": {
+            "description": "Why it wants the user, if it does.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Attention"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "waitingOn": {
+            "description": "Delegated tasks still under way.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "lastInputAt": {
+            "description": "The user's latest input, in Unix milliseconds.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "updatedAt": {
+            "description": "Time of the last input or turn end in Unix milliseconds; zero if\nunknown.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "model": {
+            "description": "Display name of the selected model, once reported.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "thinking": {
+            "description": "Display name of the selected thinking level, when the model has one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "harness",
+          "harnessName",
+          "status",
+          "lifecycle",
+          "shelf",
+          "waitingOn",
+          "updatedAt"
+        ]
+      },
+      "ForkSource": {
+        "description": "Where a thread was forked from.",
+        "type": "object",
+        "properties": {
+          "thread": {
+            "description": "The source thread, which may be gone.",
+            "$ref": "#/$defs/ThreadId"
+          },
+          "entry": {
+            "description": "The last of its entries the fork shares, if any.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EntryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "thread"
+        ]
+      },
+      "GitHubPull": {
+        "type": "object",
+        "properties": {
+          "number": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/GitHubPullState"
+          },
+          "draft": {
+            "type": "boolean"
+          },
+          "head": {
+            "type": "string"
+          },
+          "head_commit": {
+            "type": "string"
+          },
+          "base": {
+            "type": "string"
+          },
+          "additions": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "deletions": {
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          },
+          "mergeable": {
+            "type": "string"
+          },
+          "checks": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "review": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "url",
+          "state",
+          "draft",
+          "head",
+          "head_commit",
+          "base",
+          "additions",
+          "deletions",
+          "mergeable"
+        ]
+      },
+      "GitHubPullState": {
+        "type": "string",
+        "enum": [
+          "open",
+          "closed",
+          "merged"
+        ]
+      },
+      "Lifecycle": {
+        "description": "A thread's place in triage. Every change returns the lifecycle before it,\nwhich [`TriageAction::Restore`] puts back.",
+        "type": "object",
+        "properties": {
+          "standing": {
+            "$ref": "#/$defs/Standing"
+          },
+          "snoozedUntil": {
+            "description": "Put off until this time, in Unix milliseconds.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "pin": {
+            "description": "Position among pinned threads, if pinned; lower is higher up.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "order": {
+            "description": "Position among active threads, if the user arranged it. Threads without\none come first, the latest input on top.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "autoSettle": {
+            "description": "Whether it settles by itself.",
+            "$ref": "#/$defs/AutoSettle",
+            "default": "follow"
+          },
+          "archived": {
+            "type": "boolean"
+          },
+          "unread": {
+            "description": "A turn settled while no app was watching, or the user marked it.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "standing",
+          "archived",
+          "unread"
+        ]
+      },
+      "Standing": {
+        "description": "Whether the user is done with a thread.",
+        "oneOf": [
+          {
+            "description": "Open, and settled by the usual rules.",
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "open"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          {
+            "description": "Brought back by the user or a due snooze: it does not settle by itself\nuntil it gets new input.",
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "kept"
+              }
+            },
+            "required": [
+              "state"
+            ]
+          },
+          {
+            "description": "Done. New input or agent activity opens it again.",
+            "type": "object",
+            "properties": {
+              "state": {
+                "type": "string",
+                "const": "settled"
+              },
+              "at": {
+                "description": "Unix milliseconds.",
+                "type": "integer",
+                "format": "int64"
+              },
+              "by": {
+                "$ref": "#/$defs/SettledBy"
+              }
+            },
+            "required": [
+              "state",
+              "at",
+              "by"
+            ]
+          }
+        ]
+      },
+      "SettledBy": {
+        "description": "What settled a thread.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "user",
+              "inactivity"
+            ]
+          },
+          {
+            "description": "Its pull request was merged or closed.",
+            "type": "string",
+            "const": "pullRequest"
+          }
+        ]
+      },
+      "AutoSettle": {
+        "description": "A thread's say in automatic settlement.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "never"
+            ]
+          },
+          {
+            "description": "By the usual rules.",
+            "type": "string",
+            "const": "follow"
+          }
+        ]
+      },
+      "Shelf": {
+        "description": "The part of the thread list a thread belongs in.",
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": [
+              "pinned",
+              "active",
+              "snoozed",
+              "settled",
+              "archived"
+            ]
+          },
+          {
+            "description": "Running, queued, or waiting for work it delegated.",
+            "type": "string",
+            "const": "working"
+          }
+        ]
+      },
+      "Attention": {
+        "description": "Why a thread wants the user.",
+        "oneOf": [
+          {
+            "description": "The agent awaits a permission.",
+            "type": "string",
+            "const": "approval"
+          },
+          {
+            "description": "The agent awaits an answer.",
+            "type": "string",
+            "const": "question"
+          },
+          {
+            "description": "Its last run failed, unseen.",
+            "type": "string",
+            "const": "failure"
+          },
+          {
+            "description": "Something finished, unseen.",
+            "type": "string",
+            "const": "unread"
+          }
+        ]
+      },
+      "Project": {
+        "description": "A working directory shared by a group of threads.",
+        "type": "object",
+        "properties": {
+          "settings": {
+            "description": "Project preferences shared by all clients.",
+            "$ref": "#/$defs/ProjectSettings"
+          },
+          "name": {
+            "description": "Display name.",
+            "type": "string"
+          },
+          "path": {
+            "description": "Absolute directory path.",
+            "type": "string"
+          },
+          "createdAt": {
+            "description": "Creation time in Unix milliseconds.",
+            "type": "integer",
+            "format": "int64"
+          },
+          "git": {
+            "description": "Whether the directory is inside a Git checkout, so its threads can\nrun in worktrees.",
+            "type": "boolean"
+          },
+          "branch": {
+            "description": "The checkout's current branch; `None` outside Git or on a detached\nHEAD.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "settings",
+          "name",
+          "path",
+          "createdAt",
+          "git"
+        ]
+      },
+      "ProjectSettings": {
+        "description": "Stored project preferences. Optional defaults inherit from the environment.",
+        "type": "object",
+        "properties": {
+          "icon": {
+            "$ref": "#/$defs/ProjectIcon",
+            "default": {
+              "kind": "automatic"
+            }
+          },
+          "pinned": {
+            "type": "boolean",
+            "default": false
+          },
+          "order": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "default": null
+          },
+          "archived": {
+            "type": "boolean",
+            "default": false
+          },
+          "defaultHarness": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "defaultModel": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "defaultOptions": {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/$defs/OptionValue"
+            },
+            "default": {}
+          },
+          "defaultCheckout": {
+            "$ref": "#/$defs/DefaultCheckout",
+            "default": "local"
+          },
+          "baseBranch": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "branchPrefix": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "additionalDirectories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "autoSettle": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ProjectAutoSettle"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        }
+      },
+      "ProjectIcon": {
+        "description": "Icon selection advertised in project summaries. Image bytes are read\nseparately.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "automatic"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "ownerAvatar"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "lucide"
+              },
+              "name": {
+                "type": "string"
+              },
+              "color": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "color"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "emoji"
+              },
+              "emoji": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "emoji"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "uploaded"
+              },
+              "mediaType": {
+                "type": "string"
+              },
+              "blob": {
+                "description": "Lowercase SHA-256 hex digest stored in the workspace blob store.",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "mediaType",
+              "blob"
+            ]
+          }
+        ]
+      },
+      "DefaultCheckout": {
+        "type": "string",
+        "enum": [
+          "local",
+          "newWorktree"
+        ]
+      },
+      "ProjectAutoSettle": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "never"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "const": "afterDays"
+              },
+              "days": {
+                "type": "integer",
+                "format": "uint16",
+                "minimum": 0,
+                "maximum": 65535
+              }
+            },
+            "required": [
+              "kind",
+              "days"
+            ]
+          }
+        ]
+      },
+      "Task": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "parent": {
+            "$ref": "#/$defs/ThreadId"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "thread": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ThreadId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/RunId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "$ref": "#/$defs/TaskStatus"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
+          },
+          "result": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "parent",
+          "environment",
+          "status",
+          "reachable",
+          "title"
+        ]
+      },
+      "TaskStatus": {
+        "type": "string",
+        "enum": [
+          "queued",
+          "running",
+          "completed",
+          "failed",
+          "cancelled"
+        ]
+      },
+      "TaskId": {
+        "description": "A delegated task's id, allocated by the environment that owns the parent\nthread.",
+        "type": "string"
       },
       "Empty": {
         "description": "Empty successful response or notification params.",

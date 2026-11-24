@@ -4,7 +4,7 @@
 use viz_client::protocol::{
     ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileContent,
     FileSearchMatch, Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, RequestId,
-    SearchHit, Task, ThreadId, ThreadState, ThreadSummary,
+    SearchHit, Task, ThreadId, ThreadState, ThreadSummary, WorkspaceChange,
 };
 
 use crate::{
@@ -29,6 +29,8 @@ pub enum ServerMsg {
         version: String,
         /// Active environment id reported by `hello`.
         environment: String,
+        /// Monotonic workspace revision of the initial snapshot.
+        rev: u64,
         /// Available environments.
         environments: Vec<Environment>,
         /// Available harnesses in this environment.
@@ -49,14 +51,27 @@ pub enum ServerMsg {
         /// Completion result or error string.
         result: Result<(), String>,
     },
-    /// Authoritative project and thread list snapshot arrived.
+    /// Authoritative project, thread, and task snapshot arrived.
     WorkspaceSynced {
         /// Environment id that produced the snapshot.
         environment: String,
+        /// Monotonic workspace revision of this snapshot.
+        rev: u64,
         /// Projects sorted for display.
         projects: Vec<Project>,
         /// Threads sorted for display.
         threads: Vec<ThreadSummary>,
+        /// Delegated tasks tracked in this environment.
+        tasks: Vec<Task>,
+    },
+    /// Coalesced revisioned workspace entity delta arrived.
+    WorkspaceDelta {
+        /// Environment id that produced the delta.
+        environment: String,
+        /// Monotonic workspace revision after applying `changes`.
+        rev: u64,
+        /// Incremental entity mutations.
+        changes: Vec<WorkspaceChange>,
     },
     /// Authoritative delegated task list snapshot arrived.
     TasksSynced {

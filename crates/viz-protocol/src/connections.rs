@@ -30,6 +30,28 @@ pub struct Watching {
     pub watching: bool,
 }
 
+/// One incremental workspace entity mutation delivered inside
+/// [`Notification::WorkspaceDelta`].
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum WorkspaceChange {
+    /// A thread was created or its summary fields changed.
+    ThreadUpsert { thread: Box<crate::ThreadSummary> },
+    /// A thread was deleted.
+    ThreadRemoved { thread: ThreadId },
+    /// A project was created or updated.
+    ProjectUpsert { project: Box<crate::Project> },
+    /// A project was removed.
+    ProjectRemoved { project: String },
+    /// A delegated task was created or updated.
+    TaskUpsert { task: Box<Task> },
+    /// A delegated task was dismissed or removed.
+    TaskRemoved { task: TaskId },
+    /// Broadcast lagged or a bulk change occurred; resync snapshots without
+    /// closing the WebSocket.
+    Resync,
+}
+
 /// Notifications pushed after hello.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 #[serde(tag = "method", content = "params")]
@@ -67,10 +89,17 @@ pub enum Notification {
         thread: ThreadId,
         delta: crate::LiveDelta,
     },
-    #[serde(rename = "threads.changed")]
-    ThreadsChanged(Empty),
-    #[serde(rename = "tasks.changed")]
-    TasksChanged(Empty),
+    /// Coalesced revisioned workspace entity deltas (threads, projects, tasks).
+    #[serde(rename = "workspace.delta")]
+    WorkspaceDelta {
+        /// Monotonic workspace revision immediately preceding `changes`.
+        #[serde(rename = "baseRev")]
+        base_rev: u64,
+        /// Monotonic workspace revision after applying `changes`.
+        rev: u64,
+        /// Deduplicated entity updates advancing from `base_rev` to `rev`.
+        changes: Vec<WorkspaceChange>,
+    },
     /// A harness's status or options changed; list harnesses again.
     #[serde(rename = "harnesses.changed")]
     HarnessesChanged(Empty),
@@ -176,6 +205,8 @@ pub struct ListTasks {
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct TaskList {
+    /// Monotonic workspace revision at or before this snapshot was read.
+    pub rev: u64,
     pub tasks: Vec<Task>,
 }
 

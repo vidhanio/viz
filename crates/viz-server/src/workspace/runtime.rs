@@ -164,7 +164,7 @@ impl Workspace {
             .write(move |conn| {
                 if runs::status(conn, thread, run)? != Some(RunStatus::Running) {
                     requests.release_run(run);
-                    updates.live(thread, None);
+                    let _ = updates.live(thread, None);
                     return Ok(());
                 }
                 let signals = Signals {
@@ -177,7 +177,7 @@ impl Workspace {
                 runs::settle(&tx, thread, run, settlement, updates.is_watched(thread))?;
                 tx.commit()?;
                 requests.release_run(run);
-                updates.live(thread, None);
+                let _ = updates.live(thread, None);
                 Ok(())
             })
             .await?;
@@ -227,7 +227,7 @@ impl Workspace {
                         }
                     }
                 };
-                updates.live(thread, None);
+                let _ = updates.live(thread, None);
                 outcome
             })
             .await;
@@ -320,7 +320,7 @@ impl Workspace {
         let workers = Arc::clone(&self.workers);
         let updates = Arc::clone(&self.updates);
         let entry_chunks = Arc::clone(&self.entry_chunks);
-        let (active, relist, patches) = self
+        let (active, persisted, relist, patches, live_delta) = self
             .db
             .write(move |conn| {
                 let current = workers
@@ -328,10 +328,11 @@ impl Workspace {
                     .is_some_and(|driver| driver.is_current(run));
                 let mut patches = Vec::new();
                 if !current {
-                    return Ok((false, false, patches));
+                    return Ok((false, false, false, patches, None));
                 }
+                let persisted = !entries.is_empty() || snapshot.is_some();
                 let mut relist = false;
-                if !entries.is_empty() || !extracted.is_empty() || snapshot.is_some() {
+                if persisted || !extracted.is_empty() {
                     let tx = sql::immediate(conn)?;
                     attachments::link_media_blobs(&tx, thread, &extracted)?;
                     if let Some(snapshot) = snapshot {
@@ -347,15 +348,17 @@ impl Workspace {
                     tx.commit()?;
                 }
                 drop(extracted);
-                updates.live(thread, live);
-                Ok((true, relist, patches))
+                let delta = updates.live(thread, live);
+                Ok((true, persisted, relist, patches, delta))
             })
             .await?;
         if active {
             if relist {
                 self.relist(thread);
-            } else {
+            } else if persisted {
                 self.changed(Some(thread));
+            } else if let Some(delta) = live_delta {
+                self.live_delta(thread, delta);
             }
         }
         Ok(patches)

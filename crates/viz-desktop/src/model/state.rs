@@ -400,19 +400,28 @@ pub enum OptimisticUndo {
     },
 }
 
-/// Tracks in-flight optimistic edits so server failures roll back cleanly.
+#[derive(Debug, Clone)]
+struct PendingOptimistic {
+    base_rev: u64,
+    undo: OptimisticUndo,
+}
+
+/// Tracks in-flight optimistic edits so server failures roll back cleanly and
+/// superseding revisioned server deltas retire stale snapshots automatically.
 #[derive(Debug, Clone, Default)]
 pub struct OptimisticLedger {
     next_id: u64,
-    pending: BTreeMap<u64, OptimisticUndo>,
+    pending: BTreeMap<u64, PendingOptimistic>,
 }
 
 impl OptimisticLedger {
-    /// Records an undo snapshot and returns its unique mutation id.
-    pub fn record(&mut self, undo: OptimisticUndo) -> u64 {
+    /// Records an undo snapshot anchored at `base_rev` and returns its unique
+    /// mutation id.
+    pub fn record(&mut self, base_rev: u64, undo: OptimisticUndo) -> u64 {
         self.next_id = self.next_id.wrapping_add(1);
         let id = self.next_id;
-        self.pending.insert(id, undo);
+        self.pending
+            .insert(id, PendingOptimistic { base_rev, undo });
         id
     }
 
@@ -423,7 +432,31 @@ impl OptimisticLedger {
 
     /// Takes the undo snapshot when the server rejects the mutation.
     pub fn take(&mut self, id: u64) -> Option<OptimisticUndo> {
-        self.pending.remove(&id)
+        self.pending.remove(&id).map(|entry| entry.undo)
+    }
+
+    /// Retires optimistic thread edits superseded by an authoritative server
+    /// delta for `(env, thread)` at `rev > base_rev`.
+    pub fn retire_thread(&mut self, env: &str, thread: ThreadId, rev: u64) {
+        self.pending.retain(|_, entry| {
+            !(rev > entry.base_rev
+                && matches!(
+                    &entry.undo,
+                    OptimisticUndo::ThreadSummary { env: e, id, .. } if e == env && *id == thread
+                ))
+        });
+    }
+
+    /// Retires optimistic project pin edits superseded by an authoritative
+    /// server delta for `(env, path)` at `rev > base_rev`.
+    pub fn retire_project(&mut self, env: &str, path: &str, rev: u64) {
+        self.pending.retain(|_, entry| {
+            !(rev > entry.base_rev
+                && matches!(
+                    &entry.undo,
+                    OptimisticUndo::ProjectPin { env: e, path: p, .. } if e == env && p == path
+                ))
+        });
     }
 
     /// Clears all pending rollbacks (e.g., on environment switch).

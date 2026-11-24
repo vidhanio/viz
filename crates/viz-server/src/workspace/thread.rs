@@ -441,7 +441,7 @@ impl Workspace {
             })
             .await?;
         drop(reservation);
-        self.settled(thread);
+        self.thread_removed(thread);
         self.due.notify_one();
         if let Some(driver) = driver {
             driver.close().await;
@@ -454,8 +454,8 @@ impl Workspace {
                 tracing::warn!(%thread, %error, "removing materialized thread attachments");
             }
         }
-        if remove_worktree {
-            self.changed(None);
+        if remove_worktree && let Some(project) = binding.project {
+            self.project_changed(project);
         }
         Ok(())
     }

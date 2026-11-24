@@ -128,7 +128,7 @@ impl Workspace {
                 Ok((name, now, threads))
             })
             .await?;
-        self.changed(None);
+        self.project_changed(current.clone());
         for &thread in &threads {
             self.relist(thread);
         }

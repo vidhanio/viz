@@ -230,6 +230,8 @@ pub struct ListProjects {}
 /// Projects returned by `projects.list`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ProjectList {
+    /// Monotonic workspace revision at or before this snapshot was read.
+    pub rev: u64,
     /// All projects.
     pub projects: Vec<Project>,
 }

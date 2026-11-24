@@ -28,8 +28,9 @@ use crate::{
         ClientInfo, ConfigureThread, CreateProject, DeleteThread, EntryPage, Harness,
         HarnessOptions, HarnessOptionsResult, Hello, HelloParams, LaunchThread, ListEntries,
         ListHarnesses, ListProjects, ListThreads, Method, Notification, PROTOCOL_VERSION, Project,
-        RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SearchHit, SearchThreads, SendInput,
-        StopThread, ThreadId, ThreadSummary, Unwatch, UpdateProject, UpdateThread, Watch, limits,
+        ProjectList, RemoveProject, RemoveQueuedInput, RunId, SearchFiles, SearchHit,
+        SearchThreads, SendInput, StopThread, ThreadId, ThreadList, ThreadSummary, Unwatch,
+        UpdateProject, UpdateThread, Watch, limits,
     },
 };
 
@@ -165,7 +166,16 @@ impl Client {
     ///
     /// See [`Client::send`].
     pub async fn list_threads(&self) -> Result<Vec<ThreadSummary>> {
-        Ok(self.request(&ListThreads::default()).await?.threads)
+        Ok(self.list_threads_snapshot().await?.threads)
+    }
+
+    /// Lists every thread along with the workspace revision snapshot.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::send`].
+    pub async fn list_threads_snapshot(&self) -> Result<ThreadList> {
+        self.request(&ListThreads::default()).await
     }
 
     /// Launches a thread.
@@ -221,7 +231,17 @@ impl Client {
     ///
     /// See [`Client::send`].
     pub async fn list_projects(&self) -> Result<Vec<Project>> {
-        Ok(self.request(&ListProjects {}).await?.projects)
+        Ok(self.list_projects_snapshot().await?.projects)
+    }
+
+    /// Lists available project directories along with the workspace revision
+    /// snapshot.
+    ///
+    /// # Errors
+    ///
+    /// See [`Client::send`].
+    pub async fn list_projects_snapshot(&self) -> Result<ProjectList> {
+        self.request(&ListProjects {}).await
     }
 
     /// Adds a project directory.

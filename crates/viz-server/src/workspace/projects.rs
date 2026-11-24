@@ -60,7 +60,7 @@ impl Workspace {
                 }
             })
             .await?;
-        self.changed(None);
+        self.project_changed(path.clone());
         Ok(store::project_at(path, name, created_at, settings).await)
     }
 
@@ -92,16 +92,17 @@ impl Workspace {
         }
         self.validate_uploaded_icon(principal_key, path, changes.icon.as_ref())
             .await?;
-        let path = path.to_owned();
+        let path_owned = path.to_owned();
+        let path_for_tx = path_owned.clone();
         self.db
             .write_tx(move |tx| {
-                let (current_name, _, current) = store::preferences(tx, &path)?;
+                let (current_name, _, current) = store::preferences(tx, &path_for_tx)?;
                 let updated = projects::edit(current, changes)?;
                 exec(
                     tx,
                     "UPDATE projects SET name = ?2, settings = ?3 WHERE path = ?1",
                     [
-                        path.as_str().into(),
+                        path_for_tx.as_str().into(),
                         name.unwrap_or(current_name).into(),
                         store::json(&updated)?.into(),
                     ],
@@ -109,36 +110,37 @@ impl Workspace {
                 Ok(())
             })
             .await?;
-        self.changed(None);
+        self.project_changed(path_owned);
         Ok(())
     }
 
     pub(super) async fn remove_project(&self, project: &str) -> Result<(), Error> {
-        let project = project.to_owned();
+        let project_owned = project.to_owned();
+        let project_for_tx = project_owned.clone();
         let threads: Vec<ThreadId> = self
             .db
             .write_tx(move |tx| {
                 let threads: Vec<ThreadId> = rows(
                     tx,
                     "SELECT id FROM threads WHERE project = ?1",
-                    [project.as_str().into()],
+                    [project_for_tx.as_str().into()],
                 )?
                 .map(|row| row.id(0))
                 .collect::<Result<_, _>>()?;
                 let count = exec(
                     tx,
                     "DELETE FROM projects WHERE path = ?1",
-                    [project.as_str().into()],
+                    [project_for_tx.as_str().into()],
                 )?;
                 if count == 0 {
-                    return Err(Error::NoProject(project));
+                    return Err(Error::NoProject(project_for_tx));
                 }
                 Ok(threads)
             })
             .await?;
-        self.changed(None);
+        self.project_removed(project_owned);
         for thread in threads {
-            self.changed(Some(thread));
+            self.relist(thread);
         }
         Ok(())
     }

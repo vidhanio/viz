@@ -79,7 +79,8 @@ impl std::fmt::Debug for Tasks {
 handlers! {
     ROUTES for Tasks {
         ListTasks, |tasks, ListTasks { parent }| {
-            Ok(TaskList { tasks: tasks.list(parent).await? })
+            let rev = tasks.workspace.revision();
+            Ok(TaskList { rev, tasks: tasks.list(parent).await? })
         }
         DelegateTask, |tasks, ctx, DelegateTask { parent, input }| {
             Ok(TaskResult { task: tasks.delegate(&ctx.principal.key(), parent, None, input).await? })
@@ -255,7 +256,7 @@ impl Tasks {
             })
             .await?;
         if created {
-            self.signal();
+            self.signal_upsert(&id, Some(parent));
             self.scan.notify_one();
         }
         let task = self.admitted(&id, parent).await?;
@@ -279,35 +280,46 @@ impl Tasks {
         task: &TaskId,
         parent: Option<ThreadId>,
     ) -> Result<(), Error> {
-        let task = task.clone();
-        self.workspace
+        let task_owned = task.clone();
+        let owner = self
+            .workspace
             .db
             .write_tx(move |tx| {
-                let stored = store::read(tx, &task, parent)?;
-                store::save(tx, &task, &decisions::dismiss(&stored.state)?)
+                let stored = store::read(tx, &task_owned, parent)?;
+                store::save(tx, &task_owned, &decisions::dismiss(&stored.state)?)?;
+                Ok(stored.parent)
             })
             .await?;
-        self.signal();
+        self.signal_removed(task, Some(owner));
         Ok(())
     }
 
     /// Remove every removable task from a thread's list.
     pub(crate) async fn clear(&self, parent: ThreadId) -> Result<usize, Error> {
-        let count = self
+        let removed: Vec<TaskId> = self
             .workspace
             .db
             .write_tx(move |tx| {
-                let mut count = 0;
+                let mut removed = Vec::new();
                 for task in store::list(tx, Some(parent))? {
                     if let Ok(next) = decisions::dismiss(&task.state) {
                         store::save(tx, &task.id, &next)?;
-                        count += 1;
+                        removed.push(task.id);
                     }
                 }
-                Ok(count)
+                Ok(removed)
             })
             .await?;
-        self.signal();
+        let count = removed.len();
+        if count > 0 {
+            let _ = self.changed.send(());
+            for task in removed {
+                self.workspace
+                    .emit_entity(crate::workspace::EntityChange::TaskRemoved(task));
+            }
+            self.workspace
+                .emit_entity(crate::workspace::EntityChange::ThreadUpsert(parent));
+        }
         Ok(count)
     }
 
@@ -399,6 +411,22 @@ impl Tasks {
         Ok(self.task(stored))
     }
 
+    pub(crate) async fn read_opt(&self, id: &TaskId) -> Result<Option<Task>, Error> {
+        let id = id.clone();
+        let stored = self
+            .workspace
+            .db
+            .read(move |conn| match store::read(conn, &id, None) {
+                Ok(task) => Ok(Some(task)),
+                Err(Error::NoTask(_)) => Ok(None),
+                Err(error) => Err(error),
+            })
+            .await?;
+        Ok(stored
+            .filter(|task| !task.state.dismissed)
+            .map(|task| self.task(task)))
+    }
+
     fn task(&self, stored: Stored) -> Task {
         let receipt = stored.state.phase.receipt();
         Task {
@@ -415,11 +443,19 @@ impl Tasks {
         }
     }
 
-    /// Tasks count in their parents' summaries, so the thread list changes
-    /// too.
-    fn signal(&self) {
+    fn signal_upsert(&self, task: &TaskId, parent: Option<ThreadId>) {
         let _ = self.changed.send(());
-        self.workspace.directory_changed();
+        self.workspace.task_upserted(task.clone(), parent);
+    }
+
+    fn signal_removed(&self, task: &TaskId, parent: Option<ThreadId>) {
+        let _ = self.changed.send(());
+        self.workspace.task_removed(task.clone(), parent);
+    }
+
+    fn signal_resync(&self) {
+        let _ = self.changed.send(());
+        self.workspace.workspace_resync();
     }
 }
 

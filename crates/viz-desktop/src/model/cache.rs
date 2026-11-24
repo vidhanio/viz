@@ -49,6 +49,8 @@ pub struct ProjectIconCache {
 /// Normalised cache of server-owned data for one environment.
 #[derive(Debug, Clone, Default)]
 pub struct EnvironmentCache {
+    /// Latest applied server workspace revision (`0` before first snapshot).
+    pub rev: u64,
     projects: BTreeMap<String, Project>,
     project_order: Vec<String>,
     threads: BTreeMap<ThreadId, ThreadSummary>,
@@ -68,6 +70,7 @@ pub struct EnvironmentCache {
 impl EnvironmentCache {
     /// Clears cached server data when resetting or switching environments.
     pub fn clear(&mut self) {
+        self.rev = 0;
         self.projects.clear();
         self.project_order.clear();
         self.threads.clear();
@@ -171,6 +174,55 @@ impl EnvironmentCache {
                 self.thread_order.push(id);
             }
         }
+    }
+
+    /// Inserts or replaces a project and keeps display order sorted by
+    /// `(name, path)`.
+    pub fn upsert_project(&mut self, project: Project) {
+        let path = project.path.clone();
+        let inserted = self.projects.insert(path.clone(), project).is_none();
+        if inserted {
+            self.project_order.push(path);
+        }
+        self.project_order.sort_unstable_by(|a, b| {
+            let pa = self.projects.get(a);
+            let pb = self.projects.get(b);
+            match (pa, pb) {
+                (Some(pa), Some(pb)) => pa.name.cmp(&pb.name).then_with(|| pa.path.cmp(&pb.path)),
+                _ => a.cmp(b),
+            }
+        });
+    }
+
+    /// Inserts or updates a single thread summary in place without rebuilding
+    /// the whole workspace snapshot.
+    pub fn upsert_thread(&mut self, thread: ThreadSummary) {
+        let id = thread.id;
+        if self.threads.insert(id, thread).is_none() {
+            self.thread_order.insert(0, id);
+        }
+    }
+
+    /// Removes one thread summary and any cached open transcript for it.
+    pub fn remove_thread(&mut self, id: ThreadId) -> Option<ThreadSummary> {
+        let removed = self.threads.remove(&id)?;
+        self.thread_order.retain(|known| *known != id);
+        self.open_threads.remove(&id);
+        Some(removed)
+    }
+
+    /// Inserts or updates a single delegated task (newest first on insert).
+    pub fn upsert_task(&mut self, task: Task) {
+        if let Some(existing) = self.tasks.iter_mut().find(|item| item.id == task.id) {
+            *existing = task;
+        } else {
+            self.tasks.insert(0, task);
+        }
+    }
+
+    /// Removes a delegated task by id.
+    pub fn remove_task(&mut self, id: &str) {
+        self.tasks.retain(|task| task.id != id);
     }
 
     /// Retains only thread summaries matching `predicate`.

@@ -356,6 +356,7 @@ impl Workspace {
         } = input;
         let (_, config) = self.harness(Some(&harness))?;
         let config = config.clone();
+        let project_for_emit = project.clone();
         self.db
             .write_tx(move |tx| {
                 store::require_project(tx, &project)?;
@@ -370,7 +371,7 @@ impl Workspace {
                 store::save_project_access(tx, &project, &harness, access.as_ref())
             })
             .await?;
-        self.changed(None);
+        self.project_changed(project_for_emit);
         Ok(())
     }
 }

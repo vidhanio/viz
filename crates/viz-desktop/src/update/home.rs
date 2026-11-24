@@ -101,11 +101,15 @@ pub(super) fn toggle_project_pin(model: &mut Model, path: String, effects: &mut 
     }) else {
         return;
     };
-    let op_id = model.optimistic.record(OptimisticUndo::ProjectPin {
-        env,
-        path: path.clone(),
-        prior_pinned,
-    });
+    let base_rev = model.cache().rev;
+    let op_id = model.optimistic.record(
+        base_rev,
+        OptimisticUndo::ProjectPin {
+            env,
+            path: path.clone(),
+            prior_pinned,
+        },
+    );
     effects.push(Effect::Server(ServerEffect::Project {
         op_id: Some(op_id),
         change: ProjectChange::Pin {

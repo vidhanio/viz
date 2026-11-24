@@ -203,6 +203,7 @@ async fn session(
         client,
         content,
         environment: Arc::from(hello.environment.as_str()),
+        workspace_rev: 0,
         watched: None,
         git_watched: None,
         jobs: JoinSet::new(),
@@ -231,6 +232,7 @@ pub(super) struct Session<'a> {
     pub(super) client: Client,
     pub(super) content: ContentClient,
     pub(super) environment: Arc<str>,
+    pub(super) workspace_rev: u64,
     pub(super) watched: Option<ThreadId>,
     pub(super) git_watched: Option<ThreadId>,
     pub(super) jobs: JoinSet<BackgroundReply>,
@@ -354,13 +356,16 @@ impl Session<'_> {
     ) -> viz_client::Result<()> {
         let list_tasks = ListTasks::default();
         let list_envs = ListEnvironments {};
-        let (threads, mut projects, tasks, harnesses, environments) = tokio::try_join!(
-            self.client.list_threads(),
-            self.client.list_projects(),
+        let (thread_list, project_list, task_list, harnesses, environments) = tokio::try_join!(
+            self.client.list_threads_snapshot(),
+            self.client.list_projects_snapshot(),
             self.client.request(&list_tasks),
             self.client.list_harnesses(),
             self.client.request(&list_envs),
         )?;
+        let rev = thread_list.rev.min(project_list.rev).min(task_list.rev);
+        self.workspace_rev = rev;
+        let mut projects = project_list.projects;
         projects.sort_unstable_by(|a, b| a.name.cmp(&b.name).then(a.path.cmp(&b.path)));
         if let Some(thread) = *selected {
             match self.switch(Some(thread)).await {
@@ -376,11 +381,12 @@ impl Session<'_> {
                 session: self.id,
                 version: hello.version,
                 environment: hello.environment,
+                rev,
                 environments: environments.environments,
                 harnesses,
                 projects,
-                threads,
-                tasks: tasks.tasks,
+                threads: thread_list.threads,
+                tasks: task_list.tasks,
                 watched: *selected,
             },
         );
@@ -571,10 +577,32 @@ impl Session<'_> {
         Ok(())
     }
 
-    async fn on_notification(&self, notification: Notification) -> viz_client::Result<()> {
+    async fn on_notification(&mut self, notification: Notification) -> viz_client::Result<()> {
         match notification {
-            Notification::ThreadsChanged(_) => self.refresh_list().await,
-            Notification::TasksChanged(_) => self.refresh_tasks().await,
+            Notification::WorkspaceDelta {
+                base_rev,
+                rev,
+                changes,
+            } => {
+                if rev <= self.workspace_rev {
+                    return Ok(());
+                }
+                let needs_resync = base_rev > self.workspace_rev
+                    || changes.iter().any(|change| {
+                        matches!(change, viz_client::protocol::WorkspaceChange::Resync)
+                    });
+                if needs_resync {
+                    self.refresh_list().await
+                } else {
+                    self.workspace_rev = rev;
+                    self.dispatch(ServerMsg::WorkspaceDelta {
+                        environment: self.environment.to_string(),
+                        rev,
+                        changes,
+                    });
+                    Ok(())
+                }
+            }
             Notification::HarnessesChanged(_) => self.refresh_harnesses().await,
             Notification::ThreadState { thread, state } => {
                 if self.watched == Some(thread) {

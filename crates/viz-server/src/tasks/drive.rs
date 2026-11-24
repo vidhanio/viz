@@ -181,7 +181,7 @@ impl Tasks {
             Step::Done => Ok(Advance::Done),
         };
         if was_reachable != self.peers.reachable(target) {
-            self.signal();
+            self.signal_upsert(id, None);
         }
         advance
     }
@@ -322,22 +322,22 @@ impl Tasks {
     /// Decide and store what `command` does to the task as it is now, which
     /// may differ from when the step was chosen.
     pub(super) async fn apply(&self, id: &TaskId, command: Command<'_>) -> Result<(), Error> {
-        let id = id.clone();
+        let id_owned = id.clone();
         let owned = OwnedCommand::from(command);
-        let changed = self
+        let parent = self
             .workspace
             .db
             .write_tx(move |tx| {
-                let task = store::read(tx, &id, None)?;
+                let task = store::read(tx, &id_owned, None)?;
                 let next = decisions::decide(&task.state, owned.as_command());
                 if let Some(next) = &next {
-                    store::save(tx, &id, next)?;
+                    store::save(tx, &id_owned, next)?;
                 }
-                Ok(next.is_some())
+                Ok(next.map(|_| task.parent))
             })
             .await?;
-        if changed {
-            self.signal();
+        if let Some(parent) = parent {
+            self.signal_upsert(id, Some(parent));
         }
         Ok(())
     }

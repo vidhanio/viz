@@ -437,6 +437,7 @@ pub(super) fn apply_thread_change(
     effects: &mut Vec<Effect>,
 ) {
     let env = model.active_env_key().to_owned();
+    let base_rev = model.cache().rev;
     let op_id = if let Some(prior) = model.summary(thread).cloned() {
         if let Some(summary) = model.cache_mut().summary_mut(thread) {
             match &change {
@@ -445,11 +446,14 @@ pub(super) fn apply_thread_change(
                 ThreadChange::Project(project) => summary.project.clone_from(project),
             }
         }
-        model.optimistic.record(OptimisticUndo::ThreadSummary {
-            env,
-            id: thread,
-            prior: Box::new(prior),
-        })
+        model.optimistic.record(
+            base_rev,
+            OptimisticUndo::ThreadSummary {
+                env,
+                id: thread,
+                prior: Box::new(prior),
+            },
+        )
     } else {
         0
     };

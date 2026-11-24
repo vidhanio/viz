@@ -26,7 +26,7 @@ pub(super) use self::{
     },
     threads::{
         Binding, Handoff, NewThread, SavedSession, binding, create_thread, metadata, require,
-        save_metadata, state_row, thread_cwd, thread_rows, thread_title, updated,
+        save_metadata, state_row, thread_cwd, thread_row, thread_rows, thread_title, updated,
     },
     transcript::{append, entries, entries_after, latest_entry_id, publish, search},
 };

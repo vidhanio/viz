@@ -1,6 +1,10 @@
 //! WebSocket hello, connector replies, peer proxying, and incremental watches.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, ensure};
 use axum::{
@@ -21,8 +25,8 @@ use tokio_tungstenite::{
 };
 use tokio_util::sync::CancellationToken;
 use viz_protocol::{
-    ConnectionChannel, Empty, ListEnvironments, Method, SendInput, Unwatch, UnwatchGit, Watch,
-    WatchGit, Watching,
+    ConnectionChannel, Empty, ListEnvironments, Method, SendInput, TaskId, Unwatch, UnwatchGit,
+    Watch, WatchGit, Watching, WorkspaceChange,
 };
 
 use super::{Server, parse_request};
@@ -33,7 +37,7 @@ use crate::{
         ClientKind, EntryId, Hello, HelloParams, Id, Notification, PROTOCOL_VERSION, Request,
         Response, RunStatus, ThreadId, ThreadState, params, raw_params,
     },
-    workspace::{Change, WatchChange},
+    workspace::{Change, EntityChange, WatchChange},
 };
 
 const PAGE: usize = 500;
@@ -237,7 +241,6 @@ async fn local_session(socket: WebSocket, server: Arc<Server>, ctx: CallCtx) -> 
     let (outgoing, messages) = mpsc::channel::<Message>(32);
     let writer = tokio::spawn(write_frames(write, messages, server.stop.clone()));
     let mut workspace_events = server.workspace.subscribe();
-    let mut tasks = server.tasks.subscribe();
     let mut calls = JoinSet::new();
     let mut watches = HashMap::new();
     let mut git_watches: HashMap<ThreadId, AbortHandle> = HashMap::new();
@@ -252,13 +255,9 @@ async fn local_session(socket: WebSocket, server: Arc<Server>, ctx: CallCtx) -> 
                 () = server.stop.cancelled() => break,
                 () = outgoing.closed() => break,
                 event = workspace_events.recv() => {
-                    if !handle_workspace_event(event, &server, &mut watches, &outgoing, app).await? {
+                    if !handle_workspace_event(event, &mut workspace_events, &server, &mut watches, &outgoing, app).await? {
                         break;
                     }
-                },
-                change = tasks.recv(), if app => match change {
-                    Ok(()) | Err(broadcast::error::RecvError::Lagged(_)) => send_note(&outgoing, Notification::TasksChanged(Empty {})).await?,
-                    Err(broadcast::error::RecvError::Closed) => break,
                 },
                 result = git_jobs.join_next_with_id(), if !git_jobs.is_empty() => {
                     if let Some(result) = result {
@@ -327,37 +326,194 @@ async fn local_session(socket: WebSocket, server: Arc<Server>, ctx: CallCtx) -> 
     result
 }
 
+#[derive(Default)]
+struct EventBatch {
+    live_deltas: Vec<(ThreadId, Arc<viz_protocol::LiveDelta>)>,
+    dirty_watches: HashSet<ThreadId>,
+    harnesses_dirty: bool,
+    entity_span: Option<(u64, u64)>,
+    resync: bool,
+    threads: HashMap<ThreadId, bool>,
+    projects: HashMap<String, bool>,
+    tasks: HashMap<TaskId, bool>,
+}
+
+impl EventBatch {
+    fn push(&mut self, event: Change) {
+        match event {
+            Change::Live { thread, delta } => self.live_deltas.push((thread, delta)),
+            Change::Thread(id) | Change::Settled(id) => {
+                self.dirty_watches.insert(id);
+            }
+            Change::Harnesses => self.harnesses_dirty = true,
+            Change::GitActivity => {}
+            Change::Entity {
+                base_rev,
+                rev,
+                change,
+            } => {
+                self.entity_span = Some(match self.entity_span {
+                    Some((min_base, max_rev)) => (min_base.min(base_rev), max_rev.max(rev)),
+                    None => (base_rev, rev),
+                });
+                match change {
+                    EntityChange::ThreadUpsert(id) => {
+                        self.threads.insert(id, true);
+                    }
+                    EntityChange::ThreadRemoved(id) => {
+                        self.threads.insert(id, false);
+                    }
+                    EntityChange::ProjectUpsert(path) => {
+                        self.projects.insert(path, true);
+                    }
+                    EntityChange::ProjectRemoved(path) => {
+                        self.projects.insert(path, false);
+                    }
+                    EntityChange::TaskUpsert(id) => {
+                        self.tasks.insert(id, true);
+                    }
+                    EntityChange::TaskRemoved(id) => {
+                        self.tasks.insert(id, false);
+                    }
+                    EntityChange::Resync => self.resync = true,
+                }
+            }
+        }
+    }
+
+    fn mark_lagged(&mut self, rev: u64, watched: impl Iterator<Item = ThreadId>) {
+        self.dirty_watches.extend(watched);
+        self.harnesses_dirty = true;
+        self.resync = true;
+        self.entity_span = Some(match self.entity_span {
+            Some((min_base, max_rev)) => (min_base, max_rev.max(rev)),
+            None => (rev, rev),
+        });
+    }
+}
+
 async fn handle_workspace_event(
     event: std::result::Result<Change, broadcast::error::RecvError>,
+    workspace_events: &mut broadcast::Receiver<Change>,
     server: &Server,
     watches: &mut HashMap<ThreadId, WatchCursor>,
     outgoing: &mpsc::Sender<Message>,
     app: bool,
 ) -> Result<bool> {
+    let mut batch = EventBatch::default();
     match event {
-        Ok(Change::Thread(id) | Change::Settled(id)) => {
-            refresh_watch(server, watches, id, outgoing).await?;
-        }
-        Ok(Change::Directory) if app => {
-            send_note(outgoing, Notification::ThreadsChanged(Empty {})).await?;
-        }
-        Ok(Change::Harnesses) if app => {
-            send_note(outgoing, Notification::HarnessesChanged(Empty {})).await?;
-        }
-        Ok(Change::GitActivity | Change::Directory | Change::Harnesses) => {}
+        Ok(change) => batch.push(change),
         Err(broadcast::error::RecvError::Lagged(_)) => {
-            let ids: Vec<_> = watches.keys().copied().collect();
-            for id in ids {
-                refresh_watch(server, watches, id, outgoing).await?;
-            }
-            if app {
-                send_note(outgoing, Notification::ThreadsChanged(Empty {})).await?;
-                send_note(outgoing, Notification::HarnessesChanged(Empty {})).await?;
-            }
+            batch.mark_lagged(server.workspace.revision(), watches.keys().copied());
         }
         Err(broadcast::error::RecvError::Closed) => return Ok(false),
     }
+    for _ in 0..256 {
+        match workspace_events.try_recv() {
+            Ok(change) => batch.push(change),
+            Err(broadcast::error::TryRecvError::Empty) => break,
+            Err(broadcast::error::TryRecvError::Lagged(_)) => {
+                batch.mark_lagged(server.workspace.revision(), watches.keys().copied());
+                break;
+            }
+            Err(broadcast::error::TryRecvError::Closed) => return Ok(false),
+        }
+    }
+    for (thread, delta) in &batch.live_deltas {
+        let thread = *thread;
+        if batch.dirty_watches.contains(&thread) {
+            continue;
+        }
+        if let Some(watch) = watches.get_mut(&thread) {
+            let owned = delta.as_ref().clone();
+            owned.clone().apply(&mut watch.state.live);
+            send_note(
+                outgoing,
+                Notification::ThreadLive {
+                    thread,
+                    delta: owned,
+                },
+            )
+            .await?;
+        }
+    }
+    for &id in &batch.dirty_watches {
+        refresh_watch(server, watches, id, outgoing).await?;
+    }
+    if app && let Some((base_rev, rev)) = batch.entity_span {
+        let changes = resolve_entity_changes(server, &batch).await?;
+        if !changes.is_empty() {
+            send_note(
+                outgoing,
+                Notification::WorkspaceDelta {
+                    base_rev,
+                    rev,
+                    changes,
+                },
+            )
+            .await?;
+        }
+    }
+    if app && batch.harnesses_dirty {
+        send_note(outgoing, Notification::HarnessesChanged(Empty {})).await?;
+    }
     Ok(true)
+}
+
+async fn resolve_entity_changes(
+    server: &Server,
+    batch: &EventBatch,
+) -> Result<Vec<WorkspaceChange>> {
+    if batch.resync {
+        return Ok(vec![WorkspaceChange::Resync]);
+    }
+    let mut changes =
+        Vec::with_capacity(batch.projects.len() + batch.threads.len() + batch.tasks.len());
+    for (path, present) in &batch.projects {
+        if *present {
+            match server.workspace.read_project_opt(path).await? {
+                Some(project) => changes.push(WorkspaceChange::ProjectUpsert {
+                    project: Box::new(project),
+                }),
+                None => changes.push(WorkspaceChange::ProjectRemoved {
+                    project: path.clone(),
+                }),
+            }
+        } else {
+            changes.push(WorkspaceChange::ProjectRemoved {
+                project: path.clone(),
+            });
+        }
+    }
+    for (&thread, &present) in &batch.threads {
+        if present {
+            match server.workspace.read_thread_summary(thread).await? {
+                Some(summary) => changes.push(WorkspaceChange::ThreadUpsert {
+                    thread: Box::new(summary),
+                }),
+                None => changes.push(WorkspaceChange::ThreadRemoved { thread }),
+            }
+        } else {
+            changes.push(WorkspaceChange::ThreadRemoved { thread });
+        }
+    }
+    for (task_id, &present) in &batch.tasks {
+        if present {
+            match server.tasks.read_opt(task_id).await? {
+                Some(task) => changes.push(WorkspaceChange::TaskUpsert {
+                    task: Box::new(task),
+                }),
+                None => changes.push(WorkspaceChange::TaskRemoved {
+                    task: task_id.clone(),
+                }),
+            }
+        } else {
+            changes.push(WorkspaceChange::TaskRemoved {
+                task: task_id.clone(),
+            });
+        }
+    }
+    Ok(changes)
 }
 
 async fn close_watches(server: &Server, watches: HashMap<ThreadId, WatchCursor>, app: bool) {
@@ -420,7 +576,7 @@ async fn watch_checkout(
     loop {
         tokio::select! {
             () = cancel.cancelled() => break,
-            _ = timer.tick() => {},
+            _ = timer.tick(), if watch.is_none() => {},
             result = async { watch.as_mut().expect("watch present").changed(&cancel).await }, if watch.is_some() => {
                 if result.is_err() {
                     watch = None;

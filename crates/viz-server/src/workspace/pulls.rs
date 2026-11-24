@@ -44,9 +44,16 @@ impl Workspace {
 
     pub(super) fn invalidate_checkout_pulls(&self, checkout: &Path) {
         let mut pulls = self.pulls.0.lock().expect("pull requests lock poisoned");
+        let affected: Vec<ThreadId> = pulls
+            .iter()
+            .filter(|(_, cached)| Path::new(&cached.cwd).starts_with(checkout))
+            .map(|(thread, _)| *thread)
+            .collect();
         pulls.retain(|_, cached| !Path::new(&cached.cwd).starts_with(checkout));
         drop(pulls);
-        self.changed(None);
+        for thread in affected {
+            self.relist(thread);
+        }
         self.pull_due.notify_one();
     }
 

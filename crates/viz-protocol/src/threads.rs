@@ -20,6 +20,8 @@ pub struct ListThreads {
 /// `threads.list` result.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct ThreadList {
+    /// Monotonic workspace revision at or before this snapshot was read.
+    pub rev: u64,
     /// Every thread, in the order of [`Shelf`] and of each shelf.
     pub threads: Vec<ThreadSummary>,
 }

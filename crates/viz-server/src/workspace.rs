@@ -54,7 +54,7 @@ use viz_protocol::{EntryId, Lifecycle, RunId, TaskId, ThreadId};
 
 pub(crate) use self::{
     icons::ProjectIconChunk,
-    notifications::{Change, WatchChange},
+    notifications::{Change, EntityChange, WatchChange},
     rpc::ROUTES,
     runs::{active_run_from, run_from},
 };
@@ -232,6 +232,38 @@ impl Workspace {
             .read(move |conn| store::project_row(conn, &path))
             .await?;
         Ok(store::project_at(row.path, row.name, row.created_at, row.settings).await)
+    }
+
+    pub(crate) async fn read_project_opt(
+        &self,
+        path: &str,
+    ) -> Result<Option<crate::wire::Project>, Error> {
+        match self.read_project(path).await {
+            Ok(project) => Ok(Some(project)),
+            Err(Error::NoProject(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    /// Reads one thread's projected summary in `O(1)` for incremental
+    /// `workspace.delta` delivery, returning `None` if deleted.
+    pub(crate) async fn read_thread_summary(
+        &self,
+        thread: ThreadId,
+    ) -> Result<Option<crate::wire::ThreadSummary>, Error> {
+        let Some(mut record) = self
+            .db
+            .read_snapshot(move |tx| store::thread_row(tx, thread))
+            .await?
+        else {
+            return Ok(None);
+        };
+        record.summary.pull_request = self.pull_summary(record.summary.id, &record.cwd);
+        record.summary.harness_name = self.harness_name(&record.summary.harness).to_owned();
+        if let Some(path) = record.worktree_path {
+            record.summary.worktree = store::thread_worktree(Some(path)).await;
+        }
+        Ok(Some(record.summary))
     }
 
     pub(crate) async fn list_threads(

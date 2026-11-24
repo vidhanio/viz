@@ -28,8 +28,9 @@ use crate::{error::Error, rpc::handlers};
 handlers! {
     ROUTES for Arc<Workspace> {
         ListThreads, |workspace, ListThreads { project, archived }| {
+            let rev = workspace.revision();
             let threads = workspace.list_threads(archived, project.as_deref()).await?;
-            Ok(ThreadList { threads })
+            Ok(ThreadList { rev, threads })
         }
         ListEntries, |workspace, ListEntries { thread, before, limit }| {
             workspace.entries(thread, before, page_limit(limit, 500)?).await
@@ -78,8 +79,9 @@ handlers! {
             workspace.stat_blob(thread, &id).await
         }
         ListProjects, |workspace, _| {
+            let rev = workspace.revision();
             let projects = workspace.list_projects().await?;
-            Ok(ProjectList { projects })
+            Ok(ProjectList { rev, projects })
         }
         ReadProject, |workspace, ReadProject { project }| {
             let project = workspace.read_project(&project).await?;

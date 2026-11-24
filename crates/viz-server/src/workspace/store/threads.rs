@@ -224,52 +224,71 @@ pub(in crate::workspace) fn thread_rows(
         lifecycle::COLUMNS
     );
     let now = now();
-    let records = rows(db, &query, [archived.into(), project.into()])?;
-    let mut threads = Vec::new();
-    for mut row in records {
-        let harness = row.str(5)?;
-        let (lifecycle, activity, status) = lifecycle::decode(&mut row, 12)?;
-        let id = row.id(0)?;
-        let shelf = triage::shelf(&lifecycle, &activity, now);
-        let worktree_path = row.opt_str(8)?;
-        let cwd = row.str(11)?;
-        let summary = ThreadSummary {
-            id,
-            title: row.str(1)?,
-            parent: row.opt_id(2)?,
-            parent_environment: row.opt_str(3)?,
-            forked_from: row
-                .opt_id(9)?
-                .map(|thread| {
-                    Ok::<_, Error>(ForkSource {
-                        thread,
-                        entry: row.opt_id(10)?,
-                    })
+    rows(db, &query, [archived.into(), project.into()])?
+        .map(|row| decode_thread_record(row, now))
+        .collect()
+}
+
+/// Reads one thread's summary row in `O(1)` for incremental `workspace.delta`
+/// fan-out.
+pub(in crate::workspace) fn thread_row(
+    db: &Conn,
+    thread: ThreadId,
+) -> Result<Option<ThreadRecord>, Error> {
+    let query = format!(
+        "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
+            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, t.cwd, {}
+        FROM threads AS t WHERE t.id = ?1",
+        lifecycle::COLUMNS
+    );
+    let now = now();
+    row(db, &query, [thread.into()])?
+        .map(|row| decode_thread_record(row, now))
+        .transpose()
+}
+
+fn decode_thread_record(mut row: super::super::sql::Row, now: i64) -> Result<ThreadRecord, Error> {
+    let harness = row.str(5)?;
+    let (lifecycle, activity, status) = lifecycle::decode(&mut row, 12)?;
+    let id = row.id(0)?;
+    let shelf = triage::shelf(&lifecycle, &activity, now);
+    let worktree_path = row.opt_str(8)?;
+    let cwd = row.str(11)?;
+    let summary = ThreadSummary {
+        id,
+        title: row.str(1)?,
+        parent: row.opt_id(2)?,
+        parent_environment: row.opt_str(3)?,
+        forked_from: row
+            .opt_id(9)?
+            .map(|thread| {
+                Ok::<_, Error>(ForkSource {
+                    thread,
+                    entry: row.opt_id(10)?,
                 })
-                .transpose()?,
-            project: row.opt_str(4)?,
-            worktree: None,
-            pull_request: None,
-            harness_name: String::new(),
-            harness,
-            status,
-            shelf,
-            attention: triage::attention(&lifecycle, &activity),
-            waiting_on: activity.waiting_on,
-            last_input_at: activity.last_input_at,
-            updated_at: activity.updated_at,
-            model: row.opt_str(6)?,
-            thinking: row.opt_str(7)?,
-            lifecycle,
-        };
-        threads.push(ThreadRecord {
-            summary,
-            activity,
-            cwd,
-            worktree_path,
-        });
-    }
-    Ok(threads)
+            })
+            .transpose()?,
+        project: row.opt_str(4)?,
+        worktree: None,
+        pull_request: None,
+        harness_name: String::new(),
+        harness,
+        status,
+        shelf,
+        attention: triage::attention(&lifecycle, &activity),
+        waiting_on: activity.waiting_on,
+        last_input_at: activity.last_input_at,
+        updated_at: activity.updated_at,
+        model: row.opt_str(6)?,
+        thinking: row.opt_str(7)?,
+        lifecycle,
+    };
+    Ok(ThreadRecord {
+        summary,
+        activity,
+        cwd,
+        worktree_path,
+    })
 }
 
 /// Reads persisted thread state synchronously without touching Git, returning

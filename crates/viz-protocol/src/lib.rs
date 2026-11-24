@@ -32,7 +32,7 @@ pub use connections::{
     EnvironmentList, EnvironmentStatus, ListEnvironments, ListTasks, Notification, ReadProject,
     ReadThreadState, Run, RunKind, RunStatus, Task, TaskList, TaskResult, TaskStatus,
     TaskStatusRequest, TaskStatusResult, ThreadStateResult, Unwatch, WaitResult, WaitThread, Watch,
-    Watching,
+    Watching, WorkspaceChange,
 };
 pub use content::{
     CONTENT_PROTOCOL_VERSION, ConnectionChannel, ContentFrameError, ContentRequest,

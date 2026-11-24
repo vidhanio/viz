@@ -41,19 +41,30 @@ impl Tasks {
             mode,
         };
         let state = task.state;
-        let id = task.id;
-        self.workspace
+        let id = task.id.clone();
+        let parent = task.parent;
+        let deleted = self
+            .workspace
             .wake(wake, move |tx, woken| {
                 let run = match woken {
                     Woken::Run(run) => Some(*run),
                     Woken::Entry => None,
-                    Woken::Deleted => return store::remove(tx, &id),
+                    Woken::Deleted => {
+                        store::remove(tx, &id)?;
+                        return Ok(true);
+                    }
                 };
-                decisions::decide(&state, Command::Delivered(run))
-                    .map_or_else(|| Ok(()), |next| store::save(tx, &id, &next))
+                if let Some(next) = decisions::decide(&state, Command::Delivered(run)) {
+                    store::save(tx, &id, &next)?;
+                }
+                Ok(false)
             })
             .await?;
-        self.signal();
+        if deleted {
+            self.signal_removed(&task.id, None);
+        } else {
+            self.signal_upsert(&task.id, Some(parent));
+        }
         Ok(())
     }
 
@@ -154,15 +165,17 @@ impl Tasks {
             "Task {} ({}) on {} thread {} continued.\n\n{}",
             request.task, task.title, request.source, request.thread, request.text,
         );
+        let task_id = request.task.clone();
+        let parent = task.parent;
         let wake = NewWake {
-            thread: task.parent,
+            thread: parent,
             task: request.task,
             source: WakeSource::Continuation(request.run),
             text,
             mode,
         };
         self.workspace.wake(wake, |_, _| Ok(())).await?;
-        self.signal();
+        self.signal_upsert(&task_id, Some(parent));
         Ok(true)
     }
 
@@ -198,7 +211,7 @@ impl Tasks {
             .await?;
         if recorded_stop {
             self.scan.notify_one();
-            self.signal();
+            self.signal_resync();
         }
         Ok(ProgressResult { run: run_progress })
     }

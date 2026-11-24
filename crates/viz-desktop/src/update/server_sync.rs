@@ -2,8 +2,9 @@
 //! send recovery, attachment ingestion, and optimistic rollback.
 
 use viz_client::protocol::{
-    Entry, EntryData, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, ThreadId, ThreadState,
-    ThreadStatus, ThreadSummary, attachment_inline_md, attachment_ref_labels,
+    Entry, EntryData, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, Task, ThreadId,
+    ThreadState, ThreadStatus, ThreadSummary, WorkspaceChange, attachment_inline_md,
+    attachment_ref_labels,
 };
 
 use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
@@ -25,30 +26,14 @@ pub(super) fn is_active_env(model: &Model, env: &str) -> bool {
 
 pub(super) fn apply_workspace_sync(
     model: &mut Model,
+    rev: u64,
     projects: Vec<Project>,
     threads: Vec<ThreadSummary>,
+    tasks: Vec<Task>,
     effects: &mut Vec<Effect>,
 ) {
-    use ThreadStatus::{Failed, Idle, Working};
-
     for thread in &threads {
-        let Some(before) = model.summary(thread.id).map(|old| old.status) else {
-            continue;
-        };
-        let ran = before == Working;
-        let watched = model.disclosure.focused && model.selection.selected == Some(thread.id);
-        let body = match thread.status {
-            _ if before == thread.status || watched => continue,
-            _ if thread.parent.is_some() => continue,
-            Idle if ran => "Finished",
-            Failed if ran => "Failed",
-            _ => continue,
-        };
-        effects.push(Effect::Notify {
-            thread: thread.id,
-            title: thread_title(thread).to_owned(),
-            body,
-        });
+        maybe_notify_thread_finished(model, thread, effects);
     }
     let fallback = model
         .selection
@@ -70,8 +55,10 @@ pub(super) fn apply_workspace_sync(
             None
         });
     let cache = model.cache_mut();
+    cache.rev = cache.rev.max(rev);
     cache.set_projects(projects);
     cache.set_threads(threads);
+    cache.tasks = tasks;
     let icon_targets: Vec<Project> = model.cache().projects().cloned().collect();
     for project in &icon_targets {
         queue_project_icon(model, project, effects);
@@ -90,6 +77,119 @@ pub(super) fn apply_workspace_sync(
             effects.push(Effect::Server(ServerEffect::ClearSelection));
         }
     }
+}
+
+/// Applies incremental revisioned entity changes without full workspace list
+/// reloads, retiring superseded optimistic edits against `rev`.
+pub(super) fn apply_workspace_delta(
+    model: &mut Model,
+    rev: u64,
+    changes: Vec<WorkspaceChange>,
+    effects: &mut Vec<Effect>,
+) {
+    let env = model.active_env_key().to_owned();
+    let mut selected_removed = false;
+    let mut fallback = None;
+    for change in changes {
+        match change {
+            WorkspaceChange::ThreadUpsert { thread } => {
+                let thread = *thread;
+                let id = thread.id;
+                maybe_notify_thread_finished(model, &thread, effects);
+                model.cache_mut().upsert_thread(thread);
+                model.optimistic.retire_thread(&env, id, rev);
+            }
+            WorkspaceChange::ThreadRemoved { thread } => {
+                if model.selection.selected == Some(thread) {
+                    selected_removed = true;
+                    fallback = ancestor_fallback(model, thread);
+                }
+                model.cache_mut().remove_thread(thread);
+                model.optimistic.retire_thread(&env, thread, rev);
+            }
+            WorkspaceChange::ProjectUpsert { project } => {
+                let project = *project;
+                let path = project.path.clone();
+                let icon_changed = model
+                    .cache()
+                    .project(&path)
+                    .is_some_and(|old| old.settings.icon != project.settings.icon);
+                model.cache_mut().upsert_project(project.clone());
+                if icon_changed && let Some(icon) = model.cache_mut().project_icons.get_mut(&path) {
+                    icon.requested = false;
+                }
+                queue_project_icon(model, &project, effects);
+                model.optimistic.retire_project(&env, &path, rev);
+            }
+            WorkspaceChange::ProjectRemoved { project } => {
+                model.cache_mut().remove_project(&project);
+                model.cache_mut().project_icons.remove(&project);
+                model.optimistic.retire_project(&env, &project, rev);
+            }
+            WorkspaceChange::TaskUpsert { task } => {
+                model.cache_mut().upsert_task(*task);
+            }
+            WorkspaceChange::TaskRemoved { task } => {
+                model.cache_mut().remove_task(&task.0);
+            }
+            WorkspaceChange::Resync => {}
+        }
+    }
+    let cache = model.cache_mut();
+    cache.rev = cache.rev.max(rev);
+    if selected_removed
+        && model.connected()
+        && model.selection.new_thread.is_none()
+        && model
+            .selection
+            .selected
+            .is_some_and(|id| model.summary(id).is_none())
+    {
+        if let Some(id) = fallback.filter(|id| model.summary(*id).is_some()) {
+            select_thread(model, id, effects);
+        } else {
+            clear_selection(model, effects);
+            effects.push(Effect::Server(ServerEffect::ClearSelection));
+        }
+    }
+}
+
+fn maybe_notify_thread_finished(model: &Model, thread: &ThreadSummary, effects: &mut Vec<Effect>) {
+    use ThreadStatus::{Failed, Idle, Working};
+
+    let Some(before) = model.summary(thread.id).map(|old| old.status) else {
+        return;
+    };
+    let ran = before == Working;
+    let watched = model.disclosure.focused && model.selection.selected == Some(thread.id);
+    let body = match thread.status {
+        _ if before == thread.status || watched => return,
+        _ if thread.parent.is_some() => return,
+        Idle if ran => "Finished",
+        Failed if ran => "Failed",
+        _ => return,
+    };
+    effects.push(Effect::Notify {
+        thread: thread.id,
+        title: thread_title(thread).to_owned(),
+        body,
+    });
+}
+
+fn ancestor_fallback(model: &Model, removed: ThreadId) -> Option<ThreadId> {
+    let old = model.summary(removed)?;
+    let mut ancestor = old.parent.filter(|_| {
+        old.parent_environment
+            .as_ref()
+            .is_none_or(|env| Some(env) == model.connection.environment.as_ref())
+    });
+    while let Some(id) = ancestor {
+        if id != removed && model.summary(id).is_some() {
+            return Some(id);
+        }
+        ancestor = model.summary(id).and_then(|parent| parent.parent);
+    }
+    None
 }
 
 pub(super) fn apply_thread_state(

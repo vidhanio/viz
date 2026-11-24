@@ -9,8 +9,8 @@ use super::{
     server_sync::{
         apply_attachments_loaded, apply_earlier_loaded, apply_launch_failed,
         apply_project_icon_loaded, apply_select_failed, apply_send_failed, apply_thread_created,
-        apply_thread_state, apply_thread_triaged, apply_thread_view, apply_workspace_sync,
-        is_active_env, rollback_optimistic,
+        apply_thread_state, apply_thread_triaged, apply_thread_view, apply_workspace_delta,
+        apply_workspace_sync, is_active_env, rollback_optimistic,
     },
     timeline::{apply_entry_chunk_loaded, apply_thread_forked},
 };
@@ -42,6 +42,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             session,
             version,
             environment,
+            rev,
             environments,
             harnesses,
             projects,
@@ -71,8 +72,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
                     clear_selection(model, &mut effects);
                 }
             }
-            apply_workspace_sync(model, projects, threads, &mut effects);
-            model.cache_mut().tasks = tasks;
+            apply_workspace_sync(model, rev, projects, threads, tasks, &mut effects);
             effects.push(Effect::SetWindowTitle(model.window_title()));
         }
         ServerMsg::RequestAnswered { request, result } => {
@@ -83,17 +83,29 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         }
         ServerMsg::WorkspaceSynced {
             environment,
+            rev,
             projects,
             threads,
+            tasks,
         } if is_active_env(model, &environment) => {
             model.connection.environment.get_or_insert(environment);
-            apply_workspace_sync(model, projects, threads, &mut effects);
+            apply_workspace_sync(model, rev, projects, threads, tasks, &mut effects);
+        }
+        ServerMsg::WorkspaceDelta {
+            environment,
+            rev,
+            changes,
+        } if is_active_env(model, &environment) => {
+            model.connection.environment.get_or_insert(environment);
+            apply_workspace_delta(model, rev, changes, &mut effects);
         }
         ServerMsg::TasksSynced { environment, tasks } if is_active_env(model, &environment) => {
             model.connection.environment.get_or_insert(environment);
             model.cache_mut().tasks = tasks;
         }
-        ServerMsg::WorkspaceSynced { .. } | ServerMsg::TasksSynced { .. } => {}
+        ServerMsg::WorkspaceSynced { .. }
+        | ServerMsg::WorkspaceDelta { .. }
+        | ServerMsg::TasksSynced { .. } => {}
         ServerMsg::HarnessesSynced(harnesses) => {
             refresh_harnesses(model, harnesses);
         }
