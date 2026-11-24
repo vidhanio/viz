@@ -233,6 +233,9 @@ pub struct CompletionState {
     pub due: Option<f64>,
     /// Latest ranked file-search outcome for `request`.
     pub files: Option<Result<Vec<FileSearchMatch>, String>>,
+    /// Query string that produced [`Self::files`], used to keep instant
+    /// client-side filtered results visible while a fresh search runs.
+    pub files_query: Option<String>,
     /// Latest GitHub issue/PR search outcome for `request`.
     pub github: Option<Result<Vec<GitHubItem>, String>>,
     /// Highlighted row index.
@@ -248,9 +251,29 @@ impl CompletionState {
         self.request = self.request.wrapping_add(1);
         self.due = None;
         self.files = None;
+        self.files_query = None;
         self.github = None;
         self.highlighted = 0;
         self.dismissed = false;
+    }
+
+    /// Updates the tracked token while keeping previous results of the same
+    /// [`CompletionKind`] visible so typing never flashes empty.
+    pub fn advance(&mut self, token: CompletionToken) {
+        let same_kind = self
+            .token
+            .as_ref()
+            .is_some_and(|prev| prev.kind == token.kind);
+        if same_kind {
+            self.token = Some(token);
+            self.request = self.request.wrapping_add(1);
+            self.due = None;
+            self.highlighted = 0;
+            self.dismissed = false;
+        } else {
+            self.reset();
+            self.token = Some(token);
+        }
     }
 
     /// Whether `token` matches the currently tracked completion token.

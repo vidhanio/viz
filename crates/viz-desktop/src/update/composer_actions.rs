@@ -18,10 +18,10 @@ use crate::{
     },
 };
 
-/// Debounce delay before firing `@` file search RPCs.
-const FILE_DELAY: Duration = Duration::from_millis(110);
+/// Debounce delay before firing `@` file search RPCs while typing a query.
+const FILE_DELAY: Duration = Duration::from_millis(35);
 /// Debounce delay before firing `#` GitHub search RPCs.
-const GITHUB_DELAY: Duration = Duration::from_millis(140);
+const GITHUB_DELAY: Duration = Duration::from_millis(100);
 
 pub(super) fn send_input(
     model: &mut Model,
@@ -154,14 +154,19 @@ pub(super) fn poll_completion(
     };
     if !model.composer.completion.matches(&token) {
         let kind = token.kind;
-        model.composer.completion.reset();
-        model.composer.completion.token = Some(token);
+        let query = token.query.clone();
+        model.composer.completion.advance(token);
         match kind {
             CompletionKind::Mention
                 if model.selection.selected.is_some() || model.project_path().is_some() =>
             {
-                model.composer.completion.due = Some(clock + FILE_DELAY.as_secs_f64());
-                effects.push(Effect::WakeAfter(FILE_DELAY));
+                let immediate = query.is_empty() || model.composer.completion.files.is_none();
+                if immediate {
+                    dispatch_file_search(model, query, effects);
+                } else {
+                    model.composer.completion.due = Some(clock + FILE_DELAY.as_secs_f64());
+                    effects.push(Effect::WakeAfter(FILE_DELAY));
+                }
             }
             CompletionKind::PullRequest if model.project().is_some_and(|p| p.git) => {
                 model.composer.completion.due = Some(clock + GITHUB_DELAY.as_secs_f64());
@@ -180,18 +185,7 @@ pub(super) fn poll_completion(
         model.composer.completion.due = None;
         let request = model.composer.completion.request;
         match token.kind {
-            CompletionKind::Mention => {
-                let thread = model.selection.selected;
-                let project = thread.is_none().then(|| model.project_path()).flatten();
-                if thread.is_some() || project.is_some() {
-                    effects.push(Effect::Server(ServerEffect::SearchFiles {
-                        thread,
-                        project: project.map(str::to_owned),
-                        request,
-                        query: token.query,
-                    }));
-                }
-            }
+            CompletionKind::Mention => dispatch_file_search(model, token.query, effects),
             CompletionKind::PullRequest => {
                 if let Some(project) = model.project().filter(|p| p.git) {
                     effects.push(Effect::Server(ServerEffect::SearchGitHub {
@@ -203,6 +197,20 @@ pub(super) fn poll_completion(
             }
             CompletionKind::Slash | CompletionKind::Skill => {}
         }
+    }
+}
+
+fn dispatch_file_search(model: &Model, query: String, effects: &mut Vec<Effect>) {
+    let request = model.composer.completion.request;
+    let thread = model.selection.selected;
+    let project = thread.is_none().then(|| model.project_path()).flatten();
+    if thread.is_some() || project.is_some() {
+        effects.push(Effect::Server(ServerEffect::SearchFiles {
+            thread,
+            project: project.map(str::to_owned),
+            request,
+            query,
+        }));
     }
 }
 

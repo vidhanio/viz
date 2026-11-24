@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Error, blocking, check};
 
-const LISTING_TTL: Duration = Duration::from_secs(3);
+const LISTING_TTL: Duration = Duration::from_secs(30);
 const CACHED_ROOTS: usize = 8;
 
 static LISTINGS: LazyLock<Mutex<HashMap<PathBuf, Listing>>> = LazyLock::new(Mutex::default);

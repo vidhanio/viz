@@ -222,6 +222,12 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         }
         ServerMsg::FileSearchResult { request, result } => {
             if model.composer.completion.request == request {
+                model.composer.completion.files_query = model
+                    .composer
+                    .completion
+                    .token
+                    .as_ref()
+                    .map(|token| token.query.clone());
                 model.composer.completion.files = Some(result);
             }
         }

@@ -30,7 +30,7 @@ impl Session<'_> {
                     thread,
                     project: project.as_deref(),
                     query: &query,
-                    limit: Some(24),
+                    limit: Some(40),
                 })
                 .await
                 .map_err(|error| error.to_string());

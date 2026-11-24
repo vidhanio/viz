@@ -111,12 +111,34 @@ pub fn matching_skills(model: &Model, query: &str) -> Vec<SkillEntry> {
 #[must_use]
 pub fn matching_mentions(model: &Model, query: &str) -> Vec<MentionEntry> {
     let mut out = Vec::new();
-    if let Some(Ok(files)) = &model.composer.completion.files {
-        for matched in files {
-            out.push(MentionEntry::File(matched.clone()));
+    let query_lower = query.trim().to_ascii_lowercase();
+    let completion = &model.composer.completion;
+    if let Some(Ok(files)) = &completion.files {
+        let exact = completion.files_query.as_deref() == Some(query);
+        if exact || query_lower.is_empty() {
+            for matched in files {
+                out.push(MentionEntry::File(matched.clone()));
+            }
+        } else {
+            let mut scored: Vec<(u32, &viz_client::protocol::FileSearchMatch)> = files
+                .iter()
+                .filter_map(|matched| {
+                    let name = matched
+                        .path
+                        .rsplit('/')
+                        .next()
+                        .unwrap_or(matched.path.as_str());
+                    let score = score_text(name, &query_lower)
+                        .or_else(|| score_text(&matched.path, &query_lower).map(|s| s + 10))?;
+                    Some((score, matched))
+                })
+                .collect();
+            scored.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.path.cmp(&b.1.path)));
+            for (_, matched) in scored {
+                out.push(MentionEntry::File(matched.clone()));
+            }
         }
     }
-    let query_lower = query.trim().to_ascii_lowercase();
     let max_threads = if out.is_empty() { 8 } else { 4 };
     let mut added_threads = 0usize;
     for thread in model.cache().threads() {

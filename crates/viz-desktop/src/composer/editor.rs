@@ -35,27 +35,7 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
         "Ask anything. @ files, $ skills, / commands"
     };
 
-    let pill_theme = PillPalette::from_theme(t);
-    let field = text_input(&s.widgets.draft, t.body)
-        .key("draft")
-        .label("Message")
-        .w_full()
-        .color(t.text)
-        .caret(t.accent, t.k.selection())
-        .placeholder(placeholder, t.faint)
-        .pill_style(move |id| pill_theme.style(id))
-        .spellcheck(true)
-        .on_edit(|s: &mut Desktop| &mut s.widgets.draft)
-        .on_input_change(|s: &mut Desktop, tx| {
-            s.sync_draft_text();
-            let text = s.widgets.draft.text.clone();
-            s.dispatch(Msg::Composer(ComposerMsg::DraftChanged(text)), tx);
-        })
-        .on_input_paste(attachment_io::paste)
-        .on_input_key(on_draft_key)
-        .on_submit(|s: &mut Desktop, tx| {
-            s.dispatch(Msg::Composer(ComposerMsg::SendInput), tx);
-        });
+    let field = draft_field(s, placeholder, t);
 
     let has_attachments = !m.composer.draft.attachments.is_empty();
     let border = if m.composer.drag_over {
@@ -129,6 +109,38 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
     } else {
         card
     }
+}
+
+fn draft_field(s: &Desktop, placeholder: &'static str, t: &Theme) -> El {
+    let pill_theme = PillPalette::from_theme(t);
+    text_input(&s.widgets.draft, t.body)
+        .key("draft")
+        .label("Message")
+        .w_full()
+        .color(t.text)
+        .caret(t.accent, t.k.selection())
+        .placeholder(placeholder, t.faint)
+        .pill_style(move |id| pill_theme.style(id))
+        .spellcheck(true)
+        .on_edit(|s: &mut Desktop| &mut s.widgets.draft)
+        .on_input_change(|s: &mut Desktop, tx| {
+            s.sync_draft_text();
+            let text = s.widgets.draft.text.clone();
+            s.dispatch(Msg::Composer(ComposerMsg::DraftChanged(text)), tx);
+            let cursor = s.draft_cursor();
+            s.dispatch(
+                Msg::Composer(ComposerMsg::PollCompletion {
+                    clock: tx.clock(),
+                    cursor,
+                }),
+                tx,
+            );
+        })
+        .on_input_paste(attachment_io::paste)
+        .on_input_key(on_draft_key)
+        .on_submit(|s: &mut Desktop, tx| {
+            s.dispatch(Msg::Composer(ComposerMsg::SendInput), tx);
+        })
 }
 
 fn length_warning(s: &Desktop, t: &Theme) -> Option<El> {
