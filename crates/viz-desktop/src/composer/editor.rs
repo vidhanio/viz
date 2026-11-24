@@ -2,9 +2,7 @@
 //! drag-and-drop accent frame, prompt history recall, length warning, and
 //! footer controls (no voice input).
 
-use std::{cell::Cell, time::Duration};
-
-use rune::{Color, Cx, El, Key, KeyEvent, ScrollSpec, Tx, col, icon, row, text, text_input};
+use rune::{Color, El, Key, KeyEvent, ScrollSpec, Tx, col, icon, row, text, text_input};
 
 use super::{
     actions::{PillPalette, primary_actions},
@@ -98,7 +96,7 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
                 .pt(if has_attachments { S8 } else { S14 })
                 .pb(S8)
                 .min_h(S44)
-                .child(draft_scroll(s, field, t)),
+                .child(draft_scroll(field, t)),
         )
         .children(length_warning(s, t))
         .child(footer);
@@ -115,84 +113,20 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
     }
 }
 
-/// Geometry supplied by Rune after a composer-handled edit.
-pub struct CaretReveal {
-    caret: Cell<Option<[f32; 4]>>,
-    viewport: Cell<Option<[f32; 4]>>,
-    scroll: rune::Live<[f32; 2]>,
-    pending: bool,
-}
-
-impl Default for CaretReveal {
-    fn default() -> Self {
-        Self {
-            caret: Cell::new(None),
-            viewport: Cell::new(None),
-            scroll: rune::Live::new([0.0; 2]),
-            pending: false,
-        }
-    }
-}
-
-impl CaretReveal {
-    pub fn measure(&self, cx: &Cx<Desktop>) {
-        if self.pending {
-            self.caret.set(cx.caret("draft"));
-            self.viewport.set(cx.window_layout(DRAFT_SCROLL_KEY));
-        }
-    }
-
-    fn request(&mut self, tx: &mut Tx) {
-        self.caret.set(None);
-        self.pending = true;
-        tx.wake_after(Duration::ZERO);
-    }
-
-    pub fn reveal(&mut self, tx: &mut Tx) -> bool {
-        if !std::mem::take(&mut self.pending) {
-            return false;
-        }
-        let Some([_, y, _, h]) = self.caret.take() else {
-            return false;
-        };
-        let Some([_, top, _, height]) = self.viewport.take() else {
-            return false;
-        };
-        let delta = if y < top {
-            y - top
-        } else {
-            (y + h - top - height).max(0.0)
-        };
-        let [offset, max] = self.scroll.get();
-        let next = (offset + delta).clamp(0.0, max);
-        if (next - offset).abs() < 0.5 {
-            return false;
-        }
-        tx.scroll_to_instant(DRAFT_SCROLL_KEY, 0.0, next);
-        true
-    }
-}
-
-fn draft_scroll(s: &Desktop, field: El, t: &Theme) -> El {
+fn draft_scroll(field: El, t: &Theme) -> El {
     let line = t.body.line_px();
     #[expect(
         clippy::cast_precision_loss,
         reason = "MAX_LINES is a small single-digit constant"
     )]
     let max_h = MAX_LINES as f32 * line;
-    let scroll = s.widgets.composer_caret.scroll.clone();
     col()
         .key(DRAFT_SCROLL_KEY)
         .w_full()
         .shrink()
         .min_h(line)
         .max_h(max_h)
-        .scroll(ScrollSpec {
-            stick_bottom: false,
-        })
-        .on_scroll_offset(move |pos| {
-            scroll.set([pos.offset[1], pos.max[1]]);
-        })
+        .scroll(ScrollSpec::default())
         .child(field.animate_edit_layout())
 }
 
@@ -296,7 +230,6 @@ fn on_draft_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     if markdown::handle_key(edit, &s.widgets.draft_outline, ev) {
         if before != (edit.text.len(), edit.anchor, edit.focus) {
             draft_changed(s, tx);
-            s.widgets.composer_caret.request(tx);
         }
         return true;
     }

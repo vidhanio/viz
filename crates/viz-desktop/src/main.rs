@@ -68,7 +68,6 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         cx.reduced_motion(reduced);
     }
     let reduced = cx.is_reduced_motion();
-    s.widgets.composer_caret.measure(cx);
     let t = Theme::get(cx.system_dark());
     cx.help_look(t.help_look());
     if let Some(demo) = &s.motion_demo {
@@ -214,7 +213,6 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
-    let caret_scrolled = s.widgets.composer_caret.reveal(tx);
     let pane_changed = sync_sidebar_pane(s, tx);
     let diff_width = s.widgets.diff_pane.width();
     let diff_resized =
@@ -253,7 +251,6 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
         false
     };
     s.expire_toasts(clock, tx)
-        || caret_scrolled
         || pane_changed
         || diff_resized
         || zoom

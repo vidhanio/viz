@@ -12,7 +12,7 @@ use rune_kit::{ImageZoom, ToastStack, shell::PaneState};
 use tokio::sync::mpsc;
 
 use crate::{
-    composer::{CaretReveal, markdown::DraftOutline},
+    composer::markdown::DraftOutline,
     effects::{self, ServerEffect},
     model::{
         DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH, DraftCursor, DraftPill, Model,
@@ -106,7 +106,6 @@ pub struct ShellWidgets {
     /// Derived index for the active timeline viewport.
     pub timeline_rows: crate::timeline::TimelineRows,
     pub draft_outline: DraftOutline,
-    pub composer_caret: CaretReveal,
 }
 
 impl std::fmt::Debug for ShellWidgets {
@@ -159,7 +158,6 @@ impl Default for ShellWidgets {
             attachment_images: crate::attachments::DraftImages::default(),
             timeline_rows: crate::timeline::TimelineRows::default(),
             draft_outline: DraftOutline::default(),
-            composer_caret: CaretReveal::default(),
         }
     }
 }
