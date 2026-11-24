@@ -14,12 +14,12 @@ use viz_protocol::{
     GitHubPullPage, GitHubRepositories, GitHubSearch, GitStatusRequest, HarnessList,
     HarnessOptions, HarnessOptionsResult, ImportSession, InitRepository, LaunchThread,
     ListBranches, ListEntries, ListHarnessSessions, ListHarnesses, ListProjects, ListThreads,
-    ListWorktrees, MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone,
-    ReadEntryChunk, ReadFile, ReadProject, ReadThreadState, RemoveProject, RemoveQueuedInput,
-    RemoveWorktree, RestoreCheckpoint, RetitleThread, SearchFiles, SearchHits, SearchThreads,
-    SendInput, SetProjectAccess, SetThreadAccess, StartClone, StatBlob, SteerQueuedInput,
-    StopThread, ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput,
-    UpdateThread, WaitThread,
+    ListWorktrees, MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone, ReadFile,
+    ReadProject, ReadThreadState, RemoveProject, RemoveQueuedInput, RemoveWorktree,
+    RestoreCheckpoint, RetitleThread, SearchFiles, SearchHits, SearchThreads, SendInput,
+    SetProjectAccess, SetThreadAccess, StartClone, StatBlob, SteerQueuedInput, StopThread,
+    ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread,
+    WaitThread,
 };
 
 use super::{Workspace, runs, store};
@@ -32,11 +32,8 @@ handlers! {
             let threads = workspace.list_threads(archived, project.as_deref()).await?;
             Ok(ThreadList { rev, threads })
         }
-        ListEntries, |workspace, ListEntries { thread, before, limit }| {
-            workspace.entries(thread, before, page_limit(limit, 500)?).await
-        }
-        ReadEntryChunk, |workspace, request| {
-            store::chunk(workspace, request).await
+        ListEntries, |workspace, ListEntries { thread, anchor, limit }| {
+            workspace.entries(thread, anchor, page_limit(limit, 500)?).await
         }
         ReadThreadState, |workspace, ReadThreadState { thread }| {
             Ok(ThreadStateResult { state: workspace.state(thread).await? })

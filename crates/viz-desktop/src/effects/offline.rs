@@ -108,16 +108,14 @@ pub(super) fn derive(command: ServerEffect, active_env: &str) -> Offline {
                 page: None,
             }))
         }
-        ServerEffect::ReadEntryChunk {
-            thread,
-            key,
-            source,
-        } => Offline::Dispatch(Msg::Server(ServerMsg::EntryChunkLoaded {
-            thread,
-            key,
-            source,
-            result: Err("Server disconnected".into()),
-        })),
+        ServerEffect::ReadEntry { thread, key, entry } => {
+            Offline::Dispatch(Msg::Server(ServerMsg::EntryLoaded {
+                thread,
+                key,
+                entry,
+                result: Err("Server disconnected".into()),
+            }))
+        }
         ServerEffect::ReadFile { request, .. } => {
             Offline::Dispatch(Msg::Server(ServerMsg::FilePreviewLoaded {
                 request,

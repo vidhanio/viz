@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use viz_client::protocol::{CompactionStatus, EntrySource};
+use viz_client::protocol::CompactionStatus;
 
 use super::{
     CompactionNotice, ErrorKind, Item, MediaItem, Model, PlanCard, TaskResult, ToolStatus,
@@ -29,8 +29,6 @@ pub struct TurnView<'a> {
     pub compactions: Vec<&'a CompactionNotice>,
     /// Non-text media blocks emitted in this turn.
     pub media: Vec<&'a MediaItem>,
-    /// Omitted wire entries in this turn recoverable via `thread.entry_chunk`.
-    pub omitted: Vec<(&'a str, &'a EntrySource)>,
     /// Assistant prose blocks (item, streaming flag).
     pub prose: Vec<(&'a Item, bool)>,
     /// Non-default stop-reason dividers inside this turn.
@@ -215,7 +213,6 @@ fn new_turn(key: String, user: Option<&User>) -> TurnView<'_> {
         plans: Vec::new(),
         compactions: Vec::new(),
         media: Vec::new(),
-        omitted: Vec::new(),
         prose: Vec::new(),
         statuses: Vec::new(),
         notices: Vec::new(),
@@ -264,7 +261,6 @@ fn push_turn_item<'a>(turn: &mut TurnView<'a>, item: &'a Item, streaming: bool) 
             turn.compactions.push(notice);
         }
         Item::Media(media) => turn.media.push(media),
-        Item::Omitted { key, source } => turn.omitted.push((key.as_str(), source)),
         Item::TurnStatus {
             key,
             stop_reason,

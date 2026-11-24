@@ -158,6 +158,7 @@ pub(super) fn seed_worklog(m: &mut Model) {
                     ),
                     new_text: "fn render(blocks: &[Block], ending: LineEnding) -> String {\n    let separator = ending.repeat(2);\n    let body = blocks.join(&separator);\n    body + ending.as_str()\n}\n"
                         .into(),
+                    skip: 0,
                 })],
                 ..tool(
                     "edit-1",

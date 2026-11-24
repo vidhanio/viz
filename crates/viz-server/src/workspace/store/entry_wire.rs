@@ -1,301 +1,315 @@
-//! Bounds transcript payloads at the wire edge and reads their full data by
-//! revision through a bounded in-memory LRU chunk cache.
+//! Per-kind wire projection for transcript entries (never omitting entire
+//! cards) and zero-cache `O(chunk)` stored entry reads via SQLite incremental
+//! blob I/O.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
-};
+use std::io;
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use sha2::{Digest as _, Sha256};
+use rusqlite::MAIN_DB;
+use serde::Serialize;
+use serde_json::Value;
 use viz_protocol::{
-    Body, Entry, EntryChunk, EntryData, EntryId, EntrySource, LiveTurn, ReadEntryChunk, ThreadId,
-    ToolCall, TranscriptEntry,
+    Body, ContentKind, Entry, EntryData, EntryId, LiveTurn, PlanContent, ThreadId, ToolCall,
+    ToolContent, ToolDiff, TranscriptEntry, limits,
 };
 
-use super::{
-    super::{Workspace, sql::row},
-    json,
-};
+use super::super::{Workspace, sql::row};
 use crate::error::Error;
 
-/// A single entry stays bounded before deferring to `thread.entry_chunk`.
-const INLINE_BYTES: usize = viz_protocol::limits::INLINE_ENTRY_BYTES;
-/// A returned JSON string stays bounded even after outer JSON escaping.
-const CHUNK_BYTES: usize = viz_protocol::limits::INLINE_ENTRY_BYTES;
-const CHUNK_CACHE_ENTRIES: usize = 16;
-const CHUNK_CACHE_BYTES: usize = 16 * viz_protocol::limits::MIB;
+const ENTRY_BUDGET: usize = limits::ENTRY_WIRE_BUDGET;
+const TEXT_CAP: usize = limits::TOOL_TEXT_WIRE_BYTES;
+const DIFF_CONTEXT_LINES: usize = 3;
+const DIFF_TEXT_CAP: usize = TEXT_CAP * 2;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum CacheKey {
-    Stored { thread: ThreadId, entry: EntryId },
-    Live { thread: ThreadId, key: String },
-}
+/// Zero-allocation writer counting exact JSON byte length.
+struct CountingWriter(usize);
 
-#[derive(Debug)]
-struct CachedPayload {
-    revision: String,
-    data: Arc<String>,
-    last_used: u64,
-}
-
-#[derive(Debug, Default)]
-struct CacheInner {
-    entries: HashMap<CacheKey, CachedPayload>,
-    total_bytes: usize,
-}
-
-/// Bounded LRU cache of serialized full entries so sequential
-/// `thread.entry_chunk` pulls stay `O(chunk)` instead of re-reading SQLite and
-/// re-hashing the whole entry on every chunk.
-#[derive(Debug, Default)]
-pub(in crate::workspace) struct EntryChunkCache {
-    inner: Mutex<CacheInner>,
-    clock: AtomicU64,
-}
-
-impl EntryChunkCache {
-    fn get(&self, key: &CacheKey, revision: &str) -> Option<Arc<String>> {
-        let tick = self.clock.fetch_add(1, Ordering::Relaxed);
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let found = inner
-            .entries
-            .get_mut(key)
-            .filter(|entry| entry.revision == revision)
-            .map(|entry| {
-                entry.last_used = tick;
-                Arc::clone(&entry.data)
-            });
-        drop(inner);
-        found
+impl io::Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        Ok(buf.len())
     }
 
-    fn insert(&self, key: CacheKey, revision: String, data: Arc<String>) {
-        let size = data.len();
-        if size > CHUNK_CACHE_BYTES {
-            return;
-        }
-        let tick = self.clock.fetch_add(1, Ordering::Relaxed);
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(old) = inner.entries.remove(&key) {
-            inner.total_bytes = inner.total_bytes.saturating_sub(old.data.len());
-        }
-        while (inner.entries.len() >= CHUNK_CACHE_ENTRIES
-            || inner.total_bytes.saturating_add(size) > CHUNK_CACHE_BYTES)
-            && let Some(oldest) = inner
-                .entries
-                .iter()
-                .min_by_key(|(_, entry)| entry.last_used)
-                .map(|(k, _)| k.clone())
-        {
-            if let Some(evicted) = inner.entries.remove(&oldest) {
-                inner.total_bytes = inner.total_bytes.saturating_sub(evicted.data.len());
-            }
-        }
-        inner.total_bytes = inner.total_bytes.saturating_add(size);
-        inner.entries.insert(
-            key,
-            CachedPayload {
-                revision,
-                data,
-                last_used: tick,
-            },
-        );
-    }
-
-    /// Invalidates a cached stored entry after a tool patch mutates its JSON.
-    pub(in crate::workspace) fn invalidate_stored(&self, thread: ThreadId, entry: EntryId) {
-        let mut inner = self
-            .inner
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if let Some(removed) = inner.entries.remove(&CacheKey::Stored { thread, entry }) {
-            inner.total_bytes = inner.total_bytes.saturating_sub(removed.data.len());
-        }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
-/// Trims oversized entry payloads for wire transmission and returns the
-/// resulting serialized byte size for page budgeting.
-///
-/// Oversized `Prompt` entries truncate their `text` and set `truncated = true`
-/// while preserving `attachments`, `context`, and `origin` metadata so the UI
-/// never loses pills or attachments when long prompts defer to chunk loading.
-pub(in crate::workspace) fn preview(entry: &mut Entry) -> Result<usize, Error> {
-    match &mut entry.data {
+/// Computes the exact serialized JSON byte length of `value` without
+/// allocating an intermediate `String` or `Vec<u8>`.
+pub(in crate::workspace) fn serialized_len(value: &impl Serialize) -> usize {
+    let mut counter = CountingWriter(0);
+    let _ = serde_json::to_writer(&mut counter, value);
+    counter.0
+}
+
+fn fits(value: &impl Serialize, budget: usize) -> bool {
+    serialized_len(value) <= budget
+}
+
+/// Projects `entry` for control-plane wire delivery without ever emitting an
+/// omitted placeholder, setting `entry.full = Some(stored_bytes)` whenever
+/// user-visible content was shortened. Returns the projected JSON byte length.
+pub(in crate::workspace) fn preview(entry: &mut Entry, stored_bytes: u64) -> usize {
+    let over_budget = !fits(&entry.data, ENTRY_BUDGET);
+    let trimmed = match &mut entry.data {
         EntryData::Transcript(segment) => segment_preview(segment),
         EntryData::ToolUpdate { record, .. } => tool_preview(record),
-        EntryData::Prompt { .. } => {
-            if json(&entry.data)?.len() > INLINE_BYTES {
-                if let EntryData::Prompt {
-                    text, truncated, ..
-                } = &mut entry.data
-                {
-                    truncate(text);
-                    *truncated = true;
-                }
-                if json(&entry.data)?.len() > INLINE_BYTES {
-                    entry.data = EntryData::Omitted;
-                }
-            }
+        EntryData::Prompt { text, .. } | EntryData::TaskResult { text, .. } => {
+            over_budget && truncate_head(text, TEXT_CAP)
         }
-        data if json(data)?.len() > INLINE_BYTES => *data = EntryData::Omitted,
-        _ => {}
+        EntryData::Run(end) => {
+            over_budget
+                && end
+                    .answer
+                    .as_mut()
+                    .is_some_and(|answer| truncate_head(answer, TEXT_CAP))
+        }
+        EntryData::Continued => false,
+    };
+    if trimmed {
+        entry.full = Some(stored_bytes);
     }
-    Ok(json(entry)?.len())
+    serialized_len(entry)
 }
 
+/// Projects an in-progress live turn for streaming watchers in place.
 pub(in crate::workspace) fn live_preview(mut live: LiveTurn) -> LiveTurn {
     for entry in &mut live.entries {
-        segment_preview(entry);
+        let _ = segment_preview(entry);
     }
     live
 }
 
-fn segment_preview(entry: &mut TranscriptEntry) {
-    if fits(&entry.body) {
-        return;
-    }
-    entry.more = true;
+fn segment_preview(entry: &mut TranscriptEntry) -> bool {
     match &mut entry.body {
+        Body::Text(_) | Body::Thought(_) => false,
         Body::Tool(tool) => tool_preview(tool),
-        Body::Text(segment) | Body::Thought(segment) => truncate(&mut segment.text),
-        _ => entry.body = Body::Omitted,
-    }
-    if !fits(&entry.body) {
-        entry.body = Body::Omitted;
-    }
-}
-
-fn tool_preview(tool: &mut ToolCall) {
-    if fits(tool) {
-        return;
-    }
-    let input = tool.input_text();
-    let output = tool.output_text();
-    let mut summary = ToolCall::new(std::mem::take(&mut tool.id));
-    summary.title = std::mem::take(&mut tool.title);
-    truncate(&mut summary.title);
-    summary.name = tool.name.take();
-    summary.kind = tool.kind.take();
-    summary.viz = tool.viz.take();
-    summary.exit = tool.exit.take();
-    summary.status = tool.status;
-    summary.started_at = tool.started_at;
-    summary.ended_at = tool.ended_at;
-    summary.raw_input = input.map(preview_text);
-    summary.raw_output = output.map(preview_text);
-    summary.more = true;
-    if !fits(&summary) {
-        summary.viz = None;
-        summary.name = None;
-        summary.kind = None;
-        summary.raw_input = None;
-        summary.raw_output = None;
-    }
-    *tool = summary;
-}
-
-fn fits(data: &impl serde::Serialize) -> bool {
-    serde_json::to_vec(data).is_ok_and(|bytes| bytes.len() <= INLINE_BYTES)
-}
-
-fn preview_text(mut text: String) -> serde_json::Value {
-    truncate(&mut text);
-    text.into()
-}
-
-fn truncate(text: &mut String) {
-    text.truncate(text.floor_char_boundary(2048));
-}
-
-pub(in crate::workspace) async fn chunk(
-    workspace: &Workspace,
-    request: ReadEntryChunk,
-) -> Result<EntryChunk, Error> {
-    let ReadEntryChunk {
-        thread,
-        source,
-        offset,
-        revision,
-    } = request;
-    let cache_key = match &source {
-        EntrySource::Stored { entry } => CacheKey::Stored {
-            thread,
-            entry: *entry,
-        },
-        EntrySource::Live { key } => CacheKey::Live {
-            thread,
-            key: key.clone(),
-        },
-    };
-    let (actual, data) = if let Some(ref wanted) = revision
-        && let Some(cached) = workspace.entry_chunks.get(&cache_key, wanted)
-    {
-        (wanted.clone(), cached)
-    } else {
-        let raw = match source {
-            EntrySource::Stored { entry } => {
-                workspace
-                    .db
-                    .read(move |conn| {
-                        row(
-                            conn,
-                            "SELECT data FROM entries WHERE thread = ?1 AND id = ?2",
-                            [thread.into(), entry.into()],
-                        )?
-                        .ok_or_else(|| {
-                            Error::not_found(format!("no entry {entry} in thread {thread}"))
-                        })?
-                        .str(0)
-                    })
-                    .await?
+        Body::Plan(plan) => {
+            if fits(plan, ENTRY_BUDGET) {
+                return false;
             }
-            EntrySource::Live { key } => {
-                let live = workspace.updates.raw_live(thread).ok_or_else(|| {
-                    Error::not_found(format!("no live transcript in thread {thread}"))
-                })?;
-                let entry = live
-                    .entries
-                    .iter()
-                    .find(|entry| entry.key == key)
-                    .ok_or_else(|| {
-                        Error::not_found(format!("no live entry {key} in thread {thread}"))
-                    })?;
-                json(entry)?
+            match &mut plan.content {
+                PlanContent::Markdown { text, .. } => truncate_head(text, TEXT_CAP),
+                PlanContent::Items { entries } => {
+                    let original = entries.len();
+                    while entries.len() > 1 && !fits(entries, ENTRY_BUDGET) {
+                        entries.pop();
+                    }
+                    entries.len() < original
+                }
             }
-        };
-        let actual = URL_SAFE_NO_PAD.encode(Sha256::digest(raw.as_bytes()));
-        if revision.is_some_and(|revision| revision != actual) {
-            return Err(Error::unavailable(
-                "entry changed between reads; restart at offset zero",
-            ));
         }
-        let shared = Arc::new(raw);
-        workspace
-            .entry_chunks
-            .insert(cache_key, actual.clone(), Arc::clone(&shared));
-        (actual, shared)
-    };
-    let start = usize::try_from(offset).map_err(|_| Error::invalid("invalid entry offset"))?;
-    if !data.is_char_boundary(start) {
-        return Err(Error::invalid(
-            "entry offset is outside the JSON or splits a UTF-8 character",
-        ));
+        Body::Compaction(compaction) => {
+            if fits(compaction, ENTRY_BUDGET) {
+                return false;
+            }
+            truncate_head(&mut compaction.summary, TEXT_CAP)
+        }
+        Body::Media(media) => {
+            if fits(media, ENTRY_BUDGET) {
+                return false;
+            }
+            if let Some(obj) = media.block.payload.as_object_mut() {
+                obj.remove("data");
+                if let Some(res) = obj.get_mut("resource").and_then(Value::as_object_mut) {
+                    res.remove("blob");
+                    if let Some(Value::String(text)) = res.get_mut("text") {
+                        return truncate_head(text, TEXT_CAP);
+                    }
+                }
+            }
+            true
+        }
     }
-    let end = data.floor_char_boundary((start + CHUNK_BYTES).min(data.len()));
-    Ok(EntryChunk {
-        revision: actual,
-        data: data[start..end].to_owned(),
-        next: (end < data.len()).then_some(end as u64),
-    })
+}
+
+fn tool_preview(tool: &mut ToolCall) -> bool {
+    tool.meta = None;
+    let settled = tool.status.is_settled();
+    let mut trimmed = false;
+    let mut has_structured_output = !tool.terminals.is_empty();
+
+    for content in &mut tool.content {
+        match content {
+            ToolContent::Diff(diff) => {
+                has_structured_output = true;
+                if trim_diff(diff) {
+                    trimmed = true;
+                }
+            }
+            ToolContent::Block(block) => {
+                if block.kind == ContentKind::Text
+                    && let Some(Value::String(text)) = block.payload.get_mut("text")
+                {
+                    if !text.is_empty() {
+                        has_structured_output = true;
+                    }
+                    if trim_for_status(text, TEXT_CAP, settled) {
+                        trimmed = true;
+                    }
+                }
+            }
+            ToolContent::Terminal(_) | ToolContent::Session(_) => {}
+        }
+    }
+
+    for terminal in &mut tool.terminals {
+        if trim_for_status(&mut terminal.output, TEXT_CAP, settled) {
+            trimmed = true;
+        }
+    }
+
+    if has_structured_output {
+        tool.raw_output = None;
+    } else if tool
+        .raw_output
+        .as_ref()
+        .is_some_and(|raw| !fits(raw, TEXT_CAP))
+    {
+        let mut preview = tool.output_text().unwrap_or_else(|| {
+            tool.raw_output
+                .as_ref()
+                .map_or_default(|raw| serde_json::to_string_pretty(raw).unwrap_or_default())
+        });
+        trim_for_status(&mut preview, TEXT_CAP, settled);
+        tool.raw_output = Some(Value::String(preview));
+        trimmed = true;
+    }
+
+    if tool
+        .raw_input
+        .as_ref()
+        .is_some_and(|raw| !fits(raw, TEXT_CAP))
+    {
+        let mut preview = tool.input_text().unwrap_or_else(|| {
+            tool.raw_input
+                .as_ref()
+                .map_or_default(|raw| serde_json::to_string_pretty(raw).unwrap_or_default())
+        });
+        truncate_head(&mut preview, TEXT_CAP);
+        tool.raw_input = Some(Value::String(preview));
+        trimmed = true;
+    }
+
+    trimmed
+}
+
+/// Trims a [`ToolDiff`] to its changed line span plus [`DIFF_CONTEXT_LINES`]
+/// of surrounding context, setting [`ToolDiff::skip`] to the number of leading
+/// unchanged lines removed so line numbers and diff stats stay exact.
+///
+/// Returns `true` only when the changed region itself still had to be
+/// truncated past [`DIFF_TEXT_CAP`].
+fn trim_diff(diff: &mut ToolDiff) -> bool {
+    if let Some(old) = diff.old_text.as_deref() {
+        let old_lines: Vec<&str> = old.split_inclusive('\n').collect();
+        let new_lines: Vec<&str> = diff.new_text.split_inclusive('\n').collect();
+        let mut prefix = 0usize;
+        while prefix < old_lines.len()
+            && prefix < new_lines.len()
+            && old_lines[prefix] == new_lines[prefix]
+        {
+            prefix += 1;
+        }
+        let mut suffix = 0usize;
+        while suffix < old_lines.len().saturating_sub(prefix)
+            && suffix < new_lines.len().saturating_sub(prefix)
+            && old_lines[old_lines.len() - 1 - suffix] == new_lines[new_lines.len() - 1 - suffix]
+        {
+            suffix += 1;
+        }
+        let start = prefix.saturating_sub(DIFF_CONTEXT_LINES);
+        let old_end = (old_lines.len() - suffix + DIFF_CONTEXT_LINES).min(old_lines.len());
+        let new_end = (new_lines.len() - suffix + DIFF_CONTEXT_LINES).min(new_lines.len());
+        if start > 0 || old_end < old_lines.len() || new_end < new_lines.len() {
+            let trimmed_old = old_lines[start..old_end].concat();
+            let trimmed_new = new_lines[start..new_end].concat();
+            diff.old_text = Some(trimmed_old);
+            diff.new_text = trimmed_new;
+            diff.skip = diff
+                .skip
+                .saturating_add(u32::try_from(start).unwrap_or(u32::MAX));
+        }
+    }
+    let old_clipped = diff
+        .old_text
+        .as_mut()
+        .is_some_and(|old| truncate_head(old, DIFF_TEXT_CAP));
+    let new_clipped = truncate_head(&mut diff.new_text, DIFF_TEXT_CAP);
+    old_clipped || new_clipped
+}
+
+fn trim_for_status(text: &mut String, limit: usize, settled: bool) -> bool {
+    if settled {
+        truncate_head(text, limit)
+    } else {
+        truncate_tail(text, limit)
+    }
+}
+
+fn truncate_head(text: &mut String, limit: usize) -> bool {
+    if text.len() <= limit {
+        return false;
+    }
+    text.truncate(text.floor_char_boundary(limit));
+    true
+}
+
+fn truncate_tail(text: &mut String, limit: usize) -> bool {
+    if text.len() <= limit {
+        return false;
+    }
+    let cut = text.ceil_char_boundary(text.len().saturating_sub(limit));
+    text.drain(..cut);
+    true
+}
+
+/// Reads one binary byte range `[offset, offset + len)` directly from the
+/// stored JSON column in SQLite using incremental blob I/O (`blob_open` +
+/// `read_at`), returning `(bytes, total_size, rev)` in `O(chunk)` time and
+/// memory with zero caching.
+pub(in crate::workspace) async fn read_entry_chunk(
+    workspace: &Workspace,
+    thread: ThreadId,
+    entry: EntryId,
+    expected_rev: Option<u64>,
+    offset: u64,
+    len: usize,
+) -> Result<(Vec<u8>, u64, u64), Error> {
+    workspace
+        .db
+        .read_snapshot(move |tx| {
+            let meta = row(
+                tx,
+                "SELECT rev, length(CAST(data AS BLOB)) FROM entries WHERE thread = ?1 AND id = ?2",
+                [thread.into(), entry.into()],
+            )?
+            .ok_or_else(|| Error::not_found(format!("no entry {entry} in thread {thread}")))?;
+            let rev = meta.u64(0)?;
+            let total_size = meta.u64(1)?;
+            if expected_rev.is_some_and(|wanted| wanted != rev) {
+                return Err(Error::unavailable(
+                    "entry changed between reads; restart at offset zero",
+                ));
+            }
+            if offset > total_size {
+                return Err(Error::invalid("entry offset is past end of row"));
+            }
+            if offset == total_size || len == 0 {
+                return Ok((Vec::new(), total_size, rev));
+            }
+            let start = usize::try_from(offset)
+                .map_err(|_| Error::invalid("entry offset exceeds address space"))?;
+            let remaining = usize::try_from(total_size - offset)
+                .unwrap_or(usize::MAX)
+                .min(len);
+            let rowid =
+                i64::try_from(entry.0).map_err(|_| Error::invalid("entry id exceeds rowid"))?;
+            let blob = tx.blob_open(MAIN_DB, "entries", "data", rowid, true)?;
+            let mut buf = vec![0u8; remaining];
+            let read = blob.read_at(&mut buf, start)?;
+            buf.truncate(read);
+            Ok((buf, total_size, rev))
+        })
+        .await
 }

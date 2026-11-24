@@ -116,49 +116,40 @@ pub struct SearchHits {
     pub hits: Vec<SearchHit>,
 }
 
-/// Read entries older than the supplied cursor.
+/// Anchor position for [`ListEntries`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "at", rename_all = "snake_case")]
+pub enum EntryAnchor {
+    /// The newest entries in the thread.
+    #[default]
+    Latest,
+    /// Entries strictly older than `entry` (exclusive).
+    Before { entry: EntryId },
+    /// Entries strictly newer than `entry` (exclusive).
+    After { entry: EntryId },
+    /// A window centered on the turn containing `entry`.
+    Around { entry: EntryId },
+}
+
+/// Read an anchored page of transcript entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ListEntries {
     pub thread: ThreadId,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub before: Option<EntryId>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(flatten, default)]
+    pub anchor: EntryAnchor,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u16>,
 }
 
-/// A page of transcript entries, in ascending id order.
+/// A page of transcript entries, in ascending id order, with cursors for older
+/// (`before`) and newer (`after`) history.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct EntryPage {
     pub entries: Vec<Entry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before: Option<EntryId>,
-}
-
-/// Identifies a stored transcript row or an in-progress segment.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum EntrySource {
-    Stored { entry: EntryId },
-    Live { key: String },
-}
-
-/// Load an omitted or truncated entry in bounded chunks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReadEntryChunk {
-    pub thread: ThreadId,
-    pub source: EntrySource,
-    /// UTF-8 byte offset, initially zero.
-    pub offset: u64,
-    /// Use the first chunk's revision for subsequent reads.
-    pub revision: Option<String>,
-}
-
-/// Concatenate chunks as UTF-8 JSON, then decode as `EntryData` (stored) or
-/// `TranscriptEntry` (live).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct EntryChunk {
-    pub revision: String,
-    pub data: String,
-    pub next: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub after: Option<EntryId>,
 }
 
 /// Reorder a queued run or change its text.
@@ -175,6 +166,11 @@ pub struct UpdateQueuedInput {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct Entry {
     pub id: EntryId,
+    /// Full stored JSON byte size when this entry was trimmed for wire
+    /// projection; retrieve the complete stored row over the content plane via
+    /// `ContentRequest::GetEntry`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full: Option<u64>,
     #[serde(flatten)]
     pub data: EntryData,
 }
@@ -190,15 +186,8 @@ pub enum EntryData {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         context: Vec<PromptContext>,
         origin: Option<Origin>,
-        /// Whether `text` was trimmed on the wire to stay within entry byte
-        /// budgets while preserving `attachments`, `context`, and `origin`.
-        /// Load the complete entry through `thread.entry_chunk`.
-        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-        truncated: bool,
     },
     Transcript(TranscriptEntry),
-    /// The full row is available through `thread.entry_chunk`.
-    Omitted,
     /// Replaces a tool record at its original transcript position.
     ToolUpdate {
         entry: EntryId,

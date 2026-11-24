@@ -22,9 +22,6 @@ pub struct TranscriptEntry {
     /// Where the entry started relative to the others of its turn.
     pub order: u64,
     pub body: Body,
-    /// More body data is available through `thread.entry_chunk`.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub more: bool,
 }
 
 /// The content of an [`TranscriptEntry`].
@@ -41,8 +38,6 @@ pub enum Body {
     Plan(Plan),
     /// The harness summarised the conversation to free its context.
     Compaction(Compaction),
-    /// The full body is available through `thread.entry_chunk`.
-    Omitted,
 }
 
 /// A context compaction, live while it runs.

@@ -1,16 +1,15 @@
 //! Pure folding of committed server entries, live ACP turn deltas, and lazily
-//! fetched entry chunks into [`Transcript`].
+//! hydrated entries into [`Transcript`].
 
 use viz_client::protocol::{
-    Body, Entry, EntryData, EntryId, EntrySource, LiveTurn, RunEnd, Segment, ToolCall,
-    TranscriptEntry,
+    Body, Entry, EntryData, EntryId, LiveTurn, RunEnd, Segment, ToolCall, TranscriptEntry,
 };
 
 use super::{
     tool_parse::parse_tool,
     transcript::{
-        CompactionNotice, ErrorKind, Item, LoadedEntry, MediaItem, PlanCard, TaskResult,
-        ToolStatus, Transcript, TurnEnd, User,
+        CompactionNotice, ErrorKind, Item, MediaItem, PlanCard, TaskResult, ToolStatus, Transcript,
+        TurnEnd, User,
     },
 };
 
@@ -79,26 +78,29 @@ impl Transcript {
                     ended_at: segment.ended_at,
                 };
                 self.acp_partial
-                    .push(Item::from_segment(key, None, merged, entry.more, thinking));
+                    .push(Item::from_segment(key, merged, thinking));
             }
             Body::Tool(record) => {
                 let committed = self.items[self.acp_start..]
                     .iter()
                     .any(|item| matches!(item, Item::Tool(tool) if tool.call_id == record.id));
                 if !committed {
-                    let mut tool = parse_tool(Some(turn), record);
-                    tool.live_key = Some(entry.key.clone());
-                    tool.more |= entry.more;
+                    let tool = parse_tool(Some(turn), record);
                     self.acp_partial.push(Item::Tool(Box::new(tool)));
                 }
             }
-            Body::Plan(plan) => self
-                .acp_partial
-                .push(Item::Plan(PlanCard::from_wire(entry.key.clone(), plan))),
+            Body::Plan(plan) => self.acp_partial.push(Item::Plan(PlanCard::from_wire(
+                entry.key.clone(),
+                None,
+                None,
+                plan,
+            ))),
             Body::Compaction(c) => {
                 self.acp_partial
                     .push(Item::Compaction(CompactionNotice::from_wire(
                         entry.key.clone(),
+                        None,
+                        None,
                         c,
                     )));
             }
@@ -107,12 +109,6 @@ impl Transcript {
                 block: m.block.clone(),
                 blob: m.blob.clone(),
             })),
-            Body::Omitted => self.acp_partial.push(Item::Omitted {
-                key: entry.key.clone(),
-                source: EntrySource::Live {
-                    key: entry.key.clone(),
-                },
-            }),
             Body::Text(_) | Body::Thought(_) => {}
         }
     }
@@ -155,49 +151,45 @@ impl Transcript {
         }
     }
 
-    /// Patches a truncated or omitted entry in place after `thread.entry_chunk`
-    /// resolves its full payload.
-    pub fn apply_loaded_entry(&mut self, source: &EntrySource, loaded: LoadedEntry) {
-        match (source, loaded) {
-            (EntrySource::Stored { entry }, LoadedEntry::Stored(data)) => {
-                self.patch_stored(*entry, *data);
-            }
-            (EntrySource::Live { key }, LoadedEntry::Live(segment)) => {
-                self.patch_live(key, *segment);
-            }
-            _ => {}
-        }
-    }
-
-    fn patch_stored(&mut self, id: EntryId, data: EntryData) {
+    /// Hydrates a trimmed stored entry in place after
+    /// `ContentRequest::GetEntry` resolves its complete payload over the
+    /// content plane.
+    pub fn apply_loaded_entry(&mut self, id: EntryId, data: EntryData) {
         match data {
             EntryData::Transcript(segment) => {
-                let stored = EntrySource::Stored { entry: id };
-                let Some(slot) = self.items.iter_mut().find(|item| match item {
-                    Item::Tool(tool) => tool.entry == Some(id),
-                    Item::Text { entry_id, .. } | Item::Thinking { entry_id, .. } => {
-                        *entry_id == Some(id)
-                    }
-                    Item::Omitted { source, .. } => *source == stored,
-                    _ => false,
-                }) else {
-                    return;
-                };
-                let key = slot.key().to_owned();
                 match segment.body {
                     Body::Tool(record) => {
-                        let mut parsed = parse_tool(None, &record);
-                        parsed.key = key;
-                        parsed.entry = Some(id);
-                        parsed.more = false;
-                        *slot = Item::Tool(Box::new(parsed));
+                        if let Some(Item::Tool(tool)) = self
+                            .items
+                            .iter_mut()
+                            .find(|item| matches!(item, Item::Tool(t) if t.entry == Some(id)))
+                        {
+                            let mut parsed = parse_tool(None, &record);
+                            parsed.key.clone_from(&tool.key);
+                            parsed.entry = Some(id);
+                            parsed.full = None;
+                            **tool = parsed;
+                        }
                     }
-                    Body::Text(seg) => *slot = Item::from_segment(key, Some(id), seg, false, false),
-                    Body::Thought(seg) => {
-                        *slot = Item::from_segment(key, Some(id), seg, false, true);
+                    Body::Plan(plan) => {
+                        if let Some(Item::Plan(existing)) = self
+                            .items
+                            .iter_mut()
+                            .find(|item| matches!(item, Item::Plan(p) if p.entry_id == Some(id)))
+                        {
+                            let key = existing.key.clone();
+                            *existing = PlanCard::from_wire(key, Some(id), None, &plan);
+                        }
                     }
-                    Body::Plan(plan) => *slot = Item::Plan(PlanCard::from_wire(key, &plan)),
-                    _ => {}
+                    Body::Compaction(c) => {
+                        if let Some(Item::Compaction(existing)) = self.items.iter_mut().find(
+                            |item| matches!(item, Item::Compaction(n) if n.entry_id == Some(id)),
+                        ) {
+                            let key = existing.key.clone();
+                            *existing = CompactionNotice::from_wire(key, Some(id), None, &c);
+                        }
+                    }
+                    Body::Text(_) | Body::Thought(_) | Body::Media(_) => {}
                 }
             }
             EntryData::Prompt {
@@ -205,7 +197,6 @@ impl Transcript {
                 attachments,
                 context,
                 origin,
-                ..
             } => {
                 if let Some(Item::User(user)) = self
                     .items
@@ -216,39 +207,31 @@ impl Transcript {
                     user.attachments = attachments;
                     user.context = context;
                     user.origin = origin;
+                    user.full = None;
                 }
             }
-            EntryData::ToolUpdate { entry, record } => self.update_tool(entry, &record),
-            _ => {}
-        }
-    }
-
-    fn patch_live(&mut self, live_key: &str, segment: TranscriptEntry) {
-        if let Body::Tool(record) = segment.body
-            && let Some(slot) = self.acp_partial.iter_mut().find(|item| match item {
-                Item::Tool(tool) => tool.live_key.as_deref() == Some(live_key),
-                Item::Omitted { source, .. } => {
-                    matches!(source, EntrySource::Live { key } if key == live_key)
+            EntryData::TaskResult { task, text } => {
+                if let Some(Item::TaskResult(existing)) = self
+                    .items
+                    .iter_mut()
+                    .find(|item| matches!(item, Item::TaskResult(r) if r.entry_id == Some(id)))
+                {
+                    let key = existing.key.clone();
+                    *existing = TaskResult::parse(key, Some(id), None, &task, &text);
                 }
-                _ => false,
-            })
-        {
-            let mut parsed = parse_tool(self.acp_turn.as_deref(), &record);
-            slot.key().clone_into(&mut parsed.key);
-            parsed.live_key = Some(live_key.to_owned());
-            parsed.more = false;
-            *slot = Item::Tool(Box::new(parsed));
+            }
+            EntryData::ToolUpdate { entry, record } => self.update_tool(entry, &record, None),
+            EntryData::Run(_) | EntryData::Continued => {}
         }
     }
 
-    fn entry(&mut self, Entry { id, data }: &Entry) {
+    fn entry(&mut self, Entry { id, full, data }: &Entry) {
         match data {
             EntryData::Prompt {
                 text,
                 attachments,
                 context,
                 origin,
-                ..
             } => {
                 let steered = self.acp_turn.is_some() && !self.ended_run;
                 if !text.trim().is_empty() || !attachments.is_empty() || !context.is_empty() {
@@ -256,6 +239,7 @@ impl Transcript {
                     self.items.push(Item::User(User {
                         key: format!("e{id}-0"),
                         entry_id: Some(*id),
+                        full: *full,
                         text: text.clone(),
                         attachments: attachments.clone(),
                         context: context.clone(),
@@ -275,42 +259,42 @@ impl Transcript {
                 self.message_rows.insert(*id, format!("e{id}"));
                 self.items.push(Item::TaskResult(TaskResult::parse(
                     format!("e{id}"),
+                    Some(*id),
+                    *full,
                     task,
                     text,
                 )));
                 self.start(*id);
             }
-            EntryData::ToolUpdate { entry, record } => self.update_tool(*entry, record),
-            EntryData::Transcript(entry) => self.transcript_entry(*id, entry),
-            EntryData::Omitted => self.items.push(Item::Omitted {
-                key: format!("e{id}"),
-                source: EntrySource::Stored { entry: *id },
-            }),
+            EntryData::ToolUpdate { entry, record } => self.update_tool(*entry, record, *full),
+            EntryData::Transcript(entry) => self.transcript_entry(*id, *full, entry),
             EntryData::Run(end) => self.finish_run(*id, end),
         }
     }
 
-    fn transcript_entry(&mut self, id: EntryId, entry: &TranscriptEntry) {
+    fn transcript_entry(&mut self, id: EntryId, full: Option<u64>, entry: &TranscriptEntry) {
         match &entry.body {
             Body::Text(segment) => {
-                self.commit_text(id, &entry.key, segment, entry.more, false);
+                self.commit_text(&entry.key, segment, false);
                 if let Some(item) = self.items.last() {
                     self.message_rows.insert(id, item.key().to_owned());
                 }
             }
-            Body::Thought(segment) => self.commit_text(id, &entry.key, segment, entry.more, true),
+            Body::Thought(segment) => self.commit_text(&entry.key, segment, true),
             Body::Tool(record) => {
                 let mut tool = parse_tool(self.acp_turn.as_deref(), record);
                 tool.entry = Some(id);
-                tool.more |= entry.more;
+                tool.full = full;
                 self.items.push(Item::Tool(Box::new(tool)));
             }
             Body::Plan(plan) => {
-                let projected = PlanCard::from_wire(format!("e{id}"), plan);
+                let projected = PlanCard::from_wire(format!("e{id}"), Some(id), full, plan);
                 if let Some((prev_id, index)) = &self.plan
                     && *prev_id == plan.id
                     && let Some(Item::Plan(existing)) = self.items.get_mut(*index)
                 {
+                    existing.entry_id = Some(id);
+                    existing.full = full;
                     existing.at = projected.at.or(existing.at);
                     existing.content = projected.content;
                 } else {
@@ -319,11 +303,13 @@ impl Transcript {
                 }
             }
             Body::Compaction(c) => {
-                let projected = CompactionNotice::from_wire(format!("e{id}"), c);
+                let projected = CompactionNotice::from_wire(format!("e{id}"), Some(id), full, c);
                 if let Some(Item::Compaction(existing)) = self.items[self.acp_start..]
                     .iter_mut()
                     .find(|item| matches!(item, Item::Compaction(prev) if prev.id == c.id))
                 {
+                    existing.entry_id = Some(id);
+                    existing.full = full;
                     existing.status = projected.status;
                     existing.summary = projected.summary;
                     existing.error = projected.error;
@@ -339,10 +325,6 @@ impl Transcript {
                 block: m.block.clone(),
                 blob: m.blob.clone(),
             })),
-            Body::Omitted => self.items.push(Item::Omitted {
-                key: format!("e{id}"),
-                source: EntrySource::Stored { entry: id },
-            }),
         }
     }
 
@@ -431,7 +413,7 @@ impl Transcript {
         }
     }
 
-    fn update_tool(&mut self, entry: EntryId, record: &ToolCall) {
+    fn update_tool(&mut self, entry: EntryId, record: &ToolCall, full: Option<u64>) {
         if let Some(tool) = self.items.iter_mut().find_map(|item| match item {
             Item::Tool(tool) if tool.entry == Some(entry) => Some(tool),
             _ => None,
@@ -439,6 +421,7 @@ impl Transcript {
             let mut updated = parse_tool(None, record);
             updated.key.clone_from(&tool.key);
             updated.entry = Some(entry);
+            updated.full = full;
             **tool = updated;
         }
     }
@@ -451,14 +434,7 @@ impl Transcript {
         self.plan = None;
     }
 
-    fn commit_text(
-        &mut self,
-        id: EntryId,
-        key: &str,
-        segment: &Segment,
-        more: bool,
-        thinking: bool,
-    ) {
+    fn commit_text(&mut self, key: &str, segment: &Segment, thinking: bool) {
         self.acp_text_index = text_index(key);
         if self.items.len() > self.acp_start {
             match (thinking, self.items.last_mut()) {
@@ -468,7 +444,6 @@ impl Transcript {
                         text: prev,
                         started_at: ps,
                         ended_at: pe,
-                        more: pm,
                         ..
                     }),
                 )
@@ -478,14 +453,12 @@ impl Transcript {
                         text: prev,
                         started_at: ps,
                         ended_at: pe,
-                        more: pm,
                         ..
                     }),
                 ) => {
                     prev.push_str(&segment.text);
                     *ps = min_opt(*ps, segment.started_at);
                     *pe = max_opt(*pe, segment.ended_at);
-                    *pm |= more;
                     return;
                 }
                 _ => {}
@@ -493,9 +466,7 @@ impl Transcript {
         }
         self.items.push(Item::from_segment(
             key.to_owned(),
-            Some(id),
             segment.clone(),
-            more,
             thinking,
         ));
     }

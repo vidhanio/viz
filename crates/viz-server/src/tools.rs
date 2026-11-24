@@ -11,7 +11,7 @@ use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use viz_protocol::{
-    AnswerRequest, AnsweredBy, Cleared, CreateProject, DelegateInput, Empty, EntryId,
+    AnswerRequest, AnsweredBy, Cleared, CreateProject, DelegateInput, Empty, EntryAnchor, EntryId,
     EnvironmentList, ForkThread, Forked, HarnessList, HarnessOptions, LaunchThread, Launched,
     ListBranches, ListEntries, ListHarnesses, ListProjects, ListThreads, ListWorktrees, Method,
     MoveThread, ReadThreadState, RemoveProject, RemoveWorktree, RequestAnswer, RequestId,
@@ -328,29 +328,40 @@ impl Tools {
     ) -> Result<ToolResult, Error> {
         let environment = environment.unwrap_or(&self.peers.local);
         let link = Some((input.thread, environment));
+        if let Some(wanted) = input.entry {
+            if environment == self.peers.local {
+                let entry = self.workspace.read_entry_raw(input.thread, wanted).await?;
+                return output(&views::whole(entry), link);
+            }
+            let request = ListEntries {
+                thread: input.thread,
+                anchor: EntryAnchor::Before {
+                    entry: EntryId(wanted.0.saturating_add(1)),
+                },
+                limit: Some(1),
+            };
+            let mut page = self
+                .dispatch::<ListEntries, _>(environment, request, Duration::ZERO)
+                .await?;
+            return match page.entries.pop() {
+                Some(entry) if entry.id == wanted => output(&views::whole(entry), link),
+                _ => Err(Error::not_found(format!(
+                    "no entry {wanted} in thread {}",
+                    input.thread
+                ))),
+            };
+        }
         let request = ListEntries {
             thread: input.thread,
-            before: input.entry.map_or(input.before, |entry| {
-                Some(EntryId(entry.0.saturating_add(1)))
-            }),
-            limit: Some(match input.entry {
-                Some(_) => 1,
-                None => input.limit.unwrap_or(READ_ENTRIES).clamp(1, 100),
-            }),
+            anchor: input
+                .before
+                .map_or(EntryAnchor::Latest, |entry| EntryAnchor::Before { entry }),
+            limit: Some(input.limit.unwrap_or(READ_ENTRIES).clamp(1, 100)),
         };
-        let mut page = self
+        let page = self
             .dispatch::<ListEntries, _>(environment, request, Duration::ZERO)
             .await?;
-        let Some(wanted) = input.entry else {
-            return output(&views::page(page), link);
-        };
-        match page.entries.pop() {
-            Some(entry) if entry.id == wanted => output(&views::whole(entry), link),
-            _ => Err(Error::not_found(format!(
-                "no entry {wanted} in thread {}",
-                input.thread
-            ))),
-        }
+        output(&views::page(page), link)
     }
 
     async fn spawn_options(

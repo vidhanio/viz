@@ -157,7 +157,6 @@ pub(super) fn transcript(attachments: &[&str]) -> Transcript {
                 attachments,
                 context: Vec::new(),
                 origin: None,
-                truncated: false,
             },
             response(
                 "The export drops the final newline when it joins blocks. I’ll fix that at the boundary.",
@@ -183,6 +182,7 @@ pub(super) fn transcript(attachments: &[&str]) -> Transcript {
                     old_text: Some("let body = blocks.join(\"\n\n\");\nOk(body)\n".into()),
                     new_text: "let body = blocks.join(\"\n\n\");\nOk(format!(\"{body}\n\"))\n"
                         .into(),
+                    skip: 0,
                 })],
                 ..preview_tool(
                     "write-1",
@@ -321,6 +321,7 @@ pub(super) fn preview_thread(
         .zip(entries)
         .map(|(id, data)| Entry {
             id: EntryId(id),
+            full: None,
             data,
         })
         .collect::<Vec<_>>();
@@ -333,7 +334,6 @@ pub(super) fn prompt(text: &str) -> EntryData {
         attachments: Vec::new(),
         context: Vec::new(),
         origin: None,
-        truncated: false,
     }
 }
 
@@ -363,7 +363,6 @@ pub(super) fn preview_entry(key: &str, body: Body) -> TranscriptEntry {
         key: key.into(),
         order: 0,
         body,
-        more: false,
     }
 }
 

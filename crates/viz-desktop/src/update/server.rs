@@ -12,7 +12,7 @@ use super::{
         apply_thread_state, apply_thread_triaged, apply_thread_view, apply_workspace_delta,
         apply_workspace_sync, is_active_env, rollback_optimistic,
     },
-    timeline::{apply_entry_chunk_loaded, apply_thread_forked},
+    timeline::{apply_entry_loaded, apply_thread_forked},
 };
 use crate::{
     effects::Effect,
@@ -331,12 +331,12 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             forked,
             load_prompt,
         } => apply_thread_forked(model, *forked, load_prompt, &mut effects),
-        ServerMsg::EntryChunkLoaded {
+        ServerMsg::EntryLoaded {
             thread,
             key,
-            source,
+            entry,
             result,
-        } => apply_entry_chunk_loaded(model, thread, &key, &source, result, &mut effects),
+        } => apply_entry_loaded(model, thread, &key, entry, result, &mut effects),
         ServerMsg::FilePreviewLoaded { request, result } => {
             apply_file_preview_loaded(model, request, result, &mut effects);
         }

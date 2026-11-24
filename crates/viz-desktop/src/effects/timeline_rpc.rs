@@ -1,20 +1,17 @@
-//! Timeline-specific asynchronous RPC helpers (`thread.fork`,
-//! `thread.entry_chunk`, file previews, and content-channel attachment fetches)
-//! kept separate from `requests.rs`.
+//! Timeline-specific asynchronous RPC helpers (`thread.fork`, content-plane
+//! entry hydration, file previews, and attachment fetches) kept separate from
+//! `requests.rs`.
 
 use viz_client::{
     Client, ContentClient, Result,
     protocol::{
-        ContentVariant, EntryData, EntrySource, FileBody, FileRoot, ForkThread, LineWindow,
-        ReadEntryChunk, ReadFile, StatBlob, ThreadId, TranscriptEntry, limits,
+        ContentVariant, EntryData, EntryId, FileBody, FileRoot, ForkThread, LineWindow, ReadFile,
+        StatBlob, ThreadId, limits,
     },
 };
 
 use super::server::Session;
-use crate::{
-    model::{DraftAttachment, LoadedEntry},
-    update::ServerMsg,
-};
+use crate::{model::DraftAttachment, update::ServerMsg};
 
 impl Session<'_> {
     pub(super) async fn fork_thread(&self, params: ForkThread, load_prompt: bool) -> Result<()> {
@@ -26,14 +23,14 @@ impl Session<'_> {
         Ok(())
     }
 
-    pub(super) fn read_entry_chunk(&mut self, thread: ThreadId, key: String, source: EntrySource) {
-        let client: Client = self.client.clone();
+    pub(super) fn read_entry(&mut self, thread: ThreadId, key: String, entry: EntryId) {
+        let content: ContentClient = self.content.clone();
         self.spawn_msg(async move {
-            let result = fetch_entry_chunks(&client, thread, &source).await;
-            ServerMsg::EntryChunkLoaded {
+            let result = fetch_entry(&content, thread, entry).await;
+            ServerMsg::EntryLoaded {
                 thread,
                 key,
-                source,
+                entry,
                 result,
             }
         });
@@ -125,37 +122,20 @@ impl Session<'_> {
     }
 }
 
-async fn fetch_entry_chunks(
-    client: &Client,
+async fn fetch_entry(
+    content: &ContentClient,
     thread: ThreadId,
-    source: &EntrySource,
-) -> std::result::Result<LoadedEntry, String> {
-    let mut json = String::new();
-    let mut offset = 0_u64;
-    let mut revision = None;
-    loop {
-        let chunk = client
-            .request(&ReadEntryChunk {
-                thread,
-                source: source.clone(),
-                offset,
-                revision: revision.clone(),
-            })
-            .await
-            .map_err(|error| error.to_string())?;
-        json.push_str(&chunk.data);
-        revision = Some(chunk.revision);
-        match chunk.next {
-            Some(next) => offset = next,
-            None => break,
-        }
-    }
-    match source {
-        EntrySource::Stored { .. } => serde_json::from_str::<EntryData>(&json)
-            .map(|data| LoadedEntry::Stored(Box::new(data)))
-            .map_err(|error| error.to_string()),
-        EntrySource::Live { .. } => serde_json::from_str::<TranscriptEntry>(&json)
-            .map(|entry| LoadedEntry::Live(Box::new(entry)))
-            .map_err(|error| error.to_string()),
-    }
+    entry: EntryId,
+) -> std::result::Result<Box<EntryData>, String> {
+    let bytes = content
+        .get_entry(thread, entry, limits::ATTACHMENT_TOTAL_BYTES)
+        .await
+        .map_err(|error| error.to_string())?;
+    tokio::task::spawn_blocking(move || {
+        serde_json::from_slice::<EntryData>(&bytes)
+            .map(Box::new)
+            .map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }

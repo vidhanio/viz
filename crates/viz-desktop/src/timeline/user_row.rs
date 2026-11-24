@@ -76,7 +76,7 @@ impl StackPos {
 pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
     let m = &s.model;
     let fold_key = format!("{}-full", user.key);
-    let collapsible = should_collapse(&user.text);
+    let collapsible = should_collapse(&user.text) || user.full.is_some();
     let expanded = !collapsible || m.is_fold_open(&fold_key, false);
 
     let labels = attachment_ref_labels(user.attachments.iter().map(|a| a.mime.as_str()));

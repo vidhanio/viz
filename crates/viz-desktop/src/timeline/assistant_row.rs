@@ -6,7 +6,6 @@ use std::collections::HashSet;
 
 use rune::{Color, El, TextStyle, Tx, col, icon, row, text};
 use rune_kit::{IconButtonVariant, Markdown, MarkdownStyle, file_icon};
-use viz_client::protocol::EntrySource;
 
 use super::user_row::copy_morph_button;
 use crate::{
@@ -26,15 +25,7 @@ const CODE_HEADER_HEIGHT: f32 = 30.0;
 /// Renders an assistant Markdown prose block directly on the canvas (no
 /// bubble), with T3's borderless horizontal-rule tables and framed code-block
 /// headers.
-pub fn prose(
-    s: &Desktop,
-    key: &str,
-    entry_id: Option<viz_client::protocol::EntryId>,
-    source: &str,
-    streaming: bool,
-    more: bool,
-    t: &Theme,
-) -> El {
+pub fn prose(s: &Desktop, key: &str, source: &str, streaming: bool, t: &Theme) -> El {
     let wrapped_set: HashSet<String> = s.model.timeline.wrapped_code.clone();
     let copied_key = s.model.timeline.copied_key.clone();
     let msg_key = key.to_owned();
@@ -64,39 +55,6 @@ pub fn prose(
     .py(S2);
     if streaming {
         md = md.streaming(true);
-    }
-
-    if more && let Some(entry) = entry_id {
-        let loading = s.model.timeline.loading_chunks.contains(key);
-        let load_key = key.to_owned();
-        return col()
-            .key(format!("{key}-wrap"))
-            .w_full()
-            .gap(S6)
-            .child(md)
-            .child(
-                row().px(S4).child(
-                    rune_kit::Button::new(if loading {
-                        "Loading full message…"
-                    } else {
-                        "Load full message"
-                    })
-                    .variant(rune_kit::ButtonVariant::GhostMuted)
-                    .control_size(crate::theme::Size::Micro.kit())
-                    .disabled(loading || !s.model.connected())
-                    .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                        s.dispatch(
-                            Msg::Timeline(TimelineMsg::LoadEntryChunk {
-                                key: load_key.clone(),
-                                source: EntrySource::Stored { entry },
-                            }),
-                            tx,
-                        );
-                    })
-                    .build(&t.k)
-                    .key("load-more"),
-                ),
-            );
     }
 
     md

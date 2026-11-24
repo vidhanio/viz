@@ -101,7 +101,6 @@ pub(super) fn user_markdown(s: &mut Desktop) {
             attachments: Vec::new(),
             context: Vec::new(),
             origin: None,
-            truncated: false,
         },
         timed_text(
             "1:1",
@@ -134,7 +133,6 @@ pub(super) fn user_markdown(s: &mut Desktop) {
                 path: "crates/export/src/markdown.rs".into(),
             }],
             origin: None,
-            truncated: false,
         },
         timed_text(
             "2:1",
@@ -224,7 +222,6 @@ fn populated_turn_one() -> Vec<EntryData> {
             attachments: Vec::new(),
             context: Vec::new(),
             origin: None,
-            truncated: false,
         },
         timed_tool(
             "cmd-check",
@@ -281,7 +278,6 @@ fn populated_turn_two() -> Vec<EntryData> {
                 },
             ],
             origin: None,
-            truncated: false,
         },
         prompt("Keep the public `join_blocks` signature unchanged if possible."),
         timed_tool(
@@ -304,6 +300,7 @@ fn populated_turn_two() -> Vec<EntryData> {
                 path: "/work/workbench/crates/export/src/markdown.rs".into(),
                 old_text: Some("let body = blocks.join(\"\\n\\n\");\nbody\n".into()),
                 new_text: "let sep = ending.repeat(2);\nlet body = blocks.join(&sep);\nformat!(\"{body}{}\", ending.as_str())\n".into(),
+                skip: 0,
             })],
             BASE_TS + 11_500,
             BASE_TS + 14_100,
@@ -318,6 +315,7 @@ fn populated_turn_two() -> Vec<EntryData> {
                 path: "/work/workbench/crates/export/src/line_ending.rs".into(),
                 old_text: None,
                 new_text: "pub enum LineEnding { Lf, Crlf }\nimpl LineEnding {\n    pub fn as_str(&self) -> &'static str { match self { Self::Lf => \"\\n\", Self::Crlf => \"\\r\\n\" } }\n}\n".into(),
+                skip: 0,
             })],
             BASE_TS + 14_200,
             BASE_TS + 16_300,
@@ -332,6 +330,7 @@ fn populated_turn_two() -> Vec<EntryData> {
                 path: "/work/workbench/Cargo.toml".into(),
                 old_text: Some("version = \"0.1.0\"\n".into()),
                 new_text: "version = \"0.2.0\"\n".into(),
+                skip: 0,
             })],
             BASE_TS + 16_400,
             BASE_TS + 18_100,
@@ -380,7 +379,6 @@ fn seed_expanded(m: &mut Model) {
     });
     cmd_tool.started_at = Some(BASE_TS + 3_000);
     cmd_tool.ended_at = Some(BASE_TS + 8_400);
-    cmd_tool.more = true;
 
     let mut search_tool = preview_tool("search-1", "Search", "search", ToolCallStatus::Completed);
     search_tool.raw_input = Some(json_value(r#"{"query":"blocks.join"}"#));
@@ -400,6 +398,7 @@ fn seed_expanded(m: &mut Model) {
         path: "/work/workbench/src/export/markdown.rs".into(),
         old_text: Some("fn render(blocks: &[Block]) -> String {\n    blocks.join(\"\\n\\n\")\n}\n".into()),
         new_text: "fn render(blocks: &[Block], eol: &str) -> String {\n    let sep = format!(\"{eol}{eol}\");\n    format!(\"{}{eol}\", blocks.join(&sep))\n}\n".into(),
+        skip: 0,
     })];
     edit_tool.started_at = Some(BASE_TS + 1_800);
     edit_tool.ended_at = Some(BASE_TS + 2_900);
@@ -516,13 +515,11 @@ fn working_live_turn(start: i64, now: i64) -> LiveTurn {
                     started_at: Some(start + 1_500),
                     ended_at: Some(now),
                 }),
-                more: false,
             },
             TranscriptEntry {
                 key: "1:6".into(),
                 order: 6,
                 body: Body::Tool(Box::new(running_cmd)),
-                more: false,
             },
             TranscriptEntry {
                 key: "1:7".into(),
@@ -533,7 +530,6 @@ fn working_live_turn(start: i64, now: i64) -> LiveTurn {
                     started_at: Some(start + 12_000),
                     ended_at: Some(now),
                 }),
-                more: false,
             },
         ],
     }

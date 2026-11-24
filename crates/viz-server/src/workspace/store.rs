@@ -13,7 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Serialize, de::DeserializeOwned};
 
 pub(super) use self::{
-    entry_wire::{EntryChunkCache, chunk, live_preview},
+    entry_wire::{live_preview, read_entry_chunk},
     fork::{copy_history, fork_prompt, has_entry, turns},
     lifecycle::{lifecycle, save_lifecycle, standings, touch},
     projects::{
@@ -28,7 +28,9 @@ pub(super) use self::{
         Binding, Handoff, NewThread, SavedSession, binding, create_thread, metadata, require,
         save_metadata, state_row, thread_cwd, thread_row, thread_rows, thread_title, updated,
     },
-    transcript::{append, entries, entries_after, latest_entry_id, publish, search},
+    transcript::{
+        append, entries, entries_after, latest_entry_id, publish, read_entry_raw, search,
+    },
 };
 use crate::error::Error;
 

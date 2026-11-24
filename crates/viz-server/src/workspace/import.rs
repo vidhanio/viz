@@ -120,7 +120,7 @@ impl Workspace {
                     },
                 )?;
                 super::attachments::link_media_blobs(&tx, thread, &extracted)?;
-                persist_turns(&tx, thread, &input.session, turns, &ws.entry_chunks)?;
+                persist_turns(&tx, thread, &input.session, turns)?;
                 tx.commit()?;
                 drop(extracted);
                 ws.kick(thread, true);
@@ -137,7 +137,6 @@ fn persist_turns(
     thread: viz_protocol::ThreadId,
     session: &str,
     turns: Vec<viz_acp::LoadedTurn>,
-    entry_chunks: &store::EntryChunkCache,
 ) -> Result<(), Error> {
     for turn in turns {
         let prompt = store::append(
@@ -148,11 +147,10 @@ fn persist_turns(
                 attachments: Vec::new(),
                 context: Vec::new(),
                 origin: None,
-                truncated: false,
             },
         )?;
         for entry in turn.entries {
-            store::publish(tx, thread, session, entry, entry_chunks)?;
+            store::publish(tx, thread, session, entry)?;
         }
         let end = store::append(
             tx,

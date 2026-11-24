@@ -235,9 +235,7 @@ fn line(entry: Entry, text: usize, output: usize) -> Line {
                     output,
                 ),
             ),
-            Body::Omitted => ("transcript", "[body omitted]".to_owned()),
         },
-        EntryData::Omitted => ("entry", "[body omitted]".to_owned()),
         EntryData::ToolUpdate {
             entry: updated,
             record,
@@ -280,9 +278,6 @@ fn tool(record: &ToolCall, output: usize) -> String {
     if let Some(shown) = record.output_text() {
         text.push('\n');
         text.push_str(&bounded(&shown, output));
-    }
-    if record.more {
-        text.push_str("\n[tool output shortened]");
     }
     text
 }

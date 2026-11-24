@@ -33,12 +33,18 @@ pub fn file_diffs_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
                 .w_full()
                 .gap(S8)
                 .children(tool.diffs.iter().enumerate().map(|(index, diff)| {
-                    let file = FileDiff::between(
+                    let mut file = FileDiff::between(
                         diff.old_text.as_ref().map(|_| diff.path.clone()),
                         Some(diff.path.clone()),
                         diff.old_text.as_deref().unwrap_or_default(),
                         &diff.new_text,
                     );
+                    if diff.skip > 0 {
+                        for hunk in &mut file.hunks {
+                            hunk.old_start = hunk.old_start.saturating_add(diff.skip);
+                            hunk.new_start = hunk.new_start.saturating_add(diff.skip);
+                        }
+                    }
                     diff_card(s, &file, t).key(format!("diff-{index}"))
                 }))
         },

@@ -237,25 +237,15 @@ fn append_turn(
         list = list.child(lane(dividers::media_card(s, media, t)));
     }
 
-    for (key, source) in &turn.omitted {
-        list = list.child(lane(dividers::omitted_divider(s, key, source, t)));
-    }
-
     let footer = assistant_row::turn_footer(s, turn, is_latest, t);
     let has_streaming_prose = turn.prose.iter().any(|(_, streaming)| *streaming);
     if has_streaming_prose && footer.is_none() {
         for (item, streaming) in &turn.prose {
             if let Item::Text {
-                key,
-                entry_id,
-                text: source,
-                more,
-                ..
+                key, text: source, ..
             } = item
             {
-                list = list.child(lane(assistant_row::prose(
-                    s, key, *entry_id, source, *streaming, *more, t,
-                )));
+                list = list.child(lane(assistant_row::prose(s, key, source, *streaming, t)));
             }
         }
         if let Some(files) = changed_files::changed_files_card(s, turn, t) {
@@ -287,16 +277,10 @@ fn append_turn(
             .hover_group();
         for (item, streaming) in &turn.prose {
             if let Item::Text {
-                key,
-                entry_id,
-                text: source,
-                more,
-                ..
+                key, text: source, ..
             } = item
             {
-                answer = answer.child(assistant_row::prose(
-                    s, key, *entry_id, source, *streaming, *more, t,
-                ));
+                answer = answer.child(assistant_row::prose(s, key, source, *streaming, t));
             }
         }
         if let Some(files) = changed_files::changed_files_card(s, turn, t) {

@@ -1739,10 +1739,6 @@
               },
               "body": {
                 "$ref": "#/$defs/Body"
-              },
-              "more": {
-                "description": "More body data is available through `thread.entry_chunk`.",
-                "type": "boolean"
               }
             },
             "required": [
@@ -1852,19 +1848,6 @@
                 "required": [
                   "type",
                   "data"
-                ]
-              },
-              {
-                "description": "The full body is available through `thread.entry_chunk`.",
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "const": "omitted"
-                  }
-                },
-                "required": [
-                  "type"
                 ]
               }
             ]
@@ -2110,9 +2093,6 @@
                   "null"
                 ],
                 "additionalProperties": true
-              },
-              "more": {
-                "type": "boolean"
               }
             },
             "required": [
@@ -2257,6 +2237,12 @@
               },
               "newText": {
                 "type": "string"
+              },
+              "skip": {
+                "description": "Leading unchanged lines stripped from both `old_text` and `new_text`\nduring wire projection; clients add `skip` to computed hunk start lines.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               }
             },
             "required": [
@@ -10508,21 +10494,11 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "ListEntries",
-        "description": "Read entries older than the supplied cursor.",
+        "description": "Read an anchored page of transcript entries.",
         "type": "object",
         "properties": {
           "thread": {
             "$ref": "#/$defs/ThreadId"
-          },
-          "before": {
-            "anyOf": [
-              {
-                "$ref": "#/$defs/EntryId"
-              },
-              {
-                "type": "null"
-              }
-            ]
           },
           "limit": {
             "type": [
@@ -10536,6 +10512,72 @@
         },
         "required": [
           "thread"
+        ],
+        "oneOf": [
+          {
+            "description": "The newest entries in the thread.",
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "const": "latest"
+              }
+            },
+            "required": [
+              "at"
+            ]
+          },
+          {
+            "description": "Entries strictly older than `entry` (exclusive).",
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "const": "before"
+              },
+              "entry": {
+                "$ref": "#/$defs/EntryId"
+              }
+            },
+            "required": [
+              "at",
+              "entry"
+            ]
+          },
+          {
+            "description": "Entries strictly newer than `entry` (exclusive).",
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "const": "after"
+              },
+              "entry": {
+                "$ref": "#/$defs/EntryId"
+              }
+            },
+            "required": [
+              "at",
+              "entry"
+            ]
+          },
+          {
+            "description": "A window centered on the turn containing `entry`.",
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "const": "around"
+              },
+              "entry": {
+                "$ref": "#/$defs/EntryId"
+              }
+            },
+            "required": [
+              "at",
+              "entry"
+            ]
+          }
         ],
         "$defs": {
           "ThreadId": {
@@ -10555,7 +10597,7 @@
       "result": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "EntryPage",
-        "description": "A page of transcript entries, in ascending id order.",
+        "description": "A page of transcript entries, in ascending id order, with cursors for older\n(`before`) and newer (`after`) history.",
         "type": "object",
         "properties": {
           "entries": {
@@ -10565,6 +10607,16 @@
             }
           },
           "before": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/EntryId"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "after": {
             "anyOf": [
               {
                 "$ref": "#/$defs/EntryId"
@@ -10584,6 +10636,15 @@
             "properties": {
               "id": {
                 "$ref": "#/$defs/EntryId"
+              },
+              "full": {
+                "description": "Full stored JSON byte size when this entry was trimmed for wire\nprojection; retrieve the complete stored row over the content plane via\n`ContentRequest::GetEntry`.",
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
               }
             },
             "required": [
@@ -10626,10 +10687,6 @@
                             "type": "null"
                           }
                         ]
-                      },
-                      "truncated": {
-                        "description": "Whether `text` was trimmed on the wire to stay within entry byte\nbudgets while preserving `attachments`, `context`, and `origin`.\nLoad the complete entry through `thread.entry_chunk`.",
-                        "type": "boolean"
                       }
                     },
                     "required": [
@@ -10656,19 +10713,6 @@
                 "required": [
                   "kind",
                   "data"
-                ]
-              },
-              {
-                "description": "The full row is available through `thread.entry_chunk`.",
-                "type": "object",
-                "properties": {
-                  "kind": {
-                    "type": "string",
-                    "const": "omitted"
-                  }
-                },
-                "required": [
-                  "kind"
                 ]
               },
               {
@@ -10889,10 +10933,6 @@
               },
               "body": {
                 "$ref": "#/$defs/Body"
-              },
-              "more": {
-                "description": "More body data is available through `thread.entry_chunk`.",
-                "type": "boolean"
               }
             },
             "required": [
@@ -11002,19 +11042,6 @@
                 "required": [
                   "type",
                   "data"
-                ]
-              },
-              {
-                "description": "The full body is available through `thread.entry_chunk`.",
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "const": "omitted"
-                  }
-                },
-                "required": [
-                  "type"
                 ]
               }
             ]
@@ -11260,9 +11287,6 @@
                   "null"
                 ],
                 "additionalProperties": true
-              },
-              "more": {
-                "type": "boolean"
               }
             },
             "required": [
@@ -11407,6 +11431,12 @@
               },
               "newText": {
                 "type": "string"
+              },
+              "skip": {
+                "description": "Leading unchanged lines stripped from both `old_text` and `new_text`\nduring wire projection; clients add `skip` to computed hunk start lines.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               }
             },
             "required": [
@@ -11875,122 +11905,6 @@
             ]
           }
         }
-      }
-    },
-    "thread.entry_chunk": {
-      "scopes": [
-        "operator",
-        "connector",
-        "peer_tool"
-      ],
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ReadEntryChunk",
-        "description": "Load an omitted or truncated entry in bounded chunks.",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "$ref": "#/$defs/ThreadId"
-          },
-          "source": {
-            "$ref": "#/$defs/EntrySource"
-          },
-          "offset": {
-            "description": "UTF-8 byte offset, initially zero.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
-          },
-          "revision": {
-            "description": "Use the first chunk's revision for subsequent reads.",
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "thread",
-          "source",
-          "offset"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1
-          },
-          "EntrySource": {
-            "description": "Identifies a stored transcript row or an in-progress segment.",
-            "oneOf": [
-              {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "const": "stored"
-                  },
-                  "entry": {
-                    "$ref": "#/$defs/EntryId"
-                  }
-                },
-                "required": [
-                  "type",
-                  "entry"
-                ]
-              },
-              {
-                "type": "object",
-                "properties": {
-                  "type": {
-                    "type": "string",
-                    "const": "live"
-                  },
-                  "key": {
-                    "type": "string"
-                  }
-                },
-                "required": [
-                  "type",
-                  "key"
-                ]
-              }
-            ]
-          },
-          "EntryId": {
-            "description": "A transcript entry id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "EntryChunk",
-        "description": "Concatenate chunks as UTF-8 JSON, then decode as `EntryData` (stored) or\n`TranscriptEntry` (live).",
-        "type": "object",
-        "properties": {
-          "revision": {
-            "type": "string"
-          },
-          "data": {
-            "type": "string"
-          },
-          "next": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint64",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "revision",
-          "data"
-        ]
       }
     },
     "thread.answer": {
@@ -13728,6 +13642,15 @@
         "properties": {
           "id": {
             "$ref": "#/$defs/EntryId"
+          },
+          "full": {
+            "description": "Full stored JSON byte size when this entry was trimmed for wire\nprojection; retrieve the complete stored row over the content plane via\n`ContentRequest::GetEntry`.",
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint64",
+            "minimum": 0
           }
         },
         "required": [
@@ -13770,10 +13693,6 @@
                         "type": "null"
                       }
                     ]
-                  },
-                  "truncated": {
-                    "description": "Whether `text` was trimmed on the wire to stay within entry byte\nbudgets while preserving `attachments`, `context`, and `origin`.\nLoad the complete entry through `thread.entry_chunk`.",
-                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -13800,19 +13719,6 @@
             "required": [
               "kind",
               "data"
-            ]
-          },
-          {
-            "description": "The full row is available through `thread.entry_chunk`.",
-            "type": "object",
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "omitted"
-              }
-            },
-            "required": [
-              "kind"
             ]
           },
           {
@@ -13994,10 +13900,6 @@
           },
           "body": {
             "$ref": "#/$defs/Body"
-          },
-          "more": {
-            "description": "More body data is available through `thread.entry_chunk`.",
-            "type": "boolean"
           }
         },
         "required": [
@@ -14107,19 +14009,6 @@
             "required": [
               "type",
               "data"
-            ]
-          },
-          {
-            "description": "The full body is available through `thread.entry_chunk`.",
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "const": "omitted"
-              }
-            },
-            "required": [
-              "type"
             ]
           }
         ]
@@ -14365,9 +14254,6 @@
               "null"
             ],
             "additionalProperties": true
-          },
-          "more": {
-            "type": "boolean"
           }
         },
         "required": [
@@ -14512,6 +14398,12 @@
           },
           "newText": {
             "type": "string"
+          },
+          "skip": {
+            "description": "Leading unchanged lines stripped from both `old_text` and `new_text`\nduring wire projection; clients add `skip` to computed hunk start lines.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [

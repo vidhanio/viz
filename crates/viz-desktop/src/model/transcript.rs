@@ -1,11 +1,11 @@
 //! Pure transcript data model: user prompts, assistant prose/reasoning,
-//! rich tool records, plans, compactions, media, omitted entries, and run ends.
+//! rich tool records, plans, compactions, media, and run ends.
 
 use std::collections::BTreeMap;
 
 use viz_client::protocol::{
-    Compaction, CompactionStatus, ContentBlock, EntryId, EntrySource, Origin, Plan, PlanContent,
-    PlanPriority, PlanStatus, Review, Segment, ThreadId, ToolDiff, TranscriptEntry, TurnUsage,
+    Compaction, CompactionStatus, ContentBlock, EntryId, Origin, Plan, PlanContent, PlanPriority,
+    PlanStatus, Review, Segment, ThreadId, ToolDiff, TurnUsage,
 };
 
 /// A thread's transcript window and live uncommitted ACP tail.
@@ -23,15 +23,6 @@ pub struct Transcript {
     pub(super) acp_text_index: Option<usize>,
     /// Live streaming text and unfinished tool calls for the active run.
     pub acp_partial: Vec<Item>,
-}
-
-/// Decoded full payload retrieved lazily via `thread.entry_chunk`.
-#[derive(Debug, Clone)]
-pub enum LoadedEntry {
-    /// Decoded committed [`viz_client::protocol::EntryData`] row.
-    Stored(Box<viz_client::protocol::EntryData>),
-    /// Decoded live [`TranscriptEntry`] segment.
-    Live(Box<TranscriptEntry>),
 }
 
 /// Semantic error severity for inline turn error banners.
@@ -90,31 +81,23 @@ pub enum Item {
     Text {
         /// Stable element key.
         key: String,
-        /// Wire entry id, when committed.
-        entry_id: Option<EntryId>,
         /// The Markdown source.
         text: String,
         /// Unix ms of first chunk, when reported.
         started_at: Option<i64>,
         /// Unix ms of last chunk, when reported.
         ended_at: Option<i64>,
-        /// True when truncated on the wire (`thread.entry_chunk` fetches more).
-        more: bool,
     },
     /// The assistant's reasoning, collapsed inside the turn fold.
     Thinking {
         /// Stable element key.
         key: String,
-        /// Wire entry id, when committed.
-        entry_id: Option<EntryId>,
         /// The reasoning text (empty when redacted).
         text: String,
         /// Unix ms of first chunk, when reported.
         started_at: Option<i64>,
         /// Unix ms of last chunk, when reported.
         ended_at: Option<i64>,
-        /// True when truncated on the wire.
-        more: bool,
     },
     /// A tool call and, once settled, its result.
     Tool(Box<Tool>),
@@ -124,13 +107,6 @@ pub enum Item {
     Compaction(CompactionNotice),
     /// Non-text media or embedded resource emitted by the agent.
     Media(MediaItem),
-    /// Large omitted wire entry recoverable via `thread.entry_chunk`.
-    Omitted {
-        /// Stable element key.
-        key: String,
-        /// Source selector for lazy chunk loading.
-        source: EntrySource,
-    },
     /// The agent resumed work on its own.
     Continued {
         /// Stable element key.
@@ -175,10 +151,44 @@ impl Item {
             Self::TurnEnd(end) => &end.key,
             Self::Text { key, .. }
             | Self::Thinking { key, .. }
-            | Self::Omitted { key, .. }
             | Self::Continued { key }
             | Self::TurnStatus { key, .. }
             | Self::Notice { key, .. } => key,
+        }
+    }
+
+    /// Returns `(entry_id, full_bytes)` when this item's wire projection was
+    /// trimmed and can be hydrated over the content plane.
+    #[must_use]
+    pub const fn partial_entry(&self) -> Option<(EntryId, u64)> {
+        match self {
+            Self::User(user) => match (user.entry_id, user.full) {
+                (Some(id), Some(full)) => Some((id, full)),
+                _ => None,
+            },
+            Self::Tool(tool) => match (tool.entry, tool.full) {
+                (Some(id), Some(full)) => Some((id, full)),
+                _ => None,
+            },
+            Self::Plan(plan) => match (plan.entry_id, plan.full) {
+                (Some(id), Some(full)) => Some((id, full)),
+                _ => None,
+            },
+            Self::Compaction(notice) => match (notice.entry_id, notice.full) {
+                (Some(id), Some(full)) => Some((id, full)),
+                _ => None,
+            },
+            Self::TaskResult(result) => match (result.entry_id, result.full) {
+                (Some(id), Some(full)) => Some((id, full)),
+                _ => None,
+            },
+            Self::Text { .. }
+            | Self::Thinking { .. }
+            | Self::Media(_)
+            | Self::Continued { .. }
+            | Self::TurnStatus { .. }
+            | Self::Notice { .. }
+            | Self::TurnEnd(_) => None,
         }
     }
 }
@@ -188,8 +198,12 @@ impl Item {
 pub struct User {
     /// Stable element key.
     pub key: String,
-    /// Wire entry id, used for `thread.fork` (`Before` / `Through`).
+    /// Wire entry id, used for `thread.fork` (`Before` / `Through`) and
+    /// hydration.
     pub entry_id: Option<EntryId>,
+    /// Stored byte size when the wire prompt was trimmed; cleared once
+    /// hydrated over the content plane.
+    pub full: Option<u64>,
     /// What the user wrote.
     pub text: String,
     /// Stored attachments carried by this prompt.
@@ -207,6 +221,10 @@ pub struct User {
 pub struct PlanCard {
     /// Stable element key.
     pub key: String,
+    /// Wire entry id when committed.
+    pub entry_id: Option<EntryId>,
+    /// Stored byte size when the wire plan was trimmed.
+    pub full: Option<u64>,
     /// Observation timestamp in Unix ms, when reported.
     pub at: Option<i64>,
     /// Checklist entries or markdown plan prose.
@@ -232,6 +250,10 @@ pub enum PlanBody {
 pub struct CompactionNotice {
     /// Stable element key.
     pub key: String,
+    /// Wire entry id when committed.
+    pub entry_id: Option<EntryId>,
+    /// Stored byte size when the wire compaction summary was trimmed.
+    pub full: Option<u64>,
     /// Harness compaction id.
     pub id: String,
     /// Live or settled compaction status.
@@ -286,6 +308,10 @@ pub struct TurnEnd {
 pub struct TaskResult {
     /// Stable element key.
     pub key: String,
+    /// Wire entry id when committed.
+    pub entry_id: Option<EntryId>,
+    /// Stored byte size when the wire task result was trimmed.
+    pub full: Option<u64>,
     /// The task's id, to find it among the thread's tasks.
     pub task: String,
     /// Task title extracted from the delivery header.
@@ -297,7 +323,13 @@ pub struct TaskResult {
 }
 
 impl TaskResult {
-    pub(super) fn parse(key: String, task: &str, text: &str) -> Self {
+    pub(super) fn parse(
+        key: String,
+        entry_id: Option<EntryId>,
+        full: Option<u64>,
+        task: &str,
+        text: &str,
+    ) -> Self {
         let (head, detail) = text.split_once("\n\n").unwrap_or((text, ""));
         let head = head.trim().trim_end_matches('.');
         let title = head
@@ -307,6 +339,8 @@ impl TaskResult {
         let status = head.rsplit_once(' ').map_or("", |(_, status)| status);
         Self {
             key,
+            entry_id,
+            full,
             task: task.to_owned(),
             title: title.to_owned(),
             status: status.to_owned(),
@@ -350,11 +384,9 @@ pub struct Tool {
     pub key: String,
     /// The call's id, pairing it with its result.
     pub call_id: String,
-    /// Committed entry id when persisted, used for `ToolUpdate` and chunk
-    /// loading.
+    /// Committed entry id when persisted, used for `ToolUpdate` and content-
+    /// plane hydration.
     pub entry: Option<EntryId>,
-    /// Live segment key when uncommitted, used for live chunk loading.
-    pub live_key: Option<String>,
     /// Normalized category/tool name.
     pub name: String,
     /// Original programmatic tool name, when reported.
@@ -386,8 +418,9 @@ pub struct Tool {
     pub output: String,
     /// True when the beginning of terminal output was dropped.
     pub terminal_truncated: bool,
-    /// True when full payload can be fetched lazily via `thread.entry_chunk`.
-    pub more: bool,
+    /// Stored byte size when the wire tool entry was trimmed; cleared once
+    /// hydrated over the content plane.
+    pub full: Option<u64>,
     /// Automatic approval review verdict (e.g. Guardian Review).
     pub review: Option<Review>,
     /// The task confirmed by a viz delegation receipt.
@@ -416,7 +449,12 @@ pub struct PlanStep {
 }
 
 impl PlanCard {
-    pub(super) fn from_wire(key: String, plan: &Plan) -> Self {
+    pub(super) fn from_wire(
+        key: String,
+        entry_id: Option<EntryId>,
+        full: Option<u64>,
+        plan: &Plan,
+    ) -> Self {
         let content = match &plan.content {
             PlanContent::Items { entries } => PlanBody::Items(
                 entries
@@ -439,6 +477,8 @@ impl PlanCard {
         };
         Self {
             key,
+            entry_id,
+            full,
             at: plan.at,
             content,
         }
@@ -446,9 +486,16 @@ impl PlanCard {
 }
 
 impl CompactionNotice {
-    pub(super) fn from_wire(key: String, c: &Compaction) -> Self {
+    pub(super) fn from_wire(
+        key: String,
+        entry_id: Option<EntryId>,
+        full: Option<u64>,
+        c: &Compaction,
+    ) -> Self {
         Self {
             key,
+            entry_id,
+            full,
             id: c.id.clone(),
             status: c.status,
             summary: c.summary.clone(),
@@ -462,30 +509,20 @@ impl CompactionNotice {
 }
 
 impl Item {
-    pub(super) fn from_segment(
-        key: String,
-        entry_id: Option<EntryId>,
-        segment: Segment,
-        more: bool,
-        thinking: bool,
-    ) -> Self {
+    pub(super) fn from_segment(key: String, segment: Segment, thinking: bool) -> Self {
         if thinking {
             Self::Thinking {
                 key,
-                entry_id,
                 text: segment.text,
                 started_at: segment.started_at,
                 ended_at: segment.ended_at,
-                more,
             }
         } else {
             Self::Text {
                 key,
-                entry_id,
                 text: segment.text,
                 started_at: segment.started_at,
                 ended_at: segment.ended_at,
-                more,
             }
         }
     }

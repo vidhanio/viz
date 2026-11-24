@@ -57,11 +57,11 @@ pub use github::{
     GitHubSearch, GitHubSearchResult,
 };
 pub use history::{
-    AttachmentCapabilities, BlobAttachment, Entry, EntryChunk, EntryData, EntryPage, EntrySource,
-    ListEntries, PlanEntry, PlanPriority, PlanStatus, PromptAttachment, PromptContext, QueuedInput,
-    ReadEntryChunk, RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads,
-    SteerQueuedInput, TurnTokens, TurnUsage, UpdateQueuedInput, UsageCost, attachment_inline_md,
-    attachment_ref_labels, text_references_label,
+    AttachmentCapabilities, BlobAttachment, Entry, EntryAnchor, EntryData, EntryPage, ListEntries,
+    PlanEntry, PlanPriority, PlanStatus, PromptAttachment, PromptContext, QueuedInput,
+    RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads, SteerQueuedInput, TurnTokens,
+    TurnUsage, UpdateQueuedInput, UsageCost, attachment_inline_md, attachment_ref_labels,
+    text_references_label,
 };
 pub use ids::{EntryId, RequestId, RunId, TaskId, ThreadId};
 pub use interactions::{
@@ -261,7 +261,6 @@ methods! {
     Unwatch => "thread.unwatch", Watching, OP_CONN;
     SearchThreads => "threads.search", SearchHits, OP_PEER;
     ListEntries => "thread.entries", EntryPage, OP_CONN_PEER;
-    ReadEntryChunk => "thread.entry_chunk", EntryChunk, OP_CONN_PEER;
     AnswerRequest => "thread.answer", RunRequest, OP;
     SetThreadAccess => "thread.access", Empty, OP;
     SetProjectAccess => "project.access", Empty, OP;

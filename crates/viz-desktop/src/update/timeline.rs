@@ -3,13 +3,13 @@
 //! running tool timers.
 
 use viz_client::protocol::{
-    EntryId, EntrySource, FileRoot, ForkPoint, ForkThread, Forked, LineWindow, SendInput, ThreadId,
+    EntryData, EntryId, FileRoot, ForkPoint, ForkThread, Forked, LineWindow, SendInput, ThreadId,
 };
 
 use super::selection::{focus_draft, open_in_environment, open_thread, select_thread};
 use crate::{
     effects::{EditSync, EditTarget, Effect, ServerEffect},
-    model::{Item, LoadedEntry, Model},
+    model::{Item, Model},
 };
 
 /// Messages emitted by timeline rows, folds, inspectors, and cards.
@@ -46,12 +46,12 @@ pub enum TimelineMsg {
     ScrollToEnd,
     /// Fetch the previous page of older transcript entries.
     LoadEarlier,
-    /// Lazily load a truncated or omitted entry via `thread.entry_chunk`.
-    LoadEntryChunk {
+    /// Hydrate a trimmed stored entry over the content plane.
+    LoadFullEntry {
         /// Stable item key used to track loading state.
         key: String,
-        /// Stored entry id or live entry key.
-        source: EntrySource,
+        /// Stored entry id.
+        entry: EntryId,
     },
     /// Fork the active thread before a user prompt (optionally loading it into
     /// the composer for editing).
@@ -139,7 +139,32 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             let env = model.active_env_key().to_owned();
             let thread = model.selection.selected;
             let current = model.timeline.is_open(&env, thread, &key, default_open);
-            model.timeline.set_fold(&env, thread, key, !current);
+            let opening = !current;
+            model.timeline.set_fold(&env, thread, key.clone(), opening);
+            if opening
+                && model.connected()
+                && let Some(thread) = thread
+            {
+                let target_key = key.strip_suffix("-full").unwrap_or(&key);
+                if let Some((item_key, entry, full)) =
+                    model.transcript().items.iter().find_map(|item| {
+                        (item.key() == target_key)
+                            .then(|| {
+                                item.partial_entry()
+                                    .map(|(e, f)| (item.key().to_owned(), e, f))
+                            })
+                            .flatten()
+                    })
+                    && full <= viz_client::protocol::limits::AUTO_HYDRATE_ENTRY_BYTES
+                    && model.timeline.loading_chunks.insert(item_key.clone())
+                {
+                    effects.push(Effect::Server(ServerEffect::ReadEntry {
+                        thread,
+                        key: item_key,
+                        entry,
+                    }));
+                }
+            }
             if let Some(anchor) = anchor {
                 effects.push(Effect::KeepOnScreen(anchor));
             }
@@ -187,15 +212,15 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
                 effects.push(Effect::Server(ServerEffect::LoadEarlier { thread, before }));
             }
         }
-        TimelineMsg::LoadEntryChunk { key, source } => {
+        TimelineMsg::LoadFullEntry { key, entry } => {
             if model.connected()
                 && let Some(thread) = model.selection.selected
                 && model.timeline.loading_chunks.insert(key.clone())
             {
-                effects.push(Effect::Server(ServerEffect::ReadEntryChunk {
+                effects.push(Effect::Server(ServerEffect::ReadEntry {
                     thread,
                     key,
-                    source,
+                    entry,
                 }));
             }
         }
@@ -401,19 +426,19 @@ pub(super) fn apply_thread_forked(
     }
 }
 
-pub(super) fn apply_entry_chunk_loaded(
+pub(super) fn apply_entry_loaded(
     model: &mut Model,
     thread: ThreadId,
     key: &str,
-    source: &EntrySource,
-    result: Result<LoadedEntry, String>,
+    entry: EntryId,
+    result: Result<Box<EntryData>, String>,
     effects: &mut Vec<Effect>,
 ) {
     model.timeline.loading_chunks.remove(key);
     match result {
         Ok(loaded) => {
             if let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
-                open.transcript.apply_loaded_entry(source, loaded);
+                open.transcript.apply_loaded_entry(entry, *loaded);
             }
         }
         Err(error) => {

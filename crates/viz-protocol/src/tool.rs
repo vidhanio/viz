@@ -59,9 +59,8 @@ pub struct ToolCall {
     /// Set when the call is an automatic approval review of another call.
     pub review: Option<Review>,
     /// Harness metadata, without the terminal stream.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub meta: Option<serde_json::Map<String, Value>>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub more: bool,
 }
 
 /// Progress of a tool call.
@@ -106,6 +105,14 @@ pub enum ToolContent {
     Session(String),
 }
 
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if requires &T"
+)]
+const fn is_zero(value: &u32) -> bool {
+    *value == 0
+}
+
 /// A file's contents before and after an edit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -114,6 +121,10 @@ pub struct ToolDiff {
     /// Previous content; `None` for a new file.
     pub old_text: Option<String>,
     pub new_text: String,
+    /// Leading unchanged lines stripped from both `old_text` and `new_text`
+    /// during wire projection; clients add `skip` to computed hunk start lines.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub skip: u32,
 }
 
 /// A command's output so far.
@@ -164,7 +175,6 @@ impl ToolCall {
             viz: None,
             review: None,
             meta: None,
-            more: false,
         }
     }
 

@@ -185,6 +185,7 @@ impl ToolReport for ToolCall {
                     path: diff.path.to_string_lossy().into_owned(),
                     old_text: diff.old_text,
                     new_text: diff.new_text,
+                    skip: 0,
                 }),
                 ToolCallContent::Content(content) => match content.content {
                     ContentBlock::Text(mut text) => {

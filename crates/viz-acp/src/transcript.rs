@@ -331,7 +331,6 @@ impl Transcript {
             key: format!("{}:{order}", self.turn),
             order,
             body,
-            more: false,
         }
     }
 
@@ -369,32 +368,51 @@ impl Transcript {
             }
             self.answer.push_str(&content.text);
         }
-        if self.text.is_none() {
-            let segment = Segment {
-                text: String::new(),
-                message: String::new(),
-                started_at: Some(observed_at),
-                ended_at: Some(observed_at),
-            };
-            let mut entry = self.allocate(match kind {
-                TextKind::Text => Body::Text(segment),
-                TextKind::Thought => Body::Thought(segment),
-            });
-            let (_, message) = self
-                .message
-                .get_or_insert_with(|| (kind, entry.key.clone()));
-            if let Body::Text(segment) | Body::Thought(segment) = &mut entry.body {
-                segment.message.clone_from(message);
+        let mut remaining = content.text.as_str();
+        while !remaining.is_empty() {
+            if self.text.is_none() {
+                let segment = Segment {
+                    text: String::new(),
+                    message: String::new(),
+                    started_at: Some(observed_at),
+                    ended_at: Some(observed_at),
+                };
+                let mut entry = self.allocate(match kind {
+                    TextKind::Text => Body::Text(segment),
+                    TextKind::Thought => Body::Thought(segment),
+                });
+                let (_, message) = self
+                    .message
+                    .get_or_insert_with(|| (kind, entry.key.clone()));
+                if let Body::Text(segment) | Body::Thought(segment) = &mut entry.body {
+                    segment.message.clone_from(message);
+                }
+                self.text = Some(entry);
             }
-            self.text = Some(entry);
-        }
-        if let Some(entry) = &mut self.text
-            && let Body::Text(segment) | Body::Thought(segment) = &mut entry.body
-        {
-            segment.text.push_str(&content.text);
-            segment.ended_at = Some(observed_at);
-            if segment.text.len() >= TEXT_RUN {
-                self.commit_text(output);
+            if let Some(entry) = &mut self.text
+                && let Body::Text(segment) | Body::Thought(segment) = &mut entry.body
+            {
+                let room = TEXT_RUN.saturating_sub(segment.text.len()).max(1);
+                let split = if remaining.len() <= room {
+                    remaining.len()
+                } else {
+                    let boundary = remaining.floor_char_boundary(room);
+                    if boundary == 0 {
+                        remaining
+                            .chars()
+                            .next()
+                            .map_or(remaining.len(), char::len_utf8)
+                    } else {
+                        boundary
+                    }
+                };
+                let (head, tail) = remaining.split_at(split);
+                segment.text.push_str(head);
+                segment.ended_at = Some(observed_at);
+                remaining = tail;
+                if segment.text.len() >= TEXT_RUN {
+                    self.commit_text(output);
+                }
             }
         }
     }

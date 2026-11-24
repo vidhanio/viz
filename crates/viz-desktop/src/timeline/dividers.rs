@@ -6,7 +6,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use rune::{El, Tx, col, icon, row, text};
 use rune_kit::ButtonVariant;
-use viz_client::protocol::{CompactionStatus, ContentKind, EntrySource, ForkSource};
+use viz_client::protocol::{CompactionStatus, ContentKind, ForkSource};
 
 use crate::{
     app::Desktop,
@@ -295,44 +295,6 @@ pub fn forked_from_divider(s: &Desktop, source: ForkSource, t: &Theme) -> El {
         .center_y()
         .child(ui::rule(t).grow(1.0).w(0.0))
         .child(pill)
-        .child(ui::rule(t).grow(1.0).w(0.0))
-}
-
-/// Hairline-flanked lazy-load row for an omitted wire entry recoverable via
-/// `thread.entry_chunk`.
-pub fn omitted_divider(s: &Desktop, key: &str, source: &EntrySource, t: &Theme) -> El {
-    let loading = s.model.timeline.loading_chunks.contains(key);
-    let load_key = key.to_owned();
-    let source = source.clone();
-    row()
-        .key(key.to_owned())
-        .w_full()
-        .py(S6)
-        .gap(S8)
-        .center_y()
-        .child(ui::rule(t).grow(1.0).w(0.0))
-        .child(
-            rune_kit::Button::new(if loading {
-                "Loading omitted entry…"
-            } else {
-                "Load omitted entry"
-            })
-            .variant(rune_kit::ButtonVariant::GhostMuted)
-            .control_size(crate::theme::Size::Micro.kit())
-            .icon(&ui::DOWNLOAD)
-            .disabled(loading || !s.model.connected())
-            .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                s.dispatch(
-                    Msg::Timeline(TimelineMsg::LoadEntryChunk {
-                        key: load_key.clone(),
-                        source: source.clone(),
-                    }),
-                    tx,
-                );
-            })
-            .build(&t.k)
-            .key("load"),
-        )
         .child(ui::rule(t).grow(1.0).w(0.0))
 }
 

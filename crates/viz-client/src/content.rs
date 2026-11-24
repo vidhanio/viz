@@ -24,8 +24,8 @@ use tokio_tungstenite::{
 };
 use viz_protocol::{
     BlobInfo, ClientInfo, ConnectionChannel, ContentRequest, ContentResponse, ContentVariant,
-    FileRoot, Hello, HelloParams, Method, PROTOCOL_VERSION, ThreadId, decode_content_frame_offset,
-    encode_content_frame, limits,
+    EntryId, FileRoot, Hello, HelloParams, Method, PROTOCOL_VERSION, ThreadId,
+    decode_content_frame_offset, encode_content_frame, limits,
 };
 
 use crate::{Endpoint, Error, Result};
@@ -269,6 +269,112 @@ impl ContentClient {
             len,
         })
         .await
+    }
+
+    /// Pulls a stored transcript entry's complete raw JSON bytes over the
+    /// content plane in pipelined 256 KiB binary chunks, restarting cleanly if
+    /// the entry's revision changes mid-transfer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Rpc`] on server rejection or [`Error::Closed`] if the
+    /// content socket disconnects.
+    pub async fn get_entry(
+        &self,
+        thread: ThreadId,
+        entry: EntryId,
+        max_bytes: usize,
+    ) -> Result<Vec<u8>> {
+        const MAX_RETRIES: usize = 3;
+        let chunk_len = u32::try_from(limits::CONTENT_CHUNK_BYTES).unwrap_or(u32::MAX);
+        for attempt in 0..MAX_RETRIES {
+            let first_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let first_req = ContentRequest::GetEntry {
+                id: first_id,
+                thread,
+                entry,
+                rev: None,
+                offset: 0,
+                len: chunk_len,
+            };
+            let (resp, payload) = self.call(first_id, &first_req, &[]).await?;
+            let (total_size, rev, eof) = match resp {
+                ContentResponse::Chunk {
+                    total_size,
+                    offset,
+                    eof,
+                    rev,
+                    ..
+                } => {
+                    if offset != 0 {
+                        return Err(Error::Rpc {
+                            method: "content.get_entry",
+                            code: -32603,
+                            message: "out-of-order entry chunk offset".into(),
+                            git_failure: None,
+                        });
+                    }
+                    if total_size > max_bytes as u64 || payload.len() > max_bytes {
+                        return Err(Error::Rpc {
+                            method: "content.get_entry",
+                            code: -32602,
+                            message: format!("entry exceeds {max_bytes}-byte client limit"),
+                            git_failure: None,
+                        });
+                    }
+                    (total_size, rev, eof)
+                }
+                ContentResponse::Error { code, message, .. } => {
+                    return Err(Error::Rpc {
+                        method: "content.get_entry",
+                        code: i64::from(code),
+                        message,
+                        git_failure: None,
+                    });
+                }
+                _ => {
+                    return Err(Error::Rpc {
+                        method: "content.get_entry",
+                        code: -32603,
+                        message: "unexpected entry chunk response".into(),
+                        git_failure: None,
+                    });
+                }
+            };
+            let reserve = usize::try_from(total_size).unwrap_or(0).min(max_bytes);
+            let mut bytes = Vec::with_capacity(reserve);
+            bytes.extend_from_slice(&payload);
+            if eof || payload.is_empty() || (bytes.len() as u64) >= total_size {
+                return Ok(bytes);
+            }
+            match self
+                .pull_remaining(
+                    "content.get_entry",
+                    total_size,
+                    max_bytes,
+                    &mut bytes,
+                    |id, offset, len| ContentRequest::GetEntry {
+                        id,
+                        thread,
+                        entry,
+                        rev,
+                        offset,
+                        len,
+                    },
+                )
+                .await
+            {
+                Ok(()) => return Ok(bytes),
+                Err(Error::Rpc { code: -32002, .. }) if attempt + 1 < MAX_RETRIES => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Err(Error::Rpc {
+            method: "content.get_entry",
+            code: -32002,
+            message: "entry changed repeatedly while streaming".into(),
+            git_failure: None,
+        })
     }
 
     /// Streams raw bytes in 256 KiB binary chunks and commits them into the

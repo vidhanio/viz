@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use viz_client::{
     ContentClient, Error, ProjectIconFetch, Result,
     protocol::{
-        BlobAttachment, EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries,
-        ListTasks, ListWorktrees, Patch, ProjectSettingsPatch, RetitleThread, SearchThreads,
-        SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
+        BlobAttachment, EntryAnchor, EntryId, HarnessOptions, LaunchThread, ListBranches,
+        ListEntries, ListTasks, ListWorktrees, Patch, ProjectSettingsPatch, RetitleThread,
+        SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
@@ -268,7 +268,7 @@ impl Session<'_> {
             self.client
                 .list_entries(&ListEntries {
                     thread,
-                    before: Some(before),
+                    anchor: EntryAnchor::Before { entry: before },
                     limit: None,
                 })
                 .await

@@ -67,8 +67,6 @@ struct Views {
     /// Trimmed live snapshot per thread (computed once at publish time instead
     /// of re-trimming per watcher).
     preview_live: HashMap<ThreadId, LiveTurn>,
-    /// Unmodified raw live snapshot per thread for `thread.entry_chunk`.
-    raw_live: HashMap<ThreadId, LiveTurn>,
     watches: HashMap<ThreadId, usize>,
 }
 
@@ -90,18 +88,16 @@ impl Default for Updates {
 
 impl Updates {
     /// Updates the in-memory live snapshot for `thread` and computes the
-    /// trimmed [`LiveDelta`] once for all watchers.
+    /// trimmed [`LiveDelta`] once for all watchers without cloning raw turns.
     pub(super) fn live(&self, thread: ThreadId, live: Option<LiveTurn>) -> Option<Arc<LiveDelta>> {
-        let preview = live.clone().map(store::live_preview);
+        let preview = live.map(store::live_preview);
         let mut views = self.views.lock().expect("thread views poisoned");
         let prior = views.preview_live.get(&thread);
         let changed = prior != preview.as_ref();
         let delta = changed.then(|| Arc::new(LiveDelta::between(prior, preview.as_ref())));
-        if let (Some(raw), Some(preview)) = (live, preview) {
-            views.raw_live.insert(thread, raw);
+        if let Some(preview) = preview {
             views.preview_live.insert(thread, preview);
         } else {
-            views.raw_live.remove(&thread);
             views.preview_live.remove(&thread);
         }
         drop(views);
@@ -117,19 +113,9 @@ impl Updates {
             .cloned()
     }
 
-    pub(super) fn raw_live(&self, thread: ThreadId) -> Option<LiveTurn> {
-        self.views
-            .lock()
-            .expect("thread views poisoned")
-            .raw_live
-            .get(&thread)
-            .cloned()
-    }
-
     pub(super) fn remove(&self, thread: ThreadId) {
         let mut views = self.views.lock().expect("thread views poisoned");
         views.preview_live.remove(&thread);
-        views.raw_live.remove(&thread);
         views.watches.remove(&thread);
     }
 

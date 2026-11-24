@@ -12,7 +12,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::{BlobInfo, FileRoot, ThreadId, limits};
+use crate::{BlobInfo, EntryId, FileRoot, ThreadId, limits};
 
 /// Current binary content-plane envelope version.
 pub const CONTENT_PROTOCOL_VERSION: u8 = 1;
@@ -110,6 +110,24 @@ pub enum ContentRequest {
         /// Maximum chunk bytes requested (clamped server-side to 256 KiB).
         len: u32,
     },
+    /// Pull one chunk (at most `CONTENT_CHUNK_BYTES`) of a stored transcript
+    /// entry's raw JSON row via incremental SQLite blob I/O.
+    GetEntry {
+        /// Caller-assigned request id echoed on the reply.
+        id: u64,
+        /// Thread owning the entry (membership verified on every read).
+        thread: ThreadId,
+        /// Stored entry row id.
+        entry: EntryId,
+        /// Expected row revision from the first chunk; mismatches fail so the
+        /// caller restarts cleanly at offset 0.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rev: Option<u64>,
+        /// Byte offset within the raw JSON payload.
+        offset: u64,
+        /// Maximum chunk bytes requested (clamped server-side to 256 KiB).
+        len: u32,
+    },
     /// Stream one contiguous payload chunk (at most 256 KiB) into an in-flight
     /// blob upload identified by `upload`.
     UploadChunk {
@@ -164,6 +182,7 @@ impl ContentRequest {
             Self::GetAttachment { id, .. }
             | Self::GetFile { id, .. }
             | Self::GetProjectIcon { id, .. }
+            | Self::GetEntry { id, .. }
             | Self::UploadChunk { id, .. }
             | Self::UploadStage { id, .. }
             | Self::UploadFinish { id, .. }
@@ -192,6 +211,9 @@ pub enum ContentResponse {
         /// Content `ETag` for cacheable resources such as project icons.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         etag: Option<String>,
+        /// Optimistic row revision for [`ContentRequest::GetEntry`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rev: Option<u64>,
     },
     /// Resource has not changed since the caller's supplied `etag`.
     NotModified {

@@ -314,7 +314,6 @@ fn start(db: &Conn, thread: ThreadId, id: RunId) -> Result<Claimed, Error> {
             origin,
             attachments,
             context: context.clone(),
-            truncated: false,
         };
         let entry = store::append(db, thread, &data)?;
         exec(

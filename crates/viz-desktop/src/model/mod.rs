@@ -88,8 +88,8 @@ pub use self::{
     },
     tool_parse::is_command,
     transcript::{
-        CompactionNotice, ErrorKind, Item, LoadedEntry, MediaItem, PlanBody, PlanCard, PlanStep,
-        SearchMatch, TaskResult, Tool, ToolStatus, Transcript, TurnEnd, User,
+        CompactionNotice, ErrorKind, Item, MediaItem, PlanBody, PlanCard, PlanStep, SearchMatch,
+        TaskResult, Tool, ToolStatus, Transcript, TurnEnd, User,
     },
     turn_format::{
         diff_line_stats, format_clock_hm, format_cost, format_turn_duration, work_group_summary,

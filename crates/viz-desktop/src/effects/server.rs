@@ -529,12 +529,8 @@ impl Session<'_> {
                 params,
                 load_prompt,
             } => self.fork_thread(params, load_prompt).await,
-            ServerEffect::ReadEntryChunk {
-                thread,
-                key,
-                source,
-            } => {
-                self.read_entry_chunk(thread, key, source);
+            ServerEffect::ReadEntry { thread, key, entry } => {
+                self.read_entry(thread, key, entry);
                 Ok(())
             }
             ServerEffect::ReadFile {

@@ -319,7 +319,6 @@ impl Workspace {
         let session = session.to_owned();
         let workers = Arc::clone(&self.workers);
         let updates = Arc::clone(&self.updates);
-        let entry_chunks = Arc::clone(&self.entry_chunks);
         let (active, persisted, relist, patches, live_delta) = self
             .db
             .write(move |conn| {
@@ -339,9 +338,7 @@ impl Workspace {
                         relist = persist_snapshot(&tx, thread, snapshot, None)?;
                     }
                     for entry in entries {
-                        if let Some(patch) =
-                            store::publish(&tx, thread, &session, entry, &entry_chunks)?
-                        {
+                        if let Some(patch) = store::publish(&tx, thread, &session, entry)? {
                             patches.push(patch);
                         }
                     }

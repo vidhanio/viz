@@ -16,8 +16,8 @@ mod timeline_rpc;
 use std::{path::PathBuf, time::Duration};
 
 use viz_client::protocol::{
-    EntryId, EntrySource, ForkPoint, ForkThread, LaunchThread, OptionValue, RunId, SendInput,
-    ThreadId, TriageAction, WorktreeTarget,
+    EntryId, ForkPoint, ForkThread, LaunchThread, OptionValue, RunId, SendInput, ThreadId,
+    TriageAction, WorktreeTarget,
 };
 
 use crate::model::{AttachmentTarget, DraftAttachment, DraftData, DraftPill, Prefs, UndoTriage};
@@ -450,14 +450,14 @@ pub enum ServerEffect {
         /// prompt.
         load_prompt: bool,
     },
-    /// Lazily download a truncated or omitted transcript entry in chunks.
-    ReadEntryChunk {
+    /// Lazily download a trimmed transcript entry over the content plane.
+    ReadEntry {
         /// Thread id owning the entry.
         thread: ThreadId,
         /// Stable UI key for clearing loading state.
         key: String,
-        /// Stored entry id or live key selector.
-        source: EntrySource,
+        /// Stored entry id.
+        entry: EntryId,
     },
     /// Read a file confined to a thread or project root for the in-app
     /// preview modal.

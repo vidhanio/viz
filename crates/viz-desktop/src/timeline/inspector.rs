@@ -3,7 +3,6 @@
 
 use rune::{Color, El, ScrollSpec, TextStyle, Tx, col, el, rich, row, text};
 use rune_kit::{IconButtonVariant, Markdown, ScrollBar, ScrollBarStyle};
-use viz_client::protocol::EntrySource;
 
 use super::{ansi::parse_ansi, diff_card::file_diffs_inspector, search_card::search_inspector};
 use crate::{
@@ -27,7 +26,7 @@ pub fn has_inspector(tool: &Tool) -> bool {
         || !tool.diffs.is_empty()
         || !tool.search_matches.is_empty()
         || (action == ToolAction::Other && tool.raw_input_pretty.is_some())
-        || tool.more
+        || tool.full.is_some()
         || tool.exit_code.is_some_and(|code| code != 0)
         || tool.exit_signal.is_some()
 }
@@ -385,15 +384,15 @@ fn output_scroll(key: &str, output: El, max_h: f32, stick_bottom: bool, t: &Them
 }
 
 fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
-    if !tool.more {
-        return None;
-    }
-    let source = tool
-        .entry
-        .map(|entry| EntrySource::Stored { entry })
-        .or_else(|| tool.live_key.clone().map(|key| EntrySource::Live { key }))?;
+    let full = tool.full?;
+    let entry = tool.entry?;
     let loading = s.model.timeline.loading_chunks.contains(&tool.key);
     let key = tool.key.clone();
+    let label = if loading {
+        format!("Loading remaining {}…", format_bytes(full))
+    } else {
+        format!("Load full output ({})", format_bytes(full))
+    };
     Some(
         row()
             .key("load-more-bar")
@@ -402,28 +401,35 @@ fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
             .py(S6)
             .center_y()
             .child(
-                rune_kit::Button::new(if loading {
-                    "Loading full output…"
-                } else {
-                    "Load full output"
-                })
-                .variant(rune_kit::ButtonVariant::GhostMuted)
-                .control_size(crate::theme::Size::Micro.kit())
-                .icon(&ui::DOWNLOAD)
-                .disabled(loading || !s.model.connected())
-                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                    s.dispatch(
-                        Msg::Timeline(TimelineMsg::LoadEntryChunk {
-                            key: key.clone(),
-                            source: source.clone(),
-                        }),
-                        tx,
-                    );
-                })
-                .build(&t.k)
-                .key("load-chunk"),
+                rune_kit::Button::new(label)
+                    .variant(rune_kit::ButtonVariant::GhostMuted)
+                    .control_size(crate::theme::Size::Micro.kit())
+                    .icon(&ui::DOWNLOAD)
+                    .disabled(loading || !s.model.connected())
+                    .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                        s.dispatch(
+                            Msg::Timeline(TimelineMsg::LoadFullEntry {
+                                key: key.clone(),
+                                entry,
+                            }),
+                            tx,
+                        );
+                    })
+                    .build(&t.k)
+                    .key("load-chunk"),
             ),
     )
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes >= 1024 * 1024 {
+        let tenths = bytes.saturating_mul(10) / (1024 * 1024);
+        format!("{}.{} MB", tenths / 10, tenths % 10)
+    } else if bytes >= 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 fn exit_footer_text(tool: &Tool) -> Option<String> {

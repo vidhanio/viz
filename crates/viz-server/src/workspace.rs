@@ -83,7 +83,6 @@ pub(crate) struct Workspace {
     dir: PathBuf,
     leases: Arc<ResourceLeases>,
     blobs: blobs::BlobStore,
-    entry_chunks: Arc<store::EntryChunkCache>,
     /// Canonical parent of the worktrees viz creates. A checkout below it
     /// also needs a matching ownership marker before viz can remove it.
     worktrees: PathBuf,
@@ -164,7 +163,6 @@ impl Workspace {
             dir,
             leases,
             blobs,
-            entry_chunks: Arc::new(store::EntryChunkCache::default()),
             worktrees,
             default_harness: config.default_harness.clone(),
             harnesses: config.harnesses.clone(),
@@ -321,13 +319,42 @@ impl Workspace {
     pub(crate) async fn entries(
         &self,
         thread: ThreadId,
-        before: Option<EntryId>,
+        anchor: viz_protocol::EntryAnchor,
         limit: usize,
     ) -> Result<EntryPage, Error> {
         let limit = limit.clamp(1, 1000);
+        let budget = match anchor {
+            viz_protocol::EntryAnchor::Latest => viz_protocol::limits::FIRST_PAGE_WIRE_BYTES,
+            _ => viz_protocol::limits::PAGE_WIRE_BYTES,
+        };
         self.db
-            .read_snapshot(move |tx| store::entries(tx, thread, before, limit))
+            .read_snapshot(move |tx| store::entries(tx, thread, anchor, limit, budget))
             .await
+    }
+
+    /// Reads a single stored entry without wire projection trimming for MCP
+    /// `thread_read`.
+    pub(crate) async fn read_entry_raw(
+        &self,
+        thread: ThreadId,
+        entry: EntryId,
+    ) -> Result<Entry, Error> {
+        self.db
+            .read(move |conn| store::read_entry_raw(conn, thread, entry))
+            .await
+    }
+
+    /// Reads one binary chunk of a stored transcript entry directly via SQLite
+    /// incremental blob I/O.
+    pub(crate) async fn read_entry_chunk(
+        &self,
+        thread: ThreadId,
+        entry: EntryId,
+        rev: Option<u64>,
+        offset: u64,
+        len: usize,
+    ) -> Result<(Vec<u8>, u64, u64), Error> {
+        store::read_entry_chunk(self, thread, entry, rev, offset, len).await
     }
 
     /// Captures the initial transcript page, cursor head, and live baseline
@@ -342,7 +369,13 @@ impl Workspace {
         let (page, last, mut state, worktree_path) = self
             .db
             .read_snapshot(move |tx| {
-                let page = store::entries(tx, thread, None, limit)?;
+                let page = store::entries(
+                    tx,
+                    thread,
+                    viz_protocol::EntryAnchor::Latest,
+                    limit,
+                    viz_protocol::limits::FIRST_PAGE_WIRE_BYTES,
+                )?;
                 let last = store::latest_entry_id(tx, thread)?;
                 let (mut state, worktree_path) = store::state_row(tx, thread)?;
                 state.live = updates.latest(thread);

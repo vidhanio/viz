@@ -2,14 +2,14 @@
 //! platform tasks into [`super::server::update`].
 
 use viz_client::protocol::{
-    ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileContent,
-    FileSearchMatch, Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, RequestId,
-    SearchHit, Task, ThreadId, ThreadState, ThreadSummary, WorkspaceChange,
+    ConfigOption, Entry, EntryData, EntryId, EntryPage, Environment, FileContent, FileSearchMatch,
+    Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, RequestId, SearchHit, Task,
+    ThreadId, ThreadState, ThreadSummary, WorkspaceChange,
 };
 
 use crate::{
     effects::LoadedAttachments,
-    model::{AttachmentTarget, Checkouts, DraftAttachment, LoadedEntry, SessionId, Status},
+    model::{AttachmentTarget, Checkouts, DraftAttachment, SessionId, Status},
 };
 
 /// Events pushed from the background server runtime or blocking platform tasks.
@@ -273,17 +273,16 @@ pub enum ServerMsg {
         /// Load the excluded prompt into the composer for editing.
         load_prompt: bool,
     },
-    /// Lazy `thread.entry_chunk` download finished for a truncated/omitted
-    /// item.
-    EntryChunkLoaded {
+    /// Content-plane full entry download finished for a trimmed item.
+    EntryLoaded {
         /// Thread id.
         thread: ThreadId,
         /// Stable item key.
         key: String,
-        /// Wire source selector.
-        source: EntrySource,
+        /// Stored entry id.
+        entry: EntryId,
         /// Decoded full payload or error string.
-        result: Result<LoadedEntry, String>,
+        result: Result<Box<EntryData>, String>,
     },
     /// `files.read` (and image content fetch when applicable) finished for the
     /// file preview modal.

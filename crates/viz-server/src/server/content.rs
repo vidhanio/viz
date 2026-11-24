@@ -117,6 +117,7 @@ const fn request_scope(request: &ContentRequest) -> (MethodScope, &'static str) 
         ContentRequest::GetAttachment { .. } => (attachment, "content.getAttachment"),
         ContentRequest::GetFile { .. } => (MethodScope::OPERATOR, "content.getFile"),
         ContentRequest::GetProjectIcon { .. } => (MethodScope::OPERATOR, "content.getProjectIcon"),
+        ContentRequest::GetEntry { .. } => (attachment, "content.getEntry"),
         ContentRequest::UploadChunk { .. } => (attachment, "content.uploadChunk"),
         ContentRequest::UploadStage { .. } => (attachment, "content.uploadStage"),
         ContentRequest::UploadFinish { .. } => (attachment, "content.uploadFinish"),
@@ -178,6 +179,39 @@ async fn handle_request(
                 .await;
             send_project_icon_reply(outgoing, id, offset, reply).await?;
         }
+        ContentRequest::GetEntry {
+            id,
+            thread,
+            entry,
+            rev,
+            offset,
+            len,
+        } => {
+            let reply = server
+                .workspace
+                .read_entry_chunk(thread, entry, rev, offset, clamp_chunk_len(len))
+                .await;
+            send_entry_chunk_reply(outgoing, id, offset, reply).await?;
+        }
+        ContentRequest::UploadChunk { .. }
+        | ContentRequest::UploadStage { .. }
+        | ContentRequest::UploadFinish { .. }
+        | ContentRequest::UploadAbort { .. } => {
+            handle_upload_request(server, ctx, uploads, outgoing, request, payload).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn handle_upload_request(
+    server: &Server,
+    ctx: &CallCtx,
+    uploads: &Mutex<HashMap<u64, StagedUpload>>,
+    outgoing: &mpsc::Sender<Message>,
+    request: ContentRequest,
+    payload: Bytes,
+) -> Result<()> {
+    match request {
         ContentRequest::UploadChunk { id, upload, offset } => {
             match append_upload_chunk(server, uploads, upload, offset, payload).await {
                 Ok(received) => send_upload_ack(outgoing, id, upload, received).await?,
@@ -215,6 +249,7 @@ async fn handle_request(
             uploads.lock().await.remove(&upload);
             send_upload_ack(outgoing, id, upload, 0).await?;
         }
+        _ => {}
     }
     Ok(())
 }
@@ -275,6 +310,7 @@ async fn send_project_icon_reply(
                     total_size,
                     mime,
                     etag: Some(etag),
+                    rev: None,
                     offset,
                     eof,
                 },
@@ -287,6 +323,34 @@ async fn send_project_icon_reply(
         }
         Ok(crate::workspace::ProjectIconChunk::Empty) => {
             send_frame(outgoing, &ContentResponse::Empty { id }, &[]).await
+        }
+        Err(error) => send_error(outgoing, id, &error).await,
+    }
+}
+
+async fn send_entry_chunk_reply(
+    outgoing: &mpsc::Sender<Message>,
+    id: u64,
+    offset: u64,
+    reply: Result<(Vec<u8>, u64, u64), Error>,
+) -> Result<()> {
+    match reply {
+        Ok((chunk, total_size, rev)) => {
+            let eof = offset.saturating_add(chunk.len() as u64) >= total_size;
+            send_frame(
+                outgoing,
+                &ContentResponse::Chunk {
+                    id,
+                    total_size,
+                    mime: "application/json".to_owned(),
+                    etag: None,
+                    rev: Some(rev),
+                    offset,
+                    eof,
+                },
+                &chunk,
+            )
+            .await
         }
         Err(error) => send_error(outgoing, id, &error).await,
     }
@@ -308,6 +372,7 @@ async fn send_chunk_reply(
                     total_size,
                     mime,
                     etag: None,
+                    rev: None,
                     offset,
                     eof,
                 },
