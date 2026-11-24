@@ -26,6 +26,14 @@ const REST: f32 = 0.72;
 /// Opacity of a harness that cannot run.
 const UNUSABLE: f32 = 0.40;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TabState {
+    Active,
+    Idle,
+    Unusable,
+    Locked,
+}
+
 /// The rail column.
 pub(super) fn rail(s: &Desktop, list: &PickerList<'_>, t: &Theme) -> El {
     let keyboard = s.model.composer.model_menu.column == PickerColumn::Rail;
@@ -49,8 +57,11 @@ pub(super) fn rail(s: &Desktop, list: &PickerList<'_>, t: &Theme) -> El {
             },
             18.0,
             "Favorites".to_owned(),
-            favorites,
-            true,
+            if favorites {
+                TabState::Active
+            } else {
+                TabState::Idle
+            },
             keyboard,
             if favorites { t.warning } else { t.muted },
             t,
@@ -64,18 +75,31 @@ pub(super) fn rail(s: &Desktop, list: &PickerList<'_>, t: &Theme) -> El {
                 .a11y_hidden(),
         );
     for catalog in &list.catalogs {
+        let locked_out = list.scope.locked && !catalog.own;
         let tab = RailTab::Harness(catalog.id.to_owned());
-        let active = list.tab == tab;
+        let state = if locked_out {
+            TabState::Locked
+        } else if !status_usable(catalog.status) {
+            TabState::Unusable
+        } else if list.tab == tab {
+            TabState::Active
+        } else {
+            TabState::Idle
+        };
         let glyph = ui::harness_icon(catalog.id);
+        let label = if locked_out {
+            format!("{} — Start a new thread to use", catalog.name)
+        } else {
+            tooltip(catalog)
+        };
         rail = rail.child(button(
             tab,
             glyph,
             S20,
-            tooltip(catalog),
-            active,
-            status_usable(catalog.status),
+            label,
+            state,
             keyboard,
-            t.text,
+            if locked_out { t.faint } else { t.text },
             t,
         ));
     }
@@ -92,23 +116,24 @@ fn tooltip(catalog: &Catalog<'_>) -> String {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "a rail button's glyph, state flags and ink are independent"
+    reason = "a rail button's glyph, state and ink are independent"
 )]
 fn button(
     tab: RailTab,
     glyph: &'static Icon,
     size: f32,
     label: String,
-    active: bool,
-    usable: bool,
+    state: TabState,
     keyboard: bool,
     ink: Color,
     t: &Theme,
 ) -> El {
-    let opacity = match (usable, active) {
-        (false, _) => UNUSABLE,
-        (true, true) => 1.0,
-        (true, false) => REST,
+    let active = state == TabState::Active;
+    let selectable = state != TabState::Locked;
+    let opacity = match state {
+        TabState::Locked | TabState::Unusable => UNUSABLE,
+        TabState::Active => 1.0,
+        TabState::Idle => REST,
     };
     let mut item = row()
         .key(tab.key())
@@ -116,6 +141,7 @@ fn button(
         .label(&label)
         .help(label)
         .checked(active)
+        .disabled(!selectable)
         .focusable(false)
         .preserve_focus_on_press(true)
         .size(BUTTON, BUTTON)
@@ -125,16 +151,21 @@ fn button(
             t.selected
         } else {
             Color::TRANSPARENT
-        })
-        .hover(t.hover_wash)
-        .hover_group()
-        .on_press_tx(send(ModelPickerMsg::Tab(tab)))
-        .child(
-            icon(glyph, size)
-                .color(ink)
-                .group_opacity(opacity, 1.0)
-                .a11y_hidden(),
-        );
+        });
+    if selectable {
+        item = item
+            .hover(t.hover_wash)
+            .hover_group()
+            .on_press_tx(send(ModelPickerMsg::Tab(tab)))
+            .child(
+                icon(glyph, size)
+                    .color(ink)
+                    .group_opacity(opacity, 1.0)
+                    .a11y_hidden(),
+            );
+    } else {
+        item = item.child(icon(glyph, size).color(ink).opacity(opacity).a11y_hidden());
+    }
     if active {
         item = item.child(motion::shared_pill(
             "model-rail-pill",

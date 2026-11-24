@@ -20,8 +20,6 @@ pub enum Tone {
     Danger,
     /// Attention / warning / approval status (`base0A`).
     Warning,
-    /// Informational / remote / `@file` accent (`base0C`).
-    Info,
 }
 
 impl Tone {
@@ -31,7 +29,7 @@ impl Tone {
             Self::Danger => &super::CIRCLE_ALERT,
             Self::Warning => &super::TRIANGLE_ALERT,
             Self::Success => &super::CIRCLE_CHECK,
-            Self::Neutral | Self::Info => &super::INFO,
+            Self::Neutral => &super::INFO,
         }
     }
 
@@ -47,7 +45,6 @@ impl Tone {
             Self::Success => t.success,
             Self::Danger => t.danger,
             Self::Warning => t.warning,
-            Self::Info => t.info,
         }
     }
 }

@@ -271,5 +271,8 @@ pub fn catalogs<'a>(model: &'a Model, scope: &PickerScope<'a>) -> Vec<Catalog<'a
             },
         );
     }
+    if scope.locked {
+        list.sort_by_key(|catalog| !catalog.own);
+    }
     list
 }

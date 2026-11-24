@@ -133,7 +133,10 @@ pub fn picker_list<'a>(model: &'a Model) -> Option<PickerList<'a>> {
         .clone()
         .filter(|tab| match tab {
             RailTab::Favorites => true,
-            RailTab::Harness(id) => catalogs.iter().any(|catalog| catalog.id == id),
+            RailTab::Harness(id) => {
+                (!scope.locked || id == scope.harness)
+                    && catalogs.iter().any(|catalog| catalog.id == id)
+            }
         })
         .unwrap_or_else(|| RailTab::Harness(scope.harness.to_owned()));
     let row = |catalog: &Catalog<'a>, choice: &'a OptionChoice| {
@@ -155,13 +158,16 @@ pub fn picker_list<'a>(model: &'a Model) -> Option<PickerList<'a>> {
     let mut items = Vec::new();
     let mut empty = None;
     if searching {
-        searched(&catalogs, query, &row, &mut items);
+        searched(&catalogs, scope.locked, query, &row, &mut items);
         empty = items.is_empty().then_some(ListEmpty::NoMatches);
     } else if tab == RailTab::Favorites {
         for key in favorites {
             let Some(wanted) = ModelRef::from_favorite(key) else {
                 continue;
             };
+            if scope.locked && wanted.harness != scope.harness {
+                continue;
+            }
             let found = catalogs
                 .iter()
                 .find(|c| c.id == wanted.harness)
@@ -241,12 +247,16 @@ fn grouped<'a>(
 
 fn searched<'a>(
     catalogs: &[Catalog<'a>],
+    locked: bool,
     query: &str,
     row: &impl Fn(&Catalog<'a>, &'a OptionChoice) -> ModelRow<'a>,
     items: &mut Vec<ListItem<'a>>,
 ) {
     let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
     for catalog in catalogs {
+        if locked && !catalog.own {
+            continue;
+        }
         let Some(option) = catalog.model_option() else {
             continue;
         };

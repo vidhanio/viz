@@ -203,6 +203,11 @@ pub(super) fn scroll_top(fx: &mut Vec<Effect>) {
 }
 
 pub(super) fn switch_tab(model: &mut Model, tab: RailTab, fx: &mut Vec<Effect>) {
+    if let RailTab::Harness(id) = &tab
+        && picker_scope(model).is_some_and(|scope| scope.locked && scope.harness != id)
+    {
+        return;
+    }
     let menu = &mut model.composer.model_menu;
     if menu.tab.as_ref() != Some(&tab) {
         menu.tab = Some(tab);

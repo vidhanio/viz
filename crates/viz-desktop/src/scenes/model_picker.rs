@@ -378,6 +378,5 @@ pub(super) fn status(s: &mut Desktop) {
 
 pub(super) fn locked(s: &mut Desktop) {
     on_thread(s);
-    s.model.composer.model_menu.tab = Some(RailTab::Harness("codex".into()));
     finish(s);
 }

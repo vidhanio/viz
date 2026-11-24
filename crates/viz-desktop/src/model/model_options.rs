@@ -354,6 +354,7 @@ pub fn picker_nav(model: &Model) -> Option<PickerNav> {
     tabs.extend(
         list.catalogs
             .iter()
+            .filter(|catalog| !list.scope.locked || catalog.own)
             .map(|catalog| RailTab::Harness(catalog.id.to_owned())),
     );
     let levels: Vec<_> = column

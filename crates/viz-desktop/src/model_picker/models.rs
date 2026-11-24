@@ -125,32 +125,20 @@ fn banner(list: &PickerList<'_>, t: &Theme) -> Option<El> {
         return None;
     }
     let catalog = list.catalog(id)?;
-    if let Some((title, detail)) = status_note(catalog.status) {
-        let tone = if status_usable(catalog.status) {
-            Tone::Warning
-        } else {
-            Tone::Danger
-        };
-        return Some(
-            rune_kit::Card::new()
-                .accent(tone.color(t))
-                .title(title, Some(tone.glyph()))
-                .description(detail)
-                .build(&t.k)
-                .key(format!("model-status-{id}")),
-        );
-    }
-    (list.scope.locked && !catalog.own).then(|| {
+    let (title, detail) = status_note(catalog.status)?;
+    let tone = if status_usable(catalog.status) {
+        Tone::Warning
+    } else {
+        Tone::Danger
+    };
+    Some(
         rune_kit::Card::new()
-            .accent(Tone::Info.color(t))
-            .title(
-                format!("This thread runs on {}", list.scope.harness_name()),
-                Some(Tone::Info.glyph()),
-            )
-            .description(format!("Start a new thread to use {}.", catalog.name))
+            .accent(tone.color(t))
+            .title(title, Some(tone.glyph()))
+            .description(detail)
             .build(&t.k)
-            .key("model-locked")
-    })
+            .key(format!("model-status-{id}")),
+    )
 }
 
 fn model_row(
