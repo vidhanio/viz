@@ -352,9 +352,9 @@ pub(super) fn build_theme(scheme: &Scheme) -> Theme {
     overlay.c.surface_raised = overlay_fill;
     overlay.c.hover = selected;
     overlay.c.surface_raised_hover = hover_wash;
-    overlay.c.std_border = Color::TRANSPARENT;
+    overlay.c.std_border = over(overlay_fill, text, if dark { 0.32 } else { 0.34 });
     overlay.elevation.floating = vec![ring];
-    overlay.elevation.md = vec![ring];
+    overlay.elevation.md = Vec::new();
     overlay.elevation.overlay = vec![ring];
 
     Theme {
