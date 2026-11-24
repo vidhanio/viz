@@ -64,6 +64,9 @@ pub enum SidebarMsg {
     ToggleShelf(&'static str),
     /// Reveal the next page of settled threads in the Settled drawer.
     LoadMoreSettled,
+    /// Track the thread row currently under the pointer so hover quick actions
+    /// swap in without reserving horizontal space on unhovered rows.
+    HoverRow(Option<ThreadId>),
     /// Show or hide the delayed right-anchored hover preview card.
     HoverCard(Option<ThreadId>),
     /// Open or close the hover quick-action snooze preset popover for `thread`.
@@ -263,6 +266,9 @@ pub(super) fn update(model: &mut Model, msg: SidebarMsg) -> Vec<Effect> {
                 .sidebar
                 .settled_limit
                 .saturating_add(SETTLED_PAGE_SIZE);
+        }
+        SidebarMsg::HoverRow(target) => {
+            model.sidebar.hovered_thread = target;
         }
         SidebarMsg::HoverCard(target) => {
             let blocked = model.sidebar.menu.is_some()

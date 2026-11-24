@@ -3,7 +3,7 @@
 
 use std::time::Duration;
 
-use rune::{Anim, Color, Drag, El, Key, KeyEvent, Phase, Tx, col, el, icon, row, text, text_input};
+use rune::{Anim, Color, Drag, El, Key, KeyEvent, Phase, Tx, col, icon, row, text, text_input};
 use rune_kit::IconButtonVariant;
 use viz_client::protocol::{Attention, Shelf, ThreadStatus, ThreadSummary, TriageAction};
 
@@ -48,7 +48,11 @@ pub(super) fn thread_card(
         .inline_rename
         .as_ref()
         .is_some_and(|edit| edit.thread == id);
-    let force_actions = m.sidebar.snooze_popover == Some(id) || m.sidebar.hover_card == Some(id);
+    let show_actions = m.connected()
+        && !renaming
+        && (m.sidebar.hovered_thread == Some(id)
+            || m.sidebar.snooze_popover == Some(id)
+            || m.sidebar.hover_card == Some(id));
     let lifted = m
         .sidebar
         .drag
@@ -58,14 +62,14 @@ pub(super) fn thread_card(
     menu::thread_context_menu(s, thread, &key, shelf, outline.now, t, layer);
 
     let title = title_row(s, thread, shelf, selected, renaming, t);
-    let status = row_status(s, outline, thread, shelf, force_actions, t, layer);
+    let status = row_status(s, outline, thread, shelf, show_actions, t, layer);
     let identity = row()
         .w_full()
         .gap(S6)
         .center_y()
         .child(ui::project_mark(s, project, ICON_MD, t))
         .child(title.grow(1.0).shrink().min_w(0.0))
-        .child(status);
+        .children(status);
     let row3 = card_meta::metadata_row(thread, project, selected, t);
 
     let fill = if lifted.is_some() {
@@ -188,7 +192,21 @@ pub(super) fn thread_card(
         ));
     }
 
-    card
+    if m.connected() && !renaming {
+        col()
+            .key(format!("thread-wrap-{id}"))
+            .w_full()
+            .on_hover_change(move |s: &mut Desktop, inside, _| {
+                if inside {
+                    s.dispatch_local(Msg::Sidebar(SidebarMsg::HoverRow(Some(id))));
+                } else if s.model.sidebar.hovered_thread == Some(id) {
+                    s.dispatch_local(Msg::Sidebar(SidebarMsg::HoverRow(None)));
+                }
+            })
+            .child(card)
+    } else {
+        card
+    }
 }
 
 fn row_status(
@@ -196,44 +214,21 @@ fn row_status(
     outline: &SidebarOutline<'_>,
     thread: &ThreadSummary,
     shelf: Shelf,
-    force_actions: bool,
+    show_actions: bool,
     t: &Theme,
     layer: &mut Vec<El>,
-) -> El {
-    let m = &s.model;
-    let resting = resting_status(outline, thread, shelf, t);
-    let hover = m
-        .connected()
-        .then(|| hover_actions(s, thread, shelf, outline.now, t, layer));
-    let has_hover = hover.is_some();
-
-    let mut right = el().key("row1-right").h(18.0).equal_columns(1);
-    if let Some(rest) = resting {
-        let rest_opacity = if force_actions && has_hover { 0.0 } else { 1.0 };
-        let hover_opacity = if has_hover { 0.0 } else { 1.0 };
-        right = right.child(
+) -> Option<El> {
+    if show_actions {
+        return Some(
             row()
-                .grid_cell(0)
+                .key("row1-actions")
                 .h(18.0)
-                .justify_end()
                 .center_y()
-                .group_opacity(rest_opacity, hover_opacity)
-                .child(rest),
+                .child(hover_actions(s, thread, shelf, outline.now, t, layer)),
         );
     }
-    if let Some(actions_el) = hover {
-        right = right.child(
-            row()
-                .grid_cell(0)
-                .h(18.0)
-                .justify_end()
-                .center_y()
-                .group_opacity(if force_actions { 1.0 } else { 0.0 }, 1.0)
-                .child(actions_el),
-        );
-    }
-
-    right
+    resting_status(outline, thread, shelf, t)
+        .map(|rest| row().key("row1-rest").h(18.0).center_y().child(rest))
 }
 
 fn resting_status(
@@ -314,58 +309,40 @@ fn hover_actions(
             .key(format!("snooze-trigger-{id}"));
         actions::snooze_popover(s, thread, trigger, now, t, layer)
     };
-    let pill = |glyph: &'static rune::Icon, label: &'static str, action: TriageAction, undo| {
-        row()
-            .key(format!("quick-{label}-{id}"))
-            .role("button")
-            .label(label)
-            .h(Size::Micro.height())
-            .px(S4)
-            .gap(3.0)
-            .center_y()
-            .radius(RADIUS_SM)
-            .hover_group()
-            .hover(t.hover_wash)
-            .press(t.pressed_wash)
-            .press_scale(motion::PRESS_SCALE)
-            .focusable(false)
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                s.dispatch(
-                    Msg::Sidebar(SidebarMsg::Triage {
-                        thread: id,
-                        action: action.clone(),
-                        undo_title: undo,
-                        now,
-                    }),
-                    tx,
-                );
-            })
-            .child(
-                icon(glyph, 11.0)
-                    .color(t.muted)
-                    .group_color(t.text_strong)
-                    .a11y_hidden(),
-            )
-            .child(
-                text(label)
-                    .font(t.micro_medium)
-                    .color(t.muted)
-                    .group_color(t.text_strong)
-                    .a11y_hidden(),
-            )
-    };
+    let action_btn =
+        |glyph: &'static rune::Icon, label: &'static str, action: TriageAction, undo| {
+            rune_kit::IconButton::new(glyph)
+                .help(label)
+                .variant(IconButtonVariant::GhostMuted)
+                .control_size(Size::Micro.kit())
+                .on_press_tx(move |s: &mut Desktop, tx| {
+                    s.dispatch(
+                        Msg::Sidebar(SidebarMsg::Triage {
+                            thread: id,
+                            action: action.clone(),
+                            undo_title: undo,
+                            now,
+                        }),
+                        tx,
+                    );
+                })
+                .build(&t.k)
+                .key(format!("quick-{label}-{id}"))
+        };
     match shelf {
-        Shelf::Settled => pill(&ui::ROTATE_CCW, "Reopen", TriageAction::Reopen, None),
-        Shelf::Snoozed => pill(&ui::ROTATE_CCW, "Unsnooze", TriageAction::Wake, None),
+        Shelf::Settled => action_btn(&ui::ROTATE_CCW, "Reopen", TriageAction::Reopen, None),
+        Shelf::Snoozed => action_btn(&ui::ROTATE_CCW, "Unsnooze", TriageAction::Wake, None),
         Shelf::Working => snooze_btn(),
-        Shelf::Pinned | Shelf::Active | Shelf::Archived => {
-            row().gap(S2).center_y().child(snooze_btn()).child(pill(
-                &ui::CHECK,
+        Shelf::Pinned | Shelf::Active | Shelf::Archived => row()
+            .gap(S2)
+            .center_y()
+            .child(snooze_btn())
+            .child(action_btn(
+                &ui::CIRCLE_CHECK,
                 "Settle",
                 TriageAction::Settle,
                 Some("Thread settled"),
-            ))
-        }
+            )),
     }
 }
 

@@ -277,6 +277,8 @@ pub struct SidebarState {
     pub collapsed_shelves: BTreeSet<String>,
     /// Maximum number of settled threads currently shown in the Settled shelf.
     pub settled_limit: usize,
+    /// Thread currently under the pointer for immediate hover quick actions.
+    pub hovered_thread: Option<ThreadId>,
     /// Thread currently displaying the delayed right-anchored hover preview
     /// card.
     pub hover_card: Option<ThreadId>,
@@ -307,6 +309,7 @@ impl Default for SidebarState {
             filter_active: 0,
             collapsed_shelves: default_collapsed_shelves(),
             settled_limit: SETTLED_PAGE_SIZE,
+            hovered_thread: None,
             hover_card: None,
             snooze_popover: None,
             inline_rename: None,
@@ -333,6 +336,7 @@ impl SidebarState {
         self.filter_open = false;
         self.filter_query.clear();
         self.filter_active = 0;
+        self.hovered_thread = None;
         self.hover_card = None;
         self.snooze_popover = None;
         self.inline_rename = None;
