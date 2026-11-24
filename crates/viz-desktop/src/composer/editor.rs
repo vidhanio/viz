@@ -2,7 +2,7 @@
 //! drag-and-drop accent frame, prompt history recall, length warning, and
 //! footer controls (no voice input).
 
-use rune::{Color, El, Key, KeyEvent, Tx, col, icon, row, text, text_input};
+use rune::{Color, El, Key, KeyEvent, ScrollSpec, Tx, col, icon, row, text, text_input};
 
 use super::{
     actions::{PillPalette, primary_actions},
@@ -22,6 +22,8 @@ use crate::{
 
 /// Maximum visible lines before vertical scrolling inside the composer input.
 const MAX_LINES: usize = 9;
+/// Key of the composer's auto-growing draft scroll viewport.
+const DRAFT_SCROLL_KEY: &str = "composer-draft-scroll";
 
 /// Builds the flat composer card with inline chips, attachments strip,
 /// drag-over highlight, footer controls, and circular primary CTA.
@@ -94,7 +96,7 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
                 .pt(if has_attachments { S8 } else { S14 })
                 .pb(S8)
                 .min_h(S44)
-                .child(rune::auto_grow(field, 1, MAX_LINES)),
+                .child(draft_scroll(s, field, t)),
         )
         .children(length_warning(s, t))
         .child(footer);
@@ -108,6 +110,56 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
             })
     } else {
         card
+    }
+}
+
+fn draft_scroll(s: &Desktop, field: El, t: &Theme) -> El {
+    let line = t.body.line_px();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "MAX_LINES is a small single-digit constant"
+    )]
+    let max_h = MAX_LINES as f32 * line;
+    let scroll_pos = s.widgets.composer_scroll.clone();
+    col()
+        .key(DRAFT_SCROLL_KEY)
+        .w_full()
+        .shrink()
+        .min_h(line)
+        .max_h(max_h)
+        .scroll(ScrollSpec {
+            stick_bottom: false,
+        })
+        .on_scroll_offset(move |pos| {
+            scroll_pos.set([pos.offset[1], pos.max[1]]);
+        })
+        .child(field.animate_edit_layout())
+}
+
+fn keep_composer_caret_visible(s: &Desktop, tx: &mut Tx) {
+    let edit = &s.widgets.draft;
+    let caret = edit.focus.min(edit.text.len());
+    if !edit.text[caret..].contains('\n') {
+        tx.scroll_to_bottom(DRAFT_SCROLL_KEY);
+        return;
+    }
+    let line_px = crate::theme::Theme::get(true).body.line_px();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "composer line indices stay well within exact f32 range"
+    )]
+    let caret_line = edit.text[..caret].bytes().filter(|&b| b == b'\n').count() as f32;
+    let caret_bottom = (caret_line + 1.0) * line_px;
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "MAX_LINES is a small single-digit constant"
+    )]
+    let viewport = MAX_LINES as f32 * line_px;
+    let [offset, _] = s.widgets.composer_scroll.get();
+    if caret_bottom > offset + viewport {
+        tx.scroll_to_y(DRAFT_SCROLL_KEY, (caret_bottom - viewport).max(0.0));
+    } else if caret_line * line_px < offset {
+        tx.scroll_to_y(DRAFT_SCROLL_KEY, caret_line * line_px);
     }
 }
 
@@ -206,6 +258,7 @@ fn on_draft_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
         s.sync_draft_text();
         let text = s.widgets.draft.text.clone();
         s.dispatch(Msg::Composer(ComposerMsg::DraftChanged(text)), tx);
+        keep_composer_caret_visible(s, tx);
         return true;
     }
     if ev.key == Key::Escape {

@@ -78,6 +78,8 @@ pub struct ShellWidgets {
     pub attachment_images: crate::attachments::DraftImages,
     /// Latest `[offset_y, max_y]` of the active timeline scroll viewport.
     pub timeline_scroll: rune::Live<[f32; 2]>,
+    /// Latest `[offset_y, max_y]` of the composer draft scroll viewport.
+    pub composer_scroll: rune::Live<[f32; 2]>,
     /// Timeline page key that [`Self::timeline_scroll`] was last observed on.
     pub timeline_scroll_page: String,
 }
@@ -129,6 +131,7 @@ impl Default for ShellWidgets {
             project_icons: HashMap::new(),
             attachment_images: crate::attachments::DraftImages::default(),
             timeline_scroll: rune::Live::new([f32::MAX, 0.0]),
+            composer_scroll: rune::Live::new([0.0, 0.0]),
             timeline_scroll_page: String::new(),
         }
     }

@@ -44,6 +44,7 @@ octocrab = { version = "0.54", default-features = false, features = [
   "rustls-ring",
 ] }
 notify-rust = { version = "4", default-features = false }
+pulldown-cmark = { version = "0.13", default-features = false }
 regex = "1"
 reqwest = { version = "0.13", default-features = false }
 rmcp = "3.11"

@@ -6300,6 +6300,7 @@ dependencies = [
  "lucide-static-svg",
  "mime_guess",
  "notify-rust",
+ "pulldown-cmark",
  "rfd 0.18.0",
  "rune",
  "rune-fx",

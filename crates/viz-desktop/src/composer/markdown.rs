@@ -1,12 +1,14 @@
-//! Live Markdown editor helpers over a plain [`rune::TextEdit`]: WYSIWYG-style
-//! per-frame [`Span`] and strikethrough decorations for headings, bold, italic,
-//! strikethrough, inline code, links, blockquotes, lists, task items, and
-//! language-highlighted fenced code blocks, plus invisible keyboard ergonomics
-//! (fence-aware Enter, list/quote continuation, list/code indentation, and
-//! Markdown delimiter shortcuts). No buttons or hidden rich-text state.
+//! Live Markdown editor helpers over a plain [`rune::TextEdit`], parsed with
+//! `pulldown-cmark` (`into_offset_iter`): WYSIWYG-style per-frame [`Span`] and
+//! strikethrough decorations for headings, bold, italic, strikethrough, inline
+//! code, links, embedded attachment images/references, blockquotes, lists, task
+//! items, and language-highlighted fenced code blocks, plus invisible keyboard
+//! ergonomics (fence-aware Enter, list/quote continuation, indentation, and
+//! Markdown delimiter shortcuts).
 
-use std::ops::Range;
+use std::{borrow::Cow, ops::Range};
 
+use pulldown_cmark::{BrokenLink, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
 use rune::{Color, Key, KeyEvent, Span, TextEdit};
 use rune_kit::syntax::highlight;
 
@@ -18,8 +20,9 @@ pub struct Decorations {
     pub strikes: Vec<(usize, usize, Option<Color>)>,
 }
 
-/// Computes live WYSIWYG-style Markdown decorations for `edit`, skipping any
-/// atomic `Mark::Pill` byte ranges so mention chips stay untouched.
+/// Computes live WYSIWYG-style Markdown decorations for `edit` using
+/// `pulldown-cmark`, masking atomic `Mark::Pill` byte ranges so mention chips
+/// never interact with Markdown delimiters.
 #[must_use]
 pub fn decorate(edit: &TextEdit, t: &Theme) -> Decorations {
     let text = edit.text.as_str();
@@ -30,393 +33,550 @@ pub fn decorate(edit: &TextEdit, t: &Theme) -> Decorations {
     if text.is_empty() {
         return out;
     }
+
     let mut pills: Vec<Range<usize>> = edit.pills().map(|(r, _)| r).collect();
     pills.sort_by_key(|r| r.start);
+    let masked = mask_pills(text, &pills);
+    let src: &str = &masked;
 
-    let mut ctx = DecorateCtx {
-        text,
-        pills: &pills,
-        t,
-        out: &mut out,
+    let mut opts = Options::empty();
+    opts.insert(Options::ENABLE_STRIKETHROUGH);
+    opts.insert(Options::ENABLE_TASKLISTS);
+
+    let mut broken = |link: BrokenLink<'_>| {
+        let reference = link.reference.trim();
+        if is_attachment_ref(reference) {
+            Some((format!("viz-ref://{reference}").into(), "".into()))
+        } else {
+            None
+        }
     };
-    ctx.scan_document();
+
+    let mut code_ranges: Vec<Range<usize>> = Vec::new();
+    let parser = Parser::new_with_broken_link_callback(src, opts, Some(&mut broken));
+
+    for (event, range) in parser.into_offset_iter() {
+        if range.start >= range.end || range.end > text.len() {
+            continue;
+        }
+        if overlaps_pill(range.start, range.end, &pills) && is_inline_event(&event) {
+            continue;
+        }
+        match event {
+            Event::Start(Tag::Heading { level, .. }) => {
+                style_heading(text, range, level, t, &mut out);
+            }
+            Event::Start(Tag::BlockQuote(_)) => {
+                style_blockquote(text, range, t, &mut out);
+            }
+            Event::Start(Tag::Item) => {
+                style_list_item(text, range, t, &mut out);
+            }
+            Event::TaskListMarker(checked) => {
+                style_task_marker(text, range, checked, t, &mut out);
+            }
+            Event::Rule => {
+                out.spans
+                    .push(Span::new(range.start, range.end).color(t.faint));
+            }
+            Event::Start(Tag::Emphasis) => {
+                style_delimited_inline(text, range, 1, t, &mut out, |s, e| {
+                    Span::new(s, e).italic()
+                });
+            }
+            Event::Start(Tag::Strong) => {
+                style_delimited_inline(text, range, 2, t, &mut out, |s, e| {
+                    Span::new(s, e).weight(680.0)
+                });
+            }
+            Event::Start(Tag::Strikethrough) => {
+                style_strikethrough(text, range, t, &mut out);
+            }
+            Event::Code(_) => {
+                style_inline_code(text, range, t, &mut out);
+            }
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                style_link(text, range, &dest_url, t, &mut out);
+            }
+            Event::Start(Tag::Image { .. }) => {
+                style_image(text, range, t, &mut out);
+            }
+            Event::Start(Tag::CodeBlock(kind)) => {
+                code_ranges.push(range.clone());
+                style_code_block(text, range, kind, t, &mut out);
+            }
+            _ => {}
+        }
+    }
+
+    style_reference_definitions(text, &code_ranges, t, &mut out);
     out
 }
 
-struct DecorateCtx<'a> {
-    text: &'a str,
-    pills: &'a [Range<usize>],
-    t: &'a Theme,
-    out: &'a mut Decorations,
-}
-
-struct OpenFence<'a> {
-    ch: u8,
-    len: usize,
-    lang: Option<&'a str>,
-    body_start: usize,
-}
-
-impl<'a> DecorateCtx<'a> {
-    fn scan_document(&mut self) {
-        let mut fence: Option<OpenFence<'a>> = None;
-        let mut pos = 0usize;
-        for raw_line in self.text.split('\n') {
-            let line_start = pos;
-            let line_end = pos + raw_line.len();
-            let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-            let content_end = line_start + line.len();
-            pos = (line_end + 1).min(self.text.len());
-
-            if let Some(open) = &fence {
-                if is_closing_fence(line, open.ch, open.len) {
-                    let body_end = line_start.saturating_sub(1).max(open.body_start);
-                    self.highlight_code_body(open.lang, open.body_start, body_end);
-                    self.dim_mono(line_start, content_end);
-                    fence = None;
-                } else if line_start < content_end {
-                    self.out
-                        .spans
-                        .push(Span::new(line_start, content_end).mono());
-                }
-                continue;
+/// Replaces bytes covered by atomic `Mark::Pill` ranges with ASCII spaces of
+/// equal byte length so `pulldown-cmark` preserves exact UTF-8 byte offsets
+/// without treating underscores or punctuation inside `@file` pills as
+/// Markdown delimiters.
+fn mask_pills<'a>(text: &'a str, pills: &[Range<usize>]) -> Cow<'a, str> {
+    if pills.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    let mut bytes = text.as_bytes().to_vec();
+    for pill in pills {
+        let start = pill.start.min(bytes.len());
+        let end = pill.end.min(bytes.len());
+        for byte in &mut bytes[start..end] {
+            if *byte != b'\n' && *byte != b'\r' {
+                *byte = b' ';
             }
-
-            if let Some(parsed) = parse_opening_fence(line) {
-                self.style_opening_fence(line_start, content_end, &parsed);
-                fence = Some(OpenFence {
-                    ch: parsed.ch,
-                    len: parsed.len,
-                    lang: parsed.lang,
-                    body_start: pos,
-                });
-                continue;
-            }
-
-            self.style_block_line(line_start, content_end);
         }
+    }
+    Cow::Owned(String::from_utf8(bytes).unwrap_or_else(|_| text.to_owned()))
+}
 
-        if let Some(open) = fence
-            && open.body_start < self.text.len()
+const fn is_inline_event(event: &Event<'_>) -> bool {
+    matches!(
+        event,
+        Event::Start(
+            Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::Link { .. } | Tag::Image { .. }
+        ) | Event::Code(_)
+    )
+}
+
+fn overlaps_pill(start: usize, end: usize, pills: &[Range<usize>]) -> bool {
+    pills.iter().any(|r| r.start < end && start < r.end)
+}
+
+/// Whether `reference` looks like an inline attachment reference (`img-1`,
+/// `file-2`, `att-3`) that resolves against the message's attachments.
+#[must_use]
+pub fn is_attachment_ref(reference: &str) -> bool {
+    let lower = reference.to_ascii_lowercase();
+    for prefix in ["img-", "file-", "att-"] {
+        if let Some(rest) = lower.strip_prefix(prefix)
+            && !rest.is_empty()
+            && rest.bytes().all(|b| b.is_ascii_digit())
         {
-            self.highlight_code_body(open.lang, open.body_start, self.text.len());
+            return true;
         }
     }
+    false
+}
 
-    fn style_opening_fence(&mut self, line_start: usize, line_end: usize, fence: &FenceOpen<'a>) {
-        let ticks_end = line_start + fence.ticks_end;
-        self.dim_mono(line_start, ticks_end);
-        if let Some((ls, le)) = fence.lang_range {
-            self.out.spans.push(
-                Span::new(line_start + ls, line_start + le)
-                    .mono()
-                    .color(self.t.accent_text.alpha(0.85)),
-            );
-            if line_start + le < line_end {
-                self.dim_mono(line_start + le, line_end);
-            }
-        } else if ticks_end < line_end {
-            self.dim_mono(ticks_end, line_end);
-        }
+fn style_heading(
+    text: &str,
+    range: Range<usize>,
+    level: HeadingLevel,
+    t: &Theme,
+    out: &mut Decorations,
+) {
+    let slice = &text[range.clone()];
+    let bytes = slice.as_bytes();
+    let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
+    let hashes = bytes[indent..].iter().take_while(|&&b| b == b'#').count();
+    if hashes == 0 {
+        return;
     }
-
-    fn highlight_code_body(&mut self, lang: Option<&str>, start: usize, end: usize) {
-        if start >= end {
-            return;
-        }
-        let Some(code) = self.text.get(start..end) else {
-            return;
+    let prefix_end =
+        (indent + hashes + usize::from(matches!(bytes.get(indent + hashes), Some(b' ' | b'\t'))))
+            .min(slice.len());
+    out.spans
+        .push(Span::new(range.start, range.start + prefix_end).color(t.faint));
+    let body_start = range.start + prefix_end;
+    let body_end = range.start + slice.trim_end_matches(['\r', '\n']).len();
+    if body_start < body_end {
+        let bump = match level {
+            HeadingLevel::H1 => 3.0,
+            HeadingLevel::H2 => 1.5,
+            HeadingLevel::H3 => 0.5,
+            HeadingLevel::H4 | HeadingLevel::H5 | HeadingLevel::H6 => 0.0,
         };
-        let ranges = highlight(lang, code);
-        for span in self.t.syntax.spans(&ranges, start) {
-            self.out.spans.push(span.mono());
+        let mut span = Span::new(body_start, body_end).weight(680.0);
+        if bump > 0.0 {
+            span = span.size(t.body.size + bump);
         }
+        out.spans.push(span);
     }
+}
 
-    fn dim_mono(&mut self, start: usize, end: usize) {
-        if start < end {
-            self.out
-                .spans
-                .push(Span::new(start, end).mono().color(self.t.faint));
-        }
-    }
+fn style_blockquote(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations) {
+    let mut pos = range.start;
+    let accent = t.accent_text.alpha(0.8);
+    for raw_line in text[range.clone()].split('\n') {
+        let line_start = pos;
+        let line_end = pos + raw_line.len();
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        let content_end = line_start + line.len();
+        pos = (line_end + 1).min(range.end);
 
-    fn style_block_line(&mut self, line_start: usize, line_end: usize) {
-        if line_start >= line_end {
-            return;
-        }
-        let mut cursor = line_start;
-        let line = &self.text[line_start..line_end];
-
-        if is_thematic_break(line) {
-            self.out
-                .spans
-                .push(Span::new(line_start, line_end).color(self.t.faint));
-            return;
-        }
-
-        if let Some(quote_len) = parse_quote_prefix(line) {
-            self.style_quote_markers(line_start, line_start + quote_len);
-            cursor = line_start + quote_len;
-            if cursor < line_end {
-                self.out
-                    .spans
-                    .push(Span::new(cursor, line_end).color(self.t.muted));
-            }
-        }
-
-        let rest = &self.text[cursor..line_end];
-        if let Some((hashes, text_off)) = parse_heading_prefix(rest) {
-            self.out
-                .spans
-                .push(Span::new(cursor, cursor + text_off).color(self.t.faint));
-            let body_start = cursor + text_off;
-            if body_start < line_end {
-                let bump = match hashes {
-                    1 => 3.0,
-                    2 => 1.5,
-                    3 => 0.5,
-                    _ => 0.0,
-                };
-                let mut span = Span::new(body_start, line_end).weight(680.0);
-                if bump > 0.0 {
-                    span = span.size(self.t.body.size + bump);
-                }
-                self.out.spans.push(span);
-                self.scan_inline(body_start, line_end);
-            }
-            return;
-        }
-
-        if let Some(list) = parse_list_prefix(rest) {
-            let marker_start = cursor + list.marker_start;
-            let marker_end = cursor + list.marker_end;
-            self.out.spans.push(
-                Span::new(marker_start, marker_end)
-                    .bold()
-                    .color(self.t.accent_text.alpha(0.85)),
-            );
-            cursor += list.content_start;
-            if let Some((checked, box_end)) = parse_task_box(&self.text[cursor..line_end]) {
-                let color = if checked {
-                    self.t.accent_text
-                } else {
-                    self.t.muted
-                };
-                self.out
-                    .spans
-                    .push(Span::new(cursor, cursor + 3).mono().color(color));
-                cursor += box_end;
-                if checked && cursor < line_end {
-                    self.out
-                        .spans
-                        .push(Span::new(cursor, line_end).color(self.t.muted));
-                    self.out
-                        .strikes
-                        .push((cursor, line_end, Some(self.t.muted)));
+        if let Some(qlen) = parse_quote_prefix(line) {
+            for (off, byte) in line[..qlen].bytes().enumerate() {
+                if byte == b'>' {
+                    let at = line_start + off;
+                    out.spans.push(Span::new(at, at + 1).bold().color(accent));
                 }
             }
-        }
-
-        self.scan_inline(cursor, line_end);
-    }
-
-    fn style_quote_markers(&mut self, start: usize, end: usize) {
-        let color = self.t.accent_text.alpha(0.8);
-        for (offset, byte) in self.text[start..end].bytes().enumerate() {
-            if byte == b'>' {
-                let at = start + offset;
-                self.out
-                    .spans
-                    .push(Span::new(at, at + 1).bold().color(color));
+            if line_start + qlen < content_end {
+                out.spans
+                    .push(Span::new(line_start + qlen, content_end).color(t.muted));
             }
         }
     }
+}
 
-    fn scan_inline(&mut self, start: usize, end: usize) {
-        let bytes = self.text.as_bytes();
-        let mut i = start;
-        while i < end {
-            if let Some(pill_end) = self.pill_ending_at_or_after(i) {
-                i = pill_end.min(end);
-                continue;
-            }
-            match bytes[i] {
-                b'\\' if i + 1 < end && bytes[i + 1].is_ascii_punctuation() => {
-                    self.out.spans.push(Span::new(i, i + 1).color(self.t.faint));
-                    i += 2;
-                }
-                b'`' => {
-                    if let Some(next) = self.try_inline_code(i, end) {
-                        i = next;
-                    } else {
-                        i += 1;
-                    }
-                }
-                b'[' => {
-                    if let Some(next) = self.try_link(i, end) {
-                        i = next;
-                    } else {
-                        i += 1;
-                    }
-                }
-                b'~' if i + 1 < end && bytes[i + 1] == b'~' => {
-                    if let Some(next) = self.try_strike(i, end) {
-                        i = next;
-                    } else {
-                        i += 2;
-                    }
-                }
-                b'*' | b'_' => {
-                    if let Some(next) = self.try_emphasis(i, end) {
-                        i = next;
-                    } else {
-                        i += 1;
-                    }
-                }
-                _ => {
-                    let ch = self.text[i..end].chars().next().map_or(1, char::len_utf8);
-                    i += ch;
-                }
-            }
+fn style_list_item(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations) {
+    let first_line_end = text[range.clone()]
+        .find('\n')
+        .map_or(range.end, |off| range.start + off);
+    let first_line = text[range.start..first_line_end].trim_end_matches('\r');
+    let line_start = text[..range.start].rfind('\n').map_or(0, |idx| idx + 1);
+    let full_first = &text[line_start..first_line_end];
+    let stripped_offset = parse_quote_prefix(full_first).unwrap_or(0);
+    let probe = &full_first[stripped_offset..];
+    if let Some(list) = parse_list_prefix(probe) {
+        let base = line_start + stripped_offset;
+        out.spans.push(
+            Span::new(base + list.marker_start, base + list.marker_end)
+                .bold()
+                .color(t.accent_text.alpha(0.85)),
+        );
+    } else if let Some(list) = parse_list_prefix(first_line) {
+        out.spans.push(
+            Span::new(
+                range.start + list.marker_start,
+                range.start + list.marker_end,
+            )
+            .bold()
+            .color(t.accent_text.alpha(0.85)),
+        );
+    }
+}
+
+fn style_task_marker(
+    text: &str,
+    range: Range<usize>,
+    checked: bool,
+    t: &Theme,
+    out: &mut Decorations,
+) {
+    let color = if checked { t.accent_text } else { t.muted };
+    out.spans
+        .push(Span::new(range.start, range.end).mono().color(color));
+    if checked {
+        let line_end = text[range.end..]
+            .find('\n')
+            .map_or(text.len(), |off| range.end + off);
+        let body_start = range.end
+            + text[range.end..line_end]
+                .bytes()
+                .take_while(|&b| b == b' ' || b == b'\t')
+                .count();
+        let body_end = text[body_start..line_end].trim_end_matches('\r').len() + body_start;
+        if body_start < body_end {
+            out.spans
+                .push(Span::new(body_start, body_end).color(t.muted));
+            out.strikes.push((body_start, body_end, Some(t.muted)));
         }
     }
+}
 
-    fn try_inline_code(&mut self, start: usize, end: usize) -> Option<usize> {
-        let bytes = self.text.as_bytes();
-        let mut ticks = 0usize;
-        while start + ticks < end && bytes[start + ticks] == b'`' {
-            ticks += 1;
-        }
-        let body_start = start + ticks;
-        let close = find_matching_ticks(bytes, body_start, end, ticks)?;
-        let close_end = close + ticks;
-        if close <= body_start || self.overlaps_pill(start, close_end) {
-            return None;
-        }
-        let bg = self.t.chip_fill;
-        self.out
-            .spans
-            .push(Span::new(start, close_end).mono().bg(bg, 2.0));
-        self.out
-            .spans
-            .push(Span::new(start, body_start).color(self.t.faint));
-        self.out
-            .spans
-            .push(Span::new(close, close_end).color(self.t.faint));
-        Some(close_end)
+fn style_delimited_inline(
+    text: &str,
+    range: Range<usize>,
+    delim_len: usize,
+    t: &Theme,
+    out: &mut Decorations,
+    make_inner: impl FnOnce(usize, usize) -> Span,
+) {
+    if range.len() <= delim_len * 2 {
+        return;
     }
-
-    fn try_link(&mut self, start: usize, end: usize) -> Option<usize> {
-        let bytes = self.text.as_bytes();
-        let close_bracket = find_byte_unescaped(bytes, start + 1, end, b']')?;
-        if close_bracket + 1 >= end || bytes[close_bracket + 1] != b'(' {
-            return None;
-        }
-        let url_start = close_bracket + 2;
-        let close_paren = find_closing_paren(bytes, url_start, end)?;
-        let total_end = close_paren + 1;
-        if self.overlaps_pill(start, total_end) {
-            return None;
-        }
-        let label_start = start + 1;
-        self.out
-            .spans
-            .push(Span::new(start, label_start).color(self.t.faint));
-        if label_start < close_bracket {
-            self.out.spans.push(
-                Span::new(label_start, close_bracket)
-                    .color(self.t.accent_text)
-                    .underline(self.t.accent_text.alpha(0.55)),
-            );
-            self.scan_inline(label_start, close_bracket);
-        }
-        self.out
-            .spans
-            .push(Span::new(close_bracket, total_end).color(self.t.faint));
-        Some(total_end)
+    let slice = &text[range.clone()];
+    let bytes = slice.as_bytes();
+    let ch = bytes[0];
+    if !matches!(ch, b'*' | b'_') {
+        return;
     }
-
-    fn try_strike(&mut self, start: usize, end: usize) -> Option<usize> {
-        let bytes = self.text.as_bytes();
-        let inner_start = start + 2;
-        if inner_start >= end || bytes[inner_start].is_ascii_whitespace() {
-            return None;
-        }
-        let close = find_double_delim(bytes, inner_start, end, b'~')?;
-        if close <= inner_start || bytes[close - 1].is_ascii_whitespace() {
-            return None;
-        }
-        let total_end = close + 2;
-        if self.overlaps_pill(start, total_end) {
-            return None;
-        }
-        self.out
-            .spans
-            .push(Span::new(start, inner_start).color(self.t.faint));
-        self.out
-            .spans
-            .push(Span::new(inner_start, close).color(self.t.muted));
-        self.out
-            .strikes
-            .push((inner_start, close, Some(self.t.muted)));
-        self.out
-            .spans
-            .push(Span::new(close, total_end).color(self.t.faint));
-        self.scan_inline(inner_start, close);
-        Some(total_end)
+    let open_ok = bytes
+        .get(..delim_len)
+        .is_some_and(|s| s.iter().all(|&b| b == ch));
+    let close_ok = bytes
+        .get(bytes.len() - delim_len..)
+        .is_some_and(|s| s.iter().all(|&b| b == ch));
+    if !open_ok || !close_ok {
+        return;
     }
+    let inner_start = range.start + delim_len;
+    let inner_end = range.end - delim_len;
+    out.spans
+        .push(Span::new(range.start, inner_start).color(t.faint));
+    out.spans.push(make_inner(inner_start, inner_end));
+    out.spans
+        .push(Span::new(inner_end, range.end).color(t.faint));
+}
 
-    fn try_emphasis(&mut self, start: usize, end: usize) -> Option<usize> {
-        let bytes = self.text.as_bytes();
-        let ch = bytes[start];
-        if ch == b'_' && is_word_byte(start.checked_sub(1).and_then(|idx| bytes.get(idx))) {
-            return None;
+fn style_strikethrough(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations) {
+    let bytes = text[range.clone()].as_bytes();
+    let open_tildes = bytes.iter().take_while(|&&b| b == b'~').count().min(2);
+    let close_tildes = bytes
+        .iter()
+        .rev()
+        .take_while(|&&b| b == b'~')
+        .count()
+        .min(2);
+    if open_tildes == 0 || close_tildes == 0 || range.len() <= open_tildes + close_tildes {
+        return;
+    }
+    let inner_start = range.start + open_tildes;
+    let inner_end = range.end - close_tildes;
+    out.spans
+        .push(Span::new(range.start, inner_start).color(t.faint));
+    out.spans
+        .push(Span::new(inner_start, inner_end).color(t.muted));
+    out.strikes.push((inner_start, inner_end, Some(t.muted)));
+    out.spans
+        .push(Span::new(inner_end, range.end).color(t.faint));
+}
+
+fn style_inline_code(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations) {
+    let bytes = text[range.clone()].as_bytes();
+    let open_ticks = bytes.iter().take_while(|&&b| b == b'`').count();
+    let close_ticks = bytes.iter().rev().take_while(|&&b| b == b'`').count();
+    out.spans.push(
+        Span::new(range.start, range.end)
+            .mono()
+            .bg(t.chip_fill, 2.0),
+    );
+    if open_ticks > 0 && close_ticks > 0 && range.len() > open_ticks + close_ticks {
+        out.spans
+            .push(Span::new(range.start, range.start + open_ticks).color(t.faint));
+        out.spans
+            .push(Span::new(range.end - close_ticks, range.end).color(t.faint));
+    }
+}
+
+fn style_link(text: &str, range: Range<usize>, dest_url: &str, t: &Theme, out: &mut Decorations) {
+    let slice = &text[range.clone()];
+    let is_file_or_ref = dest_url.starts_with("file://") || dest_url.starts_with("viz-ref://");
+    if slice.starts_with('[')
+        && let Some(close_bracket) = find_closing_bracket(slice)
+    {
+        let label_start = range.start + 1;
+        let label_end = range.start + close_bracket;
+        if is_file_or_ref {
+            out.spans
+                .push(Span::new(range.start, range.end).bg(t.chip_fill, 2.0));
         }
-        let mut run = 0usize;
-        while start + run < end && bytes[start + run] == ch && run < 3 {
-            run += 1;
-        }
-        for len in (1..=run).rev() {
-            let inner_start = start + len;
-            if inner_start >= end || bytes[inner_start].is_ascii_whitespace() {
-                continue;
-            }
-            let Some(close) = find_emphasis_close(bytes, inner_start, end, ch, len) else {
-                continue;
+        out.spans
+            .push(Span::new(range.start, label_start).color(t.faint));
+        if label_start < label_end {
+            let span = if is_file_or_ref {
+                Span::new(label_start, label_end)
+                    .weight(500.0)
+                    .color(t.accent_text)
+            } else {
+                Span::new(label_start, label_end)
+                    .color(t.accent_text)
+                    .underline(t.accent_text.alpha(0.55))
             };
-            let total_end = close + len;
-            if self.overlaps_pill(start, total_end) {
-                continue;
-            }
-            self.out
-                .spans
-                .push(Span::new(start, inner_start).color(self.t.faint));
-            let inner = match len {
-                3 => Span::new(inner_start, close).weight(680.0).italic(),
-                2 => Span::new(inner_start, close).weight(680.0),
-                _ => Span::new(inner_start, close).italic(),
-            };
-            self.out.spans.push(inner);
-            self.out
-                .spans
-                .push(Span::new(close, total_end).color(self.t.faint));
-            self.scan_inline(inner_start, close);
-            return Some(total_end);
+            out.spans.push(span);
         }
-        None
+        out.spans
+            .push(Span::new(label_end, range.end).color(t.faint));
+        return;
+    }
+    out.spans.push(
+        Span::new(range.start, range.end)
+            .color(t.accent_text)
+            .underline(t.accent_text.alpha(0.55)),
+    );
+}
+
+fn style_image(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations) {
+    let slice = &text[range.clone()];
+    let chip_bg = t.accent.alpha(if t.k.dark { 0.14 } else { 0.10 });
+    out.spans
+        .push(Span::new(range.start, range.end).bg(chip_bg, 2.0));
+    if slice.starts_with("![")
+        && let Some(close_bracket) = find_closing_bracket(&slice[1..])
+    {
+        let close_pos = close_bracket + 1;
+        let alt_start = range.start + 2;
+        let alt_end = range.start + close_pos;
+        out.spans
+            .push(Span::new(range.start, alt_start).color(t.faint));
+        if alt_start < alt_end {
+            out.spans.push(
+                Span::new(alt_start, alt_end)
+                    .weight(500.0)
+                    .color(t.accent_text),
+            );
+        }
+        out.spans
+            .push(Span::new(alt_end, range.end).mono().color(t.faint));
+    } else {
+        out.spans
+            .push(Span::new(range.start, range.end).color(t.accent_text));
+    }
+}
+
+fn style_code_block(
+    text: &str,
+    range: Range<usize>,
+    kind: CodeBlockKind<'_>,
+    t: &Theme,
+    out: &mut Decorations,
+) {
+    let CodeBlockKind::Fenced(info) = kind else {
+        out.spans.push(
+            Span::new(range.start, range.end)
+                .mono()
+                .color(t.text_secondary),
+        );
+        return;
+    };
+    let slice = &text[range.clone()];
+    let first_nl = slice.find('\n');
+    let first_line_end = first_nl.map_or(range.end, |off| range.start + off);
+    let first_line = text[range.start..first_line_end].trim_end_matches('\r');
+    let open = parse_opening_fence(first_line);
+
+    if let Some(fence) = &open {
+        let ticks_end = range.start + fence.ticks_end;
+        out.spans
+            .push(Span::new(range.start, ticks_end).mono().color(t.faint));
+        let content_end = range.start + first_line.len();
+        if let Some((ls, le)) = fence.lang_range {
+            out.spans.push(
+                Span::new(range.start + ls, range.start + le)
+                    .mono()
+                    .color(t.accent_text.alpha(0.85)),
+            );
+            if range.start + le < content_end {
+                out.spans.push(
+                    Span::new(range.start + le, content_end)
+                        .mono()
+                        .color(t.faint),
+                );
+            }
+        } else if ticks_end < content_end {
+            out.spans
+                .push(Span::new(ticks_end, content_end).mono().color(t.faint));
+        }
     }
 
-    fn pill_ending_at_or_after(&self, byte: usize) -> Option<usize> {
-        self.pills
+    let Some(nl_off) = first_nl else {
+        return;
+    };
+    let body_start = range.start + nl_off + 1;
+    if body_start >= range.end {
+        return;
+    }
+
+    let trimmed_end = text[body_start..range.end]
+        .trim_end_matches(['\r', '\n'])
+        .len()
+        + body_start;
+    let last_line_start = text[body_start..trimmed_end]
+        .rfind('\n')
+        .map_or(body_start, |off| body_start + off + 1);
+    let last_line = text[last_line_start..trimmed_end].trim_end_matches('\r');
+
+    let body_end = if let Some(fence) = &open
+        && is_closing_fence(last_line, fence.ch, fence.len)
+    {
+        out.spans.push(
+            Span::new(last_line_start, last_line_start + last_line.len())
+                .mono()
+                .color(t.faint),
+        );
+        last_line_start.saturating_sub(1).max(body_start)
+    } else {
+        range.end
+    };
+
+    if body_start < body_end {
+        out.spans.push(Span::new(body_start, body_end).mono());
+        let lang = info
+            .split_whitespace()
+            .next()
+            .filter(|word| !word.is_empty());
+        if let Some(code) = text.get(body_start..body_end) {
+            let ranges = highlight(lang, code);
+            for span in t.syntax.spans(&ranges, body_start) {
+                out.spans.push(span.mono());
+            }
+        }
+    }
+}
+
+fn style_reference_definitions(
+    text: &str,
+    code_ranges: &[Range<usize>],
+    t: &Theme,
+    out: &mut Decorations,
+) {
+    let mut pos = 0usize;
+    for raw_line in text.split('\n') {
+        let line_start = pos;
+        let line_end = pos + raw_line.len();
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
+        pos = (line_end + 1).min(text.len());
+        if code_ranges
             .iter()
-            .find(|r| r.start <= byte && byte < r.end)
-            .map(|r| r.end)
+            .any(|r| r.start <= line_start && line_start < r.end)
+        {
+            continue;
+        }
+        let indent = line
+            .as_bytes()
+            .iter()
+            .take(3)
+            .take_while(|&&b| b == b' ')
+            .count();
+        let trimmed = &line[indent..];
+        if trimmed.starts_with('[')
+            && let Some(close) = trimmed.find("]:")
+            && close > 1
+        {
+            let label_start = line_start + indent;
+            let colon_end = label_start + close + 2;
+            out.spans.push(
+                Span::new(label_start, colon_end)
+                    .mono()
+                    .color(t.accent_text.alpha(0.75)),
+            );
+            let content_end = line_start + line.len();
+            if colon_end < content_end {
+                out.spans
+                    .push(Span::new(colon_end, content_end).mono().color(t.faint));
+            }
+        }
     }
+}
 
-    fn overlaps_pill(&self, start: usize, end: usize) -> bool {
-        self.pills.iter().any(|r| r.start < end && start < r.end)
+const fn find_closing_bracket(slice: &str) -> Option<usize> {
+    let bytes = slice.as_bytes();
+    let mut i = 1usize;
+    let mut depth = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'[' => {
+                depth += 1;
+                i += 1;
+            }
+            b']' => {
+                if depth == 0 {
+                    return Some(i);
+                }
+                depth -= 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
     }
+    None
 }
 
 /// Handles Markdown keyboard ergonomics on the composer [`TextEdit`]:
@@ -692,8 +852,6 @@ fn current_line_indent(text: &str, caret: usize) -> &str {
     &line[..spaces]
 }
 
-/// Returns `true` when `caret` lies on an opening fence line or inside an open
-/// or closed fenced code block (excluding the closing fence line itself).
 fn is_in_code_fence(text: &str, caret: usize) -> bool {
     let mut fence: Option<(u8, usize)> = None;
     let mut pos = 0usize;
@@ -728,15 +886,14 @@ fn is_in_code_fence(text: &str, caret: usize) -> bool {
     fence.is_some()
 }
 
-struct FenceOpen<'a> {
+struct FenceOpen {
     ch: u8,
     len: usize,
     ticks_end: usize,
-    lang: Option<&'a str>,
     lang_range: Option<(usize, usize)>,
 }
 
-fn parse_opening_fence(line: &str) -> Option<FenceOpen<'_>> {
+fn parse_opening_fence(line: &str) -> Option<FenceOpen> {
     let bytes = line.as_bytes();
     let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
     let ch = *bytes.get(indent)?;
@@ -758,17 +915,11 @@ fn parse_opening_fence(line: &str) -> Option<FenceOpen<'_>> {
         .bytes()
         .take_while(|b| !b.is_ascii_whitespace())
         .count();
-    let (lang, lang_range) = if lang_len > 0 {
-        let le = lang_start + lang_len;
-        (Some(&line[lang_start..le]), Some((lang_start, le)))
-    } else {
-        (None, None)
-    };
+    let lang_range = (lang_len > 0).then_some((lang_start, lang_start + lang_len));
     Some(FenceOpen {
         ch,
         len,
         ticks_end,
-        lang,
         lang_range,
     })
 }
@@ -778,25 +929,6 @@ fn is_closing_fence(line: &str, ch: u8, open_len: usize) -> bool {
     let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
     let count = bytes[indent..].iter().take_while(|&&b| b == ch).count();
     count >= open_len && bytes[indent + count..].iter().all(u8::is_ascii_whitespace)
-}
-
-fn is_thematic_break(line: &str) -> bool {
-    let trimmed = line.trim();
-    let Some(&marker) = trimmed.as_bytes().first() else {
-        return false;
-    };
-    if !matches!(marker, b'-' | b'*' | b'_') {
-        return false;
-    }
-    let mut count = 0usize;
-    for b in trimmed.bytes() {
-        if b == marker {
-            count += 1;
-        } else if b != b' ' && b != b'\t' {
-            return false;
-        }
-    }
-    count >= 3
 }
 
 fn parse_quote_prefix(line: &str) -> Option<usize> {
@@ -819,21 +951,6 @@ fn parse_quote_prefix(line: &str) -> Option<usize> {
         }
     }
     saw_gt.then_some(i)
-}
-
-fn parse_heading_prefix(line: &str) -> Option<(usize, usize)> {
-    let bytes = line.as_bytes();
-    let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
-    let hashes = bytes[indent..].iter().take_while(|&&b| b == b'#').count();
-    if !(1..=6).contains(&hashes) {
-        return None;
-    }
-    let after = indent + hashes;
-    match bytes.get(after) {
-        Some(b' ' | b'\t') => Some((hashes, after + 1)),
-        None => Some((hashes, after)),
-        _ => None,
-    }
 }
 
 struct ListPrefix {
@@ -891,138 +1008,4 @@ const fn parse_task_box(rest: &str) -> Option<(bool, usize)> {
         return Some((bytes[1] != b' ', 4));
     }
     None
-}
-
-const fn find_matching_ticks(
-    bytes: &[u8],
-    mut i: usize,
-    end: usize,
-    ticks: usize,
-) -> Option<usize> {
-    while i < end {
-        if bytes[i] == b'`' {
-            let start = i;
-            while i < end && bytes[i] == b'`' {
-                i += 1;
-            }
-            if i - start == ticks {
-                return Some(start);
-            }
-        } else {
-            i += 1;
-        }
-    }
-    None
-}
-
-const fn find_byte_unescaped(bytes: &[u8], mut i: usize, end: usize, needle: u8) -> Option<usize> {
-    while i < end {
-        if bytes[i] == b'\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == needle {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
-const fn find_closing_paren(bytes: &[u8], mut i: usize, end: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    while i < end {
-        match bytes[i] {
-            b'\\' => i += 2,
-            b'(' => {
-                depth += 1;
-                i += 1;
-            }
-            b')' => {
-                if depth == 0 {
-                    return Some(i);
-                }
-                depth -= 1;
-                i += 1;
-            }
-            b' ' | b'\t' if depth == 0 => return None,
-            _ => i += 1,
-        }
-    }
-    None
-}
-
-const fn find_double_delim(bytes: &[u8], mut i: usize, end: usize, ch: u8) -> Option<usize> {
-    while i + 1 < end {
-        if bytes[i] == b'\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == b'`' {
-            let mut ticks = 0usize;
-            while i + ticks < end && bytes[i + ticks] == b'`' {
-                ticks += 1;
-            }
-            if let Some(close) = find_matching_ticks(bytes, i + ticks, end, ticks) {
-                i = close + ticks;
-                continue;
-            }
-            i += ticks;
-            continue;
-        }
-        if bytes[i] == ch && bytes[i + 1] == ch {
-            return Some(i);
-        }
-        i += 1;
-    }
-    None
-}
-
-fn find_emphasis_close(
-    bytes: &[u8],
-    mut i: usize,
-    end: usize,
-    ch: u8,
-    len: usize,
-) -> Option<usize> {
-    while i + len <= end {
-        if bytes[i] == b'\\' {
-            i += 2;
-            continue;
-        }
-        if bytes[i] == b'`' {
-            let mut ticks = 0usize;
-            while i + ticks < end && bytes[i + ticks] == b'`' {
-                ticks += 1;
-            }
-            if let Some(close) = find_matching_ticks(bytes, i + ticks, end, ticks) {
-                i = close + ticks;
-                continue;
-            }
-            i += ticks;
-            continue;
-        }
-        if bytes[i] == ch {
-            let run_start = i;
-            while i < end && bytes[i] == ch {
-                i += 1;
-            }
-            let run_len = i - run_start;
-            let matches_len = run_len == len || (len == 1 && run_len == 3);
-            if matches_len && run_start > 0 && !bytes[run_start - 1].is_ascii_whitespace() {
-                let close_at = run_start + run_len - len;
-                if ch == b'_' && is_word_byte(bytes.get(close_at + len)) {
-                    continue;
-                }
-                return Some(close_at);
-            }
-            continue;
-        }
-        i += 1;
-    }
-    None
-}
-
-const fn is_word_byte(byte: Option<&u8>) -> bool {
-    matches!(byte, Some(b) if b.is_ascii_alphanumeric())
 }
