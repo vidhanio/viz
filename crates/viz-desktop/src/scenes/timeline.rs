@@ -5,8 +5,8 @@ use std::fmt::Write as _;
 
 use serde_json::Value;
 use viz_client::protocol::{
-    Attention, Body, EntryData, Exit, LiveTurn, PromptAttachment, PromptContext, RunEnd, Segment,
-    SettledBy, Shelf, Standing, ThreadId, ThreadStatus, ToolCallStatus, ToolContent, ToolDiff,
+    Attention, Body, EntryData, Exit, LiveTurn, Prompt, PromptRef, RunEnd, Segment, SettledBy,
+    Shelf, Standing, ThreadId, ThreadStatus, ToolCallStatus, ToolContent, ToolDiff,
     TranscriptEntry, TurnTokens, TurnUsage, UsageCost,
 };
 
@@ -142,9 +142,7 @@ pub(super) fn user_markdown(s: &mut Desktop) {
 
     let entries = vec![
         EntryData::Prompt {
-            text: "continue".into(),
-            attachments: Vec::new(),
-            context: Vec::new(),
+            prompt: viz_client::protocol::Prompt::new("continue"),
             origin: None,
         },
         timed_text(
@@ -156,27 +154,14 @@ pub(super) fn user_markdown(s: &mut Desktop) {
         ),
         run_end(Some("end_turn"), Some(usage(1_800, 220, 0.02)), None),
         EntryData::Prompt {
-            text: "### Check this layout bug\n\n\
-                Please compare @markdown.rs against [export-spec.pdf][file-1]:\n\
-                - **Bold**, *italic*, ~~old width~~, and `inline_code`\n\
-                - Inline screenshot right here:\n\n\
-                ![Clipboard.png][img-1]"
-                .into(),
-            attachments: vec![
-                PromptAttachment {
-                    id: "demo-img-1".into(),
-                    name: "Clipboard.png".into(),
-                    mime: "image/svg+xml".into(),
-                },
-                PromptAttachment {
-                    id: "demo-file-1".into(),
-                    name: "export-spec.pdf".into(),
-                    mime: "application/pdf".into(),
-                },
-            ],
-            context: vec![PromptContext::File {
-                path: "crates/export/src/markdown.rs".into(),
-            }],
+            prompt: Prompt {
+                text: "### Check this layout bug\n\nPlease compare [@markdown.rs](ref:0) against [export-spec.pdf](ref:1).\n\n- **Bold**, *italic*, ~~old width~~, and `inline_code`\n\n[Clipboard.png](ref:2)".into(),
+                refs: vec![
+                    PromptRef::File { path: "crates/export/src/markdown.rs".into(), directory: false },
+                    PromptRef::Attachment { id: "demo-file-1".into(), name: "export-spec.pdf".into(), mime: "application/pdf".into() },
+                    PromptRef::Attachment { id: "demo-img-1".into(), name: "Clipboard.png".into(), mime: "image/svg+xml".into() },
+                ],
+            },
             origin: None,
         },
         timed_text(
@@ -263,9 +248,7 @@ fn populated_turn_one() -> Vec<EntryData> {
 
     vec![
         EntryData::Prompt {
-            text: long_prompt.into(),
-            attachments: Vec::new(),
-            context: Vec::new(),
+            prompt: viz_client::protocol::Prompt::new(long_prompt),
             origin: None,
         },
         timed_tool(
@@ -306,22 +289,14 @@ fn populated_turn_two() -> Vec<EntryData> {
 
     vec![
         EntryData::Prompt {
-            text: "Audit `markdown.rs` and add nested folder support.".into(),
-            attachments: vec![PromptAttachment {
-                id: "att-1".into(),
-                name: "export-spec.pdf".into(),
-                mime: "application/pdf".into(),
-            }],
-            context: vec![
-                PromptContext::File {
-                    path: "crates/export/src/markdown.rs".into(),
-                },
-                PromptContext::Link {
-                    uri: "https://example.invalid/issues/42".into(),
-                    name: "#42".into(),
-                    title: Some("Preserve final newline".into()),
-                },
-            ],
+            prompt: Prompt {
+                text: "Audit [@markdown.rs](ref:0) and add nested folder support for [#42](ref:1). See [export-spec.pdf](ref:2).".into(),
+                refs: vec![
+                    PromptRef::File { path: "crates/export/src/markdown.rs".into(), directory: false },
+                    PromptRef::Link { uri: "https://example.invalid/issues/42".into(), name: "#42".into(), title: Some("Preserve final newline".into()) },
+                    PromptRef::Attachment { id: "att-1".into(), name: "export-spec.pdf".into(), mime: "application/pdf".into() },
+                ],
+            },
             origin: None,
         },
         prompt("Keep the public `join_blocks` signature unchanged if possible."),

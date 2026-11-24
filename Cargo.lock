@@ -6376,6 +6376,7 @@ dependencies = [
 name = "viz-protocol"
 version = "0.1.0"
 dependencies = [
+ "pulldown-cmark",
  "schemars 1.2.3",
  "serde",
  "serde_json",

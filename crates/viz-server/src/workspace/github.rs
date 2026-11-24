@@ -209,14 +209,25 @@ impl Workspace {
         let issue = detail.item;
         let body = detail.body.as_deref().unwrap_or_default();
         let body: String = body.chars().take(32_000).collect();
-        let text = launch
-            .text
+        let mut prompt = launch
+            .prompt
             .take()
-            .unwrap_or_else(|| format!("Review this GitHub {kind}."));
-        launch.text = Some(format!(
-            "{text}\n\nGitHub {kind} #{}: {}\n{}\n\n{body}",
-            issue.number, issue.title, issue.html_url,
-        ));
+            .unwrap_or_else(|| viz_protocol::Prompt::new(format!("Review this GitHub {kind}.")));
+        let label = format!("GitHub {kind} #{} ({})", issue.number, issue.title);
+        let kind = if kind == "pull request" {
+            GitHubItemKind::PullRequest
+        } else {
+            GitHubItemKind::Issue
+        };
+        prompt.append_reference(
+            &label,
+            viz_protocol::PromptRef::GitHub {
+                item: item(issue, kind),
+            },
+        );
+        prompt.text.push_str("\n\n");
+        prompt.text.push_str(&body);
+        launch.prompt = Some(prompt);
         self.launch(principal_key, launch).await
     }
 }

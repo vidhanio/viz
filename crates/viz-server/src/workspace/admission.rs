@@ -187,15 +187,11 @@ impl Workspace {
                     parent.as_ref(),
                     scratch_cwd.as_deref(),
                 )?;
-                let attachments = attachments::link_peer(&tx, thread, &args.attachments)?;
-                let run = runs::enqueue(
-                    &tx,
-                    thread,
-                    NewRun {
-                        attachments: &attachments,
-                        ..NewRun::new(&args.text)
-                    },
-                )?;
+                let mut prompt = viz_protocol::Prompt::new(&args.text);
+                for attachment in attachments::link_peer(&tx, thread, &args.attachments)? {
+                    prompt.append_attachment(attachment);
+                }
+                let run = runs::enqueue(&tx, thread, NewRun::new(&prompt))?;
                 exec(
                     &tx,
                     "INSERT INTO task_receipts (environment, task, thread, run) VALUES (?1, ?2, ?3, ?4)",

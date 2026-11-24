@@ -108,7 +108,8 @@ pub(in crate::workspace) fn append(
     .expect("entry INSERT RETURNING yielded one row")
     .id(0)?;
     let text = match data {
-        NewEntry::Prompt { text, .. } | NewEntry::TaskResult { text, .. } => text,
+        NewEntry::Prompt { prompt, .. } => &prompt.text,
+        NewEntry::TaskResult { text, .. } => text,
         NewEntry::Transcript(entry) => match &entry.body {
             Body::Text(segment) | Body::Thought(segment) => &segment.text,
             Body::Tool(tool) => &tool.title,

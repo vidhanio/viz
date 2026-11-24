@@ -246,16 +246,17 @@ impl Workspace {
         turn: &Turn,
     ) -> Result<Outcome, Error> {
         let Bound { session, .. } = self.session(thread, slot, &turn.cancel).await?;
-        let files = attachments::materialize(self, thread, claim.id, claim.attachments).await?;
-        let mut text = if let Some(author) = claim
+        let files =
+            attachments::materialize(self, thread, claim.id, claim.prompt.attachments().collect())
+                .await?;
+        let mut prompt = claim.prompt;
+        if let Some(author) = claim
             .origin
             .as_ref()
             .and_then(|origin| origin.author.as_deref())
         {
-            std::borrow::Cow::Owned(format!("{author}: {}", claim.text))
-        } else {
-            std::borrow::Cow::Borrowed(claim.text.as_str())
-        };
+            prompt.text.insert_str(0, &format!("{author}: "));
+        }
         let (cwd, handoff) = self
             .db
             .read_snapshot(move |tx| {
@@ -268,18 +269,17 @@ impl Workspace {
             })
             .await?;
         if let Some(note) = &handoff {
-            text = std::borrow::Cow::Owned(format!("{note}{text}"));
+            prompt.text.insert_str(0, note);
         }
-        let context = viz_acp::context_blocks(&claim.context, std::path::Path::new(&cwd));
         let id = session.id().to_owned();
         let id = id.as_str();
         let outcome = session
             .prompt(
                 Prompt {
-                    text: &text,
+                    prompt: &prompt,
+                    cwd: std::path::Path::new(&cwd),
                     turn: claim.entry.to_string(),
                     run: claim.id,
-                    context: &context,
                     attachments: &files,
                     cancel: turn.cancel.clone(),
                     steer: turn.steer.clone(),

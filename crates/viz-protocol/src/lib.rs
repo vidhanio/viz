@@ -18,6 +18,7 @@ mod lifecycle;
 pub mod limits;
 pub mod peer;
 mod project_settings;
+mod prompt;
 mod requests;
 mod threads;
 mod tool;
@@ -44,7 +45,7 @@ pub use folders::{
     FolderCreated, FolderEntries, FolderEntry, FolderIssue, GitHubRepositories, GitHubRepository,
     GitHubRepositoryList, InitRepository, ReadClone, StartClone,
 };
-pub use fork::{ForkPoint, ForkSource, ForkThread, Forked, ForkedPrompt};
+pub use fork::{ForkPoint, ForkSource, ForkThread, Forked};
 pub use form::{FieldKind, QuestionField, question_fields};
 pub use git::{
     CheckpointEdge, GitAction, GitActionRequest, GitActionResult, GitDiff, GitDiffFile,
@@ -58,10 +59,9 @@ pub use github::{
 };
 pub use history::{
     AttachmentCapabilities, BlobAttachment, Entry, EntryAnchor, EntryData, EntryPage, ListEntries,
-    PlanEntry, PlanPriority, PlanStatus, PromptAttachment, PromptContext, QueuedInput,
-    RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads, SteerQueuedInput, TurnTokens,
-    TurnUsage, UpdateQueuedInput, UsageCost, attachment_inline_md, attachment_ref_labels,
-    text_references_label,
+    PlanEntry, PlanPriority, PlanStatus, PromptAttachment, QueuedInput, RemoveQueuedInput, RunEnd,
+    SearchHit, SearchHits, SearchThreads, SteerQueuedInput, TurnTokens, TurnUsage,
+    UpdateQueuedInput, UsageCost, attachment_inline_md, attachment_ref_labels,
 };
 pub use ids::{EntryId, HostId, RequestId, RunId, TaskId, ThreadId};
 pub use interactions::{
@@ -77,6 +77,7 @@ pub use project_settings::{
     DefaultCheckout, ProjectAutoSettle, ProjectIcon, ProjectIconChange, ProjectSettings,
     ProjectSettingsPatch, Setting,
 };
+pub use prompt::{Prompt, PromptAnchor, PromptRef};
 pub use requests::{
     BlobInfo, BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileBody,
     FileContent, FileList, FileRoot, FileSearchKind, FileSearchMatch, GitBranch, HarnessList,

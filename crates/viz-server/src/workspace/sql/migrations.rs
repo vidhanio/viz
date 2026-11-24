@@ -34,6 +34,7 @@ const MIGRATIONS: &[&str] = &[
     include_str!("../../../migrations/0012_tool_index.sql"),
     include_str!("../../../migrations/0013_blobs.sql"),
     include_str!("../../../migrations/0014_performance_and_hydration.sql"),
+    include_str!("../../../migrations/0015_prompts.sql"),
 ];
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -81,6 +82,9 @@ fn migrate(db: &mut Connection, path: &Path) -> anyhow::Result<()> {
     }
     for (index, sql) in MIGRATIONS.iter().enumerate().skip(current) {
         let version = index + 1;
+        if version == 15 {
+            migrate_prompts(&tx)?;
+        }
         tx.execute_batch(sql)
             .with_context(|| format!("applying workspace migration {version:04}"))?;
         if populated && version == 1 {
@@ -185,5 +189,92 @@ fn migrate_blobs(tx: &Connection, db_path: &Path) -> anyhow::Result<()> {
     drop(insert_blob);
     drop(insert_ref);
     tx.execute_batch("DROP TABLE attachments;")?;
+    Ok(())
+}
+
+/// Converts legacy prompt rows in the same transaction as the schema update.
+fn migrate_prompts(tx: &Connection) -> anyhow::Result<()> {
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type", rename_all = "snake_case")]
+    enum LegacyContext {
+        File {
+            path: String,
+        },
+        Link {
+            uri: String,
+            name: String,
+            title: Option<String>,
+        },
+    }
+    fn convert(
+        text: String,
+        attachments: Vec<viz_protocol::PromptAttachment>,
+        context: Vec<LegacyContext>,
+    ) -> viz_protocol::Prompt {
+        let mut prompt = viz_protocol::Prompt::new(text);
+        for attachment in attachments {
+            prompt.append_attachment(attachment);
+        }
+        for target in context {
+            let (label, target) = match target {
+                LegacyContext::File { path } => (
+                    format!("@{path}"),
+                    viz_protocol::PromptRef::File {
+                        path,
+                        directory: false,
+                    },
+                ),
+                LegacyContext::Link { uri, name, title } => (
+                    name.clone(),
+                    viz_protocol::PromptRef::Link { uri, name, title },
+                ),
+            };
+            prompt.append_reference(&label, target);
+        }
+        prompt
+    }
+    #[derive(serde::Deserialize)]
+    struct LegacyPrompt {
+        text: String,
+        #[serde(default)]
+        attachments: Vec<viz_protocol::PromptAttachment>,
+        #[serde(default)]
+        context: Vec<LegacyContext>,
+        origin: Option<viz_protocol::Origin>,
+    }
+
+    let mut select = tx.prepare("SELECT id, data FROM entries WHERE data ->> 'kind' = 'prompt'")?;
+    let mut entries = select.query([])?;
+    while let Some(entry) = entries.next()? {
+        let id = entry.get::<_, i64>(0)?;
+        let data: serde_json::Value = serde_json::from_str(&entry.get::<_, String>(1)?)?;
+        let old: LegacyPrompt = serde_json::from_value(data["data"].clone())?;
+        let prompt = convert(old.text, old.attachments, old.context);
+        let data = serde_json::to_string(&viz_protocol::EntryData::Prompt {
+            prompt,
+            origin: old.origin,
+        })?;
+        tx.execute(
+            "UPDATE entries SET data = ?2 WHERE id = ?1",
+            params![id, data],
+        )?;
+    }
+    let mut select = tx.prepare("SELECT id, text, attachments, context FROM runs")?;
+    let mut runs = select.query([])?;
+    while let Some(run) = runs.next()? {
+        let id = run.get::<_, i64>(0)?;
+        let text = run.get::<_, String>(1)?;
+        let attachments = run.get::<_, Option<String>>(2)?;
+        let context = run.get::<_, Option<String>>(3)?;
+        let prompt = convert(
+            text,
+            serde_json::from_str::<Vec<_>>(attachments.as_deref().unwrap_or("[]"))?,
+            serde_json::from_str::<Vec<_>>(context.as_deref().unwrap_or("[]"))?,
+        );
+        tx.execute(
+            "UPDATE runs SET text = ?2 WHERE id = ?1",
+            params![id, serde_json::to_string(&prompt)?],
+        )?;
+    }
     Ok(())
 }

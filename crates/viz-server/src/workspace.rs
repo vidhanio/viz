@@ -817,9 +817,10 @@ impl Workspace {
         };
         let entry = store::append(db, thread, &result)?;
         let run = if mode == WakeMode::Prompt {
+            let prompt = viz_protocol::Prompt::new(text);
             let run = NewRun {
                 existing_entry: Some(entry),
-                ..NewRun::new(text)
+                ..NewRun::new(&prompt)
             };
             Some(runs::enqueue(db, thread, run)?)
         } else {

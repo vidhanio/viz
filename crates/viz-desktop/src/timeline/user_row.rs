@@ -6,20 +6,18 @@
 
 use std::{collections::HashMap, fmt::Write as _, path::Path};
 
-use rune::{Color, El, Image, SurfaceFit, TextStyle, Tx, col, el, icon, row, text};
+use rune::{Color, El, Image, TextStyle, Tx, col, icon, row, text};
 use rune_kit::{IconButtonVariant, Markdown, MarkdownStyle};
-use viz_client::protocol::{
-    PromptAttachment, PromptContext, ThreadId, attachment_ref_labels, text_references_label,
-};
+use viz_client::protocol::{PromptRef, ThreadId};
 
 use super::{file_preview, markdown as timeline_md};
 use crate::{
     app::Desktop,
-    model::{User, split_path},
+    model::User,
     motion,
     theme::{
-        CARD_INSET, HAIRLINE, ICON, ICON_SMALL, RADIUS_CARD, RADIUS_CONTROL, RADIUS_SM,
-        RADIUS_SURFACE, READING_WIDTH, S2, S4, S6, S8, S12, Size, Theme,
+        CARD_INSET, HAIRLINE, ICON_SMALL, RADIUS_CONTROL, RADIUS_SM, RADIUS_SURFACE, READING_WIDTH,
+        S2, S4, S8, S12, Size, Theme,
     },
     ui,
     update::{Msg, TimelineMsg},
@@ -38,7 +36,6 @@ const COLLAPSE_LINE_LIMIT: usize = 8;
 /// Approximate wrapped characters per bubble line for collapse estimation.
 const APPROX_LINE_CHARS: usize = 68;
 /// Fixed width of a non-image file attachment card (`256pt`).
-const FILE_CARD_WIDTH: f32 = 256.0;
 /// Maximum display height of an inline embedded attachment image in a bubble.
 const INLINE_IMAGE_MAX_H: f32 = 220.0;
 /// Maximum display width of an inline embedded attachment image in a bubble.
@@ -76,17 +73,8 @@ impl StackPos {
 pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
     let m = &s.model;
     let fold_key = format!("{}-full", user.key);
-    let collapsible = should_collapse(&user.text) || user.full.is_some();
+    let collapsible = should_collapse(&user.prompt.text) || user.full.is_some();
     let expanded = !collapsible || m.is_fold_open(&fold_key, false);
-
-    let labels = attachment_ref_labels(user.attachments.iter().map(|a| a.mime.as_str()));
-    let unreferenced_attachments: Vec<&PromptAttachment> = user
-        .attachments
-        .iter()
-        .zip(&labels)
-        .filter(|(_, label)| !text_references_label(&user.text, label))
-        .map(|(att, _)| att)
-        .collect();
 
     let side_actions = matches!(pos, StackPos::First | StackPos::Middle);
     let actions = hover_actions(s, user, t);
@@ -97,12 +85,8 @@ pub fn user_row(s: &Desktop, user: &User, pos: StackPos, t: &Theme) -> El {
         column = column.child(steer_header(t));
     }
 
-    if !unreferenced_attachments.is_empty() {
-        column = column.child(attachment_strip(s, &unreferenced_attachments, t));
-    }
-
-    if !user.text.is_empty() || !user.context.is_empty() || user.origin.is_some() {
-        let card = bubble(s, user, &labels, pos, collapsible, expanded, &fold_key, t);
+    if !user.prompt.text.is_empty() || user.origin.is_some() {
+        let card = bubble(s, user, pos, collapsible, expanded, &fold_key, t);
         if side_actions && let Some(strip) = actions {
             column = column.child(
                 row()
@@ -142,14 +126,9 @@ fn steer_header(t: &Theme) -> El {
         .child(text("Steer").font(t.micro_medium).color(t.muted))
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "renders fit-content Markdown user bubble with context chips, inline attachments, and collapse toggle"
-)]
 fn bubble(
     s: &Desktop,
     user: &User,
-    attachment_labels: &[String],
     pos: StackPos,
     collapsible: bool,
     expanded: bool,
@@ -158,17 +137,7 @@ fn bubble(
 ) -> El {
     let thread = s.model.selection.selected.unwrap_or(ThreadId(0));
     let cwd = s.model.thread_state().map(|st| st.cwd.as_str());
-    let (prepared_md, inlined_files) =
-        prepare_user_markdown(s, user, thread, cwd, attachment_labels);
-    let remaining_context: Vec<&PromptContext> = user
-        .context
-        .iter()
-        .filter(|ctx| match ctx {
-            PromptContext::File { path } => !inlined_files.contains(&path.as_str()),
-            PromptContext::Link { .. } => true,
-        })
-        .collect();
-
+    let prepared_md = prepare_user_markdown(s, user, thread, cwd);
     let corners = pos.corners();
     let mut card = col()
         .key(&user.key)
@@ -184,8 +153,8 @@ fn bubble(
         card = card.border(HAIRLINE, t.hairline);
     }
 
-    if !remaining_context.is_empty() || user.origin.is_some() {
-        card = card.child(context_chips(&remaining_context, user.origin.as_ref(), t));
+    if let Some(origin) = &user.origin {
+        card = card.child(rune_kit::Badge::new(format!("via {}", origin.connector)).build(&t.k));
     }
 
     if !prepared_md.is_empty() {
@@ -254,7 +223,7 @@ fn user_markdown_body(
     t: &Theme,
 ) -> El {
     let mut image_map: HashMap<String, Image> = HashMap::new();
-    for att in &user.attachments {
+    for att in user.prompt.attachments() {
         if att.mime.starts_with("image/")
             && let Some(img) = s.thread_attachment_image(thread, &att.id)
             && img.is_ready()
@@ -341,84 +310,40 @@ fn user_markdown_style(t: &Theme) -> MarkdownStyle {
         .table_scroll_bar(t.faint.alpha(0.35), t.muted.alpha(0.55))
 }
 
-/// Transforms a user prompt's raw text into render-ready Markdown:
-/// 1. Converts `@file` mentions matching `PromptContext::File` (outside code)
-///    into clickable `file://` / `viz-file://` pill links.
-/// 2. Downgrades image attachment embeds (`![alt][img-N]`) whose pixels are not
-///    yet decoded into clickable `[alt][img-N]` attachment pills so no
-///    broken-image icon flashes while loading.
-/// 3. Appends CommonMark link reference definitions for every stored attachment
-///    pointing to `viz-attachment://<thread>/<id>`.
-fn prepare_user_markdown<'a>(
-    s: &Desktop,
-    user: &'a User,
-    thread: ThreadId,
-    cwd: Option<&str>,
-    labels: &[String],
-) -> (String, Vec<&'a str>) {
-    if user.text.is_empty() {
-        return (String::new(), Vec::new());
-    }
-
-    let mut md = user.text.clone();
-    let mut inlined_files = Vec::new();
-    for ctx in &user.context {
-        let PromptContext::File { path } = ctx else {
-            continue;
+/// Resolves canonical prompt anchors to timeline links and images.
+fn prepare_user_markdown(s: &Desktop, user: &User, thread: ThreadId, cwd: Option<&str>) -> String {
+    let mut md = String::new();
+    let mut end = 0;
+    for anchor in user.prompt.anchors() {
+        md.push_str(&user.prompt.text[end..anchor.range.start]);
+        end = anchor.range.end;
+        let mut image = false;
+        let target = match anchor.target {
+            PromptRef::File { path, .. } => Some(context_file_url(path, cwd)),
+            PromptRef::Link { uri, .. } => Some(uri.clone()),
+            PromptRef::GitHub { item } => Some(item.url.clone()),
+            PromptRef::Attachment { id, mime, .. } => {
+                image = mime.starts_with("image/")
+                    && s.thread_attachment_image(thread, id)
+                        .is_some_and(|img| img.is_ready() && img.error().is_none());
+                Some(format!("viz-attachment://{}/{id}", thread.0))
+            }
+            _ => None,
         };
-        let target_url = context_file_url(path, cwd);
-        let (_, base) = split_path(path);
-        let mut matched = false;
-        let full_token = format!("@{path}");
-        if replace_outside_code(
-            &mut md,
-            &full_token,
-            &format!("[{full_token}](<{target_url}>)"),
-        ) {
-            matched = true;
-        }
-        if !base.is_empty() && base != path {
-            let base_token = format!("@{base}");
-            if replace_outside_code(
-                &mut md,
-                &base_token,
-                &format!("[{base_token}](<{target_url}>)"),
-            ) {
-                matched = true;
-            }
-        }
-        if matched {
-            inlined_files.push(path.as_str());
+        if let Some(url) = target {
+            let prefix = if image { "!" } else { "" };
+            let label = anchor
+                .label
+                .replace('\\', "\\\\")
+                .replace('[', "\\[")
+                .replace(']', "\\]");
+            let _ = write!(md, "{prefix}[{label}](<{url}>)");
+        } else {
+            md.push_str(&anchor.label);
         }
     }
-
-    if !user.attachments.is_empty() {
-        for (att, label) in user.attachments.iter().zip(labels) {
-            if att.mime.starts_with("image/") {
-                let ready = s
-                    .thread_attachment_image(thread, &att.id)
-                    .is_some_and(|img| img.is_ready() && img.error().is_none());
-                if !ready {
-                    downgrade_image_ref_to_pill(&mut md, label);
-                }
-            }
-        }
-
-        md.push_str("\n\n");
-        for (idx, (att, label)) in user.attachments.iter().zip(labels).enumerate() {
-            if idx > 0 {
-                md.push('\n');
-            }
-            let escaped = att.name.replace('\\', "\\\\").replace('"', "\\\"");
-            let _ = write!(
-                md,
-                "[{label}]: <viz-attachment://{}/{}> \"{escaped}\"",
-                thread.0, att.id
-            );
-        }
-    }
-
-    (md, inlined_files)
+    md.push_str(&user.prompt.text[end..]);
+    md
 }
 
 fn context_file_url(path: &str, cwd: Option<&str>) -> String {
@@ -437,283 +362,8 @@ fn context_file_url(path: &str, cwd: Option<&str>) -> String {
     format!("viz-file://{encoded}")
 }
 
-/// Replaces standalone occurrences of `token` (not preceded by `[` or
-/// identifier chars and not inside inline code or fenced code blocks) with
-/// `replacement`.
-fn replace_outside_code(text: &mut String, token: &str, replacement: &str) -> bool {
-    if token.is_empty() || !text.contains(token) {
-        return false;
-    }
-    let bytes = text.as_bytes();
-    let tbytes = token.as_bytes();
-    let mut out = String::with_capacity(text.len() + 32);
-    let mut i = 0usize;
-    let mut in_fence = false;
-    let mut inline_ticks = 0usize;
-    let mut at_line_start = true;
-    let mut changed = false;
-
-    while i < bytes.len() {
-        if at_line_start && inline_ticks == 0 {
-            let trimmed_off = bytes[i..]
-                .iter()
-                .take(3)
-                .take_while(|&&b| b == b' ')
-                .count();
-            if bytes[i + trimmed_off..].starts_with(b"```")
-                || bytes[i + trimmed_off..].starts_with(b"~~~")
-            {
-                in_fence = !in_fence;
-                let line_end = text[i..].find('\n').map_or(bytes.len(), |off| i + off + 1);
-                out.push_str(&text[i..line_end]);
-                i = line_end;
-                at_line_start = true;
-                continue;
-            }
-        }
-        if in_fence {
-            let line_end = text[i..].find('\n').map_or(bytes.len(), |off| i + off + 1);
-            out.push_str(&text[i..line_end]);
-            i = line_end;
-            at_line_start = true;
-            continue;
-        }
-        if bytes[i] == b'`' {
-            let run = bytes[i..].iter().take_while(|&&b| b == b'`').count();
-            if inline_ticks == 0 {
-                inline_ticks = run;
-            } else if inline_ticks == run {
-                inline_ticks = 0;
-            }
-            out.push_str(&text[i..i + run]);
-            i += run;
-            at_line_start = false;
-            continue;
-        }
-        if inline_ticks == 0 && bytes[i..].starts_with(tbytes) {
-            let prev = if i == 0 { None } else { Some(bytes[i - 1]) };
-            let next = bytes.get(i + tbytes.len()).copied();
-            let valid_prev = prev
-                .is_none_or(|b| !b.is_ascii_alphanumeric() && b != b'[' && b != b'_' && b != b'/');
-            let valid_next = next.is_none_or(|b| {
-                !b.is_ascii_alphanumeric() && b != b'_' && b != b'.' && b != b'/' && b != b'-'
-            });
-            if valid_prev && valid_next {
-                out.push_str(replacement);
-                i += tbytes.len();
-                at_line_start = false;
-                changed = true;
-                continue;
-            }
-        }
-        let ch = text[i..].chars().next().expect("valid utf-8 boundary");
-        out.push(ch);
-        i += ch.len_utf8();
-        at_line_start = ch == '\n';
-    }
-
-    if changed {
-        *text = out;
-    }
-    changed
-}
-
-/// Converts `![alt][label]` into `[alt][label]` so an unloaded image renders
-/// as a clickable pill link instead of a broken-image glyph.
-fn downgrade_image_ref_to_pill(text: &mut String, label: &str) {
-    let needle = format!("][{label}]");
-    let mut search_from = 0usize;
-    while let Some(rel) = text[search_from..].find(&needle) {
-        let pos = search_from + rel;
-        if let Some(open) = text[..pos].rfind('[')
-            && open > 0
-            && text.as_bytes()[open - 1] == b'!'
-        {
-            text.remove(open - 1);
-            search_from = pos + needle.len() - 1;
-        } else {
-            search_from = pos + needle.len();
-        }
-    }
-}
-
-fn context_chips(
-    context: &[&PromptContext],
-    origin: Option<&viz_client::protocol::Origin>,
-    t: &Theme,
-) -> El {
-    let mut strip = row().key("context-chips").gap(S4).flex_wrap().center_y();
-    if let Some(origin) = origin {
-        strip = strip.child(
-            rune_kit::Badge::new(format!("via {}", origin.connector))
-                .build(&t.k)
-                .key("origin"),
-        );
-    }
-    let chip_bg = t.text.alpha(if t.k.dark { 0.07 } else { 0.05 });
-    for (idx, ctx) in context.iter().enumerate() {
-        let chip = match ctx {
-            PromptContext::File { path } => {
-                let open_path = path.clone();
-                let (_, name) = split_path(path);
-                let display = if name.is_empty() { path.as_str() } else { name };
-                row()
-                    .role("button")
-                    .label(format!("Preview {path}"))
-                    .help(format!("Preview {path}"))
-                    .px(S6)
-                    .py(S2)
-                    .gap(S4)
-                    .center_y()
-                    .radius(RADIUS_SM)
-                    .fill(chip_bg)
-                    .border(HAIRLINE, t.hairline)
-                    .hover(t.hover_wash)
-                    .focusable(true)
-                    .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-                    .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                        s.dispatch(
-                            Msg::Timeline(TimelineMsg::OpenFilePreview {
-                                path: open_path.clone(),
-                                lines: None,
-                            }),
-                            tx,
-                        );
-                    })
-                    .child(
-                        icon(rune_kit::file_icon(path), ICON_SMALL)
-                            .color(t.muted)
-                            .a11y_hidden(),
-                    )
-                    .child(
-                        text(format!("@{display}"))
-                            .font(t.small_medium)
-                            .color(t.text),
-                    )
-            }
-            PromptContext::Link { uri, name, title } => {
-                let link_uri = uri.clone();
-                let mut chip = row()
-                    .role("link")
-                    .label(title.as_deref().unwrap_or(name))
-                    .help(title.clone().unwrap_or_else(|| uri.clone()))
-                    .px(S6)
-                    .py(S2)
-                    .gap(S4)
-                    .center_y()
-                    .radius(RADIUS_SM)
-                    .fill(chip_bg)
-                    .border(HAIRLINE, t.hairline)
-                    .hover(t.hover_wash)
-                    .focusable(true)
-                    .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-                    .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                        s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(link_uri.clone())), tx);
-                    })
-                    .child(text(name).font(t.small_medium).color(t.text_secondary));
-                if let Some(title) = title {
-                    chip = chip.help(title.clone());
-                }
-                chip
-            }
-        };
-        strip = strip.child(chip.key(format!("ctx-{idx}")));
-    }
-    strip
-}
-
-fn attachment_strip(s: &Desktop, attachments: &[&PromptAttachment], t: &Theme) -> El {
-    let thread = s.model.selection.selected;
-    let mut strip = row()
-        .key("message-attachments")
-        .gap(S6)
-        .flex_wrap()
-        .justify_end();
-    for (idx, file) in attachments.iter().enumerate() {
-        let is_image = file.mime.starts_with("image/");
-        let glyph = if is_image {
-            &ui::EYE
-        } else {
-            rune_kit::file_icon(&file.name)
-        };
-        let thumb = thread
-            .filter(|_| is_image)
-            .and_then(|thread_id| s.thread_attachment_image(thread_id, &file.id))
-            .filter(|img| img.is_ready() && img.error().is_none())
-            .map_or_else(
-                || {
-                    row()
-                        .size(32.0, 32.0)
-                        .center()
-                        .radius(RADIUS_SM)
-                        .fill(t.chip_fill)
-                        .a11y_hidden()
-                        .child(icon(glyph, ICON).color(t.muted))
-                },
-                |image| {
-                    el().size(32.0, 32.0)
-                        .radius(RADIUS_SM)
-                        .clip_rounded(RADIUS_SM)
-                        .pixels_fit(image.pixels(), SurfaceFit::Fill)
-                        .a11y_hidden()
-                },
-            );
-        let mut card = row()
-            .key(format!("attachment-{idx}"))
-            .w(FILE_CARD_WIDTH)
-            .py(S8)
-            .pl(S8)
-            .pr(S12)
-            .gap(S8)
-            .center_y()
-            .radius(RADIUS_CARD)
-            .fill(t.mine)
-            .border(HAIRLINE, t.hairline)
-            .child(thumb)
-            .child(
-                col()
-                    .grow(1.0)
-                    .shrink()
-                    .min_w(0.0)
-                    .gap(S2)
-                    .child(
-                        text(&file.name)
-                            .font(t.small_medium)
-                            .color(t.text)
-                            .truncate()
-                            .help_when_truncated(&file.name),
-                    )
-                    .child(text(&file.mime).font(t.micro).color(t.faint).truncate()),
-            );
-        if let Some(thread) = thread {
-            let id = file.id.clone();
-            let name = file.name.clone();
-            let mime = file.mime.clone();
-            card = card
-                .role("button")
-                .label(format!("Preview {}", file.name))
-                .hover(t.hover_wash)
-                .focusable(true)
-                .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
-                    s.dispatch(
-                        Msg::Timeline(TimelineMsg::OpenAttachmentPreview {
-                            thread,
-                            id: id.clone(),
-                            name: name.clone(),
-                            mime: mime.clone(),
-                        }),
-                        tx,
-                    );
-                });
-        }
-        strip = strip.child(card);
-    }
-    strip
-}
-
 fn hover_actions(s: &Desktop, user: &User, t: &Theme) -> Option<El> {
-    if user.text.is_empty() && user.entry_id.is_none() {
+    if user.prompt.text.is_empty() && user.entry_id.is_none() {
         return None;
     }
     let connected = s.model.connected();
@@ -804,10 +454,10 @@ fn copy_action(user: &User, copied: bool, t: &Theme) -> Option<El> {
             t,
         ));
     }
-    if user.text.is_empty() {
+    if user.prompt.text.is_empty() {
         return None;
     }
-    let text_copy = user.text.clone();
+    let text_copy = user.prompt.text.clone();
     let copy_id = format!("copy-{}", user.key);
     let copy_btn = copy_morph_button(
         "copy-user",

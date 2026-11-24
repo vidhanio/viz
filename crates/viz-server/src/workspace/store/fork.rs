@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use viz_core::fork::{Cut, Turn};
-use viz_protocol::{EntryId, ForkedPrompt, ThreadId};
+use viz_protocol::{EntryId, Prompt, ThreadId};
 
 use super::{
     super::sql::{Conn, exec, row, rows},
@@ -59,7 +59,7 @@ pub(in crate::workspace) fn fork_prompt(
     db: &Conn,
     thread: ThreadId,
     entry: EntryId,
-) -> Result<Option<ForkedPrompt>, Error> {
+) -> Result<Option<Prompt>, Error> {
     let Some(mut row) = row(
         db,
         "SELECT data FROM entries WHERE thread = ?1 AND id = ?2",
@@ -69,16 +69,7 @@ pub(in crate::workspace) fn fork_prompt(
         return Ok(None);
     };
     Ok(match from_json(&row.str(0)?)? {
-        NewEntry::Prompt {
-            text,
-            attachments,
-            context,
-            ..
-        } => Some(ForkedPrompt {
-            text,
-            attachments,
-            context,
-        }),
+        NewEntry::Prompt { prompt, .. } => Some(prompt),
         _ => None,
     })
 }
@@ -129,8 +120,8 @@ pub(in crate::workspace) fn copy_history(
         let target = |entry: Option<EntryId>| entry.and_then(|entry| copies.get(&entry).copied());
         exec(
             db,
-            "INSERT INTO runs (thread, kind, status, position, text, origin, attachments, prompt_entry, end_entry, answer, error, usage)
-             SELECT ?1, kind, status, 0, text, origin, attachments, ?3, ?4, answer, error, usage FROM runs WHERE id = ?2",
+            "INSERT INTO runs (thread, kind, status, position, prompt, origin, prompt_entry, end_entry, answer, error, usage)
+             SELECT ?1, kind, status, 0, prompt, origin, ?3, ?4, answer, error, usage FROM runs WHERE id = ?2",
             [
                 fork.into(),
                 run.into(),
@@ -143,8 +134,8 @@ pub(in crate::workspace) fn copy_history(
         db,
         "INSERT INTO thread_attachments (thread, id, blob, name, mime)
          SELECT ?1, id, blob, name, mime FROM thread_attachments WHERE thread = ?2 AND id IN
-            (SELECT a.value ->> 'id' FROM runs AS r, json_each(r.attachments) AS a
-             WHERE r.thread = ?1 AND r.attachments IS NOT NULL)
+            (SELECT a.value ->> 'id' FROM runs AS r, json_each(r.prompt, '$.refs') AS a
+             WHERE r.thread = ?1 AND a.value ->> 'type' = 'attachment')
          ON CONFLICT DO NOTHING",
         [fork.into(), source.into()],
     )?;

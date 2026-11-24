@@ -307,7 +307,8 @@ pub(in crate::workspace) fn state_row(
     let session: SavedSession = from_json(&row.str(3)?)?;
     let queue = rows(
         db,
-        "SELECT id, text, coalesce(json_array_length(attachments), 0) FROM runs
+        "SELECT id, prompt ->> 'text', (SELECT count(*) FROM json_each(prompt, '$.refs')
+         WHERE value ->> 'type' = 'attachment') FROM runs
         WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
         [thread.into()],
     )?

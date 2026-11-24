@@ -4,8 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    AttachmentCapabilities, Attention, BlobAttachment, ContextUsage, ForkSource, Lifecycle,
-    LiveTurn, QueuedInput, RunId, Shelf, ThreadId, ThreadWorktree, WorktreeTarget,
+    AttachmentCapabilities, Attention, ContextUsage, ForkSource, Lifecycle, LiveTurn, QueuedInput,
+    RunId, Shelf, ThreadId, ThreadWorktree, WorktreeTarget,
 };
 
 /// `threads.list` params.
@@ -82,12 +82,7 @@ pub struct LaunchThread {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<BlobAttachment>,
-    /// Files and links the first input mentions.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context: Vec<crate::PromptContext>,
+    pub prompt: Option<crate::Prompt>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// Project directory. Omit to create a private scratch directory.

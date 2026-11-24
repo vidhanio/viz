@@ -199,6 +199,41 @@ async fn mark_preview_original(workspace: &Workspace, blob_id: &str) -> Result<(
         .await
 }
 
+/// Links each referenced blob and charges it against the prompt attachment
+/// budget.
+pub(super) fn claim_prompt(
+    db: &Conn,
+    leases: &ResourceLeases,
+    principal_key: &str,
+    thread: ThreadId,
+    prompt: &viz_protocol::Prompt,
+) -> Result<(), Error> {
+    let mut seen = HashSet::new();
+    let mut staged = Vec::new();
+    let mut stored = Vec::new();
+    for anchor in prompt.anchors() {
+        if let viz_protocol::PromptRef::Attachment { id, name, mime } = anchor.target
+            && seen.insert(anchor.index)
+        {
+            validate_name(name)?;
+            if lookup(db, thread, id)?.is_some() {
+                stored.push(id.clone());
+            } else {
+                staged.push(BlobAttachment {
+                    blob: id.clone(),
+                    name: name.clone(),
+                    mime: mime.clone(),
+                });
+            }
+        }
+    }
+    if seen.len() != prompt.attachments().count() {
+        return Err(Error::invalid("each attachment needs an inline reference"));
+    }
+    claim_staged(db, leases, principal_key, thread, &staged, &stored)?;
+    Ok(())
+}
+
 /// Authorizes and links content-plane staged blobs and thread-owned stored
 /// attachment ids into `thread_attachments` under one unified `TOTAL_LIMIT`
 /// prompt byte budget.

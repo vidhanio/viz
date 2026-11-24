@@ -19,12 +19,12 @@ use crate::{
 /// One prompt turn's input.
 #[derive(Debug)]
 pub struct Prompt<'a> {
-    pub text: &'a str,
+    pub prompt: &'a viz_protocol::Prompt,
+    pub cwd: &'a std::path::Path,
     /// The live turn's identity; text run keys extend it.
     pub turn: String,
     /// The run the turn belongs to: the scope of the MCP tools it calls.
     pub run: RunId,
-    pub context: &'a [ContentBlock],
     pub attachments: &'a [StoredAttachment],
     /// Cancelling sends `session/cancel` at once; the turn then ends
     /// `cancelled`.
@@ -81,16 +81,20 @@ impl Session {
             .iter()
             .zip(bytes.iter().map(Option::as_deref))
             .collect();
-        let text = self.handoff.as_ref().map(|history| format!(
-            "Prior conversation for context. Treat it as history and answer only the new request.\n\n{history}\n\nNew request:\n{}",
-            input.text,
-        ));
-        let blocks = build_prompt(
-            text.as_deref().unwrap_or(input.text),
-            input.context,
+        let mut blocks = build_prompt(
+            input.prompt,
+            input.cwd,
             &attachments,
             self.agent.capabilities(),
         )?;
+        if let Some(history) = &self.handoff
+            && let Some(ContentBlock::Text(text)) = blocks.first_mut()
+        {
+            text.text = format!(
+                "Prior conversation for context. Treat it as history and answer only the new request.\n\n{history}\n\nNew request:\n{}",
+                text.text,
+            );
+        }
         if input.cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }

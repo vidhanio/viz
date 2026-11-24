@@ -419,8 +419,8 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
                         .iter()
                         .rev()
                         .find_map(|item| match item {
-                            Item::User(user) if !user.text.trim().is_empty() => {
-                                Some(user.text.clone())
+                            Item::User(user) if !user.prompt.text.trim().is_empty() => {
+                                Some(user.prompt.clone())
                             }
                             _ => None,
                         })
@@ -431,12 +431,9 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
                     input: SendInput {
                         thread,
                         mode: None,
-                        text: last_prompt,
+                        prompt: last_prompt,
                         request_id: None,
                         origin: None,
-                        attachments: Vec::new(),
-                        stored: Vec::new(),
-                        context: Vec::new(),
                     },
                 }));
             }
@@ -518,8 +515,10 @@ pub(super) fn apply_entry_loaded(
                     );
                 }
             } else {
-                if let Some(EntryData::Prompt { text, .. }) =
-                    matches!(action, Some(EntryAction::CopyPrompt)).then_some(loaded.as_ref())
+                if let Some(EntryData::Prompt {
+                    prompt: viz_client::protocol::Prompt { text, .. },
+                    ..
+                }) = matches!(action, Some(EntryAction::CopyPrompt)).then_some(loaded.as_ref())
                 {
                     copy_feedback(model, format!("copy-{key}"), text.clone(), effects);
                 }
@@ -628,7 +627,11 @@ fn open_entry_preview(
 
 fn entry_preview_text(entry: &EntryData) -> Option<String> {
     let tool = match entry {
-        EntryData::Prompt { text, .. } | EntryData::TaskResult { text, .. } => {
+        EntryData::Prompt {
+            prompt: viz_client::protocol::Prompt { text, .. },
+            ..
+        }
+        | EntryData::TaskResult { text, .. } => {
             return Some(text.clone());
         }
         EntryData::Transcript(entry) => match &entry.body {
@@ -860,9 +863,9 @@ fn lookup_attachment_meta(model: &Model, thread: ThreadId, id: &str) -> (String,
     if let Some(open) = model.cache().open_threads.get(&thread) {
         for item in &open.transcript.items {
             if let Item::User(user) = item
-                && let Some(att) = user.attachments.iter().find(|a| a.id == id)
+                && let Some(att) = user.prompt.attachments().find(|a| a.id == id)
             {
-                return (att.name.clone(), att.mime.clone());
+                return (att.name, att.mime);
             }
         }
     }

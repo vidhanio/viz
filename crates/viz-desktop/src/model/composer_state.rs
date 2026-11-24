@@ -3,9 +3,7 @@
 
 use std::ops::Range;
 
-use viz_client::protocol::{
-    FileSearchMatch, GitHubItem, PromptContext, RunId, SearchHit, ThreadId,
-};
+use viz_client::protocol::{FileSearchMatch, GitHubItem, PromptRef, RunId, SearchHit, ThreadId};
 
 /// Local unsent or fetched raw-byte attachment held in memory without base64
 /// encoding.
@@ -97,17 +95,16 @@ impl DraftPill {
         )
     }
 
-    /// Converts file and GitHub link pills into structured [`PromptContext`]
+    /// Converts file and GitHub link pills into structured [`PromptRef`]
     /// blocks for `thread.launch` and `thread.send`.
     #[must_use]
-    pub fn to_prompt_context(&self) -> Option<PromptContext> {
-        if let Some(path) = self
-            .id
-            .strip_prefix("file:")
-            .or_else(|| self.id.strip_prefix("dir:"))
+    pub fn to_prompt_ref(&self) -> Option<PromptRef> {
+        if let Some((kind, path)) = self.id.split_once(':')
+            && matches!(kind, "file" | "dir")
         {
-            return Some(PromptContext::File {
+            return Some(PromptRef::File {
                 path: path.to_owned(),
+                directory: kind == "dir",
             });
         }
         let rest = self
@@ -120,7 +117,7 @@ impl DraftPill {
         if uri.is_empty() {
             return None;
         }
-        Some(PromptContext::Link {
+        Some(PromptRef::Link {
             uri: uri.to_owned(),
             name: format!("#{number}"),
             title: (!title.is_empty()).then(|| title.to_owned()),
@@ -187,18 +184,24 @@ impl DraftData {
             .any(|status| !matches!(status, AttachmentStatus::Ready))
     }
 
-    /// Extracts deduplicated [`PromptContext`] items from inline pills.
-    #[must_use]
-    pub fn prompt_context(&self) -> Vec<PromptContext> {
-        let mut out = Vec::new();
+    /// Encodes editor pills in source order.
+    pub fn prompt(&self) -> viz_client::protocol::Prompt {
+        let mut prompt = viz_client::protocol::Prompt::default();
+        let mut end = 0;
         for pill in &self.pills {
-            if let Some(ctx) = pill.to_prompt_context()
-                && !out.contains(&ctx)
+            if let Some(target) = pill.to_prompt_ref()
+                && pill.range.start >= end
+                && let Some(before) = self.text.get(end..pill.range.start)
+                && self.text.get(pill.range.clone()).is_some()
             {
-                out.push(ctx);
+                prompt.text.push_str(before);
+                let link = prompt.reference(&pill.label, target);
+                prompt.text.push_str(&link);
+                end = pill.range.end;
             }
         }
-        out
+        prompt.text.push_str(&self.text[end..]);
+        prompt
     }
 }
 

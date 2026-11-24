@@ -11,9 +11,8 @@ use viz_protocol::{ForkPoint, ForkThread, Forked};
 
 use super::{
     Workspace,
-    sql::{self, Conn, exec},
+    sql::{self, Conn, exec, row},
     store::{self, Handoff, NewThread, SavedSession},
-    thread::launched,
     worktree::{self, Placement},
 };
 use crate::error::Error;
@@ -33,11 +32,8 @@ impl Workspace {
         let precheck = self
             .db
             .read_snapshot(move |tx| {
-                if let Some(found) = launched(tx, request_id.as_deref())? {
-                    return Ok(Err(Forked {
-                        thread: found.thread,
-                        prompt: None,
-                    }));
+                if let Some(found) = by_request(tx, request_id.as_deref())? {
+                    return Ok(Err(found));
                 }
                 let binding = store::binding(tx, source_thread)?;
                 let (metadata, _) = store::metadata(tx, source_thread)?;
@@ -90,11 +86,8 @@ impl Workspace {
             let precheck = self
                 .db
                 .read_snapshot(move |tx| {
-                    if let Some(found) = launched(tx, request_id.as_deref())? {
-                        return Ok(Err(Forked {
-                            thread: found.thread,
-                            prompt: None,
-                        }));
+                    if let Some(found) = by_request(tx, request_id.as_deref())? {
+                        return Ok(Err(found));
                     }
                     let binding = store::binding(tx, source_thread)?;
                     let title = if binding.project.is_none() {
@@ -141,12 +134,8 @@ impl Workspace {
             .db
             .write(move |conn| {
                 let tx = sql::immediate(conn)?;
-                if let Some(found) = launched(&tx, args.request_id.as_deref())? {
-                    let forked = Forked {
-                        thread: found.thread,
-                        prompt: None,
-                    };
-                    return Ok((forked, false));
+                if let Some(found) = by_request(&tx, args.request_id.as_deref())? {
+                    return Ok((found, false));
                 }
                 let binding = store::binding(&tx, source)?;
                 let (metadata, _) = store::metadata(&tx, source)?;
@@ -221,7 +210,7 @@ impl Workspace {
                 )?;
                 let shared = store::copy_history(&tx, source, thread, &cut)?;
                 if let Some(prompt) = &prompt {
-                    copy_prompt_attachments(&tx, source, thread, &prompt.attachments)?;
+                    copy_prompt_attachments(&tx, source, thread, prompt.attachments())?;
                 }
                 exec(
                     &tx,
@@ -236,8 +225,8 @@ impl Workspace {
                 if let Some(request_id) = args.request_id {
                     exec(
                         &tx,
-                        "INSERT INTO launch_requests (request_id, thread, run) VALUES (?1, ?2, NULL)",
-                        [request_id.into(), thread.into()],
+                        "INSERT INTO fork_requests (request_id, thread, prompt) VALUES (?1, ?2, ?3)",
+                        [request_id.into(), thread.into(), prompt.as_ref().map(store::json).transpose()?.into()],
                     )?;
                 }
                 tx.commit()?;
@@ -252,11 +241,33 @@ impl Workspace {
     }
 }
 
+fn by_request(db: &Conn, request_id: Option<&str>) -> Result<Option<Forked>, Error> {
+    let Some(request_id) = request_id else {
+        return Ok(None);
+    };
+    row(
+        db,
+        "SELECT thread, prompt FROM fork_requests WHERE request_id = ?1",
+        [request_id.into()],
+    )?
+    .map(|mut receipt| {
+        Ok(Forked {
+            thread: receipt.id(0)?,
+            prompt: receipt
+                .opt_str(1)?
+                .as_deref()
+                .map(store::from_json)
+                .transpose()?,
+        })
+    })
+    .transpose()
+}
+
 fn copy_prompt_attachments(
     tx: &Conn,
     source: viz_protocol::ThreadId,
     target: viz_protocol::ThreadId,
-    attachments: &[viz_protocol::PromptAttachment],
+    attachments: impl Iterator<Item = viz_protocol::PromptAttachment>,
 ) -> Result<(), Error> {
     for attachment in attachments {
         exec(

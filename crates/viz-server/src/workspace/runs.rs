@@ -8,6 +8,7 @@ use viz_core::{
     threads::Patch,
     titles,
 };
+use viz_protocol::Prompt;
 
 use super::{
     sql::{Conn, Row, exec, row, rows},
@@ -15,18 +16,13 @@ use super::{
 };
 use crate::{
     error::Error,
-    wire::{
-        EntryId, NewEntry, Origin, PromptAttachment, PromptContext, Run, RunId, RunKind, RunStatus,
-        ThreadId,
-    },
+    wire::{EntryId, NewEntry, Origin, Run, RunId, RunKind, RunStatus, ThreadId},
 };
 
 #[derive(Clone, Copy)]
 pub(super) struct NewRun<'a> {
-    pub(super) text: &'a str,
+    pub(super) prompt: &'a Prompt,
     pub(super) origin: Option<&'a Origin>,
-    pub(super) attachments: &'a [PromptAttachment],
-    pub(super) context: &'a [PromptContext],
     pub(super) request_id: Option<&'a str>,
     /// The entry of a task's result that stands in for a prompt: the input is
     /// the agent's, not the user's.
@@ -35,12 +31,10 @@ pub(super) struct NewRun<'a> {
 }
 
 impl<'a> NewRun<'a> {
-    pub(super) const fn new(text: &'a str) -> Self {
+    pub(super) const fn new(prompt: &'a Prompt) -> Self {
         Self {
-            text,
+            prompt,
             origin: None,
-            attachments: &[],
-            context: &[],
             request_id: None,
             existing_entry: None,
             place: Place::End,
@@ -50,26 +44,18 @@ impl<'a> NewRun<'a> {
 
 pub(super) fn enqueue(db: &Conn, thread: ThreadId, new: NewRun<'_>) -> Result<RunId, Error> {
     let origin = new.origin.map(store::json).transpose()?;
-    let attachments = (!new.attachments.is_empty())
-        .then(|| store::json(new.attachments))
-        .transpose()?;
-    let context = (!new.context.is_empty())
-        .then(|| store::json(new.context))
-        .transpose()?;
     let position = queue_position(db, thread, new.place)?;
     let run = row(
         db,
-        "INSERT INTO runs (thread, status, position, text, origin, attachments, request_id, prompt_entry, context)
-        VALUES (?1, 'queued', ?2, ?3, ?4, ?5, ?6, ?7, ?8) RETURNING id",
+        "INSERT INTO runs (thread, status, position, prompt, origin, request_id, prompt_entry)
+        VALUES (?1, 'queued', ?2, ?3, ?4, ?5, ?6) RETURNING id",
         [
             thread.into(),
             position.into(),
-            new.text.into(),
+            store::json(new.prompt)?.into(),
             origin.into(),
-            attachments.into(),
             new.request_id.into(),
             new.existing_entry.into(),
-            context.into(),
         ],
     )?
     .expect("run INSERT RETURNING yielded one row")
@@ -80,7 +66,7 @@ pub(super) fn enqueue(db: &Conn, thread: ThreadId, new: NewRun<'_>) -> Result<Ru
         [thread.into()],
     )?
     .ok_or_else(|| Error::NoThread(thread))?;
-    let title = titles::enqueue(thread_row.str(0)?, new.text);
+    let title = titles::enqueue(thread_row.str(0)?, &new.prompt.display_text());
     exec(
         db,
         "UPDATE threads SET title = ?2 WHERE id = ?1",
@@ -240,10 +226,8 @@ pub(super) fn decode_status(value: &str) -> Result<RunStatus, Error> {
 pub(super) struct Claimed {
     pub(super) id: RunId,
     pub(super) entry: EntryId,
-    pub(super) text: String,
+    pub(super) prompt: Prompt,
     pub(super) origin: Option<Origin>,
-    pub(super) attachments: Vec<PromptAttachment>,
-    pub(super) context: Vec<PromptContext>,
 }
 
 /// What a worker found to do.
@@ -284,61 +268,39 @@ fn start(db: &Conn, thread: ThreadId, id: RunId) -> Result<Claimed, Error> {
     let mut row = row(
         db,
         "UPDATE runs SET status = 'running' WHERE id = ?1
-        RETURNING text, origin, attachments, prompt_entry, context",
+        RETURNING prompt, origin, prompt_entry",
         [id.into()],
     )?
     .expect("claimed run exists under the write transaction");
-    let text = row.str(0)?;
-    let origin = row
+    let prompt: Prompt = store::from_json(&row.str(0)?)?;
+    let origin: Option<Origin> = row
         .opt_str(1)?
         .as_deref()
         .map(store::from_json)
         .transpose()?;
-    let attachments = row
-        .opt_str(2)?
-        .as_deref()
-        .map(store::from_json)
-        .transpose()?
-        .unwrap_or_default();
-    let context: Vec<PromptContext> = row
-        .opt_str(4)?
-        .as_deref()
-        .map(store::from_json)
-        .transpose()?
-        .unwrap_or_default();
-    let (entry, text, origin, attachments) = if let Some(entry) = row.opt_id(3)? {
-        (entry, text, origin, attachments)
+    let entry = if let Some(entry) = row.opt_id(2)? {
+        entry
     } else {
-        let data = NewEntry::Prompt {
-            text,
-            origin,
-            attachments,
-            context: context.clone(),
-        };
-        let entry = store::append(db, thread, &data)?;
+        let entry = store::append(
+            db,
+            thread,
+            &NewEntry::Prompt {
+                prompt: prompt.clone(),
+                origin: origin.clone(),
+            },
+        )?;
         exec(
             db,
             "UPDATE runs SET prompt_entry = ?2 WHERE id = ?1",
             [id.into(), entry.into()],
         )?;
-        let NewEntry::Prompt {
-            text,
-            origin,
-            attachments,
-            ..
-        } = data
-        else {
-            unreachable!()
-        };
-        (entry, text, origin, attachments)
+        entry
     };
     Ok(Claimed {
         id,
         entry,
-        text,
+        prompt,
         origin,
-        attachments,
-        context,
     })
 }
 
@@ -350,9 +312,13 @@ pub(super) fn begin_unprompted(db: &Conn, thread: ThreadId) -> Result<(RunId, En
     let entry = store::append(db, thread, &NewEntry::Continued)?;
     let run = row(
         db,
-        "INSERT INTO runs (thread, kind, status, position, text, prompt_entry)
-        VALUES (?1, 'unprompted', 'running', 0, '', ?2) RETURNING id",
-        [thread.into(), entry.into()],
+        "INSERT INTO runs (thread, kind, status, position, prompt_entry, prompt)
+        VALUES (?1, 'unprompted', 'running', 0, ?2, ?3) RETURNING id",
+        [
+            thread.into(),
+            entry.into(),
+            store::json(&Prompt::default())?.into(),
+        ],
     )?
     .expect("run INSERT RETURNING yielded one row")
     .id(0)?;
@@ -511,7 +477,7 @@ pub(super) fn update_queue(
     if let Some(text) = text {
         exec(
             db,
-            "UPDATE runs SET text = ?2 WHERE id = ?1",
+            "UPDATE runs SET prompt = json_set(prompt, '$.text', ?2) WHERE id = ?1",
             [run.into(), text.into()],
         )?;
     }

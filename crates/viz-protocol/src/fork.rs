@@ -3,7 +3,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{EntryId, PromptAttachment, ThreadId, WorktreeTarget};
+use super::{EntryId, Prompt, ThreadId, WorktreeTarget};
 
 /// Copy a thread's history into a new idle thread. A projectless fork gets its
 /// own scratch folder. A project fork shares the source checkout unless a
@@ -47,18 +47,7 @@ pub struct Forked {
     pub thread: ThreadId,
     /// The prompt the fork was made before, to edit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<ForkedPrompt>,
-}
-
-/// The prompt a fork leaves out.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ForkedPrompt {
-    pub text: String,
-    /// Stored in the fork too: send their ids as `stored` to attach them
-    /// again.
-    pub attachments: Vec<PromptAttachment>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context: Vec<crate::PromptContext>,
+    pub prompt: Option<Prompt>,
 }
 
 /// Where a thread was forked from.

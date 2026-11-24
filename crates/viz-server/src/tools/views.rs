@@ -201,14 +201,12 @@ pub(super) fn whole(entry: Entry) -> Page {
 
 fn line(entry: Entry, text: usize, output: usize) -> Line {
     let (kind, text) = match entry.data {
-        EntryData::Prompt {
-            text: prompt,
-            attachments,
-            ..
-        } => {
-            let mut shown = bounded(&prompt, text);
-            for attachment in attachments {
-                let _ = write!(shown, "\n[attachment {}]", attachment.name);
+        EntryData::Prompt { prompt, .. } => {
+            let mut shown = bounded(&prompt.display_text(), text);
+            for anchor in prompt.anchors() {
+                if let viz_protocol::PromptRef::Attachment { name, .. } = anchor.target {
+                    let _ = write!(shown, "\n[attachment {name}]");
+                }
             }
             ("prompt", shown)
         }

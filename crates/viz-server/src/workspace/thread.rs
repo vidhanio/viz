@@ -68,10 +68,9 @@ impl Workspace {
         {
             return Ok(found);
         }
-        let title = args
-            .title
-            .clone()
-            .unwrap_or_else(|| titles::from_prompt(args.text.as_deref().unwrap_or_default()));
+        let title = args.title.clone().unwrap_or_else(|| {
+            titles::from_prompt(args.prompt.as_ref().map_or("", |prompt| &prompt.text))
+        });
         let workspace = Arc::clone(self);
         self.jobs
             .spawn(async move {
@@ -100,7 +99,7 @@ impl Workspace {
     ) -> Result<(Launched, bool), Error> {
         let scratch = if args.project.is_none() && placement.is_none() {
             let title = args.title.as_deref().map_or_else(
-                || titles::from_prompt(args.text.as_deref().unwrap_or_default()),
+                || titles::from_prompt(args.prompt.as_ref().map_or("", |prompt| &prompt.text)),
                 str::to_owned,
             );
             Some(self.prepare_scratch(&title).await?)
@@ -175,24 +174,9 @@ impl Workspace {
                 if let Some(access) = &access {
                     store::save_thread_access(&tx, thread, Some(access))?;
                 }
-                let run = if args.text.is_some() || !args.attachments.is_empty() {
-                    let attachments = attachments::claim_staged(
-                        &tx,
-                        &ws.leases,
-                        &principal_key,
-                        thread,
-                        &args.attachments,
-                        &[],
-                    )?;
-                    Some(runs::enqueue(
-                        &tx,
-                        thread,
-                        NewRun {
-                            attachments: &attachments,
-                            context: &args.context,
-                            ..NewRun::new(args.text.as_deref().unwrap_or_default())
-                        },
-                    )?)
+                let run = if let Some(prompt) = &args.prompt {
+                    attachments::claim_prompt(&tx, &ws.leases, &principal_key, thread, prompt)?;
+                    Some(runs::enqueue(&tx, thread, NewRun::new(prompt))?)
                 } else {
                     None
                 };
@@ -243,24 +227,15 @@ impl Workspace {
                     decisions::Submission::Replay(run) => return Ok((Sent { run }, false)),
                     decisions::Submission::Enqueue { place, steer } => (place, steer),
                 };
-                let attachments = attachments::claim_staged(
-                    &tx,
-                    &ws.leases,
-                    &principal_key,
-                    thread,
-                    &args.attachments,
-                    &args.stored,
-                )?;
+                attachments::claim_prompt(&tx, &ws.leases, &principal_key, thread, &args.prompt)?;
                 let run = runs::enqueue(
                     &tx,
                     thread,
                     NewRun {
                         origin: args.origin.as_ref(),
-                        attachments: &attachments,
-                        context: &args.context,
                         request_id: args.request_id.as_deref(),
                         place,
-                        ..NewRun::new(&args.text)
+                        ..NewRun::new(&args.prompt)
                     },
                 )?;
                 if let Some(active) = steer {

@@ -4,9 +4,7 @@ use std::{collections::HashSet, fmt::Write as _, path::Path};
 
 use base64::{Engine as _, prelude::BASE64_STANDARD};
 use url::Url;
-use viz_protocol::{
-    PromptContext, attachment_inline_md, attachment_ref_labels, text_references_label,
-};
+use viz_protocol::{Prompt, PromptRef};
 
 use crate::{
     Capabilities, Error,
@@ -15,74 +13,61 @@ use crate::{
     schema::{AudioContent, ContentBlock, ImageContent, ResourceLink, TextContent},
 };
 
-/// Resource links for the files and links an input mentions. Relative paths
-/// are taken from `cwd`.
-#[must_use]
-pub fn context_blocks(context: &[PromptContext], cwd: &Path) -> Vec<ContentBlock> {
-    context
-        .iter()
-        .filter_map(|item| match item {
-            PromptContext::File { path } => {
-                let path = cwd.join(path);
-                let uri = Url::from_file_path(&path).ok()?;
-                let name = path.file_name().map_or_else(
-                    || path.display().to_string(),
-                    |name| name.to_string_lossy().into_owned(),
-                );
-                Some(ContentBlock::ResourceLink(ResourceLink::new(
-                    name,
-                    uri.to_string(),
-                )))
-            }
-            PromptContext::Link { uri, name, title } => Some(ContentBlock::ResourceLink(
-                ResourceLink::new(name.clone(), uri.clone()).title(title.clone()),
-            )),
-        })
-        .collect()
-}
-
-/// Creates an ordered ACP prompt from text, typed context, and loaded files.
+/// Builds text and resource blocks from the prompt's typed Markdown links.
 ///
 /// # Errors
-/// Returns an error for unsupported content or an invalid attachment path.
+/// Returns an error for an invalid attachment path.
 pub fn build_prompt(
-    text: &str,
-    context: &[ContentBlock],
+    prompt: &Prompt,
+    cwd: &Path,
     attachments: &[(&StoredAttachment, Option<&[u8]>)],
     capabilities: &Capabilities,
 ) -> Result<Vec<ContentBlock>> {
-    let mut description = text.to_owned();
-    if !attachments.is_empty() {
-        let labels = attachment_ref_labels(attachments.iter().map(|(a, _)| a.mime.as_str()));
-        let unreferenced: Vec<String> = attachments
-            .iter()
-            .zip(&labels)
-            .filter(|(_, label)| !text_references_label(text, label))
-            .map(|((attachment, _), label)| {
-                attachment_inline_md(&attachment.name, &attachment.mime, label)
-            })
-            .collect();
-        if !unreferenced.is_empty() {
-            if !description.trim().is_empty() {
-                description.push_str("\n\n");
+    let mut description = String::new();
+    let mut resources = Vec::new();
+    let mut emitted = HashSet::new();
+    let mut end = 0;
+    for anchor in prompt.anchors() {
+        description.push_str(&prompt.text[end..anchor.range.start]);
+        end = anchor.range.end;
+        let target = match anchor.target {
+            PromptRef::File { path, .. } => Url::from_file_path(cwd.join(path))
+                .ok()
+                .map(|uri| ResourceLink::new(path, uri.to_string())),
+            PromptRef::Link { uri, name, title } => {
+                Some(ResourceLink::new(name, uri).title(title.clone()))
             }
-            description.push_str(&unreferenced.join(" "));
-        }
-        if !description.is_empty() {
-            description.push_str("\n\n");
-        }
-        for (idx, ((attachment, _), label)) in attachments.iter().zip(&labels).enumerate() {
-            let uri = file_uri(&attachment.path)?;
-            let escaped_title = attachment.name.replace('\\', "\\\\").replace('"', "\\\"");
-            if idx > 0 {
-                description.push('\n');
+            PromptRef::GitHub { item } => {
+                Some(ResourceLink::new(&anchor.label, &item.url).title(item.title.clone()))
             }
-            let _ = write!(description, "[{label}]: <{uri}> \"{escaped_title}\"");
+            PromptRef::Attachment { id, name, .. } => attachments
+                .iter()
+                .find(|(item, _)| &item.id == id && &item.name == name)
+                .map(|(item, _)| {
+                    file_uri(&item.path).map(|uri| {
+                        ResourceLink::new(name, uri.to_string()).mime_type(item.mime.clone())
+                    })
+                })
+                .transpose()?,
+            _ => None,
+        };
+        if let Some(target) = target {
+            let _ = write!(
+                description,
+                "[{}](<{}>)",
+                anchor.label.replace(['[', ']'], " "),
+                target.uri
+            );
+            if emitted.insert(anchor.index) {
+                resources.push(ContentBlock::ResourceLink(target));
+            }
+        } else {
+            description.push_str(&anchor.label);
         }
     }
+    description.push_str(&prompt.text[end..]);
     let mut blocks = vec![ContentBlock::Text(TextContent::new(description))];
-    validate_context(context, capabilities)?;
-    blocks.extend_from_slice(context);
+    blocks.extend(resources);
     let mut emitted_media = HashSet::new();
     for (attachment, bytes) in attachments {
         if let Some(bytes) = bytes
@@ -100,10 +85,6 @@ pub fn build_prompt(
                 )));
             }
         }
-        blocks.push(ContentBlock::ResourceLink(
-            ResourceLink::new(&attachment.name, file_uri(&attachment.path)?.as_str())
-                .mime_type(attachment.mime.clone()),
-        ));
     }
     Ok(blocks)
 }

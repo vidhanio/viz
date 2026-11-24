@@ -143,9 +143,7 @@ fn persist_turns(
             tx,
             thread,
             &NewEntry::Prompt {
-                text: turn.prompt.clone(),
-                attachments: Vec::new(),
-                context: Vec::new(),
+                prompt: viz_protocol::Prompt::new(turn.prompt.clone()),
                 origin: None,
             },
         )?;
@@ -164,11 +162,11 @@ fn persist_turns(
         )?;
         exec(
             tx,
-            "INSERT INTO runs (thread, kind, status, position, text, prompt_entry, end_entry, answer)
+            "INSERT INTO runs (thread, kind, status, position, prompt, prompt_entry, end_entry, answer)
             VALUES (?1, 'prompt', 'completed', 0, ?2, ?3, ?4, ?5)",
             [
                 thread.into(),
-                turn.prompt.into(),
+                store::json(&viz_protocol::Prompt::new(turn.prompt))?.into(),
                 prompt.into(),
                 end.into(),
                 turn.answer.into(),

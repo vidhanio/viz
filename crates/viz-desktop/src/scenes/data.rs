@@ -142,20 +142,19 @@ pub(super) fn thread_state() -> ThreadState {
 }
 
 pub(super) fn transcript(attachments: &[&str]) -> Transcript {
-    let attachments = attachments
-        .iter()
-        .map(|&name| PromptAttachment {
+    let mut prompt =
+        viz_client::protocol::Prompt::new("Make the markdown export preserve a final newline.");
+    for &name in attachments {
+        prompt.append_attachment(PromptAttachment {
             id: name.to_owned(),
             name: name.to_owned(),
             mime: "image/png".into(),
-        })
-        .collect();
+        });
+    }
     preview_thread(
         [
             EntryData::Prompt {
-                text: "Make the markdown export preserve a final newline.".into(),
-                attachments,
-                context: Vec::new(),
+                prompt,
                 origin: None,
             },
             response(
@@ -330,9 +329,7 @@ pub(super) fn preview_thread(
 
 pub(super) fn prompt(text: &str) -> EntryData {
     EntryData::Prompt {
-        text: text.into(),
-        attachments: Vec::new(),
-        context: Vec::new(),
+        prompt: viz_client::protocol::Prompt::new(text),
         origin: None,
     }
 }

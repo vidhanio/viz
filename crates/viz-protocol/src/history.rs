@@ -53,14 +53,6 @@ pub fn attachment_inline_md(name: &str, mime: &str, label: &str) -> String {
     }
 }
 
-/// Whether Markdown `text` already contains a reference using `label`
-/// (case-insensitive per CommonMark link label matching).
-#[must_use]
-pub fn text_references_label(text: &str, label: &str) -> bool {
-    let needle = format!("[{}]", label.to_ascii_lowercase());
-    text.to_ascii_lowercase().contains(&needle)
-}
-
 /// Attachment capabilities of a thread's runner.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct AttachmentCapabilities {
@@ -179,12 +171,7 @@ pub struct Entry {
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum EntryData {
     Prompt {
-        text: String,
-        #[serde(default)]
-        attachments: Vec<PromptAttachment>,
-        /// Files and links the input mentioned.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        context: Vec<PromptContext>,
+        prompt: crate::Prompt,
         origin: Option<Origin>,
     },
     Transcript(TranscriptEntry),
@@ -200,22 +187,6 @@ pub enum EntryData {
     TaskResult {
         task: String,
         text: String,
-    },
-}
-
-/// Something an input points the agent at, sent as an ACP resource link.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub enum PromptContext {
-    /// A file or directory mentioned with `@`; relative to the thread's
-    /// directory unless absolute.
-    File { path: String },
-    /// An issue, pull request, or page mentioned with `#`.
-    Link {
-        uri: String,
-        /// Short label, such as `#42`.
-        name: String,
-        title: Option<String>,
     },
 }
 

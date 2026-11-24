@@ -127,13 +127,10 @@ impl From<SendText> for SendInput {
     fn from(input: SendText) -> Self {
         Self {
             thread: input.thread,
-            text: input.text,
+            prompt: viz_protocol::Prompt::new(input.text),
             mode: input.mode,
             request_id: input.request_id,
             origin: None,
-            attachments: Vec::new(),
-            stored: Vec::new(),
-            context: Vec::new(),
         }
     }
 }

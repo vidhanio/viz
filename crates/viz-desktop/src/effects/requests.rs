@@ -6,9 +6,9 @@ use sha2::{Digest, Sha256};
 use viz_client::{
     ContentClient, Error, ProjectIconFetch, Result,
     protocol::{
-        BlobAttachment, EntryAnchor, HarnessOptions, LaunchThread, ListBranches, ListEntries,
-        ListTasks, ListWorktrees, Patch, ProjectSettingsPatch, RetitleThread, SearchThreads,
-        SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
+        EntryAnchor, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks,
+        ListWorktrees, Patch, ProjectSettingsPatch, Prompt, PromptRef, RetitleThread,
+        SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
@@ -47,7 +47,8 @@ impl Session<'_> {
     ) -> Result<()> {
         let outcome = async {
             if !attachments.is_empty() {
-                params.attachments = stage_draft_attachments(&self.content, &attachments).await?;
+                let prompt = params.prompt.get_or_insert_with(Default::default);
+                stage_into_prompt(&self.content, &attachments, prompt).await?;
             }
             let fingerprint = submission_fingerprint(&self.environment, &params);
             params.request_id = Some(submission_id(&mut recovery, fingerprint));
@@ -84,7 +85,7 @@ impl Session<'_> {
     ) -> Result<()> {
         let outcome = async {
             if !attachments.is_empty() {
-                input.attachments = stage_draft_attachments(&self.content, &attachments).await?;
+                stage_into_prompt(&self.content, &attachments, &mut input.prompt).await?;
             }
             if let Some(recovery) = &mut recovery {
                 let mode = input.mode.take();
@@ -413,22 +414,25 @@ impl Session<'_> {
     }
 }
 
-async fn stage_draft_attachments(
+async fn stage_into_prompt(
     content: &ContentClient,
     attachments: &[DraftAttachment],
-) -> Result<Vec<BlobAttachment>> {
-    let mut staged = Vec::with_capacity(attachments.len());
+    prompt: &mut Prompt,
+) -> Result<()> {
     for file in attachments {
         let info = content
             .stage_blob(&file.name, &file.mime, &file.bytes)
             .await?;
-        staged.push(BlobAttachment {
-            blob: info.blob,
-            name: file.name.clone(),
-            mime: file.mime.clone(),
-        });
+        prompt.append_reference(
+            &file.name,
+            PromptRef::Attachment {
+                id: info.blob,
+                name: file.name.clone(),
+                mime: file.mime.clone(),
+            },
+        );
     }
-    Ok(staged)
+    Ok(())
 }
 
 /// Writes serialized parameters straight into a digest so large attachments

@@ -501,20 +501,13 @@ impl Transcript {
                     Body::Text(_) | Body::Thought(_) | Body::Media(_) => {}
                 }
             }
-            EntryData::Prompt {
-                text,
-                attachments,
-                context,
-                origin,
-            } => {
+            EntryData::Prompt { prompt, origin } => {
                 if let Some(Item::User(user)) = self
                     .items
                     .iter_mut()
                     .find(|item| matches!(item, Item::User(u) if u.entry_id == Some(id)))
                 {
-                    user.text = text;
-                    user.attachments = attachments;
-                    user.context = context;
+                    user.prompt = prompt;
                     user.origin = origin;
                     user.full = None;
                     changed = true;
@@ -558,22 +551,15 @@ impl Transcript {
 
         let Entry { id, full, data } = entry;
         match data {
-            EntryData::Prompt {
-                text,
-                attachments,
-                context,
-                origin,
-            } => {
+            EntryData::Prompt { prompt, origin } => {
                 let steered = self.acp_turn.is_some() && !self.ended_run;
-                if !text.trim().is_empty() || !attachments.is_empty() || !context.is_empty() {
+                if !prompt.text.trim().is_empty() || !prompt.refs.is_empty() {
                     self.message_rows.insert(*id, format!("e{id}-0-row"));
                     self.items.push(Item::User(User {
                         key: format!("e{id}-0"),
                         entry_id: Some(*id),
                         full: *full,
-                        text: text.clone(),
-                        attachments: attachments.clone(),
-                        context: context.clone(),
+                        prompt: prompt.clone(),
                         origin: origin.clone(),
                         steered,
                     }));

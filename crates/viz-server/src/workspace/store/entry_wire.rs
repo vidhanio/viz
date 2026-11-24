@@ -54,9 +54,15 @@ pub(in crate::workspace) fn preview(entry: &mut Entry, stored_bytes: u64) -> usi
     let trimmed = match &mut entry.data {
         EntryData::Transcript(segment) => segment_preview(segment),
         EntryData::ToolUpdate { record, .. } => tool_preview(record),
-        EntryData::Prompt { text, .. } | EntryData::TaskResult { text, .. } => {
-            over_budget && truncate_head(text, TEXT_CAP)
+        EntryData::Prompt { prompt, .. } => {
+            if over_budget {
+                let mut text = prompt.display_text();
+                truncate_head(&mut text, TEXT_CAP);
+                *prompt = viz_protocol::Prompt::new(text);
+            }
+            over_budget
         }
+        EntryData::TaskResult { text, .. } => over_budget && truncate_head(text, TEXT_CAP),
         EntryData::Run(end) => {
             over_budget
                 && end

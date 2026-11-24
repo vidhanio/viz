@@ -232,12 +232,7 @@ pub struct User {
     /// Stored byte size when the wire prompt was trimmed; cleared once
     /// hydrated over the content plane.
     pub full: Option<u64>,
-    /// What the user wrote.
-    pub text: String,
-    /// Stored attachments carried by this prompt.
-    pub attachments: Vec<viz_client::protocol::PromptAttachment>,
-    /// Files and links mentioned with `@` or `#`.
-    pub context: Vec<viz_client::protocol::PromptContext>,
+    pub prompt: viz_client::protocol::Prompt,
     /// External connector origin when sent outside desktop.
     pub origin: Option<Origin>,
     /// Whether this prompt arrived while a prior run was active (steer).

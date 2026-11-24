@@ -6,8 +6,8 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
-    BlobAttachment, ConfigOption, Harness, OptionValue, Origin, Project, RunId, ThreadId,
-    ThreadWorktree, WorktreeTarget,
+    ConfigOption, Harness, OptionValue, Origin, Project, RunId, ThreadId, ThreadWorktree,
+    WorktreeTarget,
 };
 
 /// A tri-state field patch: omit to keep, `null` to clear, or a value to set.
@@ -453,25 +453,13 @@ pub struct SendInput {
     pub thread: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mode: Option<SendMode>,
-    /// The input text.
-    pub text: String,
+    pub prompt: crate::Prompt,
     /// Idempotency key: a retry with the same id returns the same run.
     #[serde(rename = "requestId", skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
     /// Where the input came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
-    /// Content-addressed blobs staged over the content WebSocket to attach to
-    /// this input.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<BlobAttachment>,
-    /// Ids of attachments this thread already stores, attached again, such as
-    /// those of a forked prompt.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub stored: Vec<String>,
-    /// Files and links the input mentions.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub context: Vec<crate::PromptContext>,
 }
 
 /// How to deliver input to a busy thread.

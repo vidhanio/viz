@@ -1,5 +1,5 @@
 //! Pure composer helper transitions: sending/queueing prompts with
-//! `PromptContext`, `@`/`/`/`$`/`#` completion acceptance, prompt history
+//! typed references, `@`/`/`/`$`/`#` completion acceptance, prompt history
 //! recall, and queued message editing.
 
 use std::{mem, time::Duration};
@@ -58,8 +58,7 @@ pub(super) fn send_input(
         model.selection.new_thread = Some(draft);
     }
     let submitted = mem::take(&mut model.composer.draft);
-    let context = submitted.prompt_context();
-    let text = submitted.outbound_text();
+    let prompt = submitted.prompt();
     let attachments = (*submitted.attachments).clone();
     let command = if let Some(thread) = &mut model.selection.new_thread {
         thread.sending = true;
@@ -73,14 +72,12 @@ pub(super) fn send_input(
                 harness: thread.harness.clone(),
                 options: thread.options.clone(),
                 access: thread.access.clone(),
-                text: Some(text),
-                attachments: Vec::new(),
-                context,
+                prompt: Some(prompt),
                 ..LaunchThread::default()
             }),
         }
     } else if let Some(thread) = model.selection.selected {
-        record_prompt_history(model, thread, &text);
+        record_prompt_history(model, thread, &submitted.text);
         let mode = if model.busy() {
             explicit_mode.or(Some(SendMode::Steer))
         } else {
@@ -94,10 +91,7 @@ pub(super) fn send_input(
             })),
             input: SendInput {
                 thread,
-                text,
-                attachments: Vec::new(),
-                stored: Vec::new(),
-                context,
+                prompt,
                 request_id: None,
                 origin: None,
                 mode,
@@ -300,10 +294,7 @@ pub(super) fn choose_completion(
                     recovery: None,
                     input: SendInput {
                         thread,
-                        text: "/compact".to_owned(),
-                        attachments: Vec::new(),
-                        stored: Vec::new(),
-                        context: Vec::new(),
+                        prompt: viz_client::protocol::Prompt::new("/compact"),
                         request_id: None,
                         origin: None,
                         mode: None,
@@ -413,7 +404,9 @@ fn thread_prompt_history(model: &Model, thread: viz_client::protocol::ThreadId) 
         .items
         .iter()
         .filter_map(|item| match item {
-            Item::User(user) if !user.text.trim().is_empty() => Some(user.text.trim().to_owned()),
+            Item::User(user) if !user.prompt.text.trim().is_empty() => {
+                Some(user.prompt.text.trim().to_owned())
+            }
             _ => None,
         })
         .collect();

@@ -622,10 +622,10 @@ pub(super) fn queue_entry_image_attachments(
     }
     let mut ids = Vec::new();
     for entry in entries {
-        if let EntryData::Prompt { attachments, .. } = &entry.data {
-            for att in attachments {
+        if let EntryData::Prompt { prompt, .. } = &entry.data {
+            for att in prompt.attachments() {
                 if att.mime.starts_with("image/") {
-                    ids.push(att.id.clone());
+                    ids.push(att.id);
                 }
             }
         }

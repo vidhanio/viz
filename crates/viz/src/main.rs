@@ -135,12 +135,9 @@ async fn send(endpoint: &Endpoint, thread: ThreadId, text: String) -> anyhow::Re
     let run = client
         .send(&SendInput {
             thread,
-            text,
+            prompt: viz_client::protocol::Prompt::new(text),
             origin: None,
             request_id: None,
-            attachments: Vec::new(),
-            stored: Vec::new(),
-            context: Vec::new(),
             mode: None,
         })
         .await?;

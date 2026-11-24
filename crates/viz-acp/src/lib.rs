@@ -105,7 +105,7 @@ pub use mcp::Mcp;
 pub use options::{Catalog, Desired, Selection};
 pub use probe::{catalog, refresh};
 pub use process::drain_processes;
-pub use prompt::{StoredAttachment, build_prompt, context_blocks};
+pub use prompt::{StoredAttachment, build_prompt};
 pub use receipts::Receipts;
 pub use session::{Outcome, Prompt, Session, SessionSnapshot, stop_reason_name};
 pub use settings::{Command, Skill};
