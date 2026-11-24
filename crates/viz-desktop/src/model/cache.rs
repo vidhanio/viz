@@ -1,12 +1,13 @@
-//! Normalised per-environment server state cache.
+//! Per-environment state: normalised server workspace data plus client-owned
+//! per-environment drafts, folds, and prompt history.
 
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashMap};
 
 use viz_client::protocol::{
-    Entry, GitBranch, Harness, Project, Task, ThreadId, ThreadState, ThreadSummary, Worktree,
+    GitBranch, Harness, Project, Task, ThreadId, ThreadState, ThreadSummary, Worktree,
 };
 
-use super::transcript::Transcript;
+use super::{async_slot::AsyncSlot, composer_state::DraftData, transcript::Transcript};
 
 /// A Git project's branches and worktrees loaded on demand for checkout menus.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -17,13 +18,11 @@ pub struct Checkouts {
     pub worktrees: Vec<Worktree>,
 }
 
-/// Cached transcript and live state for an open/watched thread.
+/// Active transcript, server state, and inline media fetch status for an open
+/// thread.
 #[derive(Debug, Clone, Default)]
 pub struct OpenThread {
-    /// Authoritative loaded entries used to fold the transcript across page
-    /// boundaries.
-    pub entries: VecDeque<Vec<Entry>>,
-    /// Committed transcript items and live uncommitted ACP tail.
+    /// Committed transcript window and live uncommitted ACP tail.
     pub transcript: Transcript,
     /// Latest watched thread state, once received from the server.
     pub state: Option<ThreadState>,
@@ -31,6 +30,11 @@ pub struct OpenThread {
     pub loading: bool,
     /// True while a page of older entries is being fetched.
     pub history_loading: bool,
+    /// Per-attachment inline preview fetch lifecycle, keyed by attachment id.
+    ///
+    /// Decoded GPU textures live outside the pure model in `ShellWidgets`,
+    /// strictly scoped to the active open thread.
+    pub media_slots: HashMap<String, AsyncSlot<()>>,
 }
 
 /// Cached project icon fetch metadata keyed by project path.
@@ -46,30 +50,38 @@ pub struct ProjectIconCache {
     pub requested: bool,
 }
 
-/// Normalised cache of server-owned data for one environment.
+/// Consolidated server-synchronized and client-local state for one environment.
 #[derive(Debug, Clone, Default)]
-pub struct EnvironmentCache {
+pub struct EnvState {
     /// Latest applied server workspace revision (`0` before first snapshot).
     pub rev: u64,
     projects: BTreeMap<String, Project>,
     project_order: Vec<String>,
     threads: BTreeMap<ThreadId, ThreadSummary>,
     thread_order: Vec<ThreadId>,
-    /// Cached transcripts and live states keyed by thread id.
+    /// Open transcripts and live states keyed by thread id.
     pub open_threads: BTreeMap<ThreadId, OpenThread>,
     /// Branches and worktrees keyed by project path.
-    pub checkouts: BTreeMap<String, Checkouts>,
+    pub checkouts: BTreeMap<String, AsyncSlot<Checkouts>>,
     /// Fetched project icon metadata keyed by project path.
     pub project_icons: BTreeMap<String, ProjectIconCache>,
     /// Configured ACP harnesses advertised by this environment.
     pub harnesses: Vec<Harness>,
     /// Delegated tasks tracked in this environment.
     pub tasks: Vec<Task>,
+    /// Saved unsent composer drafts keyed by thread id.
+    pub drafts: BTreeMap<ThreadId, DraftData>,
+    /// Per-thread disclosure overrides (`true` = open, `false` = closed).
+    pub folds: BTreeMap<ThreadId, HashMap<String, bool>>,
+    /// Sent prompt recall history keyed by thread id.
+    pub prompt_history: BTreeMap<ThreadId, Vec<String>>,
 }
 
-impl EnvironmentCache {
-    /// Clears cached server data when resetting or switching environments.
-    pub fn clear(&mut self) {
+impl EnvState {
+    /// Clears server-synchronized data when resetting or switching environments
+    /// while preserving client-owned drafts, fold overrides, and prompt
+    /// history.
+    pub fn clear_server_data(&mut self) {
         self.rev = 0;
         self.projects.clear();
         self.project_order.clear();

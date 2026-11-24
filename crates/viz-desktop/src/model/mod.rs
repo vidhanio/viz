@@ -4,6 +4,7 @@
 //! state container is plain data and every projection or derivation is a pure
 //! function.
 
+pub mod async_slot;
 pub mod cache;
 pub mod completion;
 mod completion_match;
@@ -36,7 +37,8 @@ use viz_client::protocol::{
 };
 
 pub use self::{
-    cache::{Checkouts, EnvironmentCache, OpenThread},
+    async_slot::AsyncSlot,
+    cache::{Checkouts, EnvState, OpenThread},
     completion::{
         BuiltinCommand, CompletionChoice, GitHubEntry, MentionEntry, SkillEntry, SlashEntry,
         available_commands, completion_choice_at, completion_count, completion_token_at,
@@ -106,10 +108,11 @@ pub const DEFAULT_ENV_KEY: &str = "local";
 pub struct Model {
     pub requests: requests::Requests,
     pub git: git::GitState,
-    /// Connection status, endpoint, and environment roster.
+    /// Connection status, endpoint, active session, and environment roster.
     pub connection: ConnectionState,
-    /// Normalised server cache per environment id.
-    pub caches: BTreeMap<String, EnvironmentCache>,
+    /// Per-environment server workspace state, drafts, folds, and prompt
+    /// history keyed by environment id.
+    pub envs: BTreeMap<String, EnvState>,
     /// Active thread or draft and back/forward history.
     pub selection: SelectionState,
     /// Shell slot visibility, pane widths, and window width.
@@ -142,7 +145,7 @@ impl Model {
         let mut model = Self {
             git: git::GitState::default(),
             connection: ConnectionState::default(),
-            caches: BTreeMap::new(),
+            envs: BTreeMap::new(),
             selection: SelectionState::default(),
             panels: PanelsState::default(),
             sidebar: SidebarState::default(),
@@ -160,7 +163,7 @@ impl Model {
         model
     }
 
-    /// Active environment key used to index [`Self::caches`] and saved drafts.
+    /// Active environment key used to index [`Self::envs`].
     #[must_use]
     pub fn active_env_key(&self) -> &str {
         self.connection
@@ -173,28 +176,61 @@ impl Model {
     /// thread is currently open.
     #[must_use]
     pub fn is_fold_open(&self, key: &str, default_open: bool) -> bool {
-        self.timeline.is_open(
-            self.active_env_key(),
-            self.selection.selected,
-            key,
-            default_open,
-        )
+        let folds = self
+            .selection
+            .selected
+            .map_or(Some(&self.timeline.draft_folds), |id| {
+                self.cache().folds.get(&id)
+            });
+        folds
+            .and_then(|folds| folds.get(key).copied())
+            .unwrap_or(default_open)
     }
 
-    /// Active environment's normalised server cache.
+    /// Sets an explicit open/closed state for `key` on the active environment
+    /// and `thread`, bumping [`TimelineState::fold_rev`].
+    pub fn set_fold(&mut self, thread: Option<ThreadId>, key: String, open: bool) {
+        match thread {
+            Some(id) => {
+                self.cache_mut()
+                    .folds
+                    .entry(id)
+                    .or_default()
+                    .insert(key, open);
+            }
+            None => {
+                self.timeline.draft_folds.insert(key, open);
+            }
+        }
+        self.timeline.bump_fold_rev();
+    }
+
+    /// Clears recorded fold overrides for `thread` in the active environment,
+    /// bumping [`TimelineState::fold_rev`].
+    pub fn clear_folds(&mut self, thread: Option<ThreadId>) {
+        match thread {
+            Some(id) => {
+                self.cache_mut().folds.remove(&id);
+            }
+            None => self.timeline.draft_folds.clear(),
+        }
+        self.timeline.bump_fold_rev();
+    }
+
+    /// Active environment's state.
     #[must_use]
-    pub fn cache(&self) -> &EnvironmentCache {
-        static EMPTY: OnceLock<EnvironmentCache> = OnceLock::new();
-        self.caches
+    pub fn cache(&self) -> &EnvState {
+        static EMPTY: OnceLock<EnvState> = OnceLock::new();
+        self.envs
             .get(self.active_env_key())
-            .unwrap_or_else(|| EMPTY.get_or_init(EnvironmentCache::default))
+            .unwrap_or_else(|| EMPTY.get_or_init(EnvState::default))
     }
 
-    /// Mutable reference to the active environment's cache, creating it if
+    /// Mutable reference to the active environment's state, creating it if
     /// absent.
-    pub fn cache_mut(&mut self) -> &mut EnvironmentCache {
+    pub fn cache_mut(&mut self) -> &mut EnvState {
         let key = self.active_env_key().to_owned();
-        self.caches.entry(key).or_default()
+        self.envs.entry(key).or_default()
     }
 
     /// Whether the client is connected to a server.
@@ -215,10 +251,13 @@ impl Model {
         &self.cache().harnesses
     }
 
-    /// Branches and worktrees cached for `project_path`, if loaded.
+    /// Branches and worktrees loaded for `project_path`, if ready.
     #[must_use]
     pub fn checkouts(&self, project_path: &str) -> Option<&Checkouts> {
-        self.cache().checkouts.get(project_path)
+        self.cache()
+            .checkouts
+            .get(project_path)
+            .and_then(AsyncSlot::as_ready)
     }
 
     /// Cached open-thread record for the currently selected thread.
@@ -325,7 +364,7 @@ impl Model {
     #[must_use]
     pub fn can_attach(&self) -> bool {
         self.attachment_target()
-            .is_some_and(|target| !self.composer.attachment_reads.contains(&target))
+            .is_some_and(|target| !self.connection.live.attachment_reads.contains(&target))
     }
 
     /// Whether the composer can submit the current draft.
@@ -435,7 +474,7 @@ impl Model {
             .favorite_models
             .clone_from(&prefs.favorite_models);
         for (env, threads) in &prefs.drafts {
-            let env_map = self.composer.drafts_by_env.entry(env.clone()).or_default();
+            let env_map = &mut self.envs.entry(env.clone()).or_default().drafts;
             for (thread_key, text) in threads {
                 if let Ok(raw_id) = thread_key.parse::<u64>()
                     && !text.is_empty()
@@ -455,9 +494,9 @@ impl Model {
     #[must_use]
     pub fn to_prefs(&self) -> Prefs {
         let mut drafts: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-        for (env, threads) in &self.composer.drafts_by_env {
+        for (env, state) in &self.envs {
             let mut env_drafts = BTreeMap::new();
-            for (id, draft) in threads {
+            for (id, draft) in &state.drafts {
                 if !draft.text.is_empty() {
                     env_drafts.insert(id.0.to_string(), draft.text.clone());
                 }

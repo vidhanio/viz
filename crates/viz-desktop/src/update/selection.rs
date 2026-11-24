@@ -289,19 +289,15 @@ pub(super) fn show_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec
     model.selection.new_thread = None;
     model.palette.message_jump = None;
     model.selection.selected = Some(thread);
-    let env = model.active_env_key().to_owned();
-    let restored = model
-        .composer
-        .drafts_by_env
-        .get_mut(&env)
-        .and_then(|drafts| drafts.remove(&thread))
-        .unwrap_or_default();
+    let restored = model.cache_mut().drafts.remove(&thread).unwrap_or_default();
     let text = restored.text.clone();
     let pills = restored.pills.clone();
     model.composer.draft = restored;
     reset_active_view(model);
     if model.cache().open_thread(thread).is_none() {
         model.cache_mut().open_thread_mut(thread).loading = true;
+    } else if let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
+        open.media_slots.clear();
     }
     effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
         text,
@@ -317,27 +313,15 @@ pub(super) fn save_draft(model: &mut Model) -> bool {
     let Some(id) = model.selection.selected.take() else {
         return false;
     };
-    let env = model.active_env_key().to_owned();
     if draft.is_empty() {
-        model
-            .composer
-            .drafts_by_env
-            .get_mut(&env)
-            .and_then(|drafts| drafts.remove(&id))
-            .is_some()
+        model.cache_mut().drafts.remove(&id).is_some()
     } else {
         let changed = model
-            .composer
-            .drafts_by_env
-            .get(&env)
-            .and_then(|drafts| drafts.get(&id))
+            .cache()
+            .drafts
+            .get(&id)
             .is_none_or(|prev| prev.text != draft.text);
-        model
-            .composer
-            .drafts_by_env
-            .entry(env)
-            .or_default()
-            .insert(id, draft);
+        model.cache_mut().drafts.insert(id, draft);
         changed
     }
 }
@@ -397,7 +381,7 @@ pub(super) fn open_in_environment(
         return;
     }
     let saved = save_draft(model);
-    model.connection.session = crate::model::SessionId(0);
+    model.connection.reset_session(crate::model::SessionId(0));
     model.connection.status = Status::Connecting;
     model.connection.environment = Some(environment.clone());
     model.connection.epoch = model.connection.epoch.wrapping_add(1);
@@ -406,10 +390,8 @@ pub(super) fn open_in_environment(
     model.selection.back.clear();
     model.selection.forward.clear();
     model.composer.draft = DraftData::default();
-    model.composer.attachment_reads.clear();
     model.optimistic.clear();
-    model.cache_mut().clear();
-    model.timeline.clear_in_flight();
+    model.cache_mut().clear_server_data();
     model.timeline.file_preview = None;
     model.sidebar.dismiss_overlays();
     model.palette = crate::model::PaletteState::default();

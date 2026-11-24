@@ -9,7 +9,7 @@ use viz_client::protocol::{
 
 use crate::{
     effects::LoadedAttachments,
-    model::{AttachmentTarget, Checkouts, DraftAttachment, SessionId, Status},
+    model::{AttachmentTarget, Checkouts, SessionId, Status},
 };
 
 /// Events pushed from the background server runtime or blocking platform tasks.
@@ -294,15 +294,17 @@ pub enum ServerMsg {
         result: Result<(FileContent, Option<Vec<u8>>), String>,
     },
     /// Content-channel attachment download finished for a stored thread
-    /// attachment.
+    /// attachment (`(mime, raw_bytes)`).
     ThreadAttachmentLoaded {
         /// Owning thread id.
         thread: ThreadId,
         /// Attachment SHA-256 id.
         id: String,
-        /// Optional preview modal request serial.
+        /// Optional preview modal request serial (when `Some`, bytes are
+        /// [`viz_client::protocol::ContentVariant::Original`]; when `None`,
+        /// bytes are a 1024 px inline preview).
         preview_request: Option<u64>,
-        /// Loaded raw attachment or error string.
-        result: Result<DraftAttachment, String>,
+        /// Loaded `(mime, bytes)` or error string.
+        result: Result<(String, Vec<u8>), String>,
     },
 }

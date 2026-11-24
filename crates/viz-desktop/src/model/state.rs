@@ -2,13 +2,15 @@
 //!
 //! Zero Rune types, channels, or I/O handles live here.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use viz_client::protocol::{
-    AccessMode, Environment, Harness, OptionValue, Project, ThreadId, ThreadSummary, WorktreeTarget,
+    AccessMode, EntryId, Environment, Harness, OptionValue, Project, ThreadId, ThreadSummary,
+    WorktreeTarget,
 };
 
 use super::{
+    composer_state::AttachmentTarget,
     prefs::default_collapsed_shelves,
     sidebar::{ContextSubmenu, InlineRename, ProjectFilter, SETTLED_PAGE_SIZE, SidebarDrag},
 };
@@ -67,11 +69,143 @@ pub enum PaneSwitch {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub struct SessionId(pub u64);
 
+/// Maximum concurrent content-plane inline image thumbnail fetches per session.
+pub const MAX_CONCURRENT_MEDIA_FETCHES: usize = 4;
+/// Maximum concurrent content-plane entry hydration downloads per session.
+pub const MAX_CONCURRENT_ENTRY_FETCHES: usize = 2;
+
+/// Ephemeral per-connection session state cleared atomically whenever the
+/// WebSocket drops or switches environments.
+#[derive(Debug, Clone, Default)]
+pub struct LiveSession {
+    /// Active connection session id (`SessionId(0)` when disconnected).
+    pub id: SessionId,
+    /// In-flight content-plane entry hydrations keyed by `(thread, entry)`.
+    pub pending_entries: HashMap<(ThreadId, EntryId), String>,
+    /// Queued entry hydrations waiting for a concurrency slot.
+    pub queued_entries: VecDeque<(ThreadId, String, EntryId)>,
+    /// In-flight inline attachment preview fetches `(thread, attachment_id)`.
+    pub pending_media: HashSet<(ThreadId, String)>,
+    /// Queued inline attachment preview fetches waiting for a concurrency slot.
+    pub queued_media: VecDeque<(ThreadId, String)>,
+    /// In-flight local attachment reads preventing overlapping reads on one
+    /// composer target.
+    pub attachment_reads: HashSet<AttachmentTarget>,
+}
+
+impl LiveSession {
+    /// Constructs a clean live session for `id`.
+    #[must_use]
+    pub fn for_session(id: SessionId) -> Self {
+        Self {
+            id,
+            ..Self::default()
+        }
+    }
+
+    /// Returns whether the item identified by `key` currently has a pending or
+    /// queued content-plane entry hydration.
+    #[must_use]
+    pub fn is_entry_loading(&self, key: &str) -> bool {
+        self.pending_entries.values().any(|k| k == key)
+            || self.queued_entries.iter().any(|(_, k, _)| k == key)
+    }
+
+    /// Returns whether `(thread, entry)` is already pending or queued.
+    #[must_use]
+    pub fn has_entry_fetch(&self, thread: ThreadId, entry: EntryId) -> bool {
+        self.pending_entries.contains_key(&(thread, entry))
+            || self
+                .queued_entries
+                .iter()
+                .any(|(t, _, e)| *t == thread && *e == entry)
+    }
+
+    /// Enqueues or starts an entry hydration up to
+    /// [`MAX_CONCURRENT_ENTRY_FETCHES`], returning `true` if it should dispatch
+    /// immediately.
+    pub fn request_entry(&mut self, thread: ThreadId, key: String, entry: EntryId) -> bool {
+        if self.has_entry_fetch(thread, entry) {
+            return false;
+        }
+        if self.pending_entries.len() < MAX_CONCURRENT_ENTRY_FETCHES {
+            self.pending_entries.insert((thread, entry), key);
+            true
+        } else {
+            self.queued_entries.push_back((thread, key, entry));
+            false
+        }
+    }
+
+    /// Marks `(thread, entry)` complete and promotes the next queued hydration
+    /// for `active_thread`, if any.
+    pub fn finish_entry(
+        &mut self,
+        thread: ThreadId,
+        entry: EntryId,
+        active_thread: Option<ThreadId>,
+    ) -> Option<(ThreadId, String, EntryId)> {
+        self.pending_entries.remove(&(thread, entry));
+        if self.pending_entries.len() >= MAX_CONCURRENT_ENTRY_FETCHES {
+            return None;
+        }
+        while let Some((next_thread, next_key, next_entry)) = self.queued_entries.pop_front() {
+            if active_thread != Some(next_thread) {
+                continue;
+            }
+            self.pending_entries
+                .insert((next_thread, next_entry), next_key.clone());
+            return Some((next_thread, next_key, next_entry));
+        }
+        None
+    }
+
+    /// Enqueues or starts an inline media fetch up to
+    /// [`MAX_CONCURRENT_MEDIA_FETCHES`], returning `true` if it should dispatch
+    /// immediately.
+    pub fn request_media(&mut self, thread: ThreadId, id: String) -> bool {
+        let pair = (thread, id);
+        if self.pending_media.contains(&pair) || self.queued_media.contains(&pair) {
+            return false;
+        }
+        if self.pending_media.len() < MAX_CONCURRENT_MEDIA_FETCHES {
+            self.pending_media.insert(pair);
+            true
+        } else {
+            self.queued_media.push_back(pair);
+            false
+        }
+    }
+
+    /// Marks `(thread, id)` complete and promotes the next queued inline media
+    /// fetch for `active_thread`, if any.
+    pub fn finish_media(
+        &mut self,
+        thread: ThreadId,
+        id: &str,
+        active_thread: Option<ThreadId>,
+    ) -> Option<(ThreadId, String)> {
+        self.pending_media.remove(&(thread, id.to_owned()));
+        if self.pending_media.len() >= MAX_CONCURRENT_MEDIA_FETCHES {
+            return None;
+        }
+        while let Some((next_thread, next_id)) = self.queued_media.pop_front() {
+            if active_thread != Some(next_thread) {
+                continue;
+            }
+            self.pending_media.insert((next_thread, next_id.clone()));
+            return Some((next_thread, next_id));
+        }
+        None
+    }
+}
+
 /// Connection metadata shared across the desktop session.
 #[derive(Debug, Clone)]
 pub struct ConnectionState {
-    /// Active connection session id (`SessionId(0)` when disconnected).
-    pub session: SessionId,
+    /// Per-connection ephemeral tracking cleared atomically on disconnect or
+    /// environment switch.
+    pub live: LiveSession,
     /// Live WebSocket connection status.
     pub status: Status,
     /// Display endpoint string, once desktop config is read.
@@ -89,13 +223,20 @@ pub struct ConnectionState {
 impl Default for ConnectionState {
     fn default() -> Self {
         Self {
-            session: SessionId(0),
+            live: LiveSession::default(),
             status: Status::Connecting,
             endpoint: None,
             environment: None,
             environments: Vec::new(),
             epoch: 0,
         }
+    }
+}
+
+impl ConnectionState {
+    /// Resets connection-ephemeral session state to `id`.
+    pub fn reset_session(&mut self, id: SessionId) {
+        self.live = LiveSession::for_session(id);
     }
 }
 

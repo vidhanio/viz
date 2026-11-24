@@ -15,8 +15,8 @@ use super::{
     timeline::{apply_entry_loaded, apply_thread_forked},
 };
 use crate::{
-    effects::Effect,
-    model::{Model, PaletteSearch, SessionId, Status},
+    effects::{Effect, ServerEffect},
+    model::{AsyncSlot, Model, PaletteSearch, SessionId, Status},
 };
 
 #[expect(
@@ -32,8 +32,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         }
         ServerMsg::StatusChanged(status) => {
             if matches!(status, Status::Error(_)) {
-                model.connection.session = SessionId(0);
-                model.timeline.clear_in_flight();
+                model.connection.reset_session(SessionId(0));
             }
             model.connection.status = status;
             effects.push(Effect::SetWindowTitle(model.window_title()));
@@ -58,8 +57,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             {
                 return effects;
             }
-            model.connection.session = session;
-            model.timeline.clear_in_flight();
+            model.connection.reset_session(session);
             model.connection.status = Status::Connected { version };
             model.connection.environment = Some(environment);
             model.connection.environments = environments;
@@ -114,10 +112,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
         }
         ServerMsg::ThreadLive { thread, delta } => {
             let open = model.cache_mut().open_thread_mut(thread);
-            if let Some(state) = &mut open.state {
-                delta.apply(&mut state.live);
-                open.transcript.sync_acp(state.live.as_ref());
-            }
+            open.transcript.apply_live_delta(*delta);
             if model.selection.selected == Some(thread) && model.timeline.far_from_bottom {
                 model.timeline.unseen_activity = true;
             }
@@ -132,7 +127,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             {
                 model.timeline.unseen_activity = true;
             }
-            apply_thread_view(model, thread, entries, reset, before, &mut effects);
+            apply_thread_view(model, thread, &entries, reset, before, &mut effects);
         }
         ServerMsg::EarlierLoaded {
             thread,
@@ -250,12 +245,21 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
             }
             match result {
                 Ok(checkouts) => {
-                    model.cache_mut().checkouts.insert(project, checkouts);
+                    model
+                        .cache_mut()
+                        .checkouts
+                        .insert(project, AsyncSlot::Ready(checkouts));
                 }
-                Err(error) => effects.push(Effect::Toast {
-                    title: "Couldn’t list branches".into(),
-                    detail: Some(error),
-                }),
+                Err(error) => {
+                    model
+                        .cache_mut()
+                        .checkouts
+                        .insert(project, AsyncSlot::Error(error.clone()));
+                    effects.push(Effect::Toast {
+                        title: "Couldn’t list branches".into(),
+                        detail: Some(error),
+                    });
+                }
             }
         }
         ServerMsg::FileSearchResult { request, result } => {
@@ -427,52 +431,71 @@ fn apply_thread_attachment_loaded(
     thread: ThreadId,
     id: String,
     preview_request: Option<u64>,
-    result: Result<crate::model::DraftAttachment, String>,
+    result: Result<(String, Vec<u8>), String>,
     effects: &mut Vec<Effect>,
 ) {
-    let env = model.active_env_key().to_owned();
-    model
-        .timeline
-        .pending_attachments
-        .remove(&(env.clone(), thread, id.clone()));
-    match result {
-        Ok(attachment) => {
-            if attachment.mime.starts_with("image/") && !attachment.bytes.is_empty() {
-                effects.push(Effect::DecodeThreadAttachmentImage {
-                    environment: env.clone(),
-                    thread,
-                    id: id.clone(),
-                    media_type: attachment.mime.clone(),
-                    bytes: attachment.bytes.clone(),
-                });
-            }
-            if let Some(req) = preview_request
-                && model
+    if let Some(req) = preview_request {
+        match result {
+            Ok((mime, bytes)) => {
+                if model
                     .timeline
                     .file_preview
                     .as_ref()
                     .is_some_and(|p| p.request == req)
-            {
-                super::timeline::apply_loaded_attachment_to_preview(
-                    model,
-                    req,
-                    &attachment,
-                    effects,
-                );
+                {
+                    super::timeline::apply_loaded_attachment_to_preview(
+                        model, req, mime, bytes, effects,
+                    );
+                }
             }
-            model
-                .timeline
-                .loaded_attachments
-                .insert((env, thread, id), attachment);
+            Err(error) => {
+                if let Some(preview) = model.timeline.file_preview.as_mut()
+                    && preview.request == req
+                {
+                    preview.body = crate::model::FilePreviewBody::Error(error);
+                }
+            }
+        }
+        return;
+    }
+
+    let env = model.active_env_key().to_owned();
+    let next = model
+        .connection
+        .live
+        .finish_media(thread, &id, model.selection.selected);
+    match result {
+        Ok((mime, bytes)) => {
+            if let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
+                open.media_slots
+                    .entry(id.clone())
+                    .or_default()
+                    .set_ready(());
+            }
+            if mime.starts_with("image/") && !bytes.is_empty() {
+                effects.push(Effect::DecodeThreadAttachmentImage {
+                    environment: env,
+                    thread,
+                    id,
+                    media_type: mime,
+                    bytes,
+                });
+            }
         }
         Err(error) => {
-            if let Some(req) = preview_request
-                && let Some(preview) = model.timeline.file_preview.as_mut()
-                && preview.request == req
-            {
-                preview.body = crate::model::FilePreviewBody::Error(error);
+            if let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
+                open.media_slots.entry(id).or_default().set_error(error);
             }
         }
+    }
+    if let Some((next_thread, next_id)) = next
+        && model.connected()
+    {
+        effects.push(Effect::Server(ServerEffect::ReadAttachment {
+            thread: next_thread,
+            id: next_id,
+            preview_request: None,
+        }));
     }
 }
 

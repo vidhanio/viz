@@ -29,7 +29,7 @@ pub(super) fn primary_actions(s: &Desktop, t: &Theme) -> El {
     let sending_draft = m.selection.new_thread.as_ref().is_some_and(|d| d.sending);
     let reading_attachments = m
         .attachment_target()
-        .is_some_and(|target| m.composer.attachment_reads.contains(&target))
+        .is_some_and(|target| m.connection.live.attachment_reads.contains(&target))
         || m.composer.draft.has_pending_or_failed_attachments();
     if sending_draft || reading_attachments {
         let tip = if sending_draft {

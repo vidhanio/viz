@@ -11,7 +11,7 @@ use super::data::{
     THREAD, WORKTREE, list, now_ms, preview_entry, preview_plan, preview_text, preview_thread,
     preview_tool, preview_tool_entry, prompt, response, thread_state, transcript,
 };
-use crate::model::{Checkouts, Model, PaneSwitch, Status, Transcript};
+use crate::model::{Checkouts, Model, PaneSwitch, Status, Transcript, async_slot::AsyncSlot};
 
 /// Populates the baseline connected workspace model.
 pub(super) fn seed_workspace(m: &mut Model) {
@@ -64,8 +64,7 @@ pub(super) fn select_preview(m: &mut Model, thread: ThreadId) {
         m.selection.new_thread = None;
         m.selection.selected = Some(thread);
         m.composer.draft_focused = false;
-        let env = m.active_env_key().to_owned();
-        m.timeline.clear_folds(&env, Some(thread));
+        m.clear_folds(Some(thread));
         m.composer.completion.reset();
         m.composer.open_picker = None;
         let open = m.cache_mut().open_thread_mut(thread);
@@ -77,9 +76,8 @@ pub(super) fn select_preview(m: &mut Model, thread: ThreadId) {
 }
 
 pub(super) fn open_fold(m: &mut Model, key: &str) {
-    let env = m.active_env_key().to_owned();
-    m.timeline
-        .set_fold(&env, m.selection.selected, key.to_owned(), true);
+    let selected = m.selection.selected;
+    m.set_fold(selected, key.to_owned(), true);
 }
 
 pub(super) fn seed_activity(m: &mut Model) {
@@ -107,8 +105,7 @@ pub(super) fn seed_activity(m: &mut Model) {
         ],
         None,
     );
-    let env = m.active_env_key().to_owned();
-    m.timeline.clear_folds(&env, Some(THREAD));
+    m.clear_folds(Some(THREAD));
     open_fold(m, "turn-e1-0-fold");
     open_fold(m, "acp-1-run-1");
 }
@@ -198,8 +195,7 @@ pub(super) fn seed_worklog(m: &mut Model) {
         ],
         None,
     );
-    let env = m.active_env_key().to_owned();
-    m.timeline.clear_folds(&env, Some(THREAD));
+    m.clear_folds(Some(THREAD));
     for key in [
         "turn-e1-0-fold",
         "acp-1-edit-1",
@@ -305,8 +301,7 @@ pub(super) fn seed_thread_details_subagents(m: &mut Model) {
 
 pub(super) fn seed_agents(m: &mut Model) {
     seed_subagents(m);
-    let env = m.active_env_key().to_owned();
-    m.timeline.clear_folds(&env, Some(THREAD));
+    m.clear_folds(Some(THREAD));
     open_fold(m, "turn-e1-0-fold");
 }
 
@@ -360,7 +355,7 @@ pub(super) fn seed_subagent(m: &mut Model) {
 pub(super) fn seed_checkouts(m: &mut Model) {
     m.cache_mut().checkouts.insert(
         "/work/workbench".into(),
-        Checkouts {
+        AsyncSlot::Ready(Checkouts {
             branches: ["main", "release", "origin/main", "origin/release"]
                 .map(|name| GitBranch {
                     name: name.into(),
@@ -385,6 +380,6 @@ pub(super) fn seed_checkouts(m: &mut Model) {
                     threads: vec![ThreadId(10)],
                 },
             ],
-        },
+        }),
     );
 }

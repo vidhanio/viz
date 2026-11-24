@@ -195,12 +195,13 @@ fn ancestor_fallback(model: &Model, removed: ThreadId) -> Option<ThreadId> {
 pub(super) fn apply_thread_state(
     model: &mut Model,
     thread: ThreadId,
-    state: ThreadState,
+    mut state: ThreadState,
     effects: &mut Vec<Effect>,
 ) {
+    let live = state.live.take();
     let open = model.cache_mut().open_thread_mut(thread);
     let status_changed = open.state.as_ref().map(|prev| prev.status) != Some(state.status);
-    open.transcript.sync_acp(state.live.as_ref());
+    open.transcript.sync_acp(live.as_ref());
     open.state = Some(state);
     if model.selection.selected == Some(thread) {
         model.composer.model_menu.loading_levels = None;
@@ -213,7 +214,7 @@ pub(super) fn apply_thread_state(
 pub(super) fn apply_thread_view(
     model: &mut Model,
     thread: ThreadId,
-    entries: Vec<Entry>,
+    entries: &[Entry],
     reset: bool,
     before: Option<EntryId>,
     effects: &mut Vec<Effect>,
@@ -223,24 +224,16 @@ pub(super) fn apply_thread_view(
     }
     let open = model.cache_mut().open_thread_mut(thread);
     if reset {
-        open.entries.clear();
         open.transcript = Transcript::from_entries(entries.iter(), before);
         open.loading = false;
         open.history_loading = false;
+        open.media_slots.clear();
     } else {
         open.transcript.append(entries.iter());
     }
     if !entries.is_empty() {
-        queue_entry_image_attachments(model, thread, &entries, effects);
-        model
-            .cache_mut()
-            .open_thread_mut(thread)
-            .entries
-            .push_back(entries);
+        queue_entry_image_attachments(model, thread, entries, effects);
     }
-    let open = model.cache_mut().open_thread_mut(thread);
-    let live = open.state.as_ref().and_then(|state| state.live.as_ref());
-    open.transcript.sync_acp(live);
     if model.selection.selected == Some(thread) {
         super::palette::continue_message_jump(model, effects);
     }
@@ -271,11 +264,11 @@ pub(super) fn apply_earlier_loaded(
             effects.push(Effect::KeepOnScreen(first_key));
         }
         queue_entry_image_attachments(model, thread, &page.entries, effects);
-        let open = model.cache_mut().open_thread_mut(thread);
-        open.entries.push_front(page.entries);
-        open.transcript = Transcript::from_entries(open.entries.iter().flatten(), page.before);
-        let live = open.state.as_ref().and_then(|state| state.live.as_ref());
-        open.transcript.sync_acp(live);
+        model
+            .cache_mut()
+            .open_thread_mut(thread)
+            .transcript
+            .prepend(&page);
         super::palette::continue_message_jump(model, effects);
     } else if model
         .palette
@@ -435,10 +428,10 @@ pub(super) fn apply_send_failed(
             restore_active_draft(model, recovery.draft, effects);
         } else {
             let saved = model
-                .composer
-                .drafts_by_env
+                .envs
                 .entry(recovery.environment)
                 .or_default()
+                .drafts
                 .entry(thread)
                 .or_default();
             prepend_draft(saved, recovery.draft);
@@ -455,7 +448,7 @@ pub(super) fn apply_attachments_loaded(
     loaded: LoadedAttachments,
     effects: &mut Vec<Effect>,
 ) {
-    if scope != model.connection.epoch || !model.composer.attachment_reads.remove(&target) {
+    if scope != model.connection.epoch || !model.connection.live.attachment_reads.remove(&target) {
         return;
     }
     let mut errors = loaded.errors;
@@ -479,10 +472,10 @@ pub(super) fn apply_attachments_loaded(
             AttachmentTarget::Thread(id) => (
                 false,
                 model
-                    .composer
-                    .drafts_by_env
+                    .envs
                     .entry(env)
                     .or_default()
+                    .drafts
                     .entry(id)
                     .or_default(),
             ),
@@ -530,7 +523,7 @@ pub(super) fn apply_attachments_loaded(
 pub(super) fn rollback_optimistic(model: &mut Model, undo: OptimisticUndo) {
     match undo {
         OptimisticUndo::ThreadSummary { env, id, prior } => {
-            if let Some(cache) = model.caches.get_mut(&env)
+            if let Some(cache) = model.envs.get_mut(&env)
                 && let Some(current) = cache.summary_mut(id)
             {
                 *current = *prior;
@@ -541,7 +534,7 @@ pub(super) fn rollback_optimistic(model: &mut Model, undo: OptimisticUndo) {
             path,
             prior_pinned,
         } => {
-            if let Some(cache) = model.caches.get_mut(&env)
+            if let Some(cache) = model.envs.get_mut(&env)
                 && let Some(project) = cache.project_mut(&path)
             {
                 project.settings.pinned = prior_pinned;
@@ -583,33 +576,39 @@ fn prepend_draft(draft: &mut DraftData, mut recovery: DraftData) {
     *draft = recovery;
 }
 
-fn queue_entry_image_attachments(
+pub(super) fn queue_entry_image_attachments(
     model: &mut Model,
     thread: ThreadId,
     entries: &[Entry],
     effects: &mut Vec<Effect>,
 ) {
-    if !model.connected() {
+    if !model.connected() || model.selection.selected != Some(thread) {
         return;
     }
-    let env = model.active_env_key().to_owned();
+    let mut ids = Vec::new();
     for entry in entries {
         if let EntryData::Prompt { attachments, .. } = &entry.data {
             for att in attachments {
-                if !att.mime.starts_with("image/") {
-                    continue;
-                }
-                let key = (env.clone(), thread, att.id.clone());
-                if !model.timeline.loaded_attachments.contains_key(&key)
-                    && model.timeline.pending_attachments.insert(key)
-                {
-                    effects.push(Effect::Server(ServerEffect::ReadAttachment {
-                        thread,
-                        id: att.id.clone(),
-                        preview_request: None,
-                    }));
+                if att.mime.starts_with("image/") {
+                    ids.push(att.id.clone());
                 }
             }
+        }
+    }
+    for id in ids {
+        let should_fetch = model
+            .cache_mut()
+            .open_thread_mut(thread)
+            .media_slots
+            .entry(id.clone())
+            .or_default()
+            .begin();
+        if should_fetch && model.connection.live.request_media(thread, id.clone()) {
+            effects.push(Effect::Server(ServerEffect::ReadAttachment {
+                thread,
+                id,
+                preview_request: None,
+            }));
         }
     }
 }

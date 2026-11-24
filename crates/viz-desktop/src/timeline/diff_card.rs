@@ -23,9 +23,10 @@ const DIFF_SCROLL_MAX_H: f32 = 260.0;
 /// Renders memoized inline diff cards for every file diff reported by `tool`.
 pub fn file_diffs_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let cwd = s.model.thread_state().map(|state| state.cwd.as_str());
+    let rev = s.model.transcript().rev;
     rune::memo(
         format!("{}-diffs", tool.key),
-        (&tool.diffs, t.k.dark, cwd),
+        (tool.key.as_str(), rev, t.k.dark, cwd),
         || {
             col()
                 .role("group")

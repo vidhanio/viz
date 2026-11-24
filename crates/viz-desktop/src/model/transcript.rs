@@ -4,13 +4,26 @@
 use std::collections::BTreeMap;
 
 use viz_client::protocol::{
-    Compaction, CompactionStatus, ContentBlock, EntryId, Origin, Plan, PlanContent, PlanPriority,
-    PlanStatus, Review, Segment, ThreadId, ToolDiff, TurnUsage,
+    Compaction, CompactionStatus, ContentBlock, Entry, EntryId, Origin, Plan, PlanContent,
+    PlanPriority, PlanStatus, Review, Segment, ThreadId, ToolDiff, TurnUsage,
 };
+
+/// Metadata paired 1:1 with each live item in [`Transcript::acp_partial`] so
+/// streaming [`viz_client::protocol::LiveDelta`] patches update only the
+/// changed entry in place without rebuilding the live tail.
+#[derive(Debug, Clone)]
+pub(super) struct LiveEntryMeta {
+    pub(super) wire_key: String,
+    pub(super) order: u64,
+    pub(super) committed_prefix_len: usize,
+}
 
 /// A thread's transcript window and live uncommitted ACP tail.
 #[derive(Debug, Clone, Default)]
 pub struct Transcript {
+    /// Monotonic revision bumped on every mutation to items, cursors, or the
+    /// live tail, used for memoization and virtual list invalidation.
+    pub rev: u64,
     /// Committed timeline items in transcript order.
     pub items: Vec<Item>,
     /// Exclusive cursor for the next page of older entries.
@@ -21,8 +34,23 @@ pub struct Transcript {
     pub(super) acp_turn: Option<String>,
     pub(super) acp_start: usize,
     pub(super) acp_text_index: Option<usize>,
+    /// Active turn id for [`Self::acp_partial`].
+    pub(super) live_turn: Option<String>,
+    /// Per-entry wire metadata aligned 1:1 with [`Self::acp_partial`].
+    pub(super) live_meta: Vec<LiveEntryMeta>,
     /// Live streaming text and unfinished tool calls for the active run.
     pub acp_partial: Vec<Item>,
+    /// Raw entries belonging to a leading incomplete turn ONLY when the oldest
+    /// loaded page did not begin on a turn boundary (empty for normal
+    /// turn-aligned pages).
+    pub(super) leading_raw: Vec<Entry>,
+    /// Number of items at the start of [`Self::items`] produced by
+    /// [`Self::leading_raw`].
+    pub(super) leading_item_count: usize,
+    /// Whether any entry has been loaded yet.
+    pub(super) has_entries: bool,
+    /// Whether the oldest entry loaded started a turn.
+    pub(super) starts_at_turn_boundary: bool,
 }
 
 /// Semantic error severity for inline turn error banners.

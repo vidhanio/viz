@@ -122,7 +122,7 @@ fn record_prompt_history(model: &mut Model, thread: viz_client::protocol::Thread
     if trimmed.is_empty() {
         return;
     }
-    let list = model.composer.prompt_history.entry(thread).or_default();
+    let list = model.cache_mut().prompt_history.entry(thread).or_default();
     if list.last().map(String::as_str) != Some(trimmed) {
         list.push(trimmed.to_owned());
         if list.len() > 50 {
@@ -417,7 +417,7 @@ fn thread_prompt_history(model: &Model, thread: viz_client::protocol::ThreadId) 
             _ => None,
         })
         .collect();
-    if let Some(local) = model.composer.prompt_history.get(&thread) {
+    if let Some(local) = model.cache().prompt_history.get(&thread) {
         for prompt in local {
             if history.last() != Some(prompt) {
                 history.push(prompt.clone());

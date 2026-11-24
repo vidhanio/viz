@@ -99,7 +99,7 @@ impl Desktop {
                     bytes,
                 } => {
                     self.decode_thread_attachment_image(
-                        environment,
+                        &environment,
                         thread,
                         id,
                         &media_type,

@@ -96,7 +96,7 @@ pub fn update(model: &mut Model, msg: Msg) -> Vec<Effect> {
         Msg::Git(msg) => git::update(model, msg),
         Msg::Server(msg) => server::update(model, msg),
         Msg::Session { session, msg } => {
-            if session != model.connection.session {
+            if session != model.connection.live.id {
                 return Vec::new();
             }
             server::update(model, *msg)

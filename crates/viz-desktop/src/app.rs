@@ -27,6 +27,27 @@ mod toasts;
 
 pub use toasts::ToastContent;
 
+/// GPU-decoded inline image handles strictly scoped to the currently open
+/// `(environment, thread)` so switching threads immediately releases textures.
+#[derive(Default)]
+pub struct OpenThreadMedia {
+    env: String,
+    thread: Option<viz_client::protocol::ThreadId>,
+    images: HashMap<String, Image>,
+}
+
+impl OpenThreadMedia {
+    /// Drops all decoded GPU handles whenever `(env, thread)` changes.
+    pub fn sync(&mut self, env: &str, thread: Option<viz_client::protocol::ThreadId>) {
+        if self.env != env || self.thread != thread {
+            self.env.clear();
+            self.env.push_str(env);
+            self.thread = thread;
+            self.images.clear();
+        }
+    }
+}
+
 /// Stateful Rune and `rune-kit` widget controllers kept outside the pure
 /// [`Model`].
 pub struct ShellWidgets {
@@ -76,9 +97,9 @@ pub struct ShellWidgets {
     pub project_icons: HashMap<(String, String), Image>,
     /// Decoded image currently shown in the file/attachment preview lightbox.
     pub preview_image: Option<Image>,
-    /// Decoded sent-message attachment images keyed by `(environment, thread,
-    /// attachment_id)`.
-    pub thread_attachment_images: HashMap<(String, viz_client::protocol::ThreadId, String), Image>,
+    /// Decoded inline attachment images scoped strictly to the active open
+    /// thread.
+    pub open_thread_media: OpenThreadMedia,
     /// Decoded images for the active draft, in attachment order.
     pub attachment_images: crate::attachments::DraftImages,
     /// Latest `[offset_y, max_y]` of the active timeline scroll viewport.
@@ -135,7 +156,7 @@ impl Default for ShellWidgets {
             math: rune_kit::math::Client::default(),
             project_icons: HashMap::new(),
             preview_image: None,
-            thread_attachment_images: HashMap::new(),
+            open_thread_media: OpenThreadMedia::default(),
             attachment_images: crate::attachments::DraftImages::default(),
             timeline_scroll: rune::Live::new([f32::MAX, 0.0]),
             composer_scroll: rune::Live::new([0.0, 0.0]),
@@ -203,6 +224,7 @@ impl Desktop {
         {
             effects::platform::clear_thread_notification(id);
         }
+        self.sync_open_thread_media();
         crate::git::diff_panel::sync(self);
         crate::requests::sync(self);
         self.decode_draft_attachments();
@@ -220,6 +242,7 @@ impl Desktop {
         {
             effects::platform::clear_thread_notification(id);
         }
+        self.sync_open_thread_media();
         crate::git::diff_panel::sync(self);
         crate::requests::sync(self);
         self.apply_effects(effects, None);
@@ -246,6 +269,7 @@ impl Desktop {
     /// Synchronizes all Rune widget controllers from [`Self::model`] after a
     /// headless scene populates fixture state directly.
     pub fn sync_widgets_from_model(&mut self) {
+        self.sync_open_thread_media();
         crate::git::diff_panel::sync(self);
         crate::requests::sync(self);
         self.widgets.git_query = TextEdit::new(&self.model.git.query);
@@ -346,38 +370,53 @@ impl Desktop {
         self.widgets.preview_image = Some(image);
     }
 
+    /// Drops decoded inline attachment handles if the active environment or
+    /// selected thread changed.
+    fn sync_open_thread_media(&mut self) {
+        let env = self.model.active_env_key().to_owned();
+        self.widgets
+            .open_thread_media
+            .sync(&env, self.model.selection.selected);
+    }
+
     /// Returns the decoded image for a stored thread attachment in the active
-    /// environment, if fetched.
+    /// open thread, if decoded.
     #[must_use]
     pub fn thread_attachment_image(
         &self,
         thread: viz_client::protocol::ThreadId,
         id: &str,
     ) -> Option<&Image> {
-        self.widgets.thread_attachment_images.get(&(
-            self.model.active_env_key().to_owned(),
-            thread,
-            id.to_owned(),
-        ))
+        (self.widgets.open_thread_media.env == self.model.active_env_key()
+            && self.widgets.open_thread_media.thread == Some(thread))
+        .then(|| self.widgets.open_thread_media.images.get(id))
+        .flatten()
     }
 
-    /// Decodes fetched bytes for a stored thread attachment image.
+    /// Decodes fetched preview bytes for a stored thread attachment image when
+    /// it belongs to the currently open `(environment, thread)`.
     pub(crate) fn decode_thread_attachment_image(
         &mut self,
-        environment: String,
+        environment: &str,
         thread: viz_client::protocol::ThreadId,
         id: String,
         media_type: &str,
         bytes: Vec<u8>,
     ) {
+        if self.model.active_env_key() != environment
+            || self.model.selection.selected != Some(thread)
+        {
+            return;
+        }
+        self.widgets
+            .open_thread_media
+            .sync(environment, Some(thread));
         let cache = self
             .widgets
             .images
             .get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
         let image = cache.load_mime(bytes, media_type, 1024.0, 2.0);
-        self.widgets
-            .thread_attachment_images
-            .insert((environment, thread, id), image);
+        self.widgets.open_thread_media.images.insert(id, image);
     }
 
     pub(crate) fn prefs_path(&self) -> Option<&Path> {

@@ -6,12 +6,12 @@ use viz_client::{
     Client, ContentClient, Result,
     protocol::{
         ContentVariant, EntryData, EntryId, FileBody, FileRoot, ForkThread, LineWindow, ReadFile,
-        StatBlob, ThreadId, limits,
+        ThreadId, limits,
     },
 };
 
 use super::server::Session;
-use crate::{model::DraftAttachment, update::ServerMsg};
+use crate::update::ServerMsg;
 
 impl Session<'_> {
     pub(super) async fn fork_thread(&self, params: ForkThread, load_prompt: bool) -> Result<()> {
@@ -81,7 +81,6 @@ impl Session<'_> {
         id: String,
         preview_request: Option<u64>,
     ) {
-        let client: Client = self.client.clone();
         let content_client: ContentClient = self.content.clone();
         self.spawn_msg(async move {
             let variant = if preview_request.is_some() {
@@ -89,29 +88,11 @@ impl Session<'_> {
             } else {
                 ContentVariant::Preview { max_px: 1024 }
             };
-            let result = async {
-                let payload = content_client
-                    .get_attachment(thread, &id, variant, limits::ATTACHMENT_TOTAL_BYTES)
-                    .await
-                    .map_err(|error| error.to_string())?;
-                let name = if preview_request.is_some() {
-                    client
-                        .request(&StatBlob {
-                            thread,
-                            id: id.clone(),
-                        })
-                        .await
-                        .map_or_else(|_| String::new(), |info| info.name)
-                } else {
-                    String::new()
-                };
-                Ok(DraftAttachment {
-                    name,
-                    mime: payload.mime,
-                    bytes: payload.bytes,
-                })
-            }
-            .await;
+            let result = content_client
+                .get_attachment(thread, &id, variant, limits::ATTACHMENT_TOTAL_BYTES)
+                .await
+                .map(|payload| (payload.mime, payload.bytes))
+                .map_err(|error| error.to_string());
             ServerMsg::ThreadAttachmentLoaded {
                 thread,
                 id,

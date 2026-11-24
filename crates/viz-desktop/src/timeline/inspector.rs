@@ -386,7 +386,7 @@ fn output_scroll(key: &str, output: El, max_h: f32, stick_bottom: bool, t: &Them
 fn load_more_bar(s: &Desktop, tool: &Tool, t: &Theme) -> Option<El> {
     let full = tool.full?;
     let entry = tool.entry?;
-    let loading = s.model.timeline.loading_chunks.contains(&tool.key);
+    let loading = s.model.connection.live.is_entry_loading(&tool.key);
     let key = tool.key.clone();
     let label = if loading {
         format!("Loading remaining {}…", format_bytes(full))

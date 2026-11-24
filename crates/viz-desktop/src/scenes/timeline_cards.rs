@@ -29,8 +29,7 @@ pub(super) fn cards(s: &mut Desktop) {
 
 fn seed_cards(m: &mut Model) {
     seed_workspace(m);
-    let env = m.active_env_key().to_owned();
-    m.timeline.clear_folds(&env, Some(THREAD));
+    m.clear_folds(Some(THREAD));
     m.disclosure.tool_clock = BASE_TS + 50_000;
 
     let mut threads = list();
@@ -45,10 +44,8 @@ fn seed_cards(m: &mut Model) {
     cache.tasks = cards_tasks();
     cache.open_thread_mut(THREAD).transcript = preview_thread(cards_entries(), None);
 
-    m.timeline
-        .set_fold(&env, Some(THREAD), "turn-e1-0-subagents".into(), true);
-    m.timeline
-        .set_fold(&env, Some(THREAD), "e2-summary".into(), true);
+    m.set_fold(Some(THREAD), "turn-e1-0-subagents".into(), true);
+    m.set_fold(Some(THREAD), "e2-summary".into(), true);
 }
 
 fn cards_tasks() -> Vec<Task> {

@@ -185,9 +185,9 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
             model.composer.drag_over = false;
             if let Some(target) = model
                 .attachment_target()
-                .filter(|target| !model.composer.attachment_reads.contains(target))
+                .filter(|target| !model.connection.live.attachment_reads.contains(target))
             {
-                model.composer.attachment_reads.insert(target);
+                model.connection.live.attachment_reads.insert(target);
                 effects.push(Effect::Attach {
                     scope: model.connection.epoch,
                     target,

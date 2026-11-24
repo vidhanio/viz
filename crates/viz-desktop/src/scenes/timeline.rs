@@ -79,8 +79,7 @@ pub fn build_prompt(
 /// bubble width, and clickable `file://` pills inside assistant prose.
 pub(super) fn user_markdown(s: &mut Desktop) {
     seed_workspace(&mut s.model);
-    let env = s.model.active_env_key().to_owned();
-    s.model.timeline.clear_folds(&env, Some(THREAD));
+    s.model.clear_folds(Some(THREAD));
     s.model.disclosure.tool_clock = BASE_TS + 30_000;
 
     let sample_svg =
@@ -145,8 +144,9 @@ pub(super) fn user_markdown(s: &mut Desktop) {
     ];
 
     s.model.cache_mut().open_thread_mut(THREAD).transcript = preview_thread(entries, None);
+    let env = s.model.active_env_key().to_owned();
     s.decode_thread_attachment_image(
-        s.model.active_env_key().to_owned(),
+        &env,
         THREAD,
         "demo-img-1".into(),
         "image/svg+xml",
@@ -193,8 +193,7 @@ pub(super) fn status_line(s: &mut Desktop) {
 
 fn seed_populated(m: &mut Model) {
     seed_workspace(m);
-    let env = m.active_env_key().to_owned();
-    m.timeline.clear_folds(&env, Some(THREAD));
+    m.clear_folds(Some(THREAD));
     m.disclosure.tool_clock = BASE_TS + 60_000;
     if let Some(thread) = m.cache_mut().summary_mut(THREAD) {
         thread.model = Some("Claude Opus 4.7".into());
@@ -352,8 +351,7 @@ fn populated_turn_two() -> Vec<EntryData> {
 )]
 fn seed_expanded(m: &mut Model) {
     seed_workspace(m);
-    let env = m.active_env_key().to_owned();
-    m.timeline.clear_folds(&env, Some(THREAD));
+    m.clear_folds(Some(THREAD));
     m.disclosure.tool_clock = BASE_TS + 30_000;
 
     let ansi_out = "\x1b[1mrunning 4 checks\x1b[0m\n\
@@ -459,14 +457,13 @@ fn seed_expanded(m: &mut Model) {
         "acp-1-cmd-1",
         "acp-1-mcp-1",
     ] {
-        m.timeline.set_fold(&env, Some(THREAD), key.into(), true);
+        m.set_fold(Some(THREAD), key.into(), true);
     }
 }
 
 fn seed_working(m: &mut Model) {
     seed_workspace(m);
-    let env = m.active_env_key().to_owned();
-    m.timeline.clear_folds(&env, Some(THREAD));
+    m.clear_folds(Some(THREAD));
     let now = now_ms();
     let start = now - 14_000;
     m.disclosure.tool_clock = now;
@@ -481,8 +478,7 @@ fn seed_working(m: &mut Model) {
         state.status = ThreadStatus::Working;
         state.live = Some(live);
     }
-    m.timeline
-        .set_fold(&env, Some(THREAD), "acp-1-run-live".into(), true);
+    m.set_fold(Some(THREAD), "acp-1-run-live".into(), true);
 }
 
 fn working_live_turn(start: i64, now: i64) -> LiveTurn {

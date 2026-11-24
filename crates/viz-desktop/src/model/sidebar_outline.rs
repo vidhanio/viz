@@ -12,7 +12,7 @@ use viz_client::protocol::{
 
 use super::{
     Model,
-    cache::EnvironmentCache,
+    cache::EnvState,
     palette::matches_filter,
     sidebar::{ProjectFilter, SHELF_WORKING, effective_shelf},
     timeline::first_non_empty_line,
@@ -189,6 +189,7 @@ fn derive_draft<'a>(
         Some(WorktreeTarget::Existing { path }) => cache
             .checkouts
             .get(new_thread.project.as_deref().unwrap_or_default())
+            .and_then(super::AsyncSlot::as_ready)
             .and_then(|c| c.worktrees.iter().find(|w| w.path == *path))
             .and_then(|w| w.branch.clone())
             .or_else(|| Some("worktree".into())),
@@ -291,7 +292,7 @@ pub fn project_filter_options(model: &Model, now: i64) -> Vec<ProjectFilterOptio
 
 /// The topmost parent available in this environment.
 #[must_use]
-pub fn top_level(cache: &EnvironmentCache, id: ThreadId, environment: Option<&str>) -> ThreadId {
+pub fn top_level(cache: &EnvState, id: ThreadId, environment: Option<&str>) -> ThreadId {
     let mut top = id;
     while let Some(parent) = cache
         .summary(top)

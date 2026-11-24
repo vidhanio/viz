@@ -136,11 +136,10 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             default_open,
             anchor,
         } => {
-            let env = model.active_env_key().to_owned();
             let thread = model.selection.selected;
-            let current = model.timeline.is_open(&env, thread, &key, default_open);
+            let current = model.is_fold_open(&key, default_open);
             let opening = !current;
-            model.timeline.set_fold(&env, thread, key.clone(), opening);
+            model.set_fold(thread, key.clone(), opening);
             if opening
                 && model.connected()
                 && let Some(thread) = thread
@@ -156,7 +155,10 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
                             .flatten()
                     })
                     && full <= viz_client::protocol::limits::AUTO_HYDRATE_ENTRY_BYTES
-                    && model.timeline.loading_chunks.insert(item_key.clone())
+                    && model
+                        .connection
+                        .live
+                        .request_entry(thread, item_key.clone(), entry)
                 {
                     effects.push(Effect::Server(ServerEffect::ReadEntry {
                         thread,
@@ -170,10 +172,9 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             }
         }
         TimelineMsg::ToggleChangedFolders { keys, expand } => {
-            let env = model.active_env_key().to_owned();
             let thread = model.selection.selected;
             for key in keys {
-                model.timeline.set_fold(&env, thread, key, expand);
+                model.set_fold(thread, key, expand);
             }
         }
         TimelineMsg::ToggleCodeWrap(key) => {
@@ -215,7 +216,10 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         TimelineMsg::LoadFullEntry { key, entry } => {
             if model.connected()
                 && let Some(thread) = model.selection.selected
-                && model.timeline.loading_chunks.insert(key.clone())
+                && model
+                    .connection
+                    .live
+                    .request_entry(thread, key.clone(), entry)
             {
                 effects.push(Effect::Server(ServerEffect::ReadEntry {
                     thread,
@@ -349,6 +353,7 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         }
         TimelineMsg::DismissError(key) => {
             model.timeline.dismissed_errors.insert(key);
+            model.timeline.bump_fold_rev();
         }
         TimelineMsg::RetryLastPrompt => {
             if model.connected()
@@ -429,12 +434,15 @@ pub(super) fn apply_thread_forked(
 pub(super) fn apply_entry_loaded(
     model: &mut Model,
     thread: ThreadId,
-    key: &str,
+    _key: &str,
     entry: EntryId,
     result: Result<Box<EntryData>, String>,
     effects: &mut Vec<Effect>,
 ) {
-    model.timeline.loading_chunks.remove(key);
+    let next = model
+        .connection
+        .live
+        .finish_entry(thread, entry, model.selection.selected);
     match result {
         Ok(loaded) => {
             if let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
@@ -447,6 +455,15 @@ pub(super) fn apply_entry_loaded(
                 detail: Some(error),
             });
         }
+    }
+    if let Some((next_thread, next_key, next_entry)) = next
+        && model.connected()
+    {
+        effects.push(Effect::Server(ServerEffect::ReadEntry {
+            thread: next_thread,
+            key: next_key,
+            entry: next_entry,
+        }));
     }
 }
 
@@ -579,18 +596,12 @@ fn open_attachment_preview(
             crate::model::FilePreviewBody::Loading
         },
     });
-    let key = (model.active_env_key().to_owned(), thread, id.clone());
-    if let Some(cached) = model.timeline.loaded_attachments.get(&key).cloned() {
-        apply_loaded_attachment_to_preview(model, request, &cached, effects);
-        return;
-    }
     if !model.connected() {
         if let Some(preview) = model.timeline.file_preview.as_mut() {
             preview.body = crate::model::FilePreviewBody::Error("Server is offline.".into());
         }
         return;
     }
-    model.timeline.pending_attachments.insert(key);
     effects.push(Effect::Server(ServerEffect::ReadAttachment {
         thread,
         id,
@@ -601,7 +612,8 @@ fn open_attachment_preview(
 pub(super) fn apply_loaded_attachment_to_preview(
     model: &mut Model,
     request: u64,
-    attachment: &crate::model::DraftAttachment,
+    mime: String,
+    bytes: Vec<u8>,
     effects: &mut Vec<Effect>,
 ) {
     let Some(preview) = model.timeline.file_preview.as_mut() else {
@@ -610,15 +622,11 @@ pub(super) fn apply_loaded_attachment_to_preview(
     if preview.request != request {
         return;
     }
-    let bytes = attachment.bytes.clone();
     let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
-    if !attachment.name.is_empty() {
-        preview.path.clone_from(&attachment.name);
-    }
-    if attachment.mime.starts_with("image/") {
+    if mime.starts_with("image/") {
         preview.body = crate::model::FilePreviewBody::Image { size };
         effects.push(Effect::DecodePreviewImage {
-            media_type: attachment.mime.clone(),
+            media_type: mime,
             bytes,
         });
     } else if let Ok(text) = String::from_utf8(bytes) {
@@ -629,21 +637,11 @@ pub(super) fn apply_loaded_attachment_to_preview(
             size,
         };
     } else {
-        preview.body = crate::model::FilePreviewBody::Binary {
-            mime: attachment.mime.clone(),
-            size,
-        };
+        preview.body = crate::model::FilePreviewBody::Binary { mime, size };
     }
 }
 
 fn lookup_attachment_meta(model: &Model, thread: ThreadId, id: &str) -> (String, String) {
-    if let Some(cached) = model.timeline.loaded_attachments.get(&(
-        model.active_env_key().to_owned(),
-        thread,
-        id.to_owned(),
-    )) {
-        return (cached.name.clone(), cached.mime.clone());
-    }
     if let Some(open) = model.cache().open_threads.get(&thread) {
         for item in &open.transcript.items {
             if let Item::User(user) = item

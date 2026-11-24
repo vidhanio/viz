@@ -1,10 +1,7 @@
 //! Pure composer, inline pill, completion drawer, home picker, and
 //! command-palette state structs stored inside [`crate::model::Model`].
 
-use std::{
-    collections::{BTreeMap, HashSet},
-    ops::Range,
-};
+use std::ops::Range;
 
 use viz_client::protocol::{
     FileSearchMatch, GitHubItem, PromptContext, RunId, SearchHit, ThreadId,
@@ -375,8 +372,12 @@ pub struct DraftBranchPickerState {
     pub highlighted: usize,
 }
 
-/// Pure composer state: active draft, per-environment saved drafts, pickers,
-/// completions, and model favorites.
+/// Pure composer state: active draft, pickers, completions, and model
+/// favorites.
+///
+/// Per-environment saved drafts and prompt recall history live in
+/// [`super::EnvState`]; in-flight attachment reads live in
+/// [`super::LiveSession`].
 #[derive(Debug, Clone, Default)]
 #[expect(
     clippy::struct_excessive_bools,
@@ -387,10 +388,6 @@ pub struct ComposerState {
     pub draft: DraftData,
     /// Whether the composer text field currently has keyboard focus.
     pub draft_focused: bool,
-    /// Saved drafts keyed by environment id then thread id.
-    pub drafts_by_env: BTreeMap<String, BTreeMap<ThreadId, DraftData>>,
-    /// In-flight attachment reads preventing overlapping reads on one target.
-    pub attachment_reads: HashSet<AttachmentTarget>,
     /// True while files are being dragged over the composer drop zone.
     pub drag_over: bool,
     /// Index of the image attachment open in the full-size lightbox preview.
@@ -407,8 +404,6 @@ pub struct ComposerState {
     pub open_picker: Option<String>,
     /// User-starred model identifiers persisted in client preferences.
     pub favorite_models: Vec<String>,
-    /// Sent prompt history per thread for `ArrowUp` / `ArrowDown` recall.
-    pub prompt_history: BTreeMap<ThreadId, Vec<String>>,
     /// Active index while walking prompt history (`0` = oldest).
     pub history_cursor: Option<usize>,
     /// Unsent draft stashed when entering prompt history recall.
