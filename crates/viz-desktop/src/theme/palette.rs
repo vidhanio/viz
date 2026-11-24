@@ -342,9 +342,16 @@ pub(super) fn build_theme(scheme: &Scheme) -> Theme {
     let mut shell = k.clone();
     shell.radius.lg = 0.0;
 
-    let ring = Shadow {
-        spread: HAIRLINE,
-        color: border_overlay,
+    let overlay_shadow = Shadow {
+        y: 8.0,
+        blur: 24.0,
+        color: Color::BLACK.alpha(if dark { 0.42 } else { 0.14 }),
+        ..Shadow::default()
+    };
+    let overlay_ambient = Shadow {
+        y: 2.0,
+        blur: 6.0,
+        color: Color::BLACK.alpha(if dark { 0.24 } else { 0.08 }),
         ..Shadow::default()
     };
     let mut overlay = k.clone();
@@ -352,10 +359,10 @@ pub(super) fn build_theme(scheme: &Scheme) -> Theme {
     overlay.c.surface_raised = overlay_fill;
     overlay.c.hover = selected;
     overlay.c.surface_raised_hover = hover_wash;
-    overlay.c.std_border = over(overlay_fill, text, if dark { 0.32 } else { 0.34 });
-    overlay.elevation.floating = vec![ring];
-    overlay.elevation.md = Vec::new();
-    overlay.elevation.overlay = vec![ring];
+    overlay.c.std_border = overlay_fill;
+    overlay.elevation.floating = vec![overlay_ambient, overlay_shadow];
+    overlay.elevation.md = vec![overlay_ambient, overlay_shadow];
+    overlay.elevation.overlay = vec![overlay_ambient, overlay_shadow];
 
     Theme {
         shell,
