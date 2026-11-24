@@ -6,8 +6,7 @@
 //! the harness's extra ACP options: switches toggle in place, selects open a
 //! non-modal side submenu that `ArrowLeft`/`Escape` close on their own.
 
-use rune::{Color, El, col, icon, row, text};
-use rune_kit::Placement;
+use rune::{Align, Color, El, Side, col, icon, row, text};
 
 use super::{FIELD, HEADER_HEIGHT, send};
 use crate::{
@@ -302,12 +301,12 @@ pub(super) fn submenu(s: &Desktop, column: &EffortColumn<'_>, t: &Theme) -> Opti
     }
     Some(
         ui::anchored_popover(
-            "model-submenu",
+            ui::popover_frame("model-submenu", SUBMENU_WIDTH, t),
             &option_key(&option.id),
-            Placement::RightStart,
-            SUBMENU_WIDTH,
+            (Side::Right, Align::Start),
+            S4,
+            s.model.panels.viewport(),
             items,
-            t,
         )
         .paint_order(41),
     )

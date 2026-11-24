@@ -179,10 +179,10 @@ fn with_demo(s: &mut Desktop, f: impl FnOnce(&mut WorkbenchDemo)) {
 
 /// Renders either the motion workbench or the UI component gallery inside viz's
 /// flat base16 theme.
-pub fn view(demo: &MotionDemo, reduced: bool, t: &Theme) -> El {
+pub fn view(demo: &MotionDemo, reduced: bool, viewport: [f32; 2], t: &Theme) -> El {
     match demo {
         MotionDemo::Workbench(workbench) => workbench_view(workbench, reduced, t),
-        MotionDemo::Components(gallery) => ui::gallery::view(gallery, reduced, t),
+        MotionDemo::Components(gallery) => ui::gallery::view(gallery, reduced, viewport, t),
     }
 }
 

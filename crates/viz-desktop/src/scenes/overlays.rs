@@ -80,6 +80,19 @@ pub(super) fn context_menu(s: &mut Desktop) {
     s.sync_widgets_from_model();
 }
 
+/// Places the thread menu and its open submenu against the lower-right window
+/// edge.
+pub(super) fn context_menu_edge(s: &mut Desktop) {
+    seed_workspace(&mut s.model);
+    s.model.sidebar.menu = Some(ContextMenu::preview(
+        format!("thread-{}", ThreadId(9)),
+        s.model.panels.window_width - 12.0,
+        s.model.panels.window_height - 12.0,
+        Some(ContextSubmenu::Snooze),
+    ));
+    s.sync_widgets_from_model();
+}
+
 pub(super) fn palette(s: &mut Desktop) {
     seed_workspace(&mut s.model);
     let hits = [

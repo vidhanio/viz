@@ -337,6 +337,13 @@ pub struct PanelsState {
     pub window_height: f32,
 }
 
+impl PanelsState {
+    /// Current window dimensions in points.
+    pub const fn viewport(&self) -> [f32; 2] {
+        [self.window_width, self.window_height]
+    }
+}
+
 impl Default for PanelsState {
     fn default() -> Self {
         Self {
@@ -365,7 +372,7 @@ pub struct ContextMenu {
     /// Row element key (`thread-<id>`).
     pub key: String,
     /// Pointer coordinates when opened via secondary press.
-    pub point: Option<(f32, f32)>,
+    pub point: (f32, f32),
     /// Currently expanded submenu, if any.
     pub submenu: Option<ContextSubmenu>,
 }
@@ -376,7 +383,7 @@ impl ContextMenu {
     pub fn at(key: impl Into<String>, x: f32, y: f32) -> Self {
         Self {
             key: key.into(),
-            point: Some((x, y)),
+            point: (x, y),
             submenu: None,
         }
     }
@@ -391,7 +398,7 @@ impl ContextMenu {
     ) -> Self {
         Self {
             key: key.into(),
-            point: Some((x, y)),
+            point: (x, y),
             submenu,
         }
     }

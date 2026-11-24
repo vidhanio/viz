@@ -32,13 +32,12 @@ pub fn view(s: &Desktop, t: &Theme, overlays: &mut Vec<El>) -> El {
         .build(t);
     if open {
         overlays.push(
-            ui::anchored_popover(
-                "git-branches",
+            rune_kit::popover::anchored(
+                &t.overlay,
+                ui::popover_frame("git-branches", CARD_WIDTH, t).child(contents(s, current, t)),
                 ANCHOR,
                 Placement::BottomEnd,
-                CARD_WIDTH,
-                contents(s, current, t),
-                t,
+                S4,
             )
             .modal(true, super::close_popup),
         );

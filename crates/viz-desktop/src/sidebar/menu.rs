@@ -5,7 +5,7 @@
 use std::rc::Rc;
 
 use rune::{Align, El, Icon, Side, Tx, col, el, icon, row, text};
-use rune_kit::Kit;
+use rune_kit::{Kit, scrim};
 use viz_client::protocol::{
     AutoSettle, Position, Project, Shelf, ThreadId, ThreadSummary, TriageAction,
 };
@@ -13,14 +13,14 @@ use viz_client::protocol::{
 use crate::{
     app::Desktop,
     model::{ContextSubmenu, ProjectFilter, SidebarEdit, SnoozePreset},
-    theme::Theme,
+    theme::{S16, Theme},
     ui,
     update::{Msg, SidebarMsg},
 };
 
-/// Minimum width of the primary thread context menu (points).
+/// Preferred width of the primary thread context menu (points).
 const CONTEXT_MENU_WIDTH: f32 = 208.0;
-/// Minimum width of a nested submenu panel (points).
+/// Preferred width of a nested submenu panel (points).
 const SUBMENU_WIDTH: f32 = 160.0;
 
 type SelectAction = Rc<dyn Fn(&mut Desktop, &mut Tx)>;
@@ -384,6 +384,7 @@ pub(super) fn thread_context_menu(
     mount_context_menu(
         &format!("{key}-context"),
         context.point,
+        m.panels.viewport(),
         entries,
         &t.overlay,
         layer,
@@ -392,47 +393,32 @@ pub(super) fn thread_context_menu(
 
 fn mount_context_menu(
     menu_key: &str,
-    point: Option<(f32, f32)>,
+    (x, y): (f32, f32),
+    viewport: [f32; 2],
     entries: Vec<CtxEntry>,
     k: &Kit,
     layer: &mut Vec<El>,
 ) {
-    let anchor_key = if let Some((x, y)) = point {
-        let point_key = format!("{menu_key}-point");
-        layer.push(el().key(point_key.clone()).absolute(x, y).size(0.0, 0.0));
-        point_key
-    } else {
-        format!("{menu_key}-trigger")
-    };
+    let anchor_key = format!("{menu_key}-point");
+    let inset = S16 / 2.0;
+    let x = x.clamp(inset, (viewport[0] - inset).max(inset));
+    let y = y.clamp(inset, (viewport[1] - inset).max(inset));
+    layer.push(el().key(anchor_key.clone()).absolute(x, y).size(0.0, 0.0));
 
-    layer.push(
-        el().key(format!("{menu_key}-scrim"))
-            .role("none")
-            .absolute(0.0, 0.0)
-            .w_full()
-            .h_full()
-            .on_press(|s: &mut Desktop| s.dispatch_local(Msg::Sidebar(SidebarMsg::CloseRowMenu))),
-    );
+    let close = |s: &mut Desktop| s.dispatch_local(Msg::Sidebar(SidebarMsg::CloseRowMenu));
+    layer.push(scrim(format!("{menu_key}-scrim"), close));
 
     let mut subs = Vec::new();
-    let surface = build_menu_surface(menu_key, entries, CONTEXT_MENU_WIDTH, true, k, &mut subs)
-        .modal(true, |s: &mut Desktop| {
-            s.dispatch_local(Msg::Sidebar(SidebarMsg::CloseRowMenu));
-        });
-
-    layer.push(
-        surface
-            .anchored(&anchor_key, Side::Bottom, Align::Start, 0.0)
-            .instant_changes()
-            .motion_intent(rune::MotionIntent::CUT),
-    );
+    let surface = build_menu_surface(menu_key, &anchor_key, entries, viewport, true, k, &mut subs);
+    layer.push(surface.modal(true, close));
     layer.extend(subs);
 }
 
 fn build_menu_surface(
     menu_key: &str,
+    anchor_key: &str,
     entries: Vec<CtxEntry>,
-    min_width: f32,
+    viewport: [f32; 2],
     is_root: bool,
     k: &Kit,
     submenus: &mut Vec<El>,
@@ -454,6 +440,7 @@ fn build_menu_surface(
                 *item,
                 &format!("{menu_key}-item{idx}"),
                 is_root,
+                viewport,
                 k,
                 submenus,
             ),
@@ -461,21 +448,43 @@ fn build_menu_surface(
         list = list.child(row_el);
     }
 
+    let (width, side) = if is_root {
+        (root_menu_width(viewport[0]), Side::Bottom)
+    } else {
+        (SUBMENU_WIDTH, Side::Right)
+    };
     let frame = col()
         .key(format!("{menu_key}-menu"))
         .role("menu")
         .focus_group()
-        .min_w(min_width)
-        .max_w(280.0)
+        .w(width)
         .items_stretch()
         .radius(6.0)
-        .fill(c.layer_01)
-        .child(list);
+        .fill(c.layer_01);
 
-    k.elevate(frame, &k.elevation.floating)
+    ui::anchored_popover(
+        k.elevate(frame, &k.elevation.floating),
+        anchor_key,
+        (side, Align::Start),
+        0.0,
+        viewport,
+        list,
+    )
 }
 
-fn build_menu_item(item: CtxItem, key: &str, is_root: bool, k: &Kit, submenus: &mut Vec<El>) -> El {
+/// Leaves room for a submenu on narrow windows even when the root is centered.
+fn root_menu_width(viewport_width: f32) -> f32 {
+    CONTEXT_MENU_WIDTH.min((viewport_width - S16).max(0.0) * 0.6)
+}
+
+fn build_menu_item(
+    item: CtxItem,
+    key: &str,
+    is_root: bool,
+    viewport: [f32; 2],
+    k: &Kit,
+    submenus: &mut Vec<El>,
+) -> El {
     let c = &k.c;
     let disabled = item.disabled;
     let sub_open = item.submenu.as_ref().is_some_and(|(_, _, open)| *open);
@@ -545,7 +554,7 @@ fn build_menu_item(item: CtxItem, key: &str, is_root: bool, k: &Kit, submenus: &
     }
 
     if let Some((kind, entries, open)) = item.submenu {
-        e = attach_submenu(e, key, kind, entries, open, disabled, k, submenus);
+        e = attach_submenu(e, key, kind, entries, open, disabled, viewport, k, submenus);
     } else if !disabled {
         if is_root {
             e = e.on_hover_change(|s: &mut Desktop, inside, _| {
@@ -576,6 +585,7 @@ fn attach_submenu(
     entries: Vec<CtxEntry>,
     open: bool,
     disabled: bool,
+    viewport: [f32; 2],
     k: &Kit,
     submenus: &mut Vec<El>,
 ) -> El {
@@ -599,20 +609,16 @@ fn attach_submenu(
     }
     if open {
         let mut deeper = Vec::new();
-        let sub_surface = build_menu_surface(
+        let surface = build_menu_surface(
             &format!("{key}-sub"),
+            key,
             entries,
-            SUBMENU_WIDTH,
+            viewport,
             false,
             k,
             &mut deeper,
         );
-        submenus.push(
-            sub_surface
-                .anchored(key, Side::Right, Align::Start, 0.0)
-                .instant_changes()
-                .motion_intent(rune::MotionIntent::CUT),
-        );
+        submenus.push(surface);
         submenus.extend(deeper);
     }
     e

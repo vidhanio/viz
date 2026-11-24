@@ -71,7 +71,8 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
     let t = Theme::get(cx.system_dark());
     cx.help_look(t.help_look());
     if let Some(demo) = &s.motion_demo {
-        return motion_scene::view(demo, reduced, t);
+        return motion_scene::view(demo, reduced, s.model.panels.viewport(), t)
+            .on_layout_tx(shell::window_resized);
     }
     let mut overlays = Vec::new();
     let main = if home::is_active(&s.model) {

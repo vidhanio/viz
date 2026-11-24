@@ -2,8 +2,7 @@
 //! opaque `t.surface_raised` surface with `1px t.border_overlay`, zero drop
 //! shadow).
 
-use rune::{El, Icon, col, icon, row, text};
-use rune_kit::Placement;
+use rune::{Align, El, Icon, Side, col, icon, row, text};
 use viz_client::protocol::{GitHubPull, GitHubPullState, ThreadSummary};
 
 use crate::{
@@ -36,12 +35,12 @@ pub(super) fn mount(s: &Desktop, outline: &SidebarOutline<'_>, t: &Theme, layer:
     };
     let anchor_key = format!("thread-{id}");
     layer.push(ui::anchored_popover(
-        format!("hover-card-{id}"),
+        ui::popover_frame(format!("hover-card-{id}"), HOVER_CARD_WIDTH, t),
         &anchor_key,
-        Placement::RightStart,
-        HOVER_CARD_WIDTH,
+        (Side::Right, Align::Start),
+        S4,
+        m.panels.viewport(),
         thread_preview(s, thread, outline.now, t),
-        t,
     ));
 }
 

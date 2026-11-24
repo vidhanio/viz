@@ -63,6 +63,7 @@ pub const SCENES: &[Scene] = &[
     ("model-picker-locked", model_picker::locked),
     ("new-agent", overlays::new_agent),
     ("context-menu", overlays::context_menu),
+    ("context-menu-edge", overlays::context_menu_edge),
     ("palette", overlays::palette),
     ("palette-open", overlays::palette_open),
     ("project-sources", projects::sources),

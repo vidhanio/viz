@@ -116,7 +116,7 @@ pub(super) fn edit_gallery(
 }
 
 /// Renders the complete UI component gallery inside viz's flat base16 theme.
-pub fn view(state: &GalleryState, reduced: bool, t: &Theme) -> El {
+pub fn view(state: &GalleryState, reduced: bool, viewport: [f32; 2], t: &Theme) -> El {
     let mut overlays = Vec::new();
     let col_tokens = col()
         .key("gallery-col-tokens")
@@ -170,7 +170,7 @@ pub fn view(state: &GalleryState, reduced: bool, t: &Theme) -> El {
         .child(scroll);
 
     if state.overlays.popover {
-        overlays.push(gallery_popover(t));
+        overlays.push(gallery_popover(viewport, t));
     }
     if state.overlays.toast {
         overlays.push(gallery_toast(t));
@@ -291,7 +291,7 @@ pub(super) fn gallery_card(key: &str, title: &str, subtitle: &str, body: El, t: 
         .child(body)
 }
 
-fn gallery_popover(t: &Theme) -> El {
+fn gallery_popover(viewport: [f32; 2], t: &Theme) -> El {
     let body = col()
         .w_full()
         .padding(S12)
@@ -322,12 +322,12 @@ fn gallery_popover(t: &Theme) -> El {
             ),
         );
     ui::anchored_popover(
-        "gallery-popover",
+        ui::popover_frame("gallery-popover", 264.0, t),
         "btn-gallery-popover",
-        rune_kit::Placement::BottomEnd,
-        264.0,
+        (rune::Side::Bottom, rune::Align::End),
+        S4,
+        viewport,
         body,
-        t,
     )
 }
 

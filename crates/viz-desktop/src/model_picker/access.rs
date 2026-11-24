@@ -7,8 +7,8 @@
 //! picker footer uses [`footer_trigger`]; the Home context strip embeds
 //! [`access_trigger`], which mounts its own popover.
 
-use rune::{Color, El, Icon, col, icon, row, text};
-use rune_kit::{Placement, scrim};
+use rune::{Align, Color, El, Icon, Side, col, icon, row, text};
+use rune_kit::scrim;
 use viz_client::protocol::{AccessKind, AccessMode};
 
 use super::send;
@@ -112,7 +112,7 @@ pub fn access_trigger(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El>
     let view = access_view(&s.model)?;
     let open = s.model.composer.open_picker.as_deref() == Some(ACCESS_PICKER);
     if open {
-        layer.extend(popover(s, STRIP_TRIGGER, Placement::TopEnd, t));
+        layer.extend(popover(s, STRIP_TRIGGER, t));
     }
     Some(trigger(STRIP_TRIGGER, view.current, open, S24, S6, t))
 }
@@ -126,7 +126,7 @@ pub fn thread_trigger(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El>
 }
 
 /// The access popover anchored to `anchor`: a scrim and the flat card.
-pub fn popover(s: &Desktop, anchor: &str, placement: Placement, t: &Theme) -> Vec<El> {
+pub fn popover(s: &Desktop, anchor: &str, t: &Theme) -> Vec<El> {
     let Some(view) = access_view(&s.model) else {
         return Vec::new();
     };
@@ -208,6 +208,14 @@ pub fn popover(s: &Desktop, anchor: &str, placement: Placement, t: &Theme) -> Ve
     let close = |s: &mut Desktop| s.dispatch_local(Msg::ModelPicker(ModelPickerMsg::CloseAccess));
     vec![
         scrim("access-scrim", close),
-        ui::anchored_popover("access-popover", anchor, placement, WIDTH, body, t).paint_order(42),
+        ui::anchored_popover(
+            ui::popover_frame("access-popover", WIDTH, t),
+            anchor,
+            (Side::Top, Align::End),
+            S4,
+            s.model.panels.viewport(),
+            body,
+        )
+        .paint_order(42),
     ]
 }

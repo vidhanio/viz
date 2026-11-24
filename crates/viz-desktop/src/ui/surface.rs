@@ -1,8 +1,8 @@
 //! Cards, flat popovers, combobox shells, tucked drawers, scroll viewports,
 //! and inline pickers.
 
-use rune::{El, ScrollFade, ScrollSpec, col, row};
-use rune_kit::{Menu, MenuItem, Placement, ScrollBar, ScrollBarStyle};
+use rune::{Align, El, ScrollFade, ScrollSpec, Side, col, row};
+use rune_kit::{Menu, MenuItem, ScrollBar, ScrollBarStyle};
 
 use super::rule;
 use crate::{
@@ -74,30 +74,34 @@ impl Card {
 ///
 /// The [`RADIUS_CONTROL`] corner is concentric with [`RADIUS_XS`] rows inset
 /// by [`MENU_INSET`], so list bodies should pad by exactly that inset.
-pub fn popover_frame(key: impl Into<String>, width: f32, content: El, t: &Theme) -> El {
+pub fn popover_frame(key: impl Into<String>, width: f32, t: &Theme) -> El {
     rune_kit::popover::raised(
         &t.overlay,
-        col()
-            .key(key)
-            .w(width)
-            .clip_rounded(RADIUS_CONTROL)
-            .child(content),
+        col().key(key).w(width).clip_rounded(RADIUS_CONTROL),
         RADIUS_CONTROL,
     )
 }
 
-/// Anchors a [`popover_frame`] to `anchor_key` with
-/// `rune_kit::popover::anchored`.
+/// Mounts a scrolling surface at a keyed anchor. Rune flips it and fits its
+/// main axis to the available room. The cross-axis bound keeps side-opening
+/// panels short enough to scroll and dropdowns narrow enough to stay in view.
 pub fn anchored_popover(
-    key: impl Into<String>,
+    frame: El,
     anchor_key: &str,
-    placement: Placement,
-    width: f32,
+    (side, align): (Side, Align),
+    gap: f32,
+    [width, height]: [f32; 2],
     content: El,
-    t: &Theme,
 ) -> El {
-    let frame = popover_frame(key, width, content, t);
-    rune_kit::popover::anchored(&t.overlay, frame, anchor_key, placement, S4)
+    frame
+        .min_w(0.0)
+        .min_h(0.0)
+        .max_w((width - S16).max(0.0))
+        .max_h((height - S16).max(0.0))
+        .child(rune_kit::popover::fit_scroll(content))
+        .anchored_fit(anchor_key, side, align, gap)
+        .instant_changes()
+        .motion_intent(rune::MotionIntent::CUT)
 }
 
 /// Reusable flat combobox / command-palette shell: optional plain search

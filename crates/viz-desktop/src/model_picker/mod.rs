@@ -211,7 +211,8 @@ fn popover(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .child(body)
         .child(ui::rule(t))
         .child(footer);
-    let frame = ui::popover_frame("model-picker", width, content, t)
+    let frame = ui::popover_frame("model-picker", width, t)
+        .child(content)
         .focus_return(TRIGGER)
         .paint_order(40);
     layer.push(scrim("model-scrim", close));
@@ -226,12 +227,7 @@ fn popover(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         layer.push(submenu);
     }
     if state.access_open {
-        layer.extend(access::popover(
-            s,
-            access::FOOTER_TRIGGER,
-            Placement::TopEnd,
-            t,
-        ));
+        layer.extend(access::popover(s, access::FOOTER_TRIGGER, t));
     }
 }
 
