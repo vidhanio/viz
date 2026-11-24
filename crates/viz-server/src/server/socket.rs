@@ -35,7 +35,7 @@ use crate::{
     workspace::{Change, WatchChange},
 };
 
-const PAGE: usize = 100;
+const PAGE: usize = 500;
 const HANDSHAKE: Duration = Duration::from_secs(10);
 const MAX_IN_FLIGHT: usize = 32;
 
@@ -122,8 +122,7 @@ async fn watch_thread(
     outgoing: &mpsc::Sender<Message>,
     app: bool,
 ) -> Result<WatchCursor, Error> {
-    let (page, state) = server.workspace.watch_snapshot(thread, PAGE).await?;
-    let last = page.entries.last().map(|entry| entry.id);
+    let (page, last, state) = server.workspace.watch_snapshot(thread, PAGE).await?;
     if app {
         server.workspace.watched(thread, WatchChange::Open).await?;
     }

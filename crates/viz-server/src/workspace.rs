@@ -201,21 +201,23 @@ impl Workspace {
         limit: usize,
     ) -> Result<EntryPage, Error> {
         let mut db = self.db.lock().await;
-        store::entries(&mut db, thread, before, limit.clamp(1, 200)).await
+        store::entries(&mut db, thread, before, limit.clamp(1, 1000)).await
     }
 
-    /// Captures the initial transcript page and its live baseline together.
+    /// Captures the initial transcript page, cursor head, and live baseline
+    /// together.
     pub(crate) async fn watch_snapshot(
         &self,
         thread: ThreadId,
         limit: usize,
-    ) -> Result<(EntryPage, ThreadState), Error> {
+    ) -> Result<(EntryPage, Option<EntryId>, ThreadState), Error> {
         let mut db = self.db.lock().await;
         let page = store::entries(&mut db, thread, None, limit).await?;
+        let last = store::latest_entry_id(&mut db, thread).await?;
         let mut state = store::state(&mut db, thread).await?;
         state.live = self.updates.latest(thread);
         drop(db);
-        Ok((page, state))
+        Ok((page, last, state))
     }
 
     /// Reads the next append batch and captures its baseline once caught up.

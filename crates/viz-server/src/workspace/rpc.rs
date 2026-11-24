@@ -26,7 +26,7 @@ handlers! {
             Ok(ThreadList { threads })
         }
         ListEntries, ListEntries, |workspace, ListEntries { thread, before, limit }| {
-            workspace.entries(thread, before, page_limit(limit, 100)?).await
+            workspace.entries(thread, before, page_limit(limit, 500)?).await
         }
         ReadEntryChunk, ReadEntryChunk, |workspace, request| {
             store::chunk(workspace, request).await

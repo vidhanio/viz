@@ -25,7 +25,7 @@ pub(super) use self::{
         Binding, Handoff, NewThread, SavedSession, binding, create_thread, list_threads, metadata,
         require, save_metadata, state, updated,
     },
-    transcript::{append, entries, entries_after, publish, search},
+    transcript::{append, entries, entries_after, latest_entry_id, publish, search},
 };
 use crate::error::Error;
 

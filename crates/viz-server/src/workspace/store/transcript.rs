@@ -147,6 +147,22 @@ async fn index(
     Ok(())
 }
 
+pub(in crate::workspace) async fn latest_entry_id(
+    db: &mut Connection,
+    thread: ThreadId,
+) -> Result<Option<EntryId>, Error> {
+    let Some(found) = row(
+        db,
+        "SELECT id FROM entries WHERE thread = ?1 ORDER BY id DESC LIMIT 1",
+        [thread.into()],
+    )
+    .await?
+    else {
+        return Ok(None);
+    };
+    Ok(Some(found.id(0)?))
+}
+
 pub(in crate::workspace) async fn entries(
     db: &mut Connection,
     thread: ThreadId,
@@ -157,7 +173,9 @@ pub(in crate::workspace) async fn entries(
     let mut entries = if let Some(before) = before {
         rows(
             db,
-            "SELECT id, data FROM entries WHERE thread = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
+            "SELECT id, data FROM entries
+             WHERE thread = ?1 AND id < ?2 AND json_extract(data, '$.kind') != 'tool_update'
+             ORDER BY id DESC LIMIT ?3",
             [thread.into(), before.into(), (limit + 1).into()],
         )
         .await?
@@ -166,7 +184,9 @@ pub(in crate::workspace) async fn entries(
     } else {
         rows(
             db,
-            "SELECT id, data FROM entries WHERE thread = ?1 ORDER BY id DESC LIMIT ?2",
+            "SELECT id, data FROM entries
+             WHERE thread = ?1 AND json_extract(data, '$.kind') != 'tool_update'
+             ORDER BY id DESC LIMIT ?2",
             [thread.into(), (limit + 1).into()],
         )
         .await?
