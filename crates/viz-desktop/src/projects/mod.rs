@@ -22,6 +22,7 @@ use crate::{
 pub struct OptionRow {
     title: String,
     subtitle: Option<String>,
+    section: Option<&'static str>,
     glyph: &'static Icon,
     action: Option<Action>,
     badges: Vec<&'static str>,
@@ -34,12 +35,22 @@ impl OptionRow {
         Self {
             title: title.into(),
             subtitle: None,
+            section: None,
             glyph,
             action: Some(action),
             badges: Vec::new(),
             color: None,
             notice: false,
         }
+    }
+
+    const fn section(mut self, label: &'static str) -> Self {
+        self.section = Some(label);
+        self
+    }
+
+    pub const fn section_label(&self) -> Option<&'static str> {
+        self.section
     }
 
     const fn color(mut self, color: usize) -> Self {

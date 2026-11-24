@@ -32,6 +32,16 @@ pub(super) fn mount(
         .active
         .filter(|active| choices.iter().any(|(i, _)| i == active));
     let count = options.len();
+    let grouped = options.iter().any(|item| item.section_label().is_some());
+    let list_children: Vec<El> = if grouped {
+        grouped_option_cards(options, active, t)
+    } else {
+        options
+            .into_iter()
+            .enumerate()
+            .map(|(i, option)| option.build(i, Some(i) == active, t))
+            .collect()
+    };
     let list = col()
         .key(LIST)
         .role("listbox")
@@ -40,17 +50,13 @@ pub(super) fn mount(
         .min_h(0.0)
         .w_full()
         .padding(S8)
+        .gap(if grouped { crate::theme::S12 } else { 0.0 })
         .scroll(ScrollSpec {
             stick_bottom: false,
         })
         .scroll_edge_fade(S16)
         .instant_changes()
-        .children(
-            options
-                .into_iter()
-                .enumerate()
-                .map(|(i, option)| option.build(i, Some(i) == active, t)),
-        );
+        .children(list_children);
     let submit = projects::submit(page)
         .filter(|_| !page.pending)
         .map(|(_, action)| action);
@@ -190,6 +196,65 @@ fn legend(folder: bool, t: &Theme) -> El {
     }
     hints.push((&["Esc"], "Close"));
     super::key_hints(hints, t)
+}
+
+type OptionGroup = (Option<&'static str>, Vec<(usize, projects::OptionRow)>);
+
+fn grouped_option_cards(
+    options: Vec<projects::OptionRow>,
+    active: Option<usize>,
+    t: &Theme,
+) -> Vec<El> {
+    let mut groups: Vec<OptionGroup> = Vec::new();
+    for (i, option) in options.into_iter().enumerate() {
+        let section = option.section_label();
+        if let Some((last_section, items)) = groups.last_mut()
+            && *last_section == section
+        {
+            items.push((i, option));
+        } else {
+            groups.push((section, vec![(i, option)]));
+        }
+    }
+    let mut out = Vec::with_capacity(groups.len());
+    for (g, (section, items)) in groups.into_iter().enumerate() {
+        let len = items.len();
+        let mut card = col()
+            .key(format!("settings-card-{g}"))
+            .w_full()
+            .padding(crate::theme::S4)
+            .radius(crate::theme::RADIUS_CARD)
+            .fill(t.surface)
+            .border(crate::theme::HAIRLINE, t.hairline);
+        for (pos, (index, option)) in items.into_iter().enumerate() {
+            card = card.child(option.build(index, Some(index) == active, t));
+            if pos + 1 < len {
+                card = card.child(
+                    rune::el()
+                        .key(format!("settings-sep-{g}-{pos}"))
+                        .h(0.5)
+                        .ml(crate::theme::S12)
+                        .mr(crate::theme::S12)
+                        .fill(t.hairline)
+                        .a11y_hidden(),
+                );
+            }
+        }
+        let mut wrapper = col()
+            .key(format!("settings-group-{g}"))
+            .w_full()
+            .gap(crate::theme::S4);
+        if let Some(title) = section {
+            wrapper = wrapper.child(
+                text(title)
+                    .font(t.micro_medium)
+                    .color(t.muted)
+                    .ml(crate::theme::S12),
+            );
+        }
+        out.push(wrapper.child(card));
+    }
+    out
 }
 
 fn header(title: &str, t: &Theme) -> El {

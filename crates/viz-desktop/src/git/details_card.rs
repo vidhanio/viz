@@ -15,7 +15,7 @@ use crate::{
         git::{self, CARD_WIDTH, Density},
         local_child, spawned_subagent, subagent_title, thread_title,
     },
-    theme::{HAIRLINE, RADIUS_CARD, S12, Theme},
+    theme::{RADIUS_CARD, S12, Theme},
     ui,
     update::{GitMsg, Msg, TimelineMsg},
 };
@@ -48,6 +48,7 @@ pub fn card(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
         .key("thread-details-scroll")
         .scroll_anchor()
         .max_h(height);
+    let frost = t.surface_raised.alpha(if t.k.dark { 0.84 } else { 0.88 });
     Some(
         col()
             .key("thread-details-card")
@@ -55,9 +56,21 @@ pub fn card(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
             .paint_order(25)
             .w(CARD_WIDTH)
             .radius(RADIUS_CARD)
-            .fill(t.surface_raised)
-            .border(HAIRLINE, t.border_overlay)
+            .backdrop_blur(14.0)
+            .fill(frost)
+            .shadow(
+                2.0,
+                6.0,
+                rune::Color::BLACK.alpha(if t.k.dark { 0.24 } else { 0.08 }),
+            )
+            .shadow(
+                8.0,
+                24.0,
+                rune::Color::BLACK.alpha(if t.k.dark { 0.42 } else { 0.14 }),
+            )
             .clip_rounded(RADIUS_CARD)
+            .motion(crate::motion::SETTLE)
+            .transition(crate::motion::popover(crate::motion::TRAVEL_SMALL))
             .child(body),
     )
 }

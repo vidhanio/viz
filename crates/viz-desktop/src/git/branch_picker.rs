@@ -103,6 +103,7 @@ fn contents(s: &Desktop, current: Option<&str>, t: &Theme) -> El {
             .scroll(ScrollSpec {
                 stick_bottom: false,
             })
+            .scroll_fade(rune::ScrollFade::strength(crate::theme::S16).linear())
             .scroll_anchor()
             .child(
                 col()

@@ -57,8 +57,10 @@ pub(super) fn options(project: &Project) -> Vec<OptionRow> {
             &ui::COMPOSE,
             edit(id, Field::Name, project.name.clone()),
         )
+        .section("General")
         .detail(&project.name),
-        OptionRow::new("Project icon", &ui::FOLDER, push(View::Icon(id.clone()))),
+        OptionRow::new("Project icon", &ui::FOLDER, push(View::Icon(id.clone())))
+            .section("General"),
     ];
     for (field, value) in [
         (Field::Harness, s.default_harness.as_deref()),
@@ -72,6 +74,7 @@ pub(super) fn options(project: &Project) -> Vec<OptionRow> {
                 &ui::COMPOSE,
                 edit(id, field, value.unwrap_or_default().into()),
             )
+            .section("Model & Harness")
             .detail(value.unwrap_or("Inherited")),
         );
     }
@@ -86,6 +89,7 @@ pub(super) fn options(project: &Project) -> Vec<OptionRow> {
             &ui::COMPOSE,
             edit(id, Field::Options, options),
         )
+        .section("Model & Harness")
         .detail(format!("{} overrides", s.default_options.len())),
     );
     checkout_options(project, &mut rows);
@@ -112,6 +116,7 @@ fn checkout_options(project: &Project, rows: &mut Vec<OptionRow>) {
                     },
                 ),
             )
+            .section("Checkout & Directories")
             .badges(if s.default_checkout == mode {
                 vec!["Default"]
             } else {
@@ -120,11 +125,14 @@ fn checkout_options(project: &Project, rows: &mut Vec<OptionRow>) {
             .disabled(mode == DefaultCheckout::NewWorktree && !project.git),
         );
     }
-    rows.push(OptionRow::new(
-        "Add additional directory",
-        &ui::FOLDER_PLUS,
-        push(View::Folders(Destination::Additional(id.clone()))),
-    ));
+    rows.push(
+        OptionRow::new(
+            "Add additional directory",
+            &ui::FOLDER_PLUS,
+            push(View::Folders(Destination::Additional(id.clone()))),
+        )
+        .section("Checkout & Directories"),
+    );
     for (index, path) in s.additional_directories.iter().enumerate() {
         let mut paths = s.additional_directories.clone();
         paths.remove(index);
@@ -140,6 +148,7 @@ fn checkout_options(project: &Project, rows: &mut Vec<OptionRow>) {
                     },
                 ),
             )
+            .section("Checkout & Directories")
             .detail(path),
         );
     }
@@ -164,6 +173,7 @@ fn lifecycle_options(project: &Project, rows: &mut Vec<OptionRow>) {
                 },
             ),
         )
+        .section("Lifecycle")
         .badges(if s.auto_settle.is_none() {
             vec!["Selected"]
         } else {
@@ -174,6 +184,7 @@ fn lifecycle_options(project: &Project, rows: &mut Vec<OptionRow>) {
             &ui::ARCHIVE,
             edit(id, Field::Settle, days.clone()),
         )
+        .section("Lifecycle")
         .detail(if days.is_empty() {
             "Set a delay".into()
         } else {
@@ -190,6 +201,7 @@ fn lifecycle_options(project: &Project, rows: &mut Vec<OptionRow>) {
                 },
             ),
         )
+        .section("Lifecycle")
         .badges(if s.auto_settle == Some(ProjectAutoSettle::Never) {
             vec!["Selected"]
         } else {
@@ -209,7 +221,8 @@ fn lifecycle_options(project: &Project, rows: &mut Vec<OptionRow>) {
                     ..Patch::default()
                 },
             ),
-        ),
+        )
+        .section("Lifecycle"),
         OptionRow::new(
             if s.archived {
                 "Unarchive project"
@@ -224,12 +237,14 @@ fn lifecycle_options(project: &Project, rows: &mut Vec<OptionRow>) {
                     ..Patch::default()
                 },
             ),
-        ),
+        )
+        .section("Lifecycle"),
         OptionRow::new(
             "Remove project…",
             &ui::TRASH,
             push(View::Remove(id.clone())),
-        ),
+        )
+        .section("Lifecycle"),
     ]);
 }
 

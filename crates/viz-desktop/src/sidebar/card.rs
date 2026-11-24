@@ -175,6 +175,12 @@ pub(super) fn thread_card(
         card = card
             .offset(0.0, drag.dy)
             .offset_motion(Anim::INSTANT)
+            .scale(1.01)
+            .shadow(
+                6.0,
+                18.0,
+                Color::BLACK.alpha(if t.k.dark { 0.38 } else { 0.14 }),
+            )
             .raise();
     }
 

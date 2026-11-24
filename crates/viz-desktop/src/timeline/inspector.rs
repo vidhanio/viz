@@ -380,6 +380,7 @@ fn output_scroll(key: &str, output: El, max_h: f32, stick_bottom: bool, t: &Them
         .max_h(max_h)
         .min_h(0.0)
         .scroll(ScrollSpec { stick_bottom })
+        .scroll_fade(rune::ScrollFade::strength(crate::theme::S16).linear())
         .child(col().w_full().padding(S10).child(output))
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k))
 }
