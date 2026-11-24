@@ -268,7 +268,6 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             thread,
             environment,
         } => {
-            model.panels.details_open = false;
             model.git.popup = None;
             if let Some(environment) = environment {
                 open_in_environment(model, environment, Some(thread), &mut effects);

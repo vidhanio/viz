@@ -17,7 +17,6 @@ use crate::{
 pub enum GitMsg {
     ToggleDetails,
     RefreshDiff,
-    CloseDetails,
     ToggleDiff,
     PaneWidth(f32),
     Popup(Option<Popup>),
@@ -313,10 +312,6 @@ pub(super) fn update(model: &mut Model, msg: GitMsg) -> Vec<Effect> {
         GitMsg::RefreshDiff => refresh_diff(model, &mut effects),
         GitMsg::ToggleDetails => {
             model.panels.details_open = !model.panels.details_open;
-            model.git.popup = None;
-        }
-        GitMsg::CloseDetails => {
-            model.panels.details_open = false;
             model.git.popup = None;
         }
         GitMsg::ToggleDiff => {

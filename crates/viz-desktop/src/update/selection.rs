@@ -251,7 +251,6 @@ fn travel(model: &mut Model, back: bool, effects: &mut Vec<Effect>) {
 }
 
 pub(super) fn open_thread(model: &mut Model, thread: ThreadId, effects: &mut Vec<Effect>) {
-    model.panels.details_open = false;
     model.git.popup = None;
     show_thread(model, thread, effects);
     effects.push(Effect::SetWindowTitle(model.window_title()));

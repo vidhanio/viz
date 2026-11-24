@@ -1,4 +1,5 @@
-//! Adaptive, flat thread details anchored as a header popover.
+//! Adaptive, flat thread details floating persistently at the top-right corner
+//! of the main chat area.
 
 use std::{collections::HashSet, time::Duration};
 
@@ -14,23 +15,22 @@ use crate::{
         git::{self, CARD_WIDTH, Density},
         local_child, spawned_subagent, subagent_title, thread_title,
     },
-    theme::Theme,
+    theme::{HAIRLINE, RADIUS_CARD, S12, Theme},
     ui,
     update::{GitMsg, Msg, TimelineMsg},
 };
 
 pub const ANCHOR: &str = "thread-details-trigger";
 
-pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
-    let Some(id) = s.model.selection.selected else {
-        return;
-    };
+/// Renders the persistent floating thread details card pinned to the top-right
+/// of the main chat area with [`S12`] padding, or `None` when closed.
+pub fn card(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
+    let id = s.model.selection.selected?;
     if !s.model.panels.details_open {
-        return;
+        return None;
     }
-    let height = (s.model.panels.window_height - 100.0).max(100.0);
+    let height = (s.model.panels.window_height - 108.0).max(100.0);
     let density = git::density(height);
-    let overlay_start = layer.len();
     let sections = [
         workspace(s, density, t),
         subagents(s, id, t, layer),
@@ -48,18 +48,18 @@ pub fn mount(s: &Desktop, t: &Theme, layer: &mut Vec<El>) {
         .key("thread-details-scroll")
         .scroll_anchor()
         .max_h(height);
-    let mut popover = ui::anchored_popover(
-        "thread-details",
-        ANCHOR,
-        Placement::BottomEnd,
-        CARD_WIDTH,
-        body,
-        t,
-    );
-    if s.model.git.popup.is_none() && s.model.git.dialog.is_none() {
-        popover = popover.modal(true, super::close_details);
-    }
-    layer.insert(overlay_start, popover);
+    Some(
+        col()
+            .key("thread-details-card")
+            .pin(None, Some(S12), Some(S12), None)
+            .paint_order(25)
+            .w(CARD_WIDTH)
+            .radius(RADIUS_CARD)
+            .fill(t.surface_raised)
+            .border(HAIRLINE, t.border_overlay)
+            .clip_rounded(RADIUS_CARD)
+            .child(body),
+    )
 }
 
 fn workspace(s: &Desktop, density: Density, t: &Theme) -> Option<El> {
