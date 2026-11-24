@@ -55,7 +55,7 @@ impl Workspace {
             if let Some(found) = launched(&mut db, args.request_id.as_deref()).await? {
                 return Ok(found);
             }
-            store::project(&mut db, &project).await?;
+            store::require_project(&mut db, &project).await?;
             drop(db);
         }
         let title = args
@@ -300,7 +300,7 @@ impl Workspace {
         let mut tx = db.transaction().await?;
         let (current, in_worktree) = store::metadata(&mut tx, thread).await?;
         if let Patch::Set(project) = &changes.project {
-            store::project(&mut tx, project).await?;
+            store::require_project(&mut tx, project).await?;
         }
         let updated = threads::update(current.clone(), in_worktree, changes)?;
         store::save_metadata(&mut tx, thread, &updated).await?;

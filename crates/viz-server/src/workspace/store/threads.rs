@@ -13,7 +13,7 @@ use super::{
         Workspace,
         sql::{Connection, exec, row, rows},
     },
-    from_json, json, lifecycle, now, thread_worktree,
+    from_json, json, lifecycle, now,
 };
 use crate::{
     acp::{Desired, Selection},
@@ -155,6 +155,30 @@ pub(in crate::workspace) async fn require(
         .ok_or_else(|| Error::NoThread(thread))
 }
 
+pub(in crate::workspace) async fn thread_cwd(
+    db: &mut Connection,
+    thread: ThreadId,
+) -> Result<String, Error> {
+    row(db, "SELECT cwd FROM threads WHERE id = ?1", [thread.into()])
+        .await?
+        .ok_or(Error::NoThread(thread))?
+        .str(0)
+}
+
+pub(in crate::workspace) async fn thread_title(
+    db: &mut Connection,
+    thread: ThreadId,
+) -> Result<String, Error> {
+    row(
+        db,
+        "SELECT title FROM threads WHERE id = ?1",
+        [thread.into()],
+    )
+    .await?
+    .ok_or(Error::NoThread(thread))?
+    .str(0)
+}
+
 pub(in crate::workspace) struct NewThread<'a> {
     pub(in crate::workspace) harness: &'a str,
     pub(in crate::workspace) checkout: &'a Checkout,
@@ -170,7 +194,7 @@ pub(in crate::workspace) async fn create_thread(
     db: &mut Connection,
     new: &NewThread<'_>,
 ) -> Result<ThreadId, Error> {
-    workspace.admit_checkout(new.checkout).await?;
+    workspace.admit_checkout(new.checkout)?;
     let row = row(db, "INSERT INTO threads (harness, cwd, project, parent, parent_environment, title, user_title, session, updated_at, worktree)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) RETURNING id", [
         new.harness.into(), new.checkout.cwd.as_str().into(), new.project.into(), new.parent.into(), new.parent_environment.into(),
@@ -179,12 +203,20 @@ pub(in crate::workspace) async fn create_thread(
     row.id(0)
 }
 
-pub(in crate::workspace) async fn list_threads(
+/// Raw persisted thread record ready to be enriched with worktree Git branches
+/// outside the SQLite lock.
+pub(in crate::workspace) struct ThreadRecord {
+    pub(in crate::workspace) summary: ThreadSummary,
+    pub(in crate::workspace) activity: triage::Activity,
+    pub(in crate::workspace) worktree_path: Option<String>,
+}
+
+pub(in crate::workspace) async fn thread_rows(
     db: &mut Connection,
     archived: Option<bool>,
     project: Option<&str>,
     workspace: &Workspace,
-) -> Result<Vec<ThreadSummary>, Error> {
+) -> Result<Vec<ThreadRecord>, Error> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
             t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, t.cwd, {}
@@ -199,6 +231,7 @@ pub(in crate::workspace) async fn list_threads(
         let (lifecycle, activity, status) = lifecycle::decode(&mut row, 12)?;
         let id = row.id(0)?;
         let shelf = triage::shelf(&lifecycle, &activity, now);
+        let worktree_path = row.opt_str(8)?;
         let summary = ThreadSummary {
             id,
             title: row.str(1)?,
@@ -214,7 +247,7 @@ pub(in crate::workspace) async fn list_threads(
                 })
                 .transpose()?,
             project: row.opt_str(4)?,
-            worktree: thread_worktree(row.opt_str(8)?).await,
+            worktree: None,
             pull_request: workspace.pull_summary(id, &row.str(11)?),
             harness_name: workspace.harness_name(&harness).to_owned(),
             harness,
@@ -228,18 +261,22 @@ pub(in crate::workspace) async fn list_threads(
             thinking: row.opt_str(7)?,
             lifecycle,
         };
-        threads.push((summary, activity));
+        threads.push(ThreadRecord {
+            summary,
+            activity,
+            worktree_path,
+        });
     }
-    threads.sort_by_cached_key(|(thread, activity)| {
-        triage::sort_key(thread.shelf, &thread.lifecycle, activity, thread.id)
-    });
-    Ok(threads.into_iter().map(|(thread, _)| thread).collect())
+    Ok(threads)
 }
 
-pub(in crate::workspace) async fn state(
+/// Reads persisted thread state under the SQLite lock without touching Git,
+/// returning `(state, raw_worktree_path)` so callers resolve the branch after
+/// releasing the lock.
+pub(in crate::workspace) async fn state_row(
     db: &mut Connection,
     thread: ThreadId,
-) -> Result<ThreadState, Error> {
+) -> Result<(ThreadState, Option<String>), Error> {
     let query = format!(
         "SELECT t.harness, t.project, t.cwd, t.session, t.worktree, {} FROM threads AS t WHERE t.id = ?1",
         lifecycle::COLUMNS
@@ -266,21 +303,25 @@ pub(in crate::workspace) async fn state(
     let (_, _, status) = lifecycle::decode(&mut row, 5)?;
     let access = super::requests::access(db, thread, &session.options).await?;
     let requests = super::requests::pending_requests(db, thread).await?;
-    Ok(ThreadState {
-        harness: row.str(0)?,
-        project: row.opt_str(1)?,
-        worktree: thread_worktree(row.opt_str(4)?).await,
-        cwd: row.str(2)?,
-        status,
-        options: session.options,
-        commands: session.commands,
-        attachments: AttachmentCapabilities {
-            images: session.images,
+    let worktree_path = row.opt_str(4)?;
+    Ok((
+        ThreadState {
+            harness: row.str(0)?,
+            project: row.opt_str(1)?,
+            worktree: None,
+            cwd: row.str(2)?,
+            status,
+            options: session.options,
+            commands: session.commands,
+            attachments: AttachmentCapabilities {
+                images: session.images,
+            },
+            usage: session.usage,
+            queue,
+            live: None,
+            access,
+            requests,
         },
-        usage: session.usage,
-        queue,
-        live: None,
-        access,
-        requests,
-    })
+        worktree_path,
+    ))
 }

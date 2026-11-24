@@ -16,14 +16,17 @@ pub(super) use self::{
     entry_wire::{EntryChunkCache, chunk, live_preview},
     fork::{copy_history, fork_prompt, has_entry, turns},
     lifecycle::{lifecycle, save_lifecycle, standings, touch},
-    projects::{directory, path_text, preferences, project, project_at, projects, thread_worktree},
+    projects::{
+        directory, path_text, preferences, project_at, project_row, project_rows, require_project,
+        thread_worktree,
+    },
     requests::{
         access, chosen_access, insert_request, request, save_project_access, save_request,
         save_thread_access, withdraw_requests,
     },
     threads::{
-        Binding, Handoff, NewThread, SavedSession, binding, create_thread, list_threads, metadata,
-        require, save_metadata, state, updated,
+        Binding, Handoff, NewThread, SavedSession, binding, create_thread, metadata, require,
+        save_metadata, state_row, thread_cwd, thread_rows, thread_title, updated,
     },
     transcript::{append, entries, entries_after, latest_entry_id, publish, search},
 };

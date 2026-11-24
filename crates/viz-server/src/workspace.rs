@@ -146,6 +146,9 @@ impl Workspace {
             .await
             .with_context(|| format!("creating worktree directory {}", worktrees.display()))?;
         let worktrees = tokio::fs::canonicalize(&worktrees).await?;
+        let cwd = tokio::fs::canonicalize(&config.cwd)
+            .await
+            .unwrap_or_else(|_| config.cwd.clone());
         let blobs = blobs::BlobStore::open(&dir)?;
         let mut db = Connection::open(dir.join("workspace.sqlite3")).await?;
         blobs.reconcile_startup(&mut db).await?;
@@ -155,7 +158,7 @@ impl Workspace {
         Ok(Arc::new(Self {
             db: Mutex::new(db),
             environment: config.environment.clone(),
-            cwd: config.cwd.clone(),
+            cwd,
             dir,
             blobs,
             thumbs: thumbs::ThumbCache::default(),
@@ -196,11 +199,76 @@ impl Workspace {
         Ok(())
     }
 
+    pub(crate) async fn list_projects(&self) -> Result<Vec<crate::wire::Project>, Error> {
+        let rows = store::project_rows(&mut *self.db.lock().await).await?;
+        let mut projects: Vec<_> = futures_util::future::join_all(
+            rows.into_iter()
+                .map(|row| store::project_at(row.path, row.name, row.created_at, row.settings)),
+        )
+        .await;
+        projects.sort_by_key(|project| {
+            (
+                !project.settings.pinned,
+                project.settings.order.unwrap_or(i64::MAX),
+            )
+        });
+        Ok(projects)
+    }
+
+    pub(crate) async fn read_project(&self, path: &str) -> Result<crate::wire::Project, Error> {
+        let row = store::project_row(&mut *self.db.lock().await, path).await?;
+        Ok(store::project_at(row.path, row.name, row.created_at, row.settings).await)
+    }
+
+    pub(crate) async fn list_threads(
+        &self,
+        archived: Option<bool>,
+        project: Option<&str>,
+    ) -> Result<Vec<crate::wire::ThreadSummary>, Error> {
+        let records =
+            store::thread_rows(&mut *self.db.lock().await, archived, project, self).await?;
+        let mut unique_worktrees: Vec<String> = records
+            .iter()
+            .filter_map(|record| record.worktree_path.clone())
+            .collect();
+        unique_worktrees.sort_unstable();
+        unique_worktrees.dedup();
+        let resolved: std::collections::HashMap<String, crate::wire::ThreadWorktree> =
+            futures_util::future::join_all(unique_worktrees.into_iter().map(|path| async move {
+                store::thread_worktree(Some(path.clone()))
+                    .await
+                    .map(|wt| (path, wt))
+            }))
+            .await
+            .into_iter()
+            .flatten()
+            .collect();
+        let mut threads: Vec<_> = records
+            .into_iter()
+            .map(|mut record| {
+                if let Some(path) = record.worktree_path.as_deref() {
+                    record.summary.worktree = resolved.get(path).cloned();
+                }
+                (record.summary, record.activity)
+            })
+            .collect();
+        threads.sort_by_cached_key(|(thread, activity)| {
+            viz_core::lifecycle::sort_key(thread.shelf, &thread.lifecycle, activity, thread.id)
+        });
+        Ok(threads.into_iter().map(|(thread, _)| thread).collect())
+    }
+
     pub(crate) async fn state(&self, thread: ThreadId) -> Result<ThreadState, Error> {
-        let mut db = self.db.lock().await;
-        let mut state = store::state(&mut db, thread).await?;
-        state.live = self.updates.latest(thread);
-        drop(db);
+        let (mut state, worktree_path) = {
+            let mut db = self.db.lock().await;
+            let pair = store::state_row(&mut db, thread).await?;
+            let live = self.updates.latest(thread);
+            drop(db);
+            let (mut state, worktree_path) = pair;
+            state.live = live;
+            (state, worktree_path)
+        };
+        state.worktree = store::thread_worktree(worktree_path).await;
         Ok(state)
     }
 
@@ -215,37 +283,52 @@ impl Workspace {
     }
 
     /// Captures the initial transcript page, cursor head, and live baseline
-    /// together.
+    /// together, resolving worktree branch metadata outside the SQLite lock.
     pub(crate) async fn watch_snapshot(
         &self,
         thread: ThreadId,
         limit: usize,
     ) -> Result<(EntryPage, Option<EntryId>, ThreadState), Error> {
-        let mut db = self.db.lock().await;
-        let page = store::entries(&mut db, thread, None, limit).await?;
-        let last = store::latest_entry_id(&mut db, thread).await?;
-        let mut state = store::state(&mut db, thread).await?;
-        state.live = self.updates.latest(thread);
-        drop(db);
+        let (page, last, mut state, worktree_path) = {
+            let mut db = self.db.lock().await;
+            let page = store::entries(&mut db, thread, None, limit).await?;
+            let last = store::latest_entry_id(&mut db, thread).await?;
+            let (mut state, worktree_path) = store::state_row(&mut db, thread).await?;
+            state.live = self.updates.latest(thread);
+            drop(db);
+            (page, last, state, worktree_path)
+        };
+        state.worktree = store::thread_worktree(worktree_path).await;
         Ok((page, last, state))
     }
 
-    /// Reads the next append batch and captures its baseline once caught up.
+    /// Reads the next append batch and captures its baseline once caught up,
+    /// resolving worktree branch metadata outside the SQLite lock.
     pub(crate) async fn watch_changes(
         &self,
         thread: ThreadId,
         after: Option<EntryId>,
         limit: usize,
     ) -> Result<(Vec<Entry>, Option<ThreadState>), Error> {
-        let mut db = self.db.lock().await;
-        let (entries, has_more) = store::entries_after(&mut db, thread, after, limit).await?;
-        if has_more {
-            return Ok((entries, None));
-        }
-        let mut state = store::state(&mut db, thread).await?;
-        state.live = self.updates.latest(thread);
-        drop(db);
-        Ok((entries, Some(state)))
+        let (entries, state) = {
+            let mut db = self.db.lock().await;
+            let (entries, has_more) = store::entries_after(&mut db, thread, after, limit).await?;
+            if has_more {
+                return Ok((entries, None));
+            }
+            let (mut state, worktree_path) = store::state_row(&mut db, thread).await?;
+            state.live = self.updates.latest(thread);
+            drop(db);
+            (entries, Some((state, worktree_path)))
+        };
+        let state = match state {
+            Some((mut state, worktree_path)) => {
+                state.worktree = store::thread_worktree(worktree_path).await;
+                Some(state)
+            }
+            None => None,
+        };
+        Ok((entries, state))
     }
 
     pub(crate) async fn run_origin(
@@ -449,17 +532,11 @@ impl Workspace {
         let rel =
             viz_fs::RelPath::parse(path).map_err(|error| Error::invalid(error.to_string()))?;
         let root_dir = match root {
-            viz_protocol::FileRoot::Thread { thread } => row(
-                &mut *self.db.lock().await,
-                "SELECT cwd FROM threads WHERE id = ?1",
-                [thread.into()],
-            )
-            .await?
-            .ok_or(Error::NoThread(thread))?
-            .str(0)?,
+            viz_protocol::FileRoot::Thread { thread } => {
+                store::thread_cwd(&mut *self.db.lock().await, thread).await?
+            }
             viz_protocol::FileRoot::Project { project } => {
-                store::preferences(&mut *self.db.lock().await, &project).await?;
-                project
+                store::require_project(&mut *self.db.lock().await, &project).await?
             }
         };
         let root_path = PathBuf::from(root_dir);
@@ -616,14 +693,15 @@ impl Workspace {
             .unwrap_or(id)
     }
 
-    /// The checkout of `project`, or the default directory.
+    /// The checkout of `project`, or the default directory (pure SQLite check;
+    /// zero Git or filesystem I/O under the lock).
     async fn checkout_for(
         &self,
         db: &mut Connection,
         project: Option<&str>,
     ) -> Result<Checkout, Error> {
         let cwd = match project {
-            Some(project) => store::project(db, project).await?.path,
+            Some(project) => store::require_project(db, project).await?,
             None => store::path_text(&self.cwd)?.to_owned(),
         };
         Ok(Checkout {

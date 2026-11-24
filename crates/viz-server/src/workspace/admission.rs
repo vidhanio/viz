@@ -51,7 +51,7 @@ impl Workspace {
             args.target.project.as_deref(),
             parent.as_ref().map(Parent::placed),
         )?;
-        store::project(&mut *self.db.lock().await, project).await?;
+        store::require_project(&mut *self.db.lock().await, project).await?;
         let (project, source) = (project.to_owned(), source.to_owned());
         let workspace = Arc::clone(self);
         self.jobs

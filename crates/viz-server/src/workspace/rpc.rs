@@ -23,13 +23,13 @@ use viz_protocol::{
     TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
 };
 
-use super::{Workspace, runs, sql::row, store};
+use super::{Workspace, runs, store};
 use crate::{error::Error, rpc::handlers};
 
 handlers! {
     ROUTES for Arc<Workspace> {
         ListThreads, |workspace, ListThreads { project, archived }| {
-            let threads = store::list_threads(&mut *workspace.db.lock().await, archived, project.as_deref(), workspace).await?;
+            let threads = workspace.list_threads(archived, project.as_deref()).await?;
             Ok(ThreadList { threads })
         }
         ListEntries, |workspace, ListEntries { thread, before, limit }| {
@@ -47,13 +47,8 @@ handlers! {
         }
         SearchFiles, |workspace, SearchFiles { thread, project, query, limit }| {
             let cwd = match (thread, project) {
-                (Some(thread), None) => row(&mut *workspace.db.lock().await,
-                    "SELECT cwd FROM threads WHERE id = ?1", [thread.into()]
-                ).await?.ok_or_else(|| Error::NoThread(thread))?.str(0)?,
-                (None, Some(project)) => {
-                    store::preferences(&mut *workspace.db.lock().await, &project).await?;
-                    project
-                }
+                (Some(thread), None) => store::thread_cwd(&mut *workspace.db.lock().await, thread).await?,
+                (None, Some(project)) => store::require_project(&mut *workspace.db.lock().await, &project).await?,
                 _ => return Err(Error::invalid("choose one file search target")),
             };
             let files = viz_git::find_files(
@@ -82,11 +77,11 @@ handlers! {
             workspace.stat_blob(thread, &id).await
         }
         ListProjects, |workspace, _| {
-            let projects = store::projects(&mut *workspace.db.lock().await).await?;
+            let projects = workspace.list_projects().await?;
             Ok(ProjectList { projects })
         }
         ReadProject, |workspace, ReadProject { project }| {
-            let project = store::project(&mut *workspace.db.lock().await, &project).await?;
+            let project = workspace.read_project(&project).await?;
             Ok(ProjectResult { project })
         }
         CreateProject, |workspace, CreateProject { path, name }| {
@@ -132,11 +127,11 @@ handlers! {
             Ok(Empty {})
         }
         ListBranches, |workspace, ListBranches { project, query, offset, limit }| {
-            let project = store::project(&mut *workspace.db.lock().await, &project).await?;
+            let project = store::require_project(&mut *workspace.db.lock().await, &project).await?;
             let query = query.unwrap_or_default().to_lowercase();
             let offset = offset.unwrap_or_default();
             let limit = page_limit(limit, 100)?;
-            let repo = viz_git::Repository::discover(Path::new(&project.path), &workspace.closing).await?;
+            let repo = viz_git::Repository::discover(Path::new(&project), &workspace.closing).await?;
             let all = repo.branches(&workspace.closing).await?;
             let mut branches = all.entries.into_iter()
                 .filter(|branch| branch.name.to_lowercase().contains(&query))
@@ -291,17 +286,11 @@ impl Workspace {
 
         let rel = RelPath::parse(&args.path).map_err(|error| Error::invalid(error.to_string()))?;
         let root_dir = match args.root {
-            FileRoot::Thread { thread } => row(
-                &mut *self.db.lock().await,
-                "SELECT cwd FROM threads WHERE id = ?1",
-                [thread.into()],
-            )
-            .await?
-            .ok_or(Error::NoThread(thread))?
-            .str(0)?,
+            FileRoot::Thread { thread } => {
+                store::thread_cwd(&mut *self.db.lock().await, thread).await?
+            }
             FileRoot::Project { project } => {
-                store::preferences(&mut *self.db.lock().await, &project).await?;
-                project
+                store::require_project(&mut *self.db.lock().await, &project).await?
             }
         };
 

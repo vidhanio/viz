@@ -7,7 +7,7 @@ use viz_protocol::{ProjectSettings, PromoteThread, PromotedThread, ThreadId};
 
 use super::{
     Workspace,
-    sql::{exec, row, rows},
+    sql::{exec, rows},
     store,
 };
 use crate::error::Error;
@@ -87,14 +87,7 @@ impl Workspace {
         if binding.checkout.cwd != current || binding.project.is_some() {
             return Err(Error::invalid("thread placement changed"));
         }
-        let title = row(
-            &mut tx,
-            "SELECT title FROM threads WHERE id = ?1",
-            [args.thread.into()],
-        )
-        .await?
-        .ok_or(Error::NoThread(args.thread))?
-        .str(0)?;
+        let title = store::thread_title(&mut tx, args.thread).await?;
         let name = placement::ScratchPromotion::name(args.name, title)?;
         let now = store::now();
         let inserted = exec(&mut tx, "INSERT INTO projects (path, name, created_at) VALUES (?1, ?2, ?3) ON CONFLICT DO NOTHING",

@@ -337,7 +337,7 @@ impl Workspace {
         } = input;
         let (_, config) = self.harness(Some(&harness))?;
         let mut db = self.db.lock().await;
-        store::project(&mut db, &project).await?;
+        store::require_project(&mut db, &project).await?;
         let access = match access {
             Some(mode) => {
                 let options = sessions::catalog(&mut db, &harness)

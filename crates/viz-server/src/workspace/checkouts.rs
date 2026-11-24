@@ -27,12 +27,12 @@ use super::{
 use crate::error::Error;
 
 impl Workspace {
-    /// Validates a thread's destination under the database lock. A removal
-    /// reserves its root under the same lock before releasing it for Git.
-    pub(super) async fn admit_checkout(&self, checkout: &Checkout) -> Result<(), Error> {
+    /// Validates a thread's destination under the database lock without
+    /// filesystem I/O. Stored project, worktree, scratch, and default paths
+    /// are canonicalized before taking the lock.
+    pub(super) fn admit_checkout(&self, checkout: &Checkout) -> Result<(), Error> {
         let path = Path::new(checkout.worktree.as_deref().unwrap_or(&checkout.cwd));
-        let canonical = tokio::fs::canonicalize(path).await?;
-        if self.removing(&canonical) {
+        if self.removing(path) {
             return Err(viz_git::Error::Busy.into());
         }
         Ok(())
@@ -97,12 +97,12 @@ impl Workspace {
     }
 
     pub(super) async fn list_worktrees(&self, project: &str) -> Result<WorktreeList, Error> {
-        let project = store::project(&mut *self.db.lock().await, project).await?;
-        let listed = worktree::list(Path::new(&project.path)).await?;
+        let project = store::require_project(&mut *self.db.lock().await, project).await?;
+        let listed = worktree::list(Path::new(&project)).await?;
         let filed = rows(
             &mut *self.db.lock().await,
             "SELECT id, cwd FROM threads WHERE project = ?1 OR worktree IS NOT NULL ORDER BY id",
-            [project.path.as_str().into()],
+            [project.as_str().into()],
         )
         .await?;
         let mut by_checkout = std::collections::HashMap::<String, Vec<ThreadId>>::new();
@@ -205,15 +205,7 @@ impl Workspace {
             let mut db = self.db.lock().await;
             let binding = store::binding(&mut db, thread).await?;
             runs::idle(&mut db, thread).await?;
-            let title = row(
-                &mut db,
-                "SELECT title FROM threads WHERE id = ?1",
-                [thread.into()],
-            )
-            .await?
-            .map(|mut row| row.str(0))
-            .transpose()?
-            .unwrap_or_default();
+            let title = store::thread_title(&mut db, thread).await?;
             drop(db);
             (binding, title)
         };
@@ -272,6 +264,14 @@ impl Workspace {
         before: &store::Binding,
         placement: &Placement,
     ) -> Result<(), Error> {
+        let dest = Path::new(
+            placement
+                .checkout
+                .worktree
+                .as_deref()
+                .unwrap_or(&placement.checkout.cwd),
+        );
+        let canonical = tokio::fs::canonicalize(dest).await?;
         let mut db = self.db.lock().await;
         let mut tx = db.transaction().await?;
         let current = store::binding(&mut tx, thread).await?;
@@ -279,7 +279,10 @@ impl Workspace {
             return Err(threads::Rejection::Moved.into());
         }
         runs::idle(&mut tx, thread).await?;
-        self.admit_checkout(&placement.checkout).await?;
+        if self.removing(&canonical) {
+            return Err(viz_git::Error::Busy.into());
+        }
+        self.admit_checkout(&placement.checkout)?;
         let prompted = row(
             &mut tx,
             "SELECT 1 FROM runs WHERE thread = ?1 LIMIT 1",
