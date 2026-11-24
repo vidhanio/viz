@@ -70,7 +70,7 @@ pub fn card(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> Option<El> {
             )
             .clip_rounded(RADIUS_CARD)
             .motion(crate::motion::SETTLE)
-            .transition(crate::motion::popover(crate::motion::TRAVEL_SMALL))
+            .transition(crate::motion::popover(-crate::motion::TRAVEL_DRAWER))
             .child(body),
     )
 }

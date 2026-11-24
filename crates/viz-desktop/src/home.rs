@@ -67,7 +67,7 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
 
     let hero_exit = Transition::offset(0.0, -motion::TRAVEL_SMALL)
         .combined(Transition::opacity())
-        .springs(motion::SETTLE_PAIR);
+        .springs(motion::TITLE_PAIR);
 
     let hero = match m.project() {
         Some(project) => state_b_hero(s, project, lane_width, narrow, t, layer),
@@ -87,7 +87,7 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .child(hero)
         .child(dock);
 
-    if short_viewport {
+    let screen = if short_viewport {
         col()
             .key("home-screen")
             .w_full()
@@ -109,7 +109,8 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             .child(el().grow(1.0).a11y_hidden())
             .child(content)
             .child(el().grow(1.08).a11y_hidden())
-    }
+    };
+    screen.transition(hero_exit)
 }
 
 /// State A: No project selected (`"What should we work on?"` + `"No project"`).

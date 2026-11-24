@@ -104,7 +104,7 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
     let switch = motion_switch(m.selection.switch);
     let scroll_pos = s.widgets.timeline_scroll.clone();
 
-    let scroll = col()
+    let mut scroll = col()
         .key(page)
         .w_full()
         .grow(1.0)
@@ -125,18 +125,28 @@ pub fn timeline(s: &Desktop, slots: TimelineSlots, t: &Theme, layer: &mut Vec<El
         })
         .child(body)
         .scroll_bar_styled(ScrollBarStyle::scroll_view(&t.k));
+    if switch == motion::Switch::Fade {
+        scroll = scroll.enter_delay(motion::TITLE_ENTER_DELAY);
+    }
 
     let jump_pill = (m.timeline.far_from_bottom && !is_empty && !(m.is_loading() && m.connected()))
         .then(|| scroll_to_end_button(m.timeline.unseen_activity, t));
+
+    let pages = col()
+        .key("timeline-pages")
+        .w_full()
+        .grow(1.0)
+        .min_h(0.0)
+        .clip_rounded(0.0)
+        .child_exit(switch.exit(motion::TRAVEL_PANE))
+        .child(scroll);
 
     col()
         .key("timeline")
         .w_full()
         .grow(1.0)
         .min_h(0.0)
-        .clip_rounded(0.0)
-        .child_exit(switch.exit(motion::TRAVEL_PANE))
-        .child(scroll)
+        .child(pages)
         .children(jump_pill)
 }
 
@@ -287,7 +297,6 @@ fn scroll_to_end_button(unseen: bool, t: &Theme) -> El {
         )
         .focusable(true)
         .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-        .transition(motion::popover(motion::TRAVEL_SMALL))
         .on_press_tx(|s: &mut Desktop, tx: &mut Tx| {
             s.dispatch(Msg::Timeline(TimelineMsg::ScrollToEnd), tx);
         });
@@ -313,6 +322,7 @@ fn scroll_to_end_button(unseen: bool, t: &Theme) -> El {
         .key("scroll-to-end-anchor")
         .pin(Some(0.0), None, Some(0.0), Some(S12))
         .center()
+        .transition(motion::popover(motion::TRAVEL_SMALL))
         .child(pill)
 }
 

@@ -6,7 +6,7 @@ use rune_kit::{Button, ButtonVariant};
 
 use crate::{
     motion,
-    theme::{DIALOG_INSET, HAIRLINE, RADIUS_SURFACE, S8, Size, Theme},
+    theme::{DIALOG_INSET, RADIUS_SURFACE, S8, Size, Theme},
 };
 
 /// A frameless modal sheet without a header row (for the command palette or
@@ -30,9 +30,8 @@ pub fn sheet<S: 'static>(
     );
 }
 
-/// Mounts a flat modal panel (`t.surface_raised`, `1px` `t.border_overlay`,
-/// zero drop shadow) and scrim (`t.scrim`) with Escape and outside-click
-/// dismissal.
+/// Mounts a borderless shadowed modal panel (`t.surface_raised`) and scrim
+/// (`t.scrim`) with Escape and outside-click dismissal.
 fn modal<S: 'static>(
     key: &str,
     panel: El,
@@ -41,7 +40,7 @@ fn modal<S: 'static>(
     t: &Theme,
     layer: &mut Vec<El>,
 ) {
-    let k = &t.overlay;
+    let dark = t.k.dark;
     let panel = panel
         .key(format!("{key}-dialog"))
         .role("dialog")
@@ -49,10 +48,18 @@ fn modal<S: 'static>(
         .max_w(width)
         .radius(RADIUS_SURFACE)
         .fill(t.surface_raised)
-        .border(HAIRLINE, t.border_overlay)
+        .shadow(
+            2.0,
+            6.0,
+            rune::Color::BLACK.alpha(if dark { 0.24 } else { 0.08 }),
+        )
+        .shadow(
+            12.0,
+            32.0,
+            rune::Color::BLACK.alpha(if dark { 0.48 } else { 0.16 }),
+        )
         .clip_rounded(RADIUS_SURFACE)
         .transition(motion::dialog())
-        .token_motion(k.motion.overlay)
         .modal(true, close);
     layer.push(
         el().key(format!("{key}-scrim"))
@@ -61,7 +68,6 @@ fn modal<S: 'static>(
             .h_full()
             .fill(t.scrim)
             .transition(motion::scrim())
-            .token_motion(k.motion.overlay)
             .a11y_hidden(),
     );
     layer.push(

@@ -48,6 +48,7 @@ pub fn compaction_divider(s: &Desktop, notice: &CompactionNotice, t: &Theme) -> 
     if let Some(error) = &notice.error {
         block = block.child(
             text(error)
+                .key("error")
                 .font(t.small)
                 .color(t.danger)
                 .wrap()

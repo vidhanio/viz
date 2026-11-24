@@ -47,9 +47,12 @@ pub(super) fn primary_shelves(
             .gap(S2),
     );
 
+    let mut draft_slot =
+        motion::fold_container(col().key("shelf-draft-slot").w_full().clip_rounded(0.0));
     if let Some(preview) = &outline.draft {
-        stack = stack.child(draft::draft_card(s, preview, t));
+        draft_slot = draft_slot.child(motion::fold_row(draft::draft_card(s, preview, t)));
     }
+    stack = stack.child(draft_slot);
 
     if !outline.pinned.is_empty() || dragging_to_empty_pinned {
         stack = stack.child(

@@ -273,7 +273,8 @@ fn poll_earlier_history(s: &mut Desktop, tx: &mut Tx) -> bool {
     if s.model.connected()
         && s.model.transcript().before.is_some()
         && !s.model.is_history_loading()
-        && max_y > 1.0
+        && s.model.timeline.far_from_bottom
+        && max_y > AUTO_LOAD_TOP_PX
         && offset_y <= AUTO_LOAD_TOP_PX
     {
         s.dispatch(Msg::Timeline(TimelineMsg::LoadEarlier), tx);
