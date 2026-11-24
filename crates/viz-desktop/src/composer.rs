@@ -4,6 +4,7 @@
 mod actions;
 pub mod attachments;
 mod branch_picker;
+pub mod codec;
 mod completion;
 pub mod context_strip;
 mod draft;

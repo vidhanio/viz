@@ -226,9 +226,8 @@ pub enum EditSync {
         /// Replacement text.
         insertion: String,
     },
-    /// Insert `text` at the composer draft's current caret with automatic
-    /// surrounding whitespace so inline attachment references flow cleanly.
-    InsertAtDraftCaret(String),
+    /// Inserts attachment marks at the caret with surrounding whitespace.
+    InsertDraftRefs(Vec<(crate::composer::codec::PillRef, String)>),
     /// Replace a byte range in the draft with an atomic [`rune::Mark::Pill`].
     InsertDraftPill {
         /// Start byte offset of the trigger token.
@@ -299,8 +298,6 @@ pub enum ServerEffect {
         draft: u64,
         /// Launch parameters.
         params: Box<LaunchThread>,
-        /// Raw attachments staged on the content channel before launching.
-        attachments: Vec<DraftAttachment>,
         /// Submitted composer state retained until the RPC settles.
         recovery: Box<DraftData>,
     },
@@ -401,14 +398,12 @@ pub enum ServerEffect {
         /// Queued run id.
         run: RunId,
     },
-    /// Update a queued input's prompt text.
+    /// Replace a queued input's prompt.
     UpdateQueued {
-        /// Target thread id.
         thread: ThreadId,
-        /// Queued run id.
         run: RunId,
-        /// Updated prompt text.
-        text: String,
+        prompt: viz_client::protocol::Prompt,
+        recovery: Box<DraftRecovery>,
     },
     /// Remove a queued input from the queue.
     RemoveQueued {
@@ -436,8 +431,6 @@ pub enum ServerEffect {
     SendInput {
         /// Wire request.
         input: SendInput,
-        /// Raw attachments staged on the content channel before sending.
-        attachments: Vec<DraftAttachment>,
         /// Local editor snapshot and destination environment, for composer
         /// submissions.
         recovery: Option<Box<DraftRecovery>>,

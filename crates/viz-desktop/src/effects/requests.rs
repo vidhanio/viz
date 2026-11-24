@@ -42,13 +42,11 @@ impl Session<'_> {
         &self,
         draft: u64,
         mut params: LaunchThread,
-        attachments: Vec<DraftAttachment>,
         mut recovery: Box<crate::model::DraftData>,
     ) -> Result<()> {
         let outcome = async {
-            if !attachments.is_empty() {
-                let prompt = params.prompt.get_or_insert_with(Default::default);
-                stage_into_prompt(&self.content, &attachments, prompt).await?;
+            if let Some(prompt) = &mut params.prompt {
+                stage_into_prompt(&self.content, &recovery.attachments, prompt).await?;
             }
             let fingerprint = submission_fingerprint(&self.environment, &params);
             params.request_id = Some(submission_id(&mut recovery, fingerprint));
@@ -80,14 +78,16 @@ impl Session<'_> {
     pub(super) async fn send_input(
         &self,
         mut input: SendInput,
-        attachments: Vec<DraftAttachment>,
         mut recovery: Option<Box<super::DraftRecovery>>,
     ) -> Result<()> {
         let outcome = async {
-            if !attachments.is_empty() {
-                stage_into_prompt(&self.content, &attachments, &mut input.prompt).await?;
-            }
             if let Some(recovery) = &mut recovery {
+                stage_into_prompt(
+                    &self.content,
+                    &recovery.draft.attachments,
+                    &mut input.prompt,
+                )
+                .await?;
                 let mode = input.mode.take();
                 let fingerprint = submission_fingerprint(&self.environment, &input);
                 input.mode = mode;
@@ -414,23 +414,26 @@ impl Session<'_> {
     }
 }
 
-async fn stage_into_prompt(
+pub(super) async fn stage_into_prompt(
     content: &ContentClient,
     attachments: &[DraftAttachment],
     prompt: &mut Prompt,
 ) -> Result<()> {
     for file in attachments {
-        let info = content
-            .stage_blob(&file.name, &file.mime, &file.bytes)
-            .await?;
-        prompt.append_reference(
-            &file.name,
-            PromptRef::Attachment {
-                id: info.blob,
-                name: file.name.clone(),
-                mime: file.mime.clone(),
-            },
-        );
+        let local_id = file.id.to_string();
+        let mut matching = prompt.refs.iter_mut().filter_map(|target| match target {
+            PromptRef::Attachment { id, .. } if *id == local_id => Some(id),
+            _ => None,
+        });
+        if let Some(first) = matching.next() {
+            let info = content
+                .stage_blob(&file.name, &file.mime, &file.bytes)
+                .await?;
+            first.clone_from(&info.blob);
+            for id in matching {
+                id.clone_from(&info.blob);
+            }
+        }
     }
     Ok(())
 }

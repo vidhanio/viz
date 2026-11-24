@@ -1679,24 +1679,233 @@
               "run": {
                 "$ref": "#/$defs/RunId"
               },
-              "text": {
-                "type": "string"
-              },
-              "attachmentCount": {
-                "description": "Number of attachments already stored for this input.",
-                "type": "integer",
-                "format": "uint64",
-                "minimum": 0
+              "prompt": {
+                "$ref": "#/$defs/Prompt"
               }
             },
             "required": [
               "run",
-              "text",
-              "attachmentCount"
+              "prompt"
             ]
           },
           "RunId": {
             "description": "A run id.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 1
+          },
+          "Prompt": {
+            "description": "Markdown with inline links into an ordered list of typed targets.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "refs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PromptRef"
+                }
+              }
+            },
+            "required": [
+              "text",
+              "refs"
+            ]
+          },
+          "PromptRef": {
+            "description": "A target addressed by a `ref:N` link.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path",
+                  "directory"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "attachment"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "mime": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "id",
+                  "name",
+                  "mime"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "git_hub"
+                  },
+                  "item": {
+                    "$ref": "#/$defs/GitHubItem"
+                  }
+                },
+                "required": [
+                  "type",
+                  "item"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "link"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "thread"
+                  },
+                  "thread": {
+                    "$ref": "#/$defs/ThreadId"
+                  }
+                },
+                "required": [
+                  "type",
+                  "thread"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "skill"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "environment"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "model"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name"
+                ]
+              }
+            ]
+          },
+          "GitHubItem": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/GitHubItemKind"
+              },
+              "number": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "number",
+              "title",
+              "url",
+              "state"
+            ]
+          },
+          "GitHubItemKind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
+          },
+          "ThreadId": {
+            "description": "A thread id.",
             "type": "integer",
             "format": "uint64",
             "minimum": 1
@@ -2339,12 +2548,6 @@
             "required": [
               "tool"
             ]
-          },
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1
           },
           "Review": {
             "description": "The verdict of a harness's own reviewer on another call.\n\ncodex-acp reports one `think` call titled `Guardian Review` next to every\ncommand it assesses. The fold gives it the reviewed action as its title,\nand a client can fold the record into the call it reviews or hide it unless\nit failed.",
@@ -3382,7 +3585,7 @@
       "params": {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "title": "UpdateQueuedInput",
-        "description": "Reorder a queued run or change its text.",
+        "description": "Reorder a queued run or replace its prompt.",
         "type": "object",
         "properties": {
           "thread": {
@@ -3391,10 +3594,14 @@
           "run": {
             "$ref": "#/$defs/RunId"
           },
-          "text": {
-            "type": [
-              "string",
-              "null"
+          "prompt": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Prompt"
+              },
+              {
+                "type": "null"
+              }
             ]
           },
           "before": {
@@ -3417,6 +3624,216 @@
             "type": "integer",
             "format": "uint64",
             "minimum": 1
+          },
+          "Prompt": {
+            "description": "Markdown with inline links into an ordered list of typed targets.",
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string"
+              },
+              "refs": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/PromptRef"
+                }
+              }
+            },
+            "required": [
+              "text",
+              "refs"
+            ]
+          },
+          "PromptRef": {
+            "description": "A target addressed by a `ref:N` link.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "directory": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "type",
+                  "path",
+                  "directory"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "attachment"
+                  },
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "mime": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "id",
+                  "name",
+                  "mime"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "git_hub"
+                  },
+                  "item": {
+                    "$ref": "#/$defs/GitHubItem"
+                  }
+                },
+                "required": [
+                  "type",
+                  "item"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "link"
+                  },
+                  "uri": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "uri",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "thread"
+                  },
+                  "thread": {
+                    "$ref": "#/$defs/ThreadId"
+                  }
+                },
+                "required": [
+                  "type",
+                  "thread"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "skill"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "environment"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "model"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name"
+                ]
+              }
+            ]
+          },
+          "GitHubItem": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "$ref": "#/$defs/GitHubItemKind"
+              },
+              "number": {
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              },
+              "title": {
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "number",
+              "title",
+              "url",
+              "state"
+            ]
+          },
+          "GitHubItemKind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "pull_request"
+            ]
           },
           "Nullable_RunId": {
             "anyOf": [
@@ -16013,20 +16430,13 @@
           "run": {
             "$ref": "#/$defs/RunId"
           },
-          "text": {
-            "type": "string"
-          },
-          "attachmentCount": {
-            "description": "Number of attachments already stored for this input.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 0
+          "prompt": {
+            "$ref": "#/$defs/Prompt"
           }
         },
         "required": [
           "run",
-          "text",
-          "attachmentCount"
+          "prompt"
         ]
       },
       "AttachmentCapabilities": {

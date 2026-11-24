@@ -6400,6 +6400,7 @@ dependencies = [
  "jsonrpsee-types",
  "listenfd",
  "mime_guess",
+ "pulldown-cmark",
  "reqwest",
  "rusqlite",
  "rustls",

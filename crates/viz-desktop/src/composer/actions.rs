@@ -243,61 +243,36 @@ impl PillPalette {
         }
     }
 
-    /// Maps a typed pill id (`file:`, `dir:`, `thread:`, `env:`, `model:`,
-    /// `skill:`, `pr:`, `issue:`) to its inline `Mark::Pill` flat neutral fill,
-    /// text ink, and leading icon.
-    pub(super) fn style(&self, id: &str) -> PillStyle {
-        if let Some(path) = id.strip_prefix("file:") {
-            return PillStyle::default()
-                .bg(self.pill_bg)
-                .fg(self.text)
-                .icon(rune_kit::file_icon(path));
+    /// Styles the typed target carried by the editor mark.
+    pub(super) fn style(&self, mark: &str) -> PillStyle {
+        use viz_client::protocol::{GitHubItemKind, PromptRef};
+
+        let style = PillStyle::default().bg(self.pill_bg).fg(self.text);
+        match super::codec::PillRef::from_mark(mark).map(|mark| mark.target) {
+            Some(PromptRef::File {
+                path,
+                directory: false,
+            }) => style.icon(rune_kit::file_icon(&path)),
+            Some(PromptRef::File {
+                directory: true, ..
+            }) => style.icon(&ui::FOLDER),
+            Some(PromptRef::Thread { .. }) => style.icon(&ui::THREAD),
+            Some(PromptRef::Environment { .. }) => style.icon(&ui::SERVER),
+            Some(PromptRef::Model { .. }) => style.icon(&ui::CPU),
+            Some(PromptRef::Skill { .. }) => style.icon(&ui::SPARKLES),
+            Some(PromptRef::Attachment { name, .. }) => style.icon(rune_kit::file_icon(&name)),
+            Some(PromptRef::GitHub { item }) => {
+                let (fg, glyph) = match (item.kind, item.state.to_ascii_lowercase().as_str()) {
+                    (GitHubItemKind::PullRequest, "merged") => (self.delegated, &ui::GIT_MERGE),
+                    (GitHubItemKind::PullRequest, "draft") => (self.muted, &ui::PR_DRAFT),
+                    (GitHubItemKind::PullRequest, "closed") => (self.danger, &ui::PR_CLOSED),
+                    (GitHubItemKind::PullRequest, _) => (self.success, &ui::PR_OPEN),
+                    (GitHubItemKind::Issue, "closed") => (self.delegated, &ui::CIRCLE_CHECK),
+                    (GitHubItemKind::Issue, _) => (self.success, &ui::CIRCLE_DOT),
+                };
+                style.fg(fg).icon(glyph)
+            }
+            _ => style.fg(self.text_secondary),
         }
-        if id.starts_with("dir:") {
-            return PillStyle::default()
-                .bg(self.pill_bg)
-                .fg(self.text)
-                .icon(&ui::FOLDER);
-        }
-        if id.starts_with("thread:") {
-            return PillStyle::default()
-                .bg(self.pill_bg)
-                .fg(self.text)
-                .icon(&ui::THREAD);
-        }
-        if id.starts_with("env:") {
-            return PillStyle::default()
-                .bg(self.pill_bg)
-                .fg(self.text)
-                .icon(&ui::SERVER);
-        }
-        if id.starts_with("model:") {
-            return PillStyle::default()
-                .bg(self.pill_bg)
-                .fg(self.text)
-                .icon(&ui::CPU);
-        }
-        if id.starts_with("skill:") {
-            return PillStyle::default()
-                .bg(self.pill_bg)
-                .fg(self.text)
-                .icon(&ui::SPARKLES);
-        }
-        if let Some(rest) = id.strip_prefix("pr:").or_else(|| id.strip_prefix("issue:")) {
-            let is_issue = id.starts_with("issue:");
-            let state = rest.split(':').next().unwrap_or("open");
-            let (fg, glyph) = match (is_issue, state) {
-                (false, "merged") => (self.delegated, &ui::GIT_MERGE),
-                (false, "draft") => (self.muted, &ui::PR_DRAFT),
-                (false, "closed") => (self.danger, &ui::PR_CLOSED),
-                (false, _) => (self.success, &ui::PR_OPEN),
-                (true, "closed") => (self.delegated, &ui::CIRCLE_CHECK),
-                (true, _) => (self.success, &ui::CIRCLE_DOT),
-            };
-            return PillStyle::default().bg(self.pill_bg).fg(fg).icon(glyph);
-        }
-        PillStyle::default()
-            .bg(self.pill_bg)
-            .fg(self.text_secondary)
     }
 }

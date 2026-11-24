@@ -88,6 +88,14 @@ pub(super) fn derive(command: ServerEffect, active_env: &str) -> Offline {
             title: "Offline".into(),
             detail: None,
         })),
+        ServerEffect::UpdateQueued {
+            thread, recovery, ..
+        } => Offline::Dispatch(Msg::Server(ServerMsg::SendFailed {
+            thread,
+            recovery: Some(recovery),
+            title: "Offline".into(),
+            detail: None,
+        })),
         ServerEffect::ProjectPalette(request, _) => {
             Offline::Dispatch(Msg::Server(ServerMsg::ProjectPalette {
                 environment: active_env.to_owned(),
@@ -180,7 +188,6 @@ pub(super) fn derive(command: ServerEffect, active_env: &str) -> Offline {
         | ServerEffect::Abort(_)
         | ServerEffect::Project { op_id: None, .. }
         | ServerEffect::SteerQueued { .. }
-        | ServerEffect::UpdateQueued { .. }
         | ServerEffect::RemoveQueued { .. }
         | ServerEffect::Fork { .. }
         | ServerEffect::OpenLocalFile { .. }

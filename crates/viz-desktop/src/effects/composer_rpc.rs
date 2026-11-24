@@ -76,22 +76,43 @@ impl Session<'_> {
             .map(drop)
     }
 
-    /// Updates a queued input's prompt text in place.
+    /// Replaces a queued input in place.
     pub(super) async fn update_queued(
         &self,
         thread: ThreadId,
         run: RunId,
-        text: &str,
+        mut prompt: viz_client::protocol::Prompt,
+        recovery: Box<super::DraftRecovery>,
     ) -> Result<()> {
-        self.client
-            .request(&UpdateQueuedInput {
+        let outcome = async {
+            super::requests::stage_into_prompt(
+                &self.content,
+                &recovery.draft.attachments,
+                &mut prompt,
+            )
+            .await?;
+            self.client
+                .request(&UpdateQueuedInput {
+                    thread,
+                    run,
+                    prompt: Some(prompt),
+                    before: Patch::Keep,
+                })
+                .await
+        }
+        .await;
+        if let Err(error) = outcome {
+            self.dispatch(ServerMsg::SendFailed {
                 thread,
-                run,
-                text: Some(text.to_owned()),
-                before: Patch::Keep,
-            })
-            .await
-            .map(drop)
+                recovery: Some(recovery),
+                title: "Couldn’t update queued input".into(),
+                detail: Some(error.to_string()),
+            });
+            if matches!(error, viz_client::Error::Closed) {
+                return Err(error);
+            }
+        }
+        Ok(())
     }
 
     /// Removes a queued input from the queue.

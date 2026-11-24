@@ -69,11 +69,13 @@ fn queued_card(s: &Desktop, item: &QueuedInput, t: &Theme) -> El {
     let run = item.run;
     let editing = s.model.composer.editing_queued == Some(run);
     let connected = s.model.connected();
+    let display = item.prompt.display_text();
+    let attachment_count = item.prompt.attachments().count();
 
     let mut bubble = col()
         .key(format!("queued-bubble-{}", run.0))
         .role("listitem")
-        .label(format!("Queued: {}", item.text))
+        .label(format!("Queued: {display}"))
         .w_full()
         .px(S12)
         .py(S8)
@@ -88,7 +90,7 @@ fn queued_card(s: &Desktop, item: &QueuedInput, t: &Theme) -> El {
             .border_dash(4.0, 3.0);
     }
 
-    if item.attachment_count > 0 || editing {
+    if attachment_count > 0 || editing {
         let mut meta = row().gap(S4).center_y();
         if editing {
             meta = meta.child(
@@ -97,20 +99,20 @@ fn queued_card(s: &Desktop, item: &QueuedInput, t: &Theme) -> El {
                     .build(&t.k),
             );
         }
-        if item.attachment_count > 0 {
-            let label = if item.attachment_count == 1 {
+        if attachment_count > 0 {
+            let label = if attachment_count == 1 {
                 "1 attachment".to_owned()
             } else {
-                format!("{} attachments", item.attachment_count)
+                format!("{attachment_count} attachments")
             };
             meta = meta.child(rune_kit::Badge::new(label).build(&t.k));
         }
         bubble = bubble.child(meta);
     }
 
-    if !item.text.is_empty() {
+    if !display.is_empty() {
         bubble = bubble.child(
-            text(&item.text)
+            text(display)
                 .font(t.ui)
                 .color(if editing { t.text } else { t.muted })
                 .wrap()

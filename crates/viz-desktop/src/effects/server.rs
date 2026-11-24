@@ -418,9 +418,8 @@ impl Session<'_> {
             ServerEffect::Create {
                 draft,
                 params,
-                attachments,
                 recovery,
-            } => self.launch(draft, *params, attachments, recovery).await,
+            } => self.launch(draft, *params, recovery).await,
             ServerEffect::CancelTask(task) => {
                 self.client
                     .request(&CancelTask {
@@ -496,9 +495,12 @@ impl Session<'_> {
                 Ok(())
             }
             ServerEffect::SteerQueued { thread, run } => self.steer_queued(thread, run).await,
-            ServerEffect::UpdateQueued { thread, run, text } => {
-                self.update_queued(thread, run, &text).await
-            }
+            ServerEffect::UpdateQueued {
+                thread,
+                run,
+                prompt,
+                recovery,
+            } => self.update_queued(thread, run, prompt, recovery).await,
             ServerEffect::RemoveQueued { thread, run } => self.remove_queued(thread, run).await,
             ServerEffect::SearchThreads { request, query } => {
                 self.search_threads(request, query);
@@ -521,11 +523,7 @@ impl Session<'_> {
                 platform::spawn_attach(self.ui, scope, target, source);
                 Ok(())
             }
-            ServerEffect::SendInput {
-                input,
-                attachments,
-                recovery,
-            } => self.send_input(input, attachments, recovery).await,
+            ServerEffect::SendInput { input, recovery } => self.send_input(input, recovery).await,
             ServerEffect::Fork {
                 params,
                 load_prompt,

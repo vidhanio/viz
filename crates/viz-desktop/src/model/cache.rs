@@ -86,7 +86,7 @@ pub struct EnvState {
     /// Per-thread disclosure overrides (`true` = open, `false` = closed).
     pub folds: BTreeMap<ThreadId, HashMap<String, bool>>,
     /// Sent prompt recall history keyed by thread id.
-    pub prompt_history: BTreeMap<ThreadId, Vec<String>>,
+    pub prompt_history: BTreeMap<ThreadId, Vec<viz_client::protocol::Prompt>>,
 }
 
 impl EnvState {

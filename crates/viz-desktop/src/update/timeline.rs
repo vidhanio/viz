@@ -412,30 +412,20 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
             if model.connected()
                 && !model.busy()
                 && let Some(thread) = model.selection.selected
-                && let Some(last_prompt) =
-                    model
-                        .transcript()
-                        .items
-                        .iter()
-                        .rev()
-                        .find_map(|item| match item {
-                            Item::User(user) if !user.prompt.text.trim().is_empty() => {
-                                Some(user.prompt.clone())
-                            }
-                            _ => None,
-                        })
+                && let Some(Item::User(user)) = model.transcript().items.iter().rev().find(
+                    |item| matches!(item, Item::User(user) if !user.prompt.text.trim().is_empty()),
+                )
             {
-                effects.push(Effect::Server(ServerEffect::SendInput {
-                    attachments: Vec::new(),
-                    recovery: None,
-                    input: SendInput {
-                        thread,
-                        mode: None,
-                        prompt: last_prompt,
-                        request_id: None,
-                        origin: None,
-                    },
-                }));
+                if let Some(entry) = user.entry_id.filter(|_| user.full.is_some()) {
+                    let key = user.key.clone();
+                    model
+                        .timeline
+                        .entry_actions
+                        .insert((thread, entry), EntryAction::RetryPrompt);
+                    request_entry(model, key, entry, &mut effects);
+                } else {
+                    retry_prompt(thread, user.prompt.clone(), &mut effects);
+                }
             }
         }
         TimelineMsg::TickToolClock(now) => {
@@ -443,6 +433,19 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         }
     }
     effects
+}
+
+fn retry_prompt(thread: ThreadId, prompt: viz_client::protocol::Prompt, effects: &mut Vec<Effect>) {
+    effects.push(Effect::Server(ServerEffect::SendInput {
+        recovery: None,
+        input: SendInput {
+            thread,
+            mode: None,
+            prompt,
+            request_id: None,
+            origin: None,
+        },
+    }));
 }
 
 fn quote_excerpt(source: &str) -> String {
@@ -471,12 +474,7 @@ pub(super) fn apply_thread_forked(
     let Forked { thread, prompt } = forked;
     open_thread(model, thread, effects);
     if load_prompt && let Some(prompt) = prompt {
-        model.composer.draft.text.clone_from(&prompt.text);
-        effects.push(Effect::SyncEdit(EditSync::Replace {
-            target: EditTarget::Draft,
-            text: prompt.text,
-            select_all: false,
-        }));
+        super::composer_actions::load_prompt(model, &prompt, effects);
         effects.push(focus_draft());
     }
 }
@@ -515,15 +513,22 @@ pub(super) fn apply_entry_loaded(
                     );
                 }
             } else {
-                if let Some(EntryData::Prompt {
-                    prompt: viz_client::protocol::Prompt { text, .. },
-                    ..
-                }) = matches!(action, Some(EntryAction::CopyPrompt)).then_some(loaded.as_ref())
-                {
-                    copy_feedback(model, format!("copy-{key}"), text.clone(), effects);
-                }
-                if matches!(action, Some(EntryAction::EditPrompt)) {
-                    fork_before(thread, entry, true, effects);
+                if let EntryData::Prompt { prompt, .. } = loaded.as_ref() {
+                    match action {
+                        Some(EntryAction::CopyPrompt) => copy_feedback(
+                            model,
+                            format!("copy-{key}"),
+                            prompt.display_text(),
+                            effects,
+                        ),
+                        Some(EntryAction::EditPrompt) => fork_before(thread, entry, true, effects),
+                        Some(EntryAction::RetryPrompt)
+                            if model.selection.selected == Some(thread) && !model.busy() =>
+                        {
+                            retry_prompt(thread, prompt.clone(), effects);
+                        }
+                        _ => {}
+                    }
                 }
                 if !oversized && let Some(open) = model.cache_mut().open_threads.get_mut(&thread) {
                     if let Some(window) = &mut open.history {

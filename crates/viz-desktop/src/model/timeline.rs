@@ -151,6 +151,7 @@ impl FilePreviewBody {
 pub enum EntryAction {
     CopyPrompt,
     EditPrompt,
+    RetryPrompt,
     Preview(u64),
 }
 

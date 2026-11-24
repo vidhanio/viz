@@ -164,6 +164,12 @@ impl Prompt {
     pub fn reference(&mut self, label: &str, target: PromptRef) -> String {
         let index = self.refs.len();
         self.refs.push(target);
+        Self::reference_link(label, index)
+    }
+
+    /// Formats a Markdown reference to an existing index.
+    #[must_use]
+    pub fn reference_link(label: &str, index: usize) -> String {
         let mut escaped = String::with_capacity(label.len());
         for ch in label.chars() {
             if ch.is_ascii_punctuation() {

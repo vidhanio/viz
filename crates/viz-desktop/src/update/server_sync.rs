@@ -3,8 +3,7 @@
 
 use viz_client::protocol::{
     Entry, EntryAnchor, EntryData, EntryId, EntryPage, Lifecycle, Project, ProjectIcon, Task,
-    ThreadId, ThreadState, ThreadStatus, ThreadSummary, WorkspaceChange, attachment_inline_md,
-    attachment_ref_labels,
+    ThreadId, ThreadState, ThreadStatus, ThreadSummary, WorkspaceChange,
 };
 
 use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
@@ -530,20 +529,14 @@ pub(super) fn apply_attachments_loaded(
             }
         }
         if existing.len() > prior_len {
-            let labels = attachment_ref_labels(existing.iter().map(|file| file.mime.as_str()));
-            let snippet = existing[prior_len..]
+            let refs = existing[prior_len..]
                 .iter()
-                .zip(&labels[prior_len..])
-                .map(|(file, label)| attachment_inline_md(&file.name, &file.mime, label))
-                .collect::<Vec<_>>()
-                .join(" ");
+                .map(crate::model::DraftAttachment::pill)
+                .collect::<Vec<_>>();
             if is_active {
-                effects.push(Effect::SyncEdit(EditSync::InsertAtDraftCaret(snippet)));
+                effects.push(Effect::SyncEdit(EditSync::InsertDraftRefs(refs)));
             } else {
-                if !draft.text.is_empty() && !draft.text.ends_with(char::is_whitespace) {
-                    draft.text.push(' ');
-                }
-                draft.text.push_str(&snippet);
+                crate::composer::codec::append(draft, refs);
             }
         }
     }

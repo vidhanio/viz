@@ -41,6 +41,7 @@ pub fn load_attachments(source: AttachmentSource) -> LoadedAttachments {
             }
             return LoadedAttachments {
                 attachments: vec![DraftAttachment {
+                    id: crate::composer::codec::RefId::new(),
                     name: "Clipboard.png".into(),
                     mime: "image/png".into(),
                     bytes: png,
@@ -93,6 +94,7 @@ fn read_file(path: &Path, max_bytes: usize, too_large: &str) -> io::Result<Draft
         .ok_or_else(|| io::Error::other("missing file name"))?
         .to_string_lossy();
     Ok(DraftAttachment {
+        id: crate::composer::codec::RefId::new(),
         name: name.into_owned(),
         mime: mime_guess::from_path(path)
             .first_or_octet_stream()

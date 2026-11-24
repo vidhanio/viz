@@ -2,7 +2,7 @@
 //! sending/steering/queueing, inline completions, Home pickers, model/thinking
 //! picker, runner options, access mode, and tasks dock actions.
 
-use viz_client::protocol::{RunId, SendMode, attachment_inline_md, attachment_ref_labels};
+use viz_client::protocol::{PromptRef, RunId, SendMode};
 
 pub use super::home::{
     DRAFT_BRANCH_PICKER, DRAFT_BRANCH_SEARCH, HOME_ENV_PICKER, HOME_PROJECT_PICKER,
@@ -197,15 +197,8 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
         }
         ComposerMsg::RemoveAttachment(index) => {
             if index < model.composer.draft.attachments.len() {
-                let old_labels = attachment_ref_labels(
-                    model
-                        .composer
-                        .draft
-                        .attachments
-                        .iter()
-                        .map(|file| file.mime.as_str()),
-                );
-                std::sync::Arc::make_mut(&mut model.composer.draft.attachments).remove(index);
+                let file =
+                    std::sync::Arc::make_mut(&mut model.composer.draft.attachments).remove(index);
                 if index < model.composer.draft.attachment_statuses.len() {
                     model.composer.draft.attachment_statuses.remove(index);
                 }
@@ -216,43 +209,24 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
                 {
                     *open -= 1;
                 }
-                let new_labels = attachment_ref_labels(
-                    model
-                        .composer
-                        .draft
-                        .attachments
-                        .iter()
-                        .map(|file| file.mime.as_str()),
+                let draft = &mut model.composer.draft;
+                let id = file.id.to_string();
+                crate::composer::codec::remove(
+                    draft,
+                    |target| matches!(target, PromptRef::Attachment { id: target_id, .. } if *target_id == id),
                 );
-                if let Some(updated) = rewrite_refs_after_removal(
-                    &model.composer.draft.text,
-                    index,
-                    &old_labels,
-                    &new_labels,
-                ) {
-                    model.composer.draft.text.clone_from(&updated);
-                    effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
-                        text: updated,
-                        pills: model.composer.draft.pills.clone(),
-                    }));
-                }
+                effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
+                    text: draft.text.clone(),
+                    pills: draft.pills.clone(),
+                }));
             }
         }
         ComposerMsg::InsertAttachmentRef(index) => {
             if let Some(file) = model.composer.draft.attachments.get(index) {
-                let labels = attachment_ref_labels(
-                    model
-                        .composer
-                        .draft
-                        .attachments
-                        .iter()
-                        .map(|item| item.mime.as_str()),
-                );
-                if let Some(label) = labels.get(index) {
-                    let snippet = attachment_inline_md(&file.name, &file.mime, label);
-                    effects.push(Effect::SyncEdit(EditSync::InsertAtDraftCaret(snippet)));
-                    effects.push(focus_draft());
-                }
+                effects.push(Effect::SyncEdit(EditSync::InsertDraftRefs(vec![
+                    file.pill(),
+                ])));
+                effects.push(focus_draft());
             }
         }
         ComposerMsg::SetDragOver(over) => model.composer.drag_over = over,
@@ -341,67 +315,4 @@ pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
         }
     }
     effects
-}
-
-fn rewrite_refs_after_removal(
-    text: &str,
-    removed_index: usize,
-    old_labels: &[String],
-    new_labels: &[String],
-) -> Option<String> {
-    let removed_label = old_labels.get(removed_index)?;
-    let mut out = strip_inline_ref(text, removed_label);
-
-    let mut shifts: Vec<(&str, &str)> = Vec::new();
-    let mut new_i = 0usize;
-    for (old_i, old_label) in old_labels.iter().enumerate() {
-        if old_i == removed_index {
-            continue;
-        }
-        if let Some(new_label) = new_labels.get(new_i)
-            && old_label != new_label
-        {
-            shifts.push((old_label.as_str(), new_label.as_str()));
-        }
-        new_i += 1;
-    }
-
-    for (from, to) in shifts {
-        let needle = format!("][{from}]");
-        let replacement = format!("][{to}]");
-        if out.contains(&needle) {
-            out = out.replace(&needle, &replacement);
-        }
-    }
-
-    (out != text).then_some(out)
-}
-
-fn strip_inline_ref(text: &str, label: &str) -> String {
-    let suffix = format!("][{label}]");
-    let mut out = text.to_owned();
-    while let Some(pos) = out.find(&suffix) {
-        let Some(open_bracket) = out[..pos].rfind('[') else {
-            break;
-        };
-        let start = if open_bracket > 0 && out.as_bytes()[open_bracket - 1] == b'!' {
-            open_bracket - 1
-        } else {
-            open_bracket
-        };
-        let end = pos + suffix.len();
-        let before_space = start > 0 && out.as_bytes()[start - 1] == b' ';
-        let after_space = out.as_bytes().get(end) == Some(&b' ');
-        let (cut_start, cut_end) = if before_space && after_space {
-            (start, end + 1)
-        } else if before_space {
-            (start - 1, end)
-        } else if after_space {
-            (start, end + 1)
-        } else {
-            (start, end)
-        };
-        out.replace_range(cut_start..cut_end, "");
-    }
-    out
 }

@@ -5,10 +5,13 @@ use std::ops::Range;
 
 use viz_client::protocol::{FileSearchMatch, GitHubItem, PromptRef, RunId, SearchHit, ThreadId};
 
+use crate::composer::codec::{DraftPill, PillRef, RefId};
+
 /// Local unsent or fetched raw-byte attachment held in memory without base64
 /// encoding.
 #[derive(Clone, PartialEq, Eq)]
 pub struct DraftAttachment {
+    pub id: RefId,
     /// Display filename.
     pub name: String,
     /// MIME media type.
@@ -17,9 +20,25 @@ pub struct DraftAttachment {
     pub bytes: Vec<u8>,
 }
 
+impl DraftAttachment {
+    /// References a local attachment until its bytes have been staged.
+    pub fn pill(&self) -> (PillRef, String) {
+        let target = PromptRef::Attachment {
+            id: self.id.to_string(),
+            name: self.name.clone(),
+            mime: self.mime.clone(),
+        };
+        (
+            PillRef::with_id(self.id, target),
+            self.name.replace(['\n', '\r'], " "),
+        )
+    }
+}
+
 impl std::fmt::Debug for DraftAttachment {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DraftAttachment")
+            .field("id", &self.id)
             .field("name", &self.name)
             .field("mime", &self.mime)
             .field("bytes_len", &self.bytes.len())
@@ -31,99 +50,6 @@ impl std::fmt::Debug for DraftAttachment {
 pub const PROMPT_CHAR_LIMIT: usize = 200_000;
 /// Soft character threshold showing a non-blocking length caution badge.
 pub const PROMPT_WARN_LIMIT: usize = 160_000;
-
-/// Atomic inline chip stored in the composer's [`rune::TextEdit`] via
-/// `Mark::Pill`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DraftPill {
-    /// Byte range in [`DraftData::text`].
-    pub range: Range<usize>,
-    /// Typed pill identifier (`file:...`, `dir:...`, `thread:...`, `env:...`,
-    /// `model:...`, `skill:...`, `pr:...`).
-    pub id: String,
-    /// Visible inline label inserted into the editor.
-    pub label: String,
-}
-
-impl DraftPill {
-    /// Builds a file or directory mention pill id.
-    #[must_use]
-    pub fn file_id(path: &str, directory: bool) -> String {
-        if directory {
-            format!("dir:{path}")
-        } else {
-            format!("file:{path}")
-        }
-    }
-
-    /// Builds a thread mention pill id.
-    #[must_use]
-    pub fn thread_id(thread: ThreadId, title: &str) -> String {
-        format!("thread:{}:{title}", thread.0)
-    }
-
-    /// Builds an environment mention pill id.
-    #[must_use]
-    pub fn env_id(env: &str) -> String {
-        format!("env:{env}")
-    }
-
-    /// Builds a model mention pill id.
-    #[must_use]
-    pub fn model_id(value: &str) -> String {
-        format!("model:{value}")
-    }
-
-    /// Builds a skill mention pill id.
-    #[must_use]
-    pub fn skill_id(name: &str) -> String {
-        format!("skill:{name}")
-    }
-
-    /// Builds a GitHub issue/PR mention pill id encoding state, number, url,
-    /// and title.
-    #[must_use]
-    pub fn github_id(item: &GitHubItem) -> String {
-        let kind = match item.kind {
-            viz_client::protocol::GitHubItemKind::PullRequest => "pr",
-            viz_client::protocol::GitHubItemKind::Issue => "issue",
-        };
-        let state = item.state.to_ascii_lowercase();
-        format!(
-            "{kind}:{state}:{}:{}\x1f{}",
-            item.number, item.url, item.title
-        )
-    }
-
-    /// Converts file and GitHub link pills into structured [`PromptRef`]
-    /// blocks for `thread.launch` and `thread.send`.
-    #[must_use]
-    pub fn to_prompt_ref(&self) -> Option<PromptRef> {
-        if let Some((kind, path)) = self.id.split_once(':')
-            && matches!(kind, "file" | "dir")
-        {
-            return Some(PromptRef::File {
-                path: path.to_owned(),
-                directory: kind == "dir",
-            });
-        }
-        let rest = self
-            .id
-            .strip_prefix("pr:")
-            .or_else(|| self.id.strip_prefix("issue:"))?;
-        let (_, after_state) = rest.split_once(':')?;
-        let (number, tail) = after_state.split_once(':')?;
-        let (uri, title) = tail.split_once('\x1f').unwrap_or((tail, ""));
-        if uri.is_empty() {
-            return None;
-        }
-        Some(PromptRef::Link {
-            uri: uri.to_owned(),
-            name: format!("#{number}"),
-            title: (!title.is_empty()).then(|| title.to_owned()),
-        })
-    }
-}
 
 /// Upload / decoding status of an attached composer file.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,12 +87,6 @@ impl DraftData {
         self.text.is_empty() && self.attachments.is_empty()
     }
 
-    /// Outbound prompt payload.
-    #[must_use]
-    pub fn outbound_text(&self) -> String {
-        self.text.clone()
-    }
-
     /// Status for attachment `index`, defaulting to
     /// [`AttachmentStatus::Ready`].
     #[must_use]
@@ -182,26 +102,6 @@ impl DraftData {
         self.attachment_statuses
             .iter()
             .any(|status| !matches!(status, AttachmentStatus::Ready))
-    }
-
-    /// Encodes editor pills in source order.
-    pub fn prompt(&self) -> viz_client::protocol::Prompt {
-        let mut prompt = viz_client::protocol::Prompt::default();
-        let mut end = 0;
-        for pill in &self.pills {
-            if let Some(target) = pill.to_prompt_ref()
-                && pill.range.start >= end
-                && let Some(before) = self.text.get(end..pill.range.start)
-                && self.text.get(pill.range.clone()).is_some()
-            {
-                prompt.text.push_str(before);
-                let link = prompt.reference(&pill.label, target);
-                prompt.text.push_str(&link);
-                end = pill.range.end;
-            }
-        }
-        prompt.text.push_str(&self.text[end..]);
-        prompt
     }
 }
 

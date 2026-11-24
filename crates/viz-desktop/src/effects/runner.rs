@@ -244,27 +244,30 @@ impl Desktop {
                 }
                 self.sync_draft_text();
             }
-            EditSync::InsertAtDraftCaret(snippet) => {
+            EditSync::InsertDraftRefs(refs) => {
                 let draft = &mut self.widgets.draft;
                 let start = draft.anchor.min(draft.focus).min(draft.text.len());
-                let end = draft.anchor.max(draft.focus).min(draft.text.len());
-                let need_leading_space = draft.text[..start]
+                let leading_space = draft.text[..start]
                     .chars()
                     .next_back()
                     .is_some_and(|ch| !ch.is_whitespace());
-                let need_trailing_space = draft.text[end..]
-                    .chars()
-                    .next()
-                    .is_none_or(|ch| !ch.is_whitespace());
-                let mut insertion = String::with_capacity(snippet.len() + 2);
-                if need_leading_space {
-                    insertion.push(' ');
-                }
-                insertion.push_str(&snippet);
-                if need_trailing_space {
-                    insertion.push(' ');
-                }
-                draft.insert(&insertion);
+                draft.undo_group(|edit| {
+                    if leading_space {
+                        edit.insert(" ");
+                    }
+                    for (reference, label) in refs {
+                        edit.insert_pill(reference.mark(), &label);
+                        if edit.text[edit.focus..].starts_with(char::is_whitespace) {
+                            let separator = edit.text[edit.focus..]
+                                .chars()
+                                .next()
+                                .expect("whitespace follows pill");
+                            edit.set_caret(edit.focus + separator.len_utf8());
+                        } else {
+                            edit.insert(" ");
+                        }
+                    }
+                });
                 self.sync_draft_text();
             }
             EditSync::InsertDraftPill {

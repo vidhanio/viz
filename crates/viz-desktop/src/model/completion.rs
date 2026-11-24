@@ -3,7 +3,9 @@
 
 use std::ops::Range;
 
-use viz_client::protocol::{FileSearchKind, FileSearchMatch, GitHubItem, SlashCommand, ThreadId};
+use viz_client::protocol::{
+    FileSearchKind, FileSearchMatch, GitHubItem, PromptRef, SlashCommand, ThreadId,
+};
 
 pub use super::completion_match::{
     matching_commands, matching_github, matching_mentions, matching_skills,
@@ -127,8 +129,7 @@ pub enum CompletionChoice {
     SlashText(String),
     /// Insert an atomic [`rune::Mark::Pill`] replacing the trigger range.
     Pill {
-        /// Typed pill id (`file:...`, `skill:...`, `pr:...`, etc.).
-        id: String,
+        target: viz_client::protocol::PromptRef,
         /// Visible pill text (e.g., `@main.rs`, `$review`, `#42`).
         label: String,
     },
@@ -235,7 +236,9 @@ pub fn completion_choice_at(
             let list = matching_skills(model, &token.query);
             let entry = list.get(index)?;
             Some(CompletionChoice::Pill {
-                id: DraftPill::skill_id(&entry.name),
+                target: PromptRef::Skill {
+                    name: entry.name.clone(),
+                },
                 label: format!("${}", entry.name),
             })
         }
@@ -243,7 +246,9 @@ pub fn completion_choice_at(
             let list = matching_github(model, &token.query);
             let entry = list.get(index)?;
             Some(CompletionChoice::Pill {
-                id: DraftPill::github_id(&entry.item),
+                target: PromptRef::GitHub {
+                    item: entry.item.clone(),
+                },
                 label: format!("#{}", entry.item.number),
             })
         }
@@ -260,20 +265,25 @@ fn mention_to_choice(entry: &MentionEntry) -> CompletionChoice {
                 .filter(|name| !name.is_empty())
                 .unwrap_or(&file.path);
             CompletionChoice::Pill {
-                id: DraftPill::file_id(&file.path, file.kind == FileSearchKind::Directory),
+                target: PromptRef::File {
+                    path: file.path.clone(),
+                    directory: file.kind == FileSearchKind::Directory,
+                },
                 label: format!("@{short}"),
             }
         }
         MentionEntry::Thread { id, title, .. } => CompletionChoice::Pill {
-            id: DraftPill::thread_id(*id, title),
+            target: PromptRef::Thread { thread: *id },
             label: format!("@{title}"),
         },
         MentionEntry::Environment { id, .. } => CompletionChoice::Pill {
-            id: DraftPill::env_id(id),
+            target: PromptRef::Environment { name: id.clone() },
             label: format!("@{id}"),
         },
         MentionEntry::Model { value, label } => CompletionChoice::Pill {
-            id: DraftPill::model_id(value),
+            target: PromptRef::Model {
+                name: value.clone(),
+            },
             label: format!("@{label}"),
         },
     }

@@ -17,42 +17,6 @@ pub struct BlobAttachment {
     pub mime: String,
 }
 
-/// Assigns deterministic Markdown reference labels (`img-N`, `file-N`) in slice
-/// order.
-///
-/// Images receive `img-1`, `img-2`, … and non-image files receive `file-1`,
-/// `file-2`, … so the composer, transcript UI, and ACP prompts agree on every
-/// label.
-#[must_use]
-pub fn attachment_ref_labels<'a>(mimes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut img_idx = 0usize;
-    let mut file_idx = 0usize;
-    mimes
-        .into_iter()
-        .map(|mime| {
-            if mime.starts_with("image/") {
-                img_idx += 1;
-                format!("img-{img_idx}")
-            } else {
-                file_idx += 1;
-                format!("file-{file_idx}")
-            }
-        })
-        .collect()
-}
-
-/// Formats the canonical inline Markdown reference for an attachment
-/// (`![name][img-1]` for images, `[name][file-1]` for non-image files).
-#[must_use]
-pub fn attachment_inline_md(name: &str, mime: &str, label: &str) -> String {
-    let safe_name = name.replace(['[', ']', '\n', '\r'], " ");
-    if mime.starts_with("image/") {
-        format!("![{safe_name}][{label}]")
-    } else {
-        format!("[{safe_name}][{label}]")
-    }
-}
-
 /// Attachment capabilities of a thread's runner.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct AttachmentCapabilities {
@@ -64,10 +28,7 @@ pub struct AttachmentCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize, JsonSchema)]
 pub struct QueuedInput {
     pub run: RunId,
-    pub text: String,
-    /// Number of attachments already stored for this input.
-    #[serde(rename = "attachmentCount")]
-    pub attachment_count: u64,
+    pub prompt: crate::Prompt,
 }
 
 /// Promote a queued run to the front and stop the active run, if any.
@@ -144,13 +105,13 @@ pub struct EntryPage {
     pub after: Option<EntryId>,
 }
 
-/// Reorder a queued run or change its text.
+/// Reorder a queued run or replace its prompt.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct UpdateQueuedInput {
     pub thread: ThreadId,
     pub run: RunId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
+    pub prompt: Option<crate::Prompt>,
     #[serde(default, skip_serializing_if = "Patch::is_keep")]
     pub before: Patch<RunId>,
 }

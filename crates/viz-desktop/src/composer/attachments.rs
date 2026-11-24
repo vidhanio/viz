@@ -4,7 +4,6 @@
 
 use rune::{El, SurfaceFit, col, el, icon, row, text};
 use rune_kit::{IconButtonVariant, Preview};
-use viz_client::protocol::attachment_ref_labels;
 
 use crate::{
     app::Desktop,
@@ -33,15 +32,13 @@ pub fn strip(s: &Desktop, t: &Theme) -> Option<El> {
     if draft.attachments.is_empty() {
         return None;
     }
-    let labels = attachment_ref_labels(draft.attachments.iter().map(|file| file.mime.as_str()));
     let mut media = Vec::new();
     let mut files = Vec::new();
     for (index, attachment) in draft.attachments.iter().enumerate() {
-        let label = labels.get(index).map_or("", String::as_str);
         if attachment.mime.starts_with("image/") {
-            media.push((index, attachment, label));
+            media.push((index, attachment));
         } else {
-            files.push((index, attachment, label));
+            files.push((index, attachment));
         }
     }
     let mut stack = col()
@@ -60,7 +57,7 @@ pub fn strip(s: &Desktop, t: &Theme) -> Option<El> {
                 .children(
                     media
                         .into_iter()
-                        .map(|(index, file, label)| media_tile(s, index, file, label, t)),
+                        .map(|(index, file)| media_tile(s, index, file, t)),
                 ),
         );
     }
@@ -69,24 +66,14 @@ pub fn strip(s: &Desktop, t: &Theme) -> Option<El> {
             col().key("draft-files-row").w_full().gap(S4).children(
                 files
                     .into_iter()
-                    .map(|(index, file, label)| file_row(s, index, file, label, t)),
+                    .map(|(index, file)| file_row(s, index, file, t)),
             ),
         );
     }
     Some(stack)
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "single thumbnail tile with preview pixels, upload status, ref badge, and remove button"
-)]
-fn media_tile(
-    s: &Desktop,
-    index: usize,
-    attachment: &DraftAttachment,
-    ref_label: &str,
-    t: &Theme,
-) -> El {
+fn media_tile(s: &Desktop, index: usize, attachment: &DraftAttachment, t: &Theme) -> El {
     let decode_error = image_decode_error(s, index);
     let status = decode_error
         .as_ref()
@@ -173,38 +160,23 @@ fn media_tile(
         })
         .child(icon(&ui::CLOSE, 11.0).color(t.text_strong).a11y_hidden());
 
-    let ref_badge = (!ref_label.is_empty()).then(|| {
-        let tip = format!("Insert ![{}][{ref_label}] at cursor", attachment.name);
-        row()
-            .key("media-ref")
-            .role("button")
-            .label(tip.clone())
-            .help(tip)
-            .pin(Some(S4), None, None, Some(S4))
-            .px(S4)
-            .py(1.0)
-            .radius(RADIUS_SM)
-            .fill(t.canvas.alpha(0.84))
-            .border(HAIRLINE, t.border_overlay)
-            .hover(t.hover_wash)
-            .focusable(true)
-            .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-            .on_press_tx(move |s: &mut Desktop, tx| {
-                s.dispatch(Msg::Composer(ComposerMsg::InsertAttachmentRef(index)), tx);
-            })
-            .child(text(ref_label).font(t.mono_micro).color(t.text_strong))
-    });
-
-    tile.children(ref_badge).child(close)
+    let insert = insert_reference(index, &attachment.name, t).pin(Some(S4), None, None, Some(S4));
+    tile.child(insert).child(close)
 }
 
-fn file_row(
-    s: &Desktop,
-    index: usize,
-    attachment: &DraftAttachment,
-    ref_label: &str,
-    t: &Theme,
-) -> El {
+fn insert_reference(index: usize, name: &str, t: &Theme) -> El {
+    rune_kit::IconButton::new(&ui::LINK)
+        .help(format!("Insert {name} at cursor"))
+        .variant(IconButtonVariant::GhostMuted)
+        .control_size(Size::Micro.kit())
+        .on_press_tx(move |s: &mut Desktop, tx| {
+            s.dispatch(Msg::Composer(ComposerMsg::InsertAttachmentRef(index)), tx);
+        })
+        .build(&t.k)
+        .key("insert-reference")
+}
+
+fn file_row(s: &Desktop, index: usize, attachment: &DraftAttachment, t: &Theme) -> El {
     let status = s.model.composer.draft.attachment_status(index);
     let is_error = matches!(status, crate::model::AttachmentStatus::Error(_));
     let bytes = attachment.bytes.len();
@@ -235,28 +207,7 @@ fn file_row(
                 .help_when_truncated(&attachment.name),
         );
 
-    if !ref_label.is_empty() {
-        let tip = format!("Insert [{}][{ref_label}] at cursor", attachment.name);
-        item = item.child(
-            row()
-                .key("file-ref")
-                .role("button")
-                .label(tip.clone())
-                .help(tip)
-                .px(S4)
-                .py(1.0)
-                .radius(RADIUS_SM)
-                .fill(t.surface)
-                .border(HAIRLINE, t.hairline)
-                .hover(t.hover_wash)
-                .focusable(true)
-                .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
-                .on_press_tx(move |s: &mut Desktop, tx| {
-                    s.dispatch(Msg::Composer(ComposerMsg::InsertAttachmentRef(index)), tx);
-                })
-                .child(text(ref_label).font(t.mono_micro).color(t.text_secondary)),
-        );
-    }
+    item = item.child(insert_reference(index, &attachment.name, t));
 
     match status {
         crate::model::AttachmentStatus::Uploading(pct) => {

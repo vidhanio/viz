@@ -8,7 +8,7 @@
 
 use std::{borrow::Cow, ops::Range};
 
-use pulldown_cmark::{BrokenLink, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
 use rune::{Color, Key, KeyEvent, Span, TextEdit};
 use rune_kit::syntax::highlight;
 
@@ -43,18 +43,9 @@ pub fn decorate(edit: &TextEdit, t: &Theme) -> Decorations {
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TASKLISTS);
 
-    let mut broken = |link: BrokenLink<'_>| {
-        let reference = link.reference.trim();
-        if is_attachment_ref(reference) {
-            Some((format!("viz-ref://{reference}").into(), "".into()))
-        } else {
-            None
-        }
-    };
-
     let mut code_ranges: Vec<Range<usize>> = Vec::new();
     let caret = edit.focus;
-    let parser = Parser::new_with_broken_link_callback(src, opts, Some(&mut broken));
+    let parser = Parser::new_ext(src, opts);
 
     for (event, range) in parser.into_offset_iter() {
         if range.start >= range.end || range.end > text.len() {
@@ -146,22 +137,6 @@ const fn is_inline_event(event: &Event<'_>) -> bool {
 
 fn overlaps_pill(start: usize, end: usize, pills: &[Range<usize>]) -> bool {
     pills.iter().any(|r| r.start < end && start < r.end)
-}
-
-/// Whether `reference` looks like an inline attachment reference (`img-1`,
-/// `file-2`, `att-3`) that resolves against the message's attachments.
-#[must_use]
-pub fn is_attachment_ref(reference: &str) -> bool {
-    let lower = reference.to_ascii_lowercase();
-    for prefix in ["img-", "file-", "att-"] {
-        if let Some(rest) = lower.strip_prefix(prefix)
-            && !rest.is_empty()
-            && rest.bytes().all(|b| b.is_ascii_digit())
-        {
-            return true;
-        }
-    }
-    false
 }
 
 fn style_heading(
@@ -366,7 +341,6 @@ fn style_link(
 ) {
     let slice = &text[range.clone()];
     let is_file = dest_url.starts_with("file://");
-    let is_ref = dest_url.starts_with("viz-ref://");
     let editing = caret >= range.start && caret <= range.end;
     let syntax_ink = if editing { t.muted } else { t.faint };
     if slice.starts_with('[')
@@ -374,7 +348,7 @@ fn style_link(
     {
         let label_start = range.start + 1;
         let label_end = range.start + close_bracket;
-        if is_file || is_ref {
+        if is_file {
             let pill_bg = flat_pill_bg(editing, t);
             out.spans
                 .push(Span::new(range.start, range.end).bg(pill_bg, 2.0));
@@ -382,7 +356,7 @@ fn style_link(
         out.spans
             .push(Span::new(range.start, label_start).color(syntax_ink));
         if label_start < label_end {
-            let span = if is_file || is_ref {
+            let span = if is_file {
                 Span::new(label_start, label_end)
                     .weight(500.0)
                     .color(t.text_strong)

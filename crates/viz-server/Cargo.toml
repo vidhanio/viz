@@ -18,6 +18,7 @@ clap = { workspace = true, features = ["derive"] }
 futures.workspace = true
 futures-util = { workspace = true, features = ["sink"] }
 image.workspace = true
+pulldown-cmark.workspace = true
 jsonrpsee-types.workspace = true
 listenfd.workspace = true
 mime_guess.workspace = true

@@ -176,7 +176,7 @@ pub fn build_draft_edit(text: &str, pills: &[DraftPill]) -> TextEdit {
         if pill.range.start > pos {
             edit.insert(&text[pos..pill.range.start]);
         }
-        edit.insert_pill(&pill.id, &text[pill.range.clone()]);
+        edit.insert_pill(pill.reference.mark(), &text[pill.range.clone()]);
         pos = pill.range.end;
     }
     if pos < text.len() {
@@ -199,10 +199,11 @@ pub fn sync_draft_text(s: &mut Desktop) {
         .widgets
         .draft
         .pills()
-        .map(|(range, id)| DraftPill {
-            label: s.widgets.draft.text[range.clone()].to_owned(),
-            range,
-            id: id.to_owned(),
+        .filter_map(|(range, mark)| {
+            Some(DraftPill {
+                range,
+                reference: crate::composer::codec::PillRef::from_mark(mark)?,
+            })
         })
         .collect();
     if pills != s.model.composer.draft.pills {

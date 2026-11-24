@@ -154,7 +154,7 @@ pub(super) fn state(state: ThreadState) -> State {
             .into_iter()
             .map(|input| Queued {
                 run: input.run,
-                text: bounded(&input.text, PREVIEW),
+                text: bounded(&input.prompt.display_text(), PREVIEW),
             })
             .collect(),
         live,

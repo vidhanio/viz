@@ -46,7 +46,7 @@ pub use self::{
     },
     composer_state::{
         AttachmentStatus, AttachmentTarget, CompletionKind, CompletionToken, ComposerState,
-        DraftAttachment, DraftCursor, DraftData, DraftPill, PROMPT_CHAR_LIMIT, PROMPT_WARN_LIMIT,
+        DraftAttachment, DraftCursor, DraftData, PROMPT_CHAR_LIMIT, PROMPT_WARN_LIMIT,
         PaletteChoice, PaletteCommand, PaletteSearch, PaletteState,
     },
     home::{HomeProjectOption, draft_branch_options, home_project_options},
@@ -98,6 +98,7 @@ pub use self::{
     },
     turns::{ChangedFile, TurnSpec, TurnView, project_turn, turn_items, turn_specs},
 };
+pub use crate::composer::codec::DraftPill;
 
 /// Default key used in per-environment maps before the server reports an
 /// environment id in `hello`.
@@ -386,9 +387,7 @@ impl Model {
         {
             return false;
         }
-        let non_empty = !self.composer.draft.text.trim().is_empty()
-            || !self.composer.draft.attachments.is_empty();
-        if !non_empty {
+        if self.composer.draft.text.trim().is_empty() {
             return false;
         }
         if self.composer.editing_queued.is_some() {

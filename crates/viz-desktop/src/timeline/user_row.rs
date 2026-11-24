@@ -457,7 +457,7 @@ fn copy_action(user: &User, copied: bool, t: &Theme) -> Option<El> {
     if user.prompt.text.is_empty() {
         return None;
     }
-    let text_copy = user.prompt.text.clone();
+    let text_copy = user.prompt.display_text();
     let copy_id = format!("copy-{}", user.key);
     let copy_btn = copy_morph_button(
         "copy-user",

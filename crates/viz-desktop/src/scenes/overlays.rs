@@ -141,17 +141,27 @@ pub(super) fn attachments(s: &mut Desktop) {
         transcript(&["export-before.png", "notes.md"]);
     s.model.composer.draft.attachments = vec![
         DraftAttachment {
+            id: crate::composer::codec::RefId::new(),
             name: "Screenshot 2026-11-18.png".into(),
             mime: "image/png".into(),
             bytes: Vec::new(),
         },
         DraftAttachment {
+            id: crate::composer::codec::RefId::new(),
             name: "export.log".into(),
             mime: "text/plain".into(),
             bytes: b"line 1\nline 2\n".to_vec(),
         },
     ]
     .into();
+    let draft = &mut s.model.composer.draft;
+    let refs = draft
+        .attachments
+        .iter()
+        .map(DraftAttachment::pill)
+        .collect::<Vec<_>>();
+    crate::composer::codec::append(draft, refs);
+
     s.sync_widgets_from_model();
 }
 

@@ -463,7 +463,7 @@ pub(super) fn update_queue(
     db: &Conn,
     thread: ThreadId,
     run: RunId,
-    text: Option<&str>,
+    prompt: Option<&Prompt>,
     before: Patch<RunId>,
 ) -> Result<(), Error> {
     let placement = match before {
@@ -474,11 +474,11 @@ pub(super) fn update_queue(
     if let Some(order) = decisions::reorder(queue(db, thread)?, run, placement)? {
         save_order(db, &order)?;
     }
-    if let Some(text) = text {
+    if let Some(prompt) = prompt {
         exec(
             db,
-            "UPDATE runs SET prompt = json_set(prompt, '$.text', ?2) WHERE id = ?1",
-            [run.into(), text.into()],
+            "UPDATE runs SET prompt = ?2 WHERE id = ?1",
+            [run.into(), store::json(prompt)?.into()],
         )?;
     }
     Ok(())

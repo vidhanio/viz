@@ -16,7 +16,7 @@ use super::{
 };
 use crate::{
     app::Desktop,
-    model::{AttachmentStatus, DraftAttachment, DraftPill, NewThread},
+    model::{AttachmentStatus, DraftAttachment, NewThread},
     update::HOME_PROJECT_PICKER,
 };
 
@@ -168,14 +168,6 @@ pub(super) fn home_empty(s: &mut Desktop) {
 /// attachment rows.
 pub(super) fn composer_chips(s: &mut Desktop) {
     seed_workspace(&mut s.model);
-    let text = "Inspect @markdown.rs with $rust-review for #142 and summarize the diff.";
-    let file_start = text.find("@markdown.rs").unwrap_or(0);
-    let file_end = file_start + "@markdown.rs".len();
-    let skill_start = text.find("$rust-review").unwrap_or(0);
-    let skill_end = skill_start + "$rust-review".len();
-    let pr_start = text.find("#142").unwrap_or(0);
-    let pr_end = pr_start + "#142".len();
-
     let pr = GitHubItem {
         kind: GitHubItemKind::PullRequest,
         number: 142,
@@ -183,47 +175,50 @@ pub(super) fn composer_chips(s: &mut Desktop) {
         url: "https://github.com/acme/workbench/pull/142".into(),
         state: "open".into(),
     };
-    s.model.composer.draft.text = text.into();
-    s.model.composer.draft.pills = vec![
-        DraftPill {
-            range: file_start..file_end,
-            id: DraftPill::file_id("src/export/markdown.rs", false),
-            label: "@markdown.rs".into(),
-        },
-        DraftPill {
-            range: skill_start..skill_end,
-            id: DraftPill::skill_id("rust-review"),
-            label: "$rust-review".into(),
-        },
-        DraftPill {
-            range: pr_start..pr_end,
-            id: DraftPill::github_id(&pr),
-            label: "#142".into(),
-        },
-    ];
+    s.model.composer.draft = crate::composer::codec::decode(&viz_client::protocol::Prompt {
+        text: "Inspect [@markdown.rs](ref:0) and [@markdown.rs](ref:1) with [$rust-review](ref:2) for [#142](ref:3).".into(),
+        refs: vec![
+            viz_client::protocol::PromptRef::File { path: "src/export/markdown.rs".into(), directory: false },
+            viz_client::protocol::PromptRef::File { path: "src/import/markdown.rs".into(), directory: false },
+            viz_client::protocol::PromptRef::Skill { name: "rust-review".into() },
+            viz_client::protocol::PromptRef::GitHub { item: pr },
+        ],
+    });
     s.model.composer.draft.attachments = vec![
         DraftAttachment {
+            id: crate::composer::codec::RefId::new(),
             name: "timeline-before.png".into(),
             mime: "image/png".into(),
             bytes: SAMPLE_PNG.to_vec(),
         },
         DraftAttachment {
+            id: crate::composer::codec::RefId::new(),
             name: "composer-mock.png".into(),
             mime: "image/png".into(),
             bytes: SAMPLE_PNG.to_vec(),
         },
         DraftAttachment {
+            id: crate::composer::codec::RefId::new(),
             name: "export-trace.log".into(),
             mime: "text/plain".into(),
             bytes: "line 1\nline 2\nexport ok\n".repeat(120).into_bytes(),
         },
         DraftAttachment {
+            id: crate::composer::codec::RefId::new(),
             name: "schema.json".into(),
             mime: "application/json".into(),
             bytes: "{\"version\":2,\"methods\":[]}\n".repeat(45).into_bytes(),
         },
     ]
     .into();
+    let draft = &mut s.model.composer.draft;
+    let refs = draft
+        .attachments
+        .iter()
+        .map(DraftAttachment::pill)
+        .collect::<Vec<_>>();
+    crate::composer::codec::append(draft, refs);
+
     s.model.composer.draft.attachment_statuses = vec![
         AttachmentStatus::Ready,
         AttachmentStatus::Uploading(Some(68)),
@@ -402,13 +397,14 @@ pub(super) fn composer_queued(s: &mut Desktop) {
         state.queue = vec![
             QueuedInput {
                 run: RunId(501),
-                text: "Also check whether fenced code blocks preserve CRLF endings.".into(),
-                attachment_count: 0,
+                prompt: viz_client::protocol::Prompt::new("Also check whether fenced code blocks preserve CRLF endings."),
             },
             QueuedInput {
                 run: RunId(502),
-                text: "Update the CLI flag help text once the exporter passes.".into(),
-                attachment_count: 1,
+                prompt: viz_client::protocol::Prompt {
+                    text: "Update the CLI flag help text once the exporter passes. [export.log](ref:0)".into(),
+                    refs: vec![viz_client::protocol::PromptRef::Attachment { id: "export.log".into(), name: "export.log".into(), mime: "text/plain".into() }],
+                },
             },
         ];
     }

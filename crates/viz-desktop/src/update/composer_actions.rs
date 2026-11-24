@@ -33,11 +33,11 @@ pub(super) fn send_input(
     }
     if let Some(run) = model.composer.editing_queued.take() {
         if let Some(thread) = model.selection.selected {
-            let text = model.composer.draft.outbound_text();
+            let prompt = crate::composer::codec::encode(&model.composer.draft);
             let restored = model.composer.editing_stash.take().unwrap_or_default();
             let restore_text = restored.text.clone();
             let restore_pills = restored.pills.clone();
-            model.composer.draft = restored;
+            let submitted = mem::replace(&mut model.composer.draft, restored);
             model.composer.completion.reset();
             effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
                 text: restore_text,
@@ -46,7 +46,11 @@ pub(super) fn send_input(
             effects.push(Effect::Server(ServerEffect::UpdateQueued {
                 thread,
                 run,
-                text,
+                prompt,
+                recovery: Box::new(crate::effects::DraftRecovery {
+                    environment: model.active_env_key().to_owned(),
+                    draft: submitted,
+                }),
             }));
             effects.push(focus_draft());
         }
@@ -58,14 +62,12 @@ pub(super) fn send_input(
         model.selection.new_thread = Some(draft);
     }
     let submitted = mem::take(&mut model.composer.draft);
-    let prompt = submitted.prompt();
-    let attachments = (*submitted.attachments).clone();
+    let prompt = crate::composer::codec::encode(&submitted);
     let command = if let Some(thread) = &mut model.selection.new_thread {
         thread.sending = true;
         ServerEffect::Create {
             draft: thread.id,
             recovery: Box::new(submitted),
-            attachments,
             params: Box::new(LaunchThread {
                 project: thread.project.clone(),
                 worktree: thread.worktree.clone(),
@@ -77,14 +79,15 @@ pub(super) fn send_input(
             }),
         }
     } else if let Some(thread) = model.selection.selected {
-        record_prompt_history(model, thread, &submitted.text);
+        if submitted.attachments.is_empty() {
+            record_prompt_history(model, thread, &prompt);
+        }
         let mode = if model.busy() {
             explicit_mode.or(Some(SendMode::Steer))
         } else {
             None
         };
         ServerEffect::SendInput {
-            attachments,
             recovery: Some(Box::new(crate::effects::DraftRecovery {
                 environment: model.active_env_key().to_owned(),
                 draft: submitted,
@@ -111,14 +114,14 @@ pub(super) fn send_input(
     effects.push(Effect::SavePrefs(model.to_prefs()));
 }
 
-fn record_prompt_history(model: &mut Model, thread: viz_client::protocol::ThreadId, text: &str) {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return;
-    }
+fn record_prompt_history(
+    model: &mut Model,
+    thread: viz_client::protocol::ThreadId,
+    prompt: &viz_client::protocol::Prompt,
+) {
     let list = model.cache_mut().prompt_history.entry(thread).or_default();
-    if list.last().map(String::as_str) != Some(trimmed) {
-        list.push(trimmed.to_owned());
+    if list.last() != Some(prompt) {
+        list.push(prompt.clone());
         if list.len() > 50 {
             list.remove(0);
         }
@@ -290,7 +293,6 @@ pub(super) fn choose_completion(
             if let Some(thread) = model.selection.selected.filter(|_| !model.busy()) {
                 clear_token_range(model, start, end, effects);
                 effects.push(Effect::Server(ServerEffect::SendInput {
-                    attachments: Vec::new(),
                     recovery: None,
                     input: SendInput {
                         thread,
@@ -308,11 +310,11 @@ pub(super) fn choose_completion(
         CompletionChoice::SlashText(cmd) => {
             replace_plain(model, start, end, &cmd, needs_space, effects);
         }
-        CompletionChoice::Pill { id, label } => {
+        CompletionChoice::Pill { target, label } => {
             effects.push(Effect::SyncEdit(EditSync::InsertDraftPill {
                 start,
                 end,
-                id,
+                id: crate::composer::codec::PillRef::new(target).mark(),
                 label,
                 trailing_space: needs_space,
             }));
@@ -380,13 +382,7 @@ pub(super) fn step_history(model: &mut Model, up: bool, effects: &mut Vec<Effect
     };
     model.composer.history_cursor = next_idx;
     if let Some(idx) = next_idx {
-        let text = entries[idx].clone();
-        model.composer.draft.text.clone_from(&text);
-        model.composer.draft.pills.clear();
-        effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
-            text,
-            pills: Vec::new(),
-        }));
+        load_prompt(model, &entries[idx], effects);
     } else if let Some(stashed) = model.composer.history_stash.take() {
         let text = stashed.text.clone();
         let pills = stashed.pills.clone();
@@ -398,15 +394,16 @@ pub(super) fn step_history(model: &mut Model, up: bool, effects: &mut Vec<Effect
     }
 }
 
-fn thread_prompt_history(model: &Model, thread: viz_client::protocol::ThreadId) -> Vec<String> {
-    let mut history: Vec<String> = model
+fn thread_prompt_history(
+    model: &Model,
+    thread: viz_client::protocol::ThreadId,
+) -> Vec<viz_client::protocol::Prompt> {
+    let mut history: Vec<_> = model
         .transcript()
         .items
         .iter()
         .filter_map(|item| match item {
-            Item::User(user) if !user.prompt.text.trim().is_empty() => {
-                Some(user.prompt.text.trim().to_owned())
-            }
+            Item::User(user) if !user.prompt.text.trim().is_empty() => Some(user.prompt.clone()),
             _ => None,
         })
         .collect();
@@ -421,10 +418,10 @@ fn thread_prompt_history(model: &Model, thread: viz_client::protocol::ThreadId) 
 }
 
 pub(super) fn edit_queued(model: &mut Model, run: RunId, effects: &mut Vec<Effect>) {
-    let Some(text) = model
+    let Some(prompt) = model
         .thread_state()
         .and_then(|state| state.queue.iter().find(|item| item.run == run))
-        .map(|queued| queued.text.clone())
+        .map(|queued| queued.prompt.clone())
     else {
         return;
     };
@@ -432,14 +429,21 @@ pub(super) fn edit_queued(model: &mut Model, run: RunId, effects: &mut Vec<Effec
         model.composer.editing_stash = Some(model.composer.draft.clone());
     }
     model.composer.editing_queued = Some(run);
-    model.composer.draft.text.clone_from(&text);
-    model.composer.draft.pills.clear();
     model.composer.completion.reset();
-    effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
-        text,
-        pills: Vec::new(),
-    }));
+    load_prompt(model, &prompt, effects);
     effects.push(focus_draft());
+}
+
+pub(super) fn load_prompt(
+    model: &mut Model,
+    prompt: &viz_client::protocol::Prompt,
+    effects: &mut Vec<Effect>,
+) {
+    model.composer.draft = crate::composer::codec::decode(prompt);
+    effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
+        text: model.composer.draft.text.clone(),
+        pills: model.composer.draft.pills.clone(),
+    }));
 }
 
 pub(super) fn cancel_edit_queued(model: &mut Model, effects: &mut Vec<Effect>) {

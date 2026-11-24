@@ -216,8 +216,8 @@ handlers! {
             workspace.settled(thread);
             Ok(Empty {})
         }
-        UpdateQueuedInput, |workspace, input| {
-            workspace.update_queue(input).await?;
+        UpdateQueuedInput, |workspace, ctx, input| {
+            workspace.update_queue(ctx.principal.key(), input).await?;
             Ok(Empty {})
         }
         SteerQueuedInput, |workspace, input| {
@@ -252,17 +252,25 @@ handlers! {
 }
 
 impl Workspace {
-    async fn update_queue(&self, input: UpdateQueuedInput) -> Result<(), Error> {
+    async fn update_queue(
+        &self,
+        principal_key: String,
+        input: UpdateQueuedInput,
+    ) -> Result<(), Error> {
         let UpdateQueuedInput {
             thread,
             run,
             before,
-            text,
+            prompt,
         } = input;
+        let leases = Arc::clone(&self.leases);
         self.db
             .write_tx(move |tx| {
                 store::require(tx, thread)?;
-                runs::update_queue(tx, thread, run, text.as_deref(), before)
+                if let Some(prompt) = &prompt {
+                    super::attachments::claim_prompt(tx, &leases, &principal_key, thread, prompt)?;
+                }
+                runs::update_queue(tx, thread, run, prompt.as_ref(), before)
             })
             .await?;
         self.changed(Some(thread));

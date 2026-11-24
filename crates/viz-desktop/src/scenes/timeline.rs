@@ -82,19 +82,13 @@ pub(super) fn file_preview(s: &mut Desktop) {
     seed_populated(&mut s.model);
     let sample = r"//! Prompt assembly helpers for ACP harnesses.
 
-use viz_protocol::{Attachment, PromptContext};
+use viz_protocol::Prompt;
 
-/// Builds the user prompt text and typed ACP content blocks.
-pub fn build_prompt(
-    text: &str,
-    attachments: &[Attachment],
-    context: &[PromptContext],
-) -> Vec<ContentBlock> {
+pub fn build_prompt(prompt: &Prompt) -> Vec<ContentBlock> {
     let mut blocks = Vec::new();
-    let body = append_attachment_refs(text, attachments);
-    blocks.push(ContentBlock::text(body));
-    for attachment in attachments {
-        push_media_block(&mut blocks, attachment);
+    blocks.push(ContentBlock::text(prompt.display_text()));
+    for anchor in prompt.anchors() {
+        push_resource_block(&mut blocks, anchor.target);
     }
     blocks
 }
@@ -120,8 +114,8 @@ pub fn build_prompt(
 }
 
 /// Showcases rich Markdown rendering inside sent user bubbles (headings, bold,
-/// code, inline `@file` pill, `[spec.pdf][file-1]` attachment pill, inline
-/// embedded `![Clipboard.png][img-1]` image), compact fit-content `"continue"`
+/// code, inline file and attachment pills, an
+/// embedded screenshot), compact fit-content `"continue"`
 /// bubble width, and clickable `file://` pills inside assistant prose.
 pub(super) fn user_markdown(s: &mut Desktop) {
     seed_workspace(&mut s.model);

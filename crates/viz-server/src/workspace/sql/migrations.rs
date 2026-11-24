@@ -7,7 +7,7 @@
 //! checked before the commit instead.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     path::Path,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -207,14 +207,11 @@ fn migrate_prompts(tx: &Connection) -> anyhow::Result<()> {
         },
     }
     fn convert(
-        text: String,
+        text: &str,
         attachments: Vec<viz_protocol::PromptAttachment>,
         context: Vec<LegacyContext>,
     ) -> viz_protocol::Prompt {
-        let mut prompt = viz_protocol::Prompt::new(text);
-        for attachment in attachments {
-            prompt.append_attachment(attachment);
-        }
+        let mut prompt = migrate_attachment_links(text, attachments);
         for target in context {
             let (label, target) = match target {
                 LegacyContext::File { path } => (
@@ -249,7 +246,7 @@ fn migrate_prompts(tx: &Connection) -> anyhow::Result<()> {
         let id = entry.get::<_, i64>(0)?;
         let data: serde_json::Value = serde_json::from_str(&entry.get::<_, String>(1)?)?;
         let old: LegacyPrompt = serde_json::from_value(data["data"].clone())?;
-        let prompt = convert(old.text, old.attachments, old.context);
+        let prompt = convert(&old.text, old.attachments, old.context);
         let data = serde_json::to_string(&viz_protocol::EntryData::Prompt {
             prompt,
             origin: old.origin,
@@ -267,7 +264,7 @@ fn migrate_prompts(tx: &Connection) -> anyhow::Result<()> {
         let attachments = run.get::<_, Option<String>>(2)?;
         let context = run.get::<_, Option<String>>(3)?;
         let prompt = convert(
-            text,
+            &text,
             serde_json::from_str::<Vec<_>>(attachments.as_deref().unwrap_or("[]"))?,
             serde_json::from_str::<Vec<_>>(context.as_deref().unwrap_or("[]"))?,
         );
@@ -277,4 +274,80 @@ fn migrate_prompts(tx: &Connection) -> anyhow::Result<()> {
         )?;
     }
     Ok(())
+}
+
+/// Resolves old generated attachment labels using CommonMark's reference-link
+/// rules. An attachment without an inline occurrence still receives a link.
+fn migrate_attachment_links(
+    text: &str,
+    attachments: Vec<viz_protocol::PromptAttachment>,
+) -> viz_protocol::Prompt {
+    use pulldown_cmark::{BrokenLink, Event, LinkType, Options, Parser, Tag};
+    use viz_protocol::{Prompt, PromptRef};
+
+    if attachments.is_empty() {
+        return Prompt::new(text);
+    }
+    let mut labels = HashMap::with_capacity(attachments.len());
+    let mut names = Vec::with_capacity(attachments.len());
+    let mut prompt = Prompt::default();
+    let mut images = 0;
+    let mut files = 0;
+    for (index, attachment) in attachments.into_iter().enumerate() {
+        let key = if attachment.mime.starts_with("image/") {
+            images += 1;
+            format!("img-{images}")
+        } else {
+            files += 1;
+            format!("file-{files}")
+        };
+        labels.insert(key, index);
+        names.push(attachment.name.clone());
+        prompt.refs.push(PromptRef::Attachment {
+            id: attachment.id,
+            name: attachment.name,
+            mime: attachment.mime,
+        });
+    }
+    let mut broken = |link: BrokenLink<'_>| {
+        let index = labels.get(&link.reference.to_ascii_lowercase())?;
+        Some((index.to_string().into(), "".into()))
+    };
+    let parser = Parser::new_with_broken_link_callback(text, Options::empty(), Some(&mut broken));
+    let mut found = HashSet::new();
+    let mut end = 0;
+    for (event, range) in parser.into_offset_iter() {
+        if let Event::Start(
+            Tag::Link {
+                link_type: LinkType::ReferenceUnknown,
+                dest_url,
+                ..
+            }
+            | Tag::Image {
+                link_type: LinkType::ReferenceUnknown,
+                dest_url,
+                ..
+            },
+        ) = event
+            && range.start >= end
+            && let Ok(index) = dest_url.parse::<usize>()
+        {
+            prompt.text.push_str(&text[end..range.start]);
+            prompt
+                .text
+                .push_str(&Prompt::reference_link(&names[index], index));
+            found.insert(index);
+            end = range.end;
+        }
+    }
+    prompt.text.push_str(&text[end..]);
+    let mut unreferenced = String::new();
+    for (index, name) in names.iter().enumerate() {
+        if !found.contains(&index) {
+            unreferenced.push_str(&Prompt::reference_link(name, index));
+            unreferenced.push_str("\n\n");
+        }
+    }
+    prompt.text.insert_str(0, &unreferenced);
+    prompt
 }

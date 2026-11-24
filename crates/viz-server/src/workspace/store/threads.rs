@@ -307,16 +307,14 @@ pub(in crate::workspace) fn state_row(
     let session: SavedSession = from_json(&row.str(3)?)?;
     let queue = rows(
         db,
-        "SELECT id, prompt ->> 'text', (SELECT count(*) FROM json_each(prompt, '$.refs')
-         WHERE value ->> 'type' = 'attachment') FROM runs
+        "SELECT id, prompt FROM runs
         WHERE thread = ?1 AND status = 'queued' ORDER BY position, id",
         [thread.into()],
     )?
     .map(|mut row| {
         Ok(QueuedInput {
             run: row.id(0)?,
-            text: row.str(1)?,
-            attachment_count: row.u64(2)?,
+            prompt: from_json(&row.str(1)?)?,
         })
     })
     .collect::<Result<_, Error>>()?;
