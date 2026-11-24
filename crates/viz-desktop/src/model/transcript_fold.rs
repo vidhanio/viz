@@ -105,6 +105,7 @@ impl Transcript {
             Body::Media(m) => self.acp_partial.push(Item::Media(MediaItem {
                 key: entry.key.clone(),
                 block: m.block.clone(),
+                blob: m.blob.clone(),
             })),
             Body::Omitted => self.acp_partial.push(Item::Omitted {
                 key: entry.key.clone(),
@@ -336,6 +337,7 @@ impl Transcript {
             Body::Media(m) => self.items.push(Item::Media(MediaItem {
                 key: format!("e{id}"),
                 block: m.block.clone(),
+                blob: m.blob.clone(),
             })),
             Body::Omitted => self.items.push(Item::Omitted {
                 key: format!("e{id}"),

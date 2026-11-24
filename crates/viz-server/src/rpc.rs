@@ -28,6 +28,17 @@ pub(crate) enum Principal {
     Peer(Arc<str>),
 }
 
+impl Principal {
+    /// Stable principal key scoping staged content-plane blob leases.
+    pub(crate) fn key(&self) -> String {
+        match self {
+            Self::Local => "local".to_owned(),
+            Self::Client => "client".to_owned(),
+            Self::Peer(id) => format!("peer:{id}"),
+        }
+    }
+}
+
 /// Authenticated caller context threaded through every RPC dispatch and
 /// content-plane session.
 #[derive(Debug, Clone)]

@@ -1,4 +1,5 @@
-//! Resolve project images on the server and return content-addressed responses.
+//! Resolve project images on the server and serve raw bytes over the content
+//! channel with `ETag` validation.
 
 use std::{
     collections::HashMap,
@@ -6,18 +7,30 @@ use std::{
     time::{Duration, Instant},
 };
 
-use base64::{
-    Engine as _,
-    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
-};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use sha2::{Digest, Sha256};
-use viz_protocol::{ProjectIcon, ProjectIconChange, ProjectIconResult, ReadProjectIcon};
+use viz_protocol::{ProjectIcon, ProjectIconChange};
 
-use super::{Workspace, store};
+use super::{Workspace, blobs, store};
 use crate::error::Error;
 
 const LIMIT: usize = 1024 * 1024;
 const TTL: Duration = Duration::from_secs(30);
+
+/// Result of reading one chunk of a project's icon on the content channel.
+#[derive(Debug)]
+pub(crate) enum ProjectIconChunk {
+    Chunk {
+        bytes: Vec<u8>,
+        total_size: u64,
+        mime: String,
+        etag: String,
+    },
+    NotModified {
+        etag: String,
+    },
+    Empty,
+}
 
 #[derive(Debug, Default)]
 pub(super) struct Icons {
@@ -35,51 +48,36 @@ struct Cached {
 struct Image {
     etag: String,
     media_type: String,
-    data: String,
+    bytes: Vec<u8>,
 }
 
 impl Image {
-    fn from_bytes(bytes: &[u8]) -> Option<Self> {
-        let media_type = image_type(bytes)?.to_owned();
-        let etag = URL_SAFE_NO_PAD.encode(Sha256::digest(bytes));
+    fn from_bytes(bytes: Vec<u8>) -> Option<Self> {
+        let media_type = image_type(&bytes)?.to_owned();
+        let etag = URL_SAFE_NO_PAD.encode(Sha256::digest(&bytes));
         Some(Self {
             etag,
             media_type,
-            data: STANDARD.encode(bytes),
+            bytes,
         })
     }
 
-    fn response(self, known: Option<&str>) -> ProjectIconResult {
-        if known == Some(&self.etag) {
-            ProjectIconResult::Unchanged { etag: self.etag }
-        } else {
-            ProjectIconResult::Image {
-                etag: self.etag,
-                media_type: self.media_type,
-                data: self.data,
-            }
+    fn slice(self, known: Option<&str>, offset: u64, len: usize) -> ProjectIconChunk {
+        if known == Some(self.etag.as_str()) {
+            return ProjectIconChunk::NotModified { etag: self.etag };
+        }
+        let total_size = self.bytes.len() as u64;
+        let start = usize::try_from(offset)
+            .unwrap_or(self.bytes.len())
+            .min(self.bytes.len());
+        let end = start.saturating_add(len).min(self.bytes.len());
+        ProjectIconChunk::Chunk {
+            bytes: self.bytes[start..end].to_vec(),
+            total_size,
+            mime: self.media_type,
+            etag: self.etag,
         }
     }
-}
-
-pub(super) fn validate_upload(change: Option<&ProjectIconChange>) -> Result<(), Error> {
-    if let Some(ProjectIconChange::Uploaded { media_type, data }) = change {
-        decode(media_type, data)?;
-    }
-    Ok(())
-}
-
-fn decode(media_type: &str, data: &str) -> Result<Vec<u8>, Error> {
-    if data.len() > LIMIT.div_ceil(3) * 4 {
-        return Err(Error::invalid("project icon exceeds 1 MiB"));
-    }
-    let bytes = STANDARD
-        .decode(data)
-        .map_err(|_| Error::invalid("project icon is not base64"))?;
-    if bytes.len() > LIMIT || image_type(&bytes) != Some(media_type) {
-        return Err(Error::invalid("invalid project icon image or media type"));
-    }
-    Ok(bytes)
 }
 
 fn image_type(bytes: &[u8]) -> Option<&'static str> {
@@ -106,32 +104,78 @@ fn image_type(bytes: &[u8]) -> Option<&'static str> {
 }
 
 impl Workspace {
-    pub(super) async fn project_icon(
+    /// Verifies that an uploaded project icon blob was staged by the caller
+    /// (or already belongs to `project`), fits under 1 MiB, and matches the
+    /// declared image media type.
+    pub(super) async fn validate_uploaded_icon(
         &self,
-        args: ReadProjectIcon,
-    ) -> Result<ProjectIconResult, Error> {
-        let project = args.project.clone();
+        principal_key: &str,
+        project: &str,
+        change: Option<&ProjectIconChange>,
+    ) -> Result<(), Error> {
+        let Some(ProjectIconChange::Uploaded { media_type, blob }) = change else {
+            return Ok(());
+        };
+        if !blobs::is_valid_blob_id(blob) {
+            return Err(Error::invalid("invalid project icon blob identifier"));
+        }
+        let authorized = if self.leases.has_client_stage(principal_key, blob) {
+            true
+        } else {
+            let project = project.to_owned();
+            let (_, _, prefs) = self
+                .db
+                .read(move |conn| store::preferences(conn, &project))
+                .await?;
+            matches!(&prefs.settings.icon, ProjectIcon::Uploaded { blob: existing, .. } if existing == blob)
+        };
+        if !authorized {
+            return Err(Error::invalid(
+                "project icon blob must be staged on the content channel first",
+            ));
+        }
+        let bytes = self.blobs.read(blob, LIMIT as u64).await?;
+        if bytes.len() > LIMIT || image_type(&bytes) != Some(media_type.as_str()) {
+            return Err(Error::invalid("invalid project icon image or media type"));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn read_project_icon_chunk(
+        &self,
+        project: &str,
+        known_etag: Option<&str>,
+        offset: u64,
+        len: usize,
+    ) -> Result<ProjectIconChunk, Error> {
+        let project_key = project.to_owned();
         let (_, _, prefs) = self
             .db
-            .read(move |conn| store::preferences(conn, &project))
+            .read(move |conn| store::preferences(conn, &project_key))
             .await?;
         let icon = prefs.settings.icon;
         let image = match &icon {
-            ProjectIcon::Uploaded { media_type } => prefs
-                .icon_data
-                .as_deref()
-                .map(|data| decode(media_type, data).map(|bytes| Image::from_bytes(&bytes)))
-                .transpose()?
-                .flatten(),
+            ProjectIcon::Uploaded { media_type, blob } => {
+                if blobs::is_valid_blob_id(blob) {
+                    let bytes = self.blobs.read(blob, LIMIT as u64).await?;
+                    if bytes.len() <= LIMIT && image_type(&bytes) == Some(media_type.as_str()) {
+                        Image::from_bytes(bytes)
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
             ProjectIcon::Lucide { .. } | ProjectIcon::Emoji { .. } => None,
             ProjectIcon::Automatic | ProjectIcon::OwnerAvatar => {
-                let cached = self.icons.cache.lock().await.get(&args.project).cloned();
+                let cached = self.icons.cache.lock().await.get(project).cloned();
                 if let Some(cached) =
                     cached.filter(|cached| cached.icon == icon && cached.at.elapsed() < TTL)
                 {
                     cached.image
                 } else {
-                    let root = Path::new(&args.project);
+                    let root = Path::new(project);
                     let image = if icon == ProjectIcon::Automatic {
                         self.local_icon(root).await
                     } else {
@@ -148,7 +192,7 @@ impl Workspace {
                         cache.remove(&oldest);
                     }
                     cache.insert(
-                        args.project,
+                        project.to_owned(),
                         Cached {
                             icon,
                             at: Instant::now(),
@@ -160,8 +204,8 @@ impl Workspace {
                 }
             }
         };
-        Ok(image.map_or(ProjectIconResult::None, |image| {
-            image.response(args.etag.as_deref())
+        Ok(image.map_or(ProjectIconChunk::Empty, |image| {
+            image.slice(known_etag, offset, len)
         }))
     }
 
@@ -169,7 +213,7 @@ impl Workspace {
         for candidate in viz_git::icon_candidate_paths() {
             if let Ok(Some(bytes)) =
                 viz_git::read_icon(root, Path::new(candidate), &self.closing).await
-                && let Some(image) = Image::from_bytes(&bytes)
+                && let Some(image) = Image::from_bytes(bytes)
             {
                 return Some(image);
             }
@@ -236,5 +280,5 @@ async fn download_avatar(host: &str, image: &str) -> Result<Option<Image>, Error
         }
         bytes.extend_from_slice(&chunk);
     }
-    Ok(Image::from_bytes(&bytes))
+    Ok(Image::from_bytes(bytes))
 }

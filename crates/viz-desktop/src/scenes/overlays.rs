@@ -2,8 +2,8 @@
 //! environments, and empty/offline states.
 
 use viz_client::protocol::{
-    Attachment, EntryId, Environment, EnvironmentStatus, FileSearchKind, FileSearchMatch, Harness,
-    Project, SearchHit, SlashCommand, ThreadId, WorktreeTarget,
+    EntryId, Environment, EnvironmentStatus, FileSearchKind, FileSearchMatch, Harness, Project,
+    SearchHit, SlashCommand, ThreadId, WorktreeTarget,
 };
 
 use super::{
@@ -14,8 +14,8 @@ use crate::{
     app::Desktop,
     checkout,
     model::{
-        ContextMenu, ContextSubmenu, NewThread, PaletteSearch, ProjectFilter, SidebarEdit, Status,
-        Transcript,
+        ContextMenu, ContextSubmenu, DraftAttachment, NewThread, PaletteSearch, ProjectFilter,
+        SidebarEdit, Status, Transcript,
     },
     timeline,
 };
@@ -127,15 +127,15 @@ pub(super) fn attachments(s: &mut Desktop) {
     s.model.cache_mut().open_thread_mut(THREAD).transcript =
         transcript(&["export-before.png", "notes.md"]);
     s.model.composer.draft.attachments = vec![
-        Attachment {
+        DraftAttachment {
             name: "Screenshot 2026-11-18.png".into(),
             mime: "image/png".into(),
-            data: String::new(),
+            bytes: Vec::new(),
         },
-        Attachment {
+        DraftAttachment {
             name: "export.log".into(),
             mime: "text/plain".into(),
-            data: "bGluZSAxCmxpbmUgMgo=".into(),
+            bytes: b"line 1\nline 2\n".to_vec(),
         },
     ]
     .into();

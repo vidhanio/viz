@@ -9,7 +9,7 @@ pub use viz_protocol as protocol;
 
 pub use crate::{
     client::{Client, Connection},
-    content::{ContentClient, DownloadedContent},
+    content::{ContentClient, DownloadedContent, ProjectIconFetch},
     endpoint::{Endpoint, ResolveEndpointError},
     error::{Error, Result},
 };

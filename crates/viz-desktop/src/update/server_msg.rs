@@ -2,14 +2,14 @@
 //! platform tasks into [`super::server::update`].
 
 use viz_client::protocol::{
-    Attachment, ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileContent,
+    ConfigOption, Entry, EntryId, EntryPage, EntrySource, Environment, FileContent,
     FileSearchMatch, Forked, GitHubItem, Harness, Lifecycle, LiveDelta, Project, RequestId,
     SearchHit, Task, ThreadId, ThreadState, ThreadSummary,
 };
 
 use crate::{
     effects::LoadedAttachments,
-    model::{AttachmentTarget, Checkouts, LoadedEntry, SessionId, Status},
+    model::{AttachmentTarget, Checkouts, DraftAttachment, LoadedEntry, SessionId, Status},
 };
 
 /// Events pushed from the background server runtime or blocking platform tasks.
@@ -270,14 +270,17 @@ pub enum ServerMsg {
         /// Decoded full payload or error string.
         result: Result<LoadedEntry, String>,
     },
-    /// `files.read` finished for the file preview modal.
+    /// `files.read` (and image content fetch when applicable) finished for the
+    /// file preview modal.
     FilePreviewLoaded {
         /// Monotonic preview request serial.
         request: u64,
-        /// Loaded file content or error string.
-        result: Result<FileContent, String>,
+        /// Loaded file metadata/body plus optional preview image bytes, or an
+        /// error string.
+        result: Result<(FileContent, Option<Vec<u8>>), String>,
     },
-    /// `thread.attachment` finished for a stored thread attachment.
+    /// Content-channel attachment download finished for a stored thread
+    /// attachment.
     ThreadAttachmentLoaded {
         /// Owning thread id.
         thread: ThreadId,
@@ -285,7 +288,7 @@ pub enum ServerMsg {
         id: String,
         /// Optional preview modal request serial.
         preview_request: Option<u64>,
-        /// Loaded attachment or error string.
-        result: Result<Attachment, String>,
+        /// Loaded raw attachment or error string.
+        result: Result<DraftAttachment, String>,
     },
 }

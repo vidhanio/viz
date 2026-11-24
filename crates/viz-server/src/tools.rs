@@ -189,36 +189,8 @@ impl Tools {
                 let count = self.tasks.clear(scope.thread).await?;
                 output(&Cleared { count }, None)
             }
-            "delegate_task" => {
-                let task = self
-                    .tasks
-                    .delegate(scope.thread, Some(scope.run), decode(args)?)
-                    .await?;
-                let result = TaskResult { task };
-                let link = result
-                    .task
-                    .thread
-                    .map(|thread| (thread, result.task.environment.as_str()));
-                output(&result, link)
-            }
-            "task_status" => {
-                let TaskStatus {
-                    task,
-                    wait,
-                    timeout_ms,
-                } = decode(args)?;
-                let timeout = timeout_ms.unwrap_or(DEFAULT_WAIT).min(MAX_WAIT);
-                let result = self
-                    .tasks
-                    .status(&task, Some(scope.thread), wait, Some(timeout))
-                    .await?;
-                let environment = result.task.environment.clone();
-                let link = result
-                    .task
-                    .thread
-                    .map(|thread| (thread, environment.as_str()));
-                output(&views::task(result.task, result.timed_out), link)
-            }
+            "delegate_task" => self.delegate_task(scope, decode(args)?).await,
+            "task_status" => self.task_status(scope, decode(args)?).await,
             "task_cancel" => {
                 let TaskKey { task } = decode(args)?;
                 let task = self.tasks.cancel(&task, Some(scope.thread)).await?;
@@ -248,6 +220,38 @@ impl Tools {
             }
             _ => self.call_rpc(name, args).await,
         }
+    }
+
+    async fn delegate_task(
+        &self,
+        scope: ToolScope,
+        input: DelegateInput,
+    ) -> Result<ToolResult, Error> {
+        let key = CallCtx::internal().principal.key();
+        let task = self
+            .tasks
+            .delegate(&key, scope.thread, Some(scope.run), input)
+            .await?;
+        let result = TaskResult { task };
+        let link = result
+            .task
+            .thread
+            .map(|thread| (thread, result.task.environment.as_str()));
+        output(&result, link)
+    }
+
+    async fn task_status(&self, scope: ToolScope, input: TaskStatus) -> Result<ToolResult, Error> {
+        let timeout = input.timeout_ms.unwrap_or(DEFAULT_WAIT).min(MAX_WAIT);
+        let result = self
+            .tasks
+            .status(&input.task, Some(scope.thread), input.wait, Some(timeout))
+            .await?;
+        let environment = result.task.environment.clone();
+        let link = result
+            .task
+            .thread
+            .map(|thread| (thread, environment.as_str()));
+        output(&views::task(result.task, result.timed_out), link)
     }
 
     fn dispatch<'a, M, T>(

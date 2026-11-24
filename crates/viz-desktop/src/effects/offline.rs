@@ -80,14 +80,14 @@ pub(super) fn derive(command: ServerEffect, active_env: &str) -> Offline {
                 result: None,
             }))
         }
-        ServerEffect::SendInput { input, recovery } => {
-            Offline::Dispatch(Msg::Server(ServerMsg::SendFailed {
-                thread: input.thread,
-                recovery,
-                title: "Offline".into(),
-                detail: None,
-            }))
-        }
+        ServerEffect::SendInput {
+            input, recovery, ..
+        } => Offline::Dispatch(Msg::Server(ServerMsg::SendFailed {
+            thread: input.thread,
+            recovery,
+            title: "Offline".into(),
+            detail: None,
+        })),
         ServerEffect::ProjectPalette(request, _) => {
             Offline::Dispatch(Msg::Server(ServerMsg::ProjectPalette {
                 environment: active_env.to_owned(),

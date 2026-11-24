@@ -6,16 +6,14 @@ pub const KIB: usize = 1024;
 /// One mebibyte in bytes.
 pub const MIB: usize = 1024 * 1024;
 
-/// Maximum single WebSocket frame or message size accepted by server, client,
-/// and peer WebSocket proxy (`32 MiB`).
-pub const MAX_WS_FRAME: usize = 32 * MIB;
+/// Maximum single WebSocket frame or message size (`2 MiB`).
+///
+/// Bulk attachments, previews, and icons travel as 256 KiB binary chunks on
+/// the dedicated content WebSocket.
+pub const MAX_WS_FRAME: usize = 2 * MIB;
 
 /// Maximum decoded byte total for attachments on a single prompt (`20 MiB`).
 pub const ATTACHMENT_TOTAL_BYTES: usize = 20 * MIB;
-
-/// Base64-encoded ceiling corresponding to [`ATTACHMENT_TOTAL_BYTES`]
-/// (`ceil(20 MiB / 3) * 4`).
-pub const ATTACHMENT_ENCODED_LIMIT: usize = ATTACHMENT_TOTAL_BYTES.div_ceil(3) * 4;
 
 /// Maximum raw bytes returned in one streamed content chunk (`256 KiB`).
 pub const CONTENT_CHUNK_BYTES: usize = 256 * KIB;

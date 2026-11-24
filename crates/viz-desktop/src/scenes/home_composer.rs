@@ -3,12 +3,11 @@
 //! strip, tucked `@`/`/`/`$`/`#` completion drawers, and active-run Steer/Queue
 //! CTA + dashed queued deck.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use viz_client::protocol::{
-    Access, AccessKind, AccessMode, AccessSource, Attachment, CommandSource, Environment,
-    EnvironmentStatus, FileSearchKind, FileSearchMatch, GitHubItem, GitHubItemKind, GitHubPull,
-    GitHubPullState, Harness, HarnessStatus, Project, ProjectSettings, QueuedInput, RunId,
-    SlashCommand, ThreadStatus, WorktreeTarget,
+    Access, AccessKind, AccessMode, AccessSource, CommandSource, Environment, EnvironmentStatus,
+    FileSearchKind, FileSearchMatch, GitHubItem, GitHubItemKind, GitHubPull, GitHubPullState,
+    Harness, HarnessStatus, Project, ProjectSettings, QueuedInput, RunId, SlashCommand,
+    ThreadStatus, WorktreeTarget,
 };
 
 use super::{
@@ -17,15 +16,27 @@ use super::{
 };
 use crate::{
     app::Desktop,
-    model::{AttachmentStatus, DraftPill, NewThread},
+    model::{AttachmentStatus, DraftAttachment, DraftPill, NewThread},
     update::HOME_PROJECT_PICKER,
 };
 
-/// Tiny 8×8 RGB PNG encoded as base64 for deterministic attachment
-/// thumbnail previews.
-fn sample_png_base64() -> String {
-    "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAnklEQVR4nA3JoQ0EIAwAwN/lx0B1hoYhGmZAdYImdQQJFoEpEluC+oWes/f5ggaoCD3BYLACe4If+H2+UUOsGHuKg6OVuGf0E1+QBqpIPdFgskJ7kh96kTXkirmnPDhbyXtmP/mFaJCK0pMMFiuyp/iRF01Dq9h6aoOblbZn89NeLA2r4uppDV5W1p7Lz3pxNdyKt6c7+Fq5e14/9/cHN0FsYWJ76AgAAAAASUVORK5CYII=".to_owned()
-}
+/// Tiny 8×8 RGB PNG for deterministic attachment thumbnail previews.
+const SAMPLE_PNG: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00, 0x08, 0x08, 0x02, 0x00, 0x00, 0x00, 0x4b, 0x6d, 0x29,
+    0xdc, 0x00, 0x00, 0x00, 0x9e, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x0d, 0xc9, 0xa1, 0x0d, 0x04,
+    0x20, 0x0c, 0x00, 0xc0, 0xdf, 0xe5, 0xc7, 0x40, 0x75, 0x86, 0x86, 0x21, 0x1a, 0x66, 0x40, 0x75,
+    0x82, 0x26, 0x75, 0x04, 0x09, 0x16, 0x81, 0x29, 0x12, 0x5b, 0x82, 0xfa, 0x85, 0x9e, 0xb3, 0xf7,
+    0xf9, 0x82, 0x06, 0xa8, 0x08, 0x3d, 0xc1, 0x60, 0xb0, 0x02, 0x7b, 0x82, 0x1f, 0xf8, 0x7d, 0xbe,
+    0x51, 0x43, 0xac, 0x18, 0x7b, 0x8a, 0x83, 0xa3, 0x95, 0xb8, 0x67, 0xf4, 0x13, 0x5f, 0x90, 0x06,
+    0xaa, 0x48, 0x3d, 0xd1, 0x60, 0xb2, 0x42, 0x7b, 0x92, 0x1f, 0x7a, 0x91, 0x35, 0xe4, 0x8a, 0xb9,
+    0xa7, 0x3c, 0x38, 0x5b, 0xc9, 0x7b, 0x66, 0x3f, 0xf9, 0x85, 0x68, 0x90, 0x8a, 0xd2, 0x93, 0x0c,
+    0x16, 0x2b, 0xb2, 0xa7, 0xf8, 0x91, 0x17, 0x4d, 0x43, 0xab, 0xd8, 0x7a, 0x6a, 0x83, 0x9b, 0x95,
+    0xb6, 0x67, 0xf3, 0xd3, 0x5e, 0x2c, 0x0d, 0xab, 0xe2, 0xea, 0x69, 0x0d, 0x5e, 0x56, 0xd6, 0x9e,
+    0xcb, 0xcf, 0x7a, 0x71, 0x35, 0xdc, 0x8a, 0xb7, 0xa7, 0x3b, 0xf8, 0x5a, 0xb9, 0x7b, 0x5e, 0x3f,
+    0xf7, 0xf7, 0x07, 0x37, 0x41, 0x6c, 0x61, 0x62, 0x7b, 0xe8, 0x08, 0x00, 0x00, 0x00, 0x00, 0x49,
+    0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 fn preview_access_modes() -> Vec<AccessMode> {
     vec![
@@ -190,27 +201,26 @@ pub(super) fn composer_chips(s: &mut Desktop) {
             label: "#142".into(),
         },
     ];
-    let png = sample_png_base64();
     s.model.composer.draft.attachments = vec![
-        Attachment {
+        DraftAttachment {
             name: "timeline-before.png".into(),
             mime: "image/png".into(),
-            data: png.clone(),
+            bytes: SAMPLE_PNG.to_vec(),
         },
-        Attachment {
+        DraftAttachment {
             name: "composer-mock.png".into(),
             mime: "image/png".into(),
-            data: png,
+            bytes: SAMPLE_PNG.to_vec(),
         },
-        Attachment {
+        DraftAttachment {
             name: "export-trace.log".into(),
             mime: "text/plain".into(),
-            data: STANDARD.encode("line 1\nline 2\nexport ok\n".repeat(120)),
+            bytes: "line 1\nline 2\nexport ok\n".repeat(120).into_bytes(),
         },
-        Attachment {
+        DraftAttachment {
             name: "schema.json".into(),
             mime: "application/json".into(),
-            data: STANDARD.encode("{\"version\":2,\"methods\":[]}\n".repeat(45)),
+            bytes: "{\"version\":2,\"methods\":[]}\n".repeat(45).into_bytes(),
         },
     ]
     .into();

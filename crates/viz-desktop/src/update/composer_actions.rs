@@ -66,6 +66,7 @@ pub(super) fn send_input(
         ServerEffect::Create {
             draft: thread.id,
             recovery: Box::new(submitted),
+            attachments,
             params: Box::new(LaunchThread {
                 project: thread.project.clone(),
                 worktree: thread.worktree.clone(),
@@ -73,7 +74,7 @@ pub(super) fn send_input(
                 options: thread.options.clone(),
                 access: thread.access.clone(),
                 text: Some(text),
-                attachments,
+                attachments: Vec::new(),
                 context,
                 ..LaunchThread::default()
             }),
@@ -86,6 +87,7 @@ pub(super) fn send_input(
             None
         };
         ServerEffect::SendInput {
+            attachments,
             recovery: Some(Box::new(crate::effects::DraftRecovery {
                 environment: model.active_env_key().to_owned(),
                 draft: submitted,
@@ -93,7 +95,7 @@ pub(super) fn send_input(
             input: SendInput {
                 thread,
                 text,
-                attachments,
+                attachments: Vec::new(),
                 stored: Vec::new(),
                 context,
                 request_id: None,
@@ -294,6 +296,7 @@ pub(super) fn choose_completion(
             if let Some(thread) = model.selection.selected.filter(|_| !model.busy()) {
                 clear_token_range(model, start, end, effects);
                 effects.push(Effect::Server(ServerEffect::SendInput {
+                    attachments: Vec::new(),
                     recovery: None,
                     input: SendInput {
                         thread,

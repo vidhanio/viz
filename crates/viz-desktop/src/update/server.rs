@@ -1,7 +1,6 @@
 //! Pure transitions for server responses, push notifications, and optimistic
 //! rollbacks.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use viz_client::protocol::{ConfigOption, Harness, ThreadId};
 
 pub use super::server_msg::ServerMsg;
@@ -351,7 +350,7 @@ pub(super) fn update(model: &mut Model, msg: ServerMsg) -> Vec<Effect> {
 fn apply_file_preview_loaded(
     model: &mut Model,
     request: u64,
-    result: Result<viz_client::protocol::FileContent, String>,
+    result: Result<(viz_client::protocol::FileContent, Option<Vec<u8>>), String>,
     effects: &mut Vec<Effect>,
 ) {
     let Some(preview) = model.timeline.file_preview.as_mut() else {
@@ -361,7 +360,7 @@ fn apply_file_preview_loaded(
         return;
     }
     match result {
-        Ok(content) => {
+        Ok((content, image_bytes)) => {
             preview.path.clone_from(&content.path);
             match content.body {
                 viz_client::protocol::FileBody::Text {
@@ -384,8 +383,8 @@ fn apply_file_preview_loaded(
                         });
                     }
                 }
-                viz_client::protocol::FileBody::Image { data } => {
-                    if let Ok(bytes) = STANDARD.decode(&data) {
+                viz_client::protocol::FileBody::Image {} => {
+                    if let Some(bytes) = image_bytes {
                         preview.body = crate::model::FilePreviewBody::Image { size: content.size };
                         effects.push(Effect::DecodePreviewImage {
                             media_type: content.mime,
@@ -393,7 +392,7 @@ fn apply_file_preview_loaded(
                         });
                     } else {
                         preview.body = crate::model::FilePreviewBody::Error(
-                            "Couldn’t decode image bytes".into(),
+                            "Couldn’t download preview image".into(),
                         );
                     }
                 }
@@ -416,7 +415,7 @@ fn apply_thread_attachment_loaded(
     thread: ThreadId,
     id: String,
     preview_request: Option<u64>,
-    result: Result<viz_client::protocol::Attachment, String>,
+    result: Result<crate::model::DraftAttachment, String>,
     effects: &mut Vec<Effect>,
 ) {
     let env = model.active_env_key().to_owned();
@@ -426,15 +425,13 @@ fn apply_thread_attachment_loaded(
         .remove(&(env.clone(), thread, id.clone()));
     match result {
         Ok(attachment) => {
-            if attachment.mime.starts_with("image/")
-                && let Ok(bytes) = STANDARD.decode(&attachment.data)
-            {
+            if attachment.mime.starts_with("image/") && !attachment.bytes.is_empty() {
                 effects.push(Effect::DecodeThreadAttachmentImage {
                     environment: env.clone(),
                     thread,
                     id: id.clone(),
                     media_type: attachment.mime.clone(),
-                    bytes,
+                    bytes: attachment.bytes.clone(),
                 });
             }
             if let Some(req) = preview_request

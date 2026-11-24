@@ -83,9 +83,16 @@ impl Workspace {
             Ok(checkout) => checkout,
             Err(launched) => return Ok(launched),
         };
-        let turns = acp::load_history(config, Path::new(&checkout.cwd), &input.session, "import")
-            .await?
-            .unwrap_or_default();
+        let mut turns =
+            acp::load_history(config, Path::new(&checkout.cwd), &input.session, "import")
+                .await?
+                .unwrap_or_default();
+        let mut extracted = Vec::new();
+        for turn in &mut turns {
+            extracted.extend(
+                super::attachments::extract_media_blobs(self, &mut turn.entries, None).await?,
+            );
+        }
         let harness_name = harness.to_owned();
         let ws = Arc::clone(self);
         let thread = self
@@ -112,45 +119,10 @@ impl Workspace {
                         },
                     },
                 )?;
-                for turn in turns {
-                    let prompt = store::append(
-                        &tx,
-                        thread,
-                        &NewEntry::Prompt {
-                            text: turn.prompt.clone(),
-                            attachments: Vec::new(),
-                            context: Vec::new(),
-                            origin: None,
-                            truncated: false,
-                        },
-                    )?;
-                    for entry in turn.entries {
-                        store::publish(&tx, thread, &input.session, entry, &ws.entry_chunks)?;
-                    }
-                    let end = store::append(
-                        &tx,
-                        thread,
-                        &NewEntry::Run(RunEnd {
-                            stop_reason: Some("end_turn".to_owned()),
-                            error: None,
-                            answer: Some(turn.answer.clone()),
-                            usage: None,
-                        }),
-                    )?;
-                    exec(
-                        &tx,
-                        "INSERT INTO runs (thread, kind, status, position, text, prompt_entry, end_entry, answer)
-                        VALUES (?1, 'prompt', 'completed', 0, ?2, ?3, ?4, ?5)",
-                        [
-                            thread.into(),
-                            turn.prompt.into(),
-                            prompt.into(),
-                            end.into(),
-                            turn.answer.into(),
-                        ],
-                    )?;
-                }
+                super::attachments::link_media_blobs(&tx, thread, &extracted)?;
+                persist_turns(&tx, thread, &input.session, turns, &ws.entry_chunks)?;
                 tx.commit()?;
+                drop(extracted);
                 ws.kick(thread, true);
                 Ok(thread)
             })
@@ -158,6 +130,54 @@ impl Workspace {
         self.relist(thread);
         Ok(Launched { thread, run: None })
     }
+}
+
+fn persist_turns(
+    tx: &Conn,
+    thread: viz_protocol::ThreadId,
+    session: &str,
+    turns: Vec<viz_acp::LoadedTurn>,
+    entry_chunks: &store::EntryChunkCache,
+) -> Result<(), Error> {
+    for turn in turns {
+        let prompt = store::append(
+            tx,
+            thread,
+            &NewEntry::Prompt {
+                text: turn.prompt.clone(),
+                attachments: Vec::new(),
+                context: Vec::new(),
+                origin: None,
+                truncated: false,
+            },
+        )?;
+        for entry in turn.entries {
+            store::publish(tx, thread, session, entry, entry_chunks)?;
+        }
+        let end = store::append(
+            tx,
+            thread,
+            &NewEntry::Run(RunEnd {
+                stop_reason: Some("end_turn".to_owned()),
+                error: None,
+                answer: Some(turn.answer.clone()),
+                usage: None,
+            }),
+        )?;
+        exec(
+            tx,
+            "INSERT INTO runs (thread, kind, status, position, text, prompt_entry, end_entry, answer)
+            VALUES (?1, 'prompt', 'completed', 0, ?2, ?3, ?4, ?5)",
+            [
+                thread.into(),
+                turn.prompt.into(),
+                prompt.into(),
+                end.into(),
+                turn.answer.into(),
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 /// The thread bound to a harness's session, if any.

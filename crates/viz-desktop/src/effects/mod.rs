@@ -16,14 +16,14 @@ mod timeline_rpc;
 use std::{path::PathBuf, time::Duration};
 
 use viz_client::protocol::{
-    Attachment, EntryId, EntrySource, ForkPoint, ForkThread, LaunchThread, OptionValue, RunId,
-    SendInput, ThreadId, TriageAction, WorktreeTarget,
+    EntryId, EntrySource, ForkPoint, ForkThread, LaunchThread, OptionValue, RunId, SendInput,
+    ThreadId, TriageAction, WorktreeTarget,
 };
 
-use crate::model::{AttachmentTarget, DraftData, DraftPill, Prefs, UndoTriage};
+use crate::model::{AttachmentTarget, DraftAttachment, DraftData, DraftPill, Prefs, UndoTriage};
 
-/// Maximum base64-encoded bytes per message across all attachments.
-pub const ATTACHMENT_ENCODED_LIMIT: usize = platform::ENCODED_LIMIT;
+/// Maximum raw attachment bytes per message across all attachments.
+pub const ATTACHMENT_TOTAL_BYTES: usize = viz_client::protocol::limits::ATTACHMENT_TOTAL_BYTES;
 
 /// Pure description of an edge or shell side effect returned by
 /// [`crate::update::update`].
@@ -258,8 +258,8 @@ pub enum AttachmentSource {
 /// Result of reading a batch of attachments on the blocking pool.
 #[derive(Debug, Clone, Default)]
 pub struct LoadedAttachments {
-    /// Encoded attachments ready to attach.
-    pub attachments: Vec<Attachment>,
+    /// Raw-byte attachments ready to stage on the content channel.
+    pub attachments: Vec<DraftAttachment>,
     /// Per-file errors to report via toast.
     pub errors: Vec<String>,
 }
@@ -299,6 +299,8 @@ pub enum ServerEffect {
         draft: u64,
         /// Launch parameters.
         params: Box<LaunchThread>,
+        /// Raw attachments staged on the content channel before launching.
+        attachments: Vec<DraftAttachment>,
         /// Submitted composer state retained until the RPC settles.
         recovery: Box<DraftData>,
     },
@@ -434,6 +436,8 @@ pub enum ServerEffect {
     SendInput {
         /// Wire request.
         input: SendInput,
+        /// Raw attachments staged on the content channel before sending.
+        attachments: Vec<DraftAttachment>,
         /// Local editor snapshot and destination environment, for composer
         /// submissions.
         recovery: Option<Box<DraftRecovery>>,
@@ -467,7 +471,7 @@ pub enum ServerEffect {
         /// Optional 1-based line window for text previews.
         window: Option<viz_client::protocol::LineWindow>,
     },
-    /// Read a stored thread attachment (`thread.attachment`) for preview or
+    /// Read a stored thread attachment over the content channel for preview or
     /// inline image rendering.
     ReadAttachment {
         /// Thread owning the attachment.

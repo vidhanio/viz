@@ -110,6 +110,19 @@ pub(super) async fn session(socket: WebSocket, server: Arc<Server>, ctx: CallCtx
     result
 }
 
+const fn request_scope(request: &ContentRequest) -> (MethodScope, &'static str) {
+    let attachment = MethodScope::OPERATOR.union(MethodScope::CONNECTOR);
+    match request {
+        ContentRequest::GetAttachment { .. } => (attachment, "content.getAttachment"),
+        ContentRequest::GetFile { .. } => (MethodScope::OPERATOR, "content.getFile"),
+        ContentRequest::GetProjectIcon { .. } => (MethodScope::OPERATOR, "content.getProjectIcon"),
+        ContentRequest::UploadChunk { .. } => (attachment, "content.uploadChunk"),
+        ContentRequest::UploadStage { .. } => (attachment, "content.uploadStage"),
+        ContentRequest::UploadFinish { .. } => (attachment, "content.uploadFinish"),
+        ContentRequest::UploadAbort { .. } => (attachment, "content.uploadAbort"),
+    }
+}
+
 async fn handle_request(
     server: &Server,
     ctx: &CallCtx,
@@ -118,7 +131,10 @@ async fn handle_request(
     request: ContentRequest,
     payload: Vec<u8>,
 ) -> Result<()> {
-    let attachment_scope = MethodScope::OPERATOR.union(MethodScope::CONNECTOR);
+    let (scope, method) = request_scope(&request);
+    if let Err(error) = ctx.require(scope, method) {
+        return send_error(outgoing, request.id(), &error).await;
+    }
     match request {
         ContentRequest::GetAttachment {
             id,
@@ -128,13 +144,9 @@ async fn handle_request(
             offset,
             len,
         } => {
-            if let Err(error) = ctx.require(attachment_scope, "content.getAttachment") {
-                return send_error(outgoing, id, &error).await;
-            }
-            let capped = clamp_chunk_len(len);
             let reply = server
                 .workspace
-                .read_attachment_chunk(thread, &attachment, variant, offset, capped)
+                .read_attachment_chunk(thread, &attachment, variant, offset, clamp_chunk_len(len))
                 .await;
             send_chunk_reply(outgoing, id, offset, reply).await?;
         }
@@ -146,35 +158,43 @@ async fn handle_request(
             offset,
             len,
         } => {
-            if let Err(error) = ctx.require(MethodScope::OPERATOR, "content.getFile") {
-                return send_error(outgoing, id, &error).await;
-            }
-            let capped = clamp_chunk_len(len);
             let reply = server
                 .workspace
-                .read_file_chunk(root, &path, variant, offset, capped)
+                .read_file_chunk(root, &path, variant, offset, clamp_chunk_len(len))
                 .await;
             send_chunk_reply(outgoing, id, offset, reply).await?;
         }
+        ContentRequest::GetProjectIcon {
+            id,
+            project,
+            etag,
+            offset,
+            len,
+        } => {
+            let reply = server
+                .workspace
+                .read_project_icon_chunk(&project, etag.as_deref(), offset, clamp_chunk_len(len))
+                .await;
+            send_project_icon_reply(outgoing, id, offset, reply).await?;
+        }
         ContentRequest::UploadChunk { id, upload, offset } => {
-            if let Err(error) = ctx.require(attachment_scope, "content.uploadChunk") {
-                return send_error(outgoing, id, &error).await;
-            }
             match append_upload_chunk(uploads, upload, offset, &payload).await {
-                Ok(received) => {
-                    send_frame(
-                        outgoing,
-                        &ContentResponse::UploadAck {
-                            id,
-                            upload,
-                            received,
-                        },
-                        &[],
-                    )
-                    .await?;
-                }
+                Ok(received) => send_upload_ack(outgoing, id, upload, received).await?,
                 Err(error) => send_error(outgoing, id, &error).await?,
             }
+        }
+        ContentRequest::UploadStage {
+            id,
+            upload,
+            name,
+            mime,
+        } => {
+            let bytes = { uploads.lock().await.remove(&upload) }.unwrap_or_default();
+            let reply = server
+                .workspace
+                .stage_uploaded_blob(&ctx.principal.key(), name, mime, bytes)
+                .await;
+            send_uploaded_reply(outgoing, id, reply).await?;
         }
         ContentRequest::UploadFinish {
             id,
@@ -183,45 +203,92 @@ async fn handle_request(
             name,
             mime,
         } => {
-            if let Err(error) = ctx.require(attachment_scope, "content.uploadFinish") {
-                return send_error(outgoing, id, &error).await;
-            }
             let bytes = { uploads.lock().await.remove(&upload) }.unwrap_or_default();
-            match server
+            let reply = server
                 .workspace
                 .store_uploaded_attachment(thread, name, mime, bytes)
-                .await
-            {
-                Ok(info) => {
-                    send_frame(outgoing, &ContentResponse::Uploaded { id, info }, &[]).await?;
-                }
-                Err(error) => send_error(outgoing, id, &error).await?,
-            }
+                .await;
+            send_uploaded_reply(outgoing, id, reply).await?;
         }
         ContentRequest::UploadAbort { id, upload } => {
-            if let Err(error) = ctx.require(attachment_scope, "content.uploadAbort") {
-                return send_error(outgoing, id, &error).await;
-            }
             uploads.lock().await.remove(&upload);
-            send_frame(
-                outgoing,
-                &ContentResponse::UploadAck {
-                    id,
-                    upload,
-                    received: 0,
-                },
-                &[],
-            )
-            .await?;
+            send_upload_ack(outgoing, id, upload, 0).await?;
         }
     }
     Ok(())
+}
+
+async fn send_upload_ack(
+    outgoing: &mpsc::Sender<Message>,
+    id: u64,
+    upload: u64,
+    received: u64,
+) -> Result<()> {
+    send_frame(
+        outgoing,
+        &ContentResponse::UploadAck {
+            id,
+            upload,
+            received,
+        },
+        &[],
+    )
+    .await
 }
 
 fn clamp_chunk_len(len: u32) -> usize {
     usize::try_from(len)
         .unwrap_or(limits::CONTENT_CHUNK_BYTES)
         .clamp(1, limits::CONTENT_CHUNK_BYTES)
+}
+
+async fn send_uploaded_reply(
+    outgoing: &mpsc::Sender<Message>,
+    id: u64,
+    reply: Result<viz_protocol::BlobInfo, Error>,
+) -> Result<()> {
+    match reply {
+        Ok(info) => send_frame(outgoing, &ContentResponse::Uploaded { id, info }, &[]).await,
+        Err(error) => send_error(outgoing, id, &error).await,
+    }
+}
+
+async fn send_project_icon_reply(
+    outgoing: &mpsc::Sender<Message>,
+    id: u64,
+    offset: u64,
+    reply: Result<crate::workspace::ProjectIconChunk, Error>,
+) -> Result<()> {
+    match reply {
+        Ok(crate::workspace::ProjectIconChunk::Chunk {
+            bytes,
+            total_size,
+            mime,
+            etag,
+        }) => {
+            let eof = offset.saturating_add(bytes.len() as u64) >= total_size;
+            send_frame(
+                outgoing,
+                &ContentResponse::Chunk {
+                    id,
+                    total_size,
+                    mime,
+                    etag: Some(etag),
+                    offset,
+                    eof,
+                },
+                &bytes,
+            )
+            .await
+        }
+        Ok(crate::workspace::ProjectIconChunk::NotModified { etag }) => {
+            send_frame(outgoing, &ContentResponse::NotModified { id, etag }, &[]).await
+        }
+        Ok(crate::workspace::ProjectIconChunk::Empty) => {
+            send_frame(outgoing, &ContentResponse::Empty { id }, &[]).await
+        }
+        Err(error) => send_error(outgoing, id, &error).await,
+    }
 }
 
 async fn send_chunk_reply(
@@ -239,6 +306,7 @@ async fn send_chunk_reply(
                     id,
                     total_size,
                     mime,
+                    etag: None,
                     offset,
                     eof,
                 },

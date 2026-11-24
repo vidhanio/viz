@@ -648,7 +648,7 @@
           "attachments": {
             "type": "array",
             "items": {
-              "$ref": "#/$defs/Attachment"
+              "$ref": "#/$defs/BlobAttachment"
             }
           },
           "attachmentIds": {
@@ -749,10 +749,14 @@
               }
             ]
           },
-          "Attachment": {
-            "description": "A file attached to an input.",
+          "BlobAttachment": {
+            "description": "Reference to a binary blob already staged via the content WebSocket.",
             "type": "object",
             "properties": {
+              "blob": {
+                "description": "Canonical lowercase SHA-256 hex digest returned by `UploadStage` or\n`UploadFinish`.",
+                "type": "string"
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -760,16 +764,12 @@
               "mime": {
                 "description": "Media type.",
                 "type": "string"
-              },
-              "data": {
-                "description": "Base64 bytes, at most 20 MiB decoded.",
-                "type": "string"
               }
             },
             "required": [
+              "blob",
               "name",
-              "mime",
-              "data"
+              "mime"
             ]
           }
         }
@@ -1901,6 +1901,17 @@
               "block": {
                 "$ref": "#/$defs/ContentBlock"
               },
+              "blob": {
+                "description": "Content-addressed blob reference when inline binary bytes were extracted\nto disk at ingestion.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/MediaBlob"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "source": {
                 "$ref": "#/$defs/TextKind"
               },
@@ -1942,6 +1953,31 @@
               "resource_link",
               "resource",
               "other"
+            ]
+          },
+          "MediaBlob": {
+            "description": "On-disk content-addressed media payload extracted at server ingestion.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Thread-scoped attachment identifier (canonical SHA-256 hex digest)\nreadable via the content WebSocket (`GetAttachment`).",
+                "type": "string"
+              },
+              "mime": {
+                "description": "Media MIME type.",
+                "type": "string"
+              },
+              "size": {
+                "description": "Decoded byte length stored on disk.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "mime",
+              "size"
             ]
           },
           "TextKind": {
@@ -3220,11 +3256,16 @@
                   },
                   "mediaType": {
                     "type": "string"
+                  },
+                  "blob": {
+                    "description": "Lowercase SHA-256 hex digest stored in the workspace blob store.",
+                    "type": "string"
                   }
                 },
                 "required": [
                   "kind",
-                  "mediaType"
+                  "mediaType",
+                  "blob"
                 ]
               }
             ]
@@ -4990,11 +5031,16 @@
                   },
                   "mediaType": {
                     "type": "string"
+                  },
+                  "blob": {
+                    "description": "Lowercase SHA-256 hex digest stored in the workspace blob store.",
+                    "type": "string"
                   }
                 },
                 "required": [
                   "kind",
-                  "mediaType"
+                  "mediaType",
+                  "blob"
                 ]
               }
             ]
@@ -5297,11 +5343,16 @@
                   },
                   "mediaType": {
                     "type": "string"
+                  },
+                  "blob": {
+                    "description": "Lowercase SHA-256 hex digest stored in the workspace blob store.",
+                    "type": "string"
                   }
                 },
                 "required": [
                   "kind",
-                  "mediaType"
+                  "mediaType",
+                  "blob"
                 ]
               }
             ]
@@ -5593,7 +5644,7 @@
                 ]
               },
               {
-                "description": "Base64-encoded raster or SVG image.",
+                "description": "Content-addressed image blob staged via the content WebSocket.",
                 "type": "object",
                 "properties": {
                   "kind": {
@@ -5603,14 +5654,14 @@
                   "mediaType": {
                     "type": "string"
                   },
-                  "data": {
+                  "blob": {
                     "type": "string"
                   }
                 },
                 "required": [
                   "kind",
                   "mediaType",
-                  "data"
+                  "blob"
                 ]
               }
             ]
@@ -5777,89 +5828,6 @@
         "title": "Empty",
         "description": "Empty successful response or notification params.",
         "type": "object"
-      }
-    },
-    "project.icon": {
-      "scopes": [
-        "operator"
-      ],
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ReadProjectIcon",
-        "description": "Read an image icon only when it differs from an already cached\nrepresentation.",
-        "type": "object",
-        "properties": {
-          "project": {
-            "type": "string"
-          },
-          "etag": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        },
-        "required": [
-          "project"
-        ]
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ProjectIconResult",
-        "oneOf": [
-          {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "none"
-              }
-            },
-            "required": [
-              "kind"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "unchanged"
-              },
-              "etag": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "etag"
-            ]
-          },
-          {
-            "type": "object",
-            "properties": {
-              "kind": {
-                "type": "string",
-                "const": "image"
-              },
-              "etag": {
-                "type": "string"
-              },
-              "mediaType": {
-                "type": "string"
-              },
-              "data": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "etag",
-              "mediaType",
-              "data"
-            ]
-          }
-        ]
       }
     },
     "folders.browse": {
@@ -7663,7 +7631,7 @@
               "attachments": {
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/Attachment"
+                  "$ref": "#/$defs/BlobAttachment"
                 }
               },
               "context": {
@@ -7724,10 +7692,14 @@
               }
             }
           },
-          "Attachment": {
-            "description": "A file attached to an input.",
+          "BlobAttachment": {
+            "description": "Reference to a binary blob already staged via the content WebSocket.",
             "type": "object",
             "properties": {
+              "blob": {
+                "description": "Canonical lowercase SHA-256 hex digest returned by `UploadStage` or\n`UploadFinish`.",
+                "type": "string"
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -7735,16 +7707,12 @@
               "mime": {
                 "description": "Media type.",
                 "type": "string"
-              },
-              "data": {
-                "description": "Base64 bytes, at most 20 MiB decoded.",
-                "type": "string"
               }
             },
             "required": [
+              "blob",
               "name",
-              "mime",
-              "data"
+              "mime"
             ]
           },
           "PromptContext": {
@@ -9329,21 +9297,16 @@
                 ]
               },
               {
-                "description": "Raster or vector image bytes.",
+                "description": "Raster or vector image whose bytes are fetched via the content\nWebSocket (`GetFile`).",
                 "type": "object",
                 "properties": {
                   "kind": {
                     "type": "string",
                     "const": "image"
-                  },
-                  "data": {
-                    "description": "Base64-encoded image bytes.",
-                    "type": "string"
                   }
                 },
                 "required": [
-                  "kind",
-                  "data"
+                  "kind"
                 ]
               },
               {
@@ -9367,65 +9330,6 @@
             ]
           }
         }
-      }
-    },
-    "thread.attachment": {
-      "scopes": [
-        "operator",
-        "connector"
-      ],
-      "params": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "ReadAttachment",
-        "description": "Read one stored attachment belonging to a thread (`thread.attachment`).",
-        "type": "object",
-        "properties": {
-          "thread": {
-            "description": "Thread owning the attachment.",
-            "$ref": "#/$defs/ThreadId"
-          },
-          "id": {
-            "description": "Attachment identifier within the thread.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "thread",
-          "id"
-        ],
-        "$defs": {
-          "ThreadId": {
-            "description": "A thread id.",
-            "type": "integer",
-            "format": "uint64",
-            "minimum": 1
-          }
-        }
-      },
-      "result": {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "title": "Attachment",
-        "description": "A file attached to an input.",
-        "type": "object",
-        "properties": {
-          "name": {
-            "description": "Display name.",
-            "type": "string"
-          },
-          "mime": {
-            "description": "Media type.",
-            "type": "string"
-          },
-          "data": {
-            "description": "Base64 bytes, at most 20 MiB decoded.",
-            "type": "string"
-          }
-        },
-        "required": [
-          "name",
-          "mime",
-          "data"
-        ]
       }
     },
     "blob.stat": {
@@ -9538,7 +9442,7 @@
           "attachments": {
             "type": "array",
             "items": {
-              "$ref": "#/$defs/Attachment"
+              "$ref": "#/$defs/BlobAttachment"
             }
           },
           "context": {
@@ -9599,10 +9503,14 @@
           }
         },
         "$defs": {
-          "Attachment": {
-            "description": "A file attached to an input.",
+          "BlobAttachment": {
+            "description": "Reference to a binary blob already staged via the content WebSocket.",
             "type": "object",
             "properties": {
+              "blob": {
+                "description": "Canonical lowercase SHA-256 hex digest returned by `UploadStage` or\n`UploadFinish`.",
+                "type": "string"
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -9610,16 +9518,12 @@
               "mime": {
                 "description": "Media type.",
                 "type": "string"
-              },
-              "data": {
-                "description": "Base64 bytes, at most 20 MiB decoded.",
-                "type": "string"
               }
             },
             "required": [
+              "blob",
               "name",
-              "mime",
-              "data"
+              "mime"
             ]
           },
           "PromptContext": {
@@ -10227,10 +10131,10 @@
             ]
           },
           "attachments": {
-            "description": "Files to attach to this input.",
+            "description": "Content-addressed blobs staged over the content WebSocket to attach to\nthis input.",
             "type": "array",
             "items": {
-              "$ref": "#/$defs/Attachment"
+              "$ref": "#/$defs/BlobAttachment"
             }
           },
           "stored": {
@@ -10306,10 +10210,14 @@
               "channel"
             ]
           },
-          "Attachment": {
-            "description": "A file attached to an input.",
+          "BlobAttachment": {
+            "description": "Reference to a binary blob already staged via the content WebSocket.",
             "type": "object",
             "properties": {
+              "blob": {
+                "description": "Canonical lowercase SHA-256 hex digest returned by `UploadStage` or\n`UploadFinish`.",
+                "type": "string"
+              },
               "name": {
                 "description": "Display name.",
                 "type": "string"
@@ -10317,16 +10225,12 @@
               "mime": {
                 "description": "Media type.",
                 "type": "string"
-              },
-              "data": {
-                "description": "Base64 bytes, at most 20 MiB decoded.",
-                "type": "string"
               }
             },
             "required": [
+              "blob",
               "name",
-              "mime",
-              "data"
+              "mime"
             ]
           },
           "PromptContext": {
@@ -11133,6 +11037,17 @@
               "block": {
                 "$ref": "#/$defs/ContentBlock"
               },
+              "blob": {
+                "description": "Content-addressed blob reference when inline binary bytes were extracted\nto disk at ingestion.",
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/MediaBlob"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
               "source": {
                 "$ref": "#/$defs/TextKind"
               },
@@ -11174,6 +11089,31 @@
               "resource_link",
               "resource",
               "other"
+            ]
+          },
+          "MediaBlob": {
+            "description": "On-disk content-addressed media payload extracted at server ingestion.",
+            "type": "object",
+            "properties": {
+              "id": {
+                "description": "Thread-scoped attachment identifier (canonical SHA-256 hex digest)\nreadable via the content WebSocket (`GetAttachment`).",
+                "type": "string"
+              },
+              "mime": {
+                "description": "Media MIME type.",
+                "type": "string"
+              },
+              "size": {
+                "description": "Decoded byte length stored on disk.",
+                "type": "integer",
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "id",
+              "mime",
+              "size"
             ]
           },
           "TextKind": {
@@ -13386,11 +13326,16 @@
                   },
                   "mediaType": {
                     "type": "string"
+                  },
+                  "blob": {
+                    "description": "Lowercase SHA-256 hex digest stored in the workspace blob store.",
+                    "type": "string"
                   }
                 },
                 "required": [
                   "kind",
-                  "mediaType"
+                  "mediaType",
+                  "blob"
                 ]
               }
             ]
@@ -14186,6 +14131,17 @@
           "block": {
             "$ref": "#/$defs/ContentBlock"
           },
+          "blob": {
+            "description": "Content-addressed blob reference when inline binary bytes were extracted\nto disk at ingestion.",
+            "anyOf": [
+              {
+                "$ref": "#/$defs/MediaBlob"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "source": {
             "$ref": "#/$defs/TextKind"
           },
@@ -14227,6 +14183,31 @@
           "resource_link",
           "resource",
           "other"
+        ]
+      },
+      "MediaBlob": {
+        "description": "On-disk content-addressed media payload extracted at server ingestion.",
+        "type": "object",
+        "properties": {
+          "id": {
+            "description": "Thread-scoped attachment identifier (canonical SHA-256 hex digest)\nreadable via the content WebSocket (`GetAttachment`).",
+            "type": "string"
+          },
+          "mime": {
+            "description": "Media MIME type.",
+            "type": "string"
+          },
+          "size": {
+            "description": "Decoded byte length stored on disk.",
+            "type": "integer",
+            "format": "uint64",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "id",
+          "mime",
+          "size"
         ]
       },
       "TextKind": {

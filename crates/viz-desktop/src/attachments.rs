@@ -3,15 +3,13 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rune::{ClipboardContent, El, ImageCache, TextEdit, Tx, image::Image};
 use rune_kit::IconButtonVariant;
-use viz_client::protocol::Attachment;
 
 use crate::{
     app::Desktop,
     effects::AttachmentSource,
-    model::DraftPill,
+    model::{DraftAttachment, DraftPill},
     theme::{Size, Theme},
     ui,
     update::{ComposerMsg, Msg},
@@ -92,13 +90,6 @@ pub fn button(s: &Desktop, t: &Theme) -> El {
         .key("attach")
 }
 
-/// Approximate decoded byte count of a base64 payload.
-#[must_use]
-pub fn decoded_size(encoded: &str) -> usize {
-    let trimmed = encoded.trim_end_matches('=');
-    trimmed.len() * 3 / 4
-}
-
 /// Formats byte sizes compactly (`512 B`, `14 KB`, `1.4 MB`).
 #[must_use]
 pub fn compact_bytes(bytes: usize) -> String {
@@ -118,12 +109,16 @@ pub fn compact_bytes(bytes: usize) -> String {
 /// decoded content as the handles are acquired and dropped.
 #[derive(Default)]
 pub struct DraftImages {
-    source: std::sync::Weak<Vec<Attachment>>,
+    source: std::sync::Weak<Vec<DraftAttachment>>,
     handles: Vec<Option<Image>>,
 }
 
 impl DraftImages {
-    pub fn sync(&mut self, attachments: &Arc<Vec<Attachment>>, decoder: &mut Option<ImageCache>) {
+    pub fn sync(
+        &mut self,
+        attachments: &Arc<Vec<DraftAttachment>>,
+        decoder: &mut Option<ImageCache>,
+    ) {
         let source = Arc::downgrade(attachments);
         if source.ptr_eq(&self.source) {
             return;
@@ -140,13 +135,12 @@ impl DraftImages {
     }
 }
 
-fn decode(attachment: &Attachment, decoder: &mut Option<ImageCache>) -> Option<Image> {
-    if !attachment.mime.starts_with("image/") || attachment.data.is_empty() {
+fn decode(attachment: &DraftAttachment, decoder: &mut Option<ImageCache>) -> Option<Image> {
+    if !attachment.mime.starts_with("image/") || attachment.bytes.is_empty() {
         return None;
     }
-    let bytes = STANDARD.decode(&attachment.data).ok()?;
     let decoder = decoder.get_or_insert_with(|| ImageCache::new(Arc::new(|| {})));
-    Some(decoder.load_mime(bytes, &attachment.mime, 256.0, 2.0))
+    Some(decoder.load_mime(attachment.bytes.clone(), &attachment.mime, 256.0, 2.0))
 }
 
 /// Drops a failed thumbnail and asks the decoder to try again.

@@ -2,7 +2,6 @@
 //! links, fork/edit/reply actions, chunk loading, scroll state, and
 //! running tool timers.
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use viz_client::protocol::{
     EntryId, EntrySource, FileRoot, ForkPoint, ForkThread, Forked, LineWindow, SendInput, ThreadId,
 };
@@ -344,6 +343,7 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
                         })
             {
                 effects.push(Effect::Server(ServerEffect::SendInput {
+                    attachments: Vec::new(),
                     recovery: None,
                     input: SendInput {
                         thread,
@@ -576,7 +576,7 @@ fn open_attachment_preview(
 pub(super) fn apply_loaded_attachment_to_preview(
     model: &mut Model,
     request: u64,
-    attachment: &viz_client::protocol::Attachment,
+    attachment: &crate::model::DraftAttachment,
     effects: &mut Vec<Effect>,
 ) {
     let Some(preview) = model.timeline.file_preview.as_mut() else {
@@ -585,11 +585,7 @@ pub(super) fn apply_loaded_attachment_to_preview(
     if preview.request != request {
         return;
     }
-    let Ok(bytes) = STANDARD.decode(&attachment.data) else {
-        preview.body =
-            crate::model::FilePreviewBody::Error("Couldn’t decode attachment bytes".into());
-        return;
-    };
+    let bytes = attachment.bytes.clone();
     let size = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
     if !attachment.name.is_empty() {
         preview.path.clone_from(&attachment.name);

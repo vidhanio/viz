@@ -4,7 +4,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    Attachment, Empty, Entry, EntryId, Origin, RunId, TaskId, ThreadId, ThreadState, WorktreeTarget,
+    BlobAttachment, Empty, Entry, EntryId, Origin, RunId, TaskId, ThreadId, ThreadState,
+    WorktreeTarget,
 };
 
 /// `thread.watch` params: start receiving
@@ -279,7 +280,7 @@ pub struct DelegateInput {
     #[schemars(length(min = 1))]
     pub text: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<Attachment>,
+    pub attachments: Vec<BlobAttachment>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub attachment_ids: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

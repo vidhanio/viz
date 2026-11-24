@@ -37,6 +37,7 @@ use super::{
 use crate::error::Error;
 
 const PEER_STAGE_TTL: Duration = Duration::from_secs(300);
+const CLIENT_STAGE_TTL: Duration = Duration::from_secs(600);
 
 /// In-memory lease registry preventing background reconciliation from removing
 /// external resources whose owning SQLite rows have not committed yet.
@@ -44,6 +45,7 @@ const PEER_STAGE_TTL: Duration = Duration::from_secs(300);
 pub(crate) struct ResourceLeases {
     blobs: Mutex<HashMap<String, usize>>,
     peer_staged_blobs: Mutex<HashMap<String, Instant>>,
+    client_staged_blobs: Mutex<HashMap<(String, String), Instant>>,
     scratch_dirs: Mutex<HashMap<PathBuf, usize>>,
 }
 
@@ -126,8 +128,35 @@ impl ResourceLeases {
         staged.insert(blob_id.to_owned(), Instant::now());
     }
 
+    /// Marks `blob_id` as staged by an authenticated client principal via the
+    /// content WebSocket (`UploadStage`), keeping it alive for
+    /// `CLIENT_STAGE_TTL` until claimed by `thread.launch`, `thread.send`,
+    /// `task.delegate`, or `project.update`.
+    pub(crate) fn mark_client_staged(&self, principal_key: &str, blob_id: &str) {
+        let mut staged = self
+            .client_staged_blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        staged.retain(|_, when| when.elapsed() < CLIENT_STAGE_TTL);
+        staged.insert(
+            (principal_key.to_owned(), blob_id.to_owned()),
+            Instant::now(),
+        );
+    }
+
+    /// Returns whether `principal_key` holds an unexpired content-plane stage
+    /// lease for `blob_id`.
+    pub(crate) fn has_client_stage(&self, principal_key: &str, blob_id: &str) -> bool {
+        let mut staged = self
+            .client_staged_blobs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        staged.retain(|_, when| when.elapsed() < CLIENT_STAGE_TTL);
+        staged.contains_key(&(principal_key.to_owned(), blob_id.to_owned()))
+    }
+
     /// Returns every blob identifier currently protected by an active write
-    /// permit or unexpired peer-stage grace entry.
+    /// permit or unexpired stage lease.
     pub(crate) fn active_blobs(&self) -> HashSet<String> {
         let mut active: HashSet<String> = self
             .blobs
@@ -136,17 +165,27 @@ impl ResourceLeases {
             .keys()
             .cloned()
             .collect();
-        let mut staged = self
-            .peer_staged_blobs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        staged.retain(|_, when| when.elapsed() < PEER_STAGE_TTL);
-        active.extend(staged.keys().cloned());
+        {
+            let mut staged = self
+                .peer_staged_blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            staged.retain(|_, when| when.elapsed() < PEER_STAGE_TTL);
+            active.extend(staged.keys().cloned());
+        }
+        {
+            let mut staged = self
+                .client_staged_blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            staged.retain(|_, when| when.elapsed() < CLIENT_STAGE_TTL);
+            active.extend(staged.keys().map(|(_, blob)| blob.clone()));
+        }
         active
     }
 
     /// Returns whether `blob_id` currently holds an in-flight write permit or
-    /// unexpired peer-stage entry.
+    /// unexpired stage lease.
     pub(crate) fn is_blob_active(&self, blob_id: &str) -> bool {
         let in_flight = self
             .blobs
@@ -156,12 +195,22 @@ impl ResourceLeases {
         if in_flight {
             return true;
         }
+        {
+            let mut staged = self
+                .peer_staged_blobs
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            staged.retain(|_, when| when.elapsed() < PEER_STAGE_TTL);
+            if staged.contains_key(blob_id) {
+                return true;
+            }
+        }
         let mut staged = self
-            .peer_staged_blobs
+            .client_staged_blobs
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        staged.retain(|_, when| when.elapsed() < PEER_STAGE_TTL);
-        staged.contains_key(blob_id)
+        staged.retain(|_, when| when.elapsed() < CLIENT_STAGE_TTL);
+        staged.keys().any(|(_, blob)| blob == blob_id)
     }
 
     /// Acquires an orphan-sweep lease for `path` before creating the scratch
@@ -254,7 +303,8 @@ impl Workspace {
                 let candidates: Vec<String> = rows(
                     tx,
                     "SELECT id FROM blobs
-                     WHERE NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)",
+                     WHERE NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)
+                       AND NOT EXISTS (SELECT 1 FROM projects WHERE json_extract(settings, '$.icon.blob') = blobs.id)",
                     [],
                 )?
                 .map(|mut row| row.str(0))
@@ -272,7 +322,8 @@ impl Workspace {
                         tx,
                         "DELETE FROM blobs
                          WHERE id = ?1
-                           AND NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)",
+                           AND NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)
+                           AND NOT EXISTS (SELECT 1 FROM projects WHERE json_extract(settings, '$.icon.blob') = blobs.id)",
                         [id.as_str().into()],
                     )?;
                     if count > 0 {

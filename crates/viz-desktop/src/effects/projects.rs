@@ -2,7 +2,7 @@
 
 use anyhow::Context as _;
 use viz_client::{
-    Client,
+    Client, ContentClient,
     protocol::{
         BrowseFolders, CancelClone, CloneId, CloneState, CreateFolder, CreateProject,
         GitHubRepositories, ImportSession, InitRepository, ListHarnessSessions, ProjectIconChange,
@@ -40,9 +40,10 @@ pub enum ProjectRequest {
 impl Session<'_> {
     pub(super) fn project_palette(&mut self, request: u64, command: ProjectRequest) {
         let client = self.client.clone();
+        let content = self.content.clone();
         let environment = self.environment.to_string();
         self.spawn_msg(async move {
-            let result = execute(&client, command)
+            let result = execute(&client, &content, command)
                 .await
                 .map_err(|error| error.to_string());
             ServerMsg::ProjectPalette {
@@ -54,7 +55,11 @@ impl Session<'_> {
     }
 }
 
-async fn execute(client: &Client, command: ProjectRequest) -> anyhow::Result<ProjectReply> {
+async fn execute(
+    client: &Client,
+    content: &ContentClient,
+    command: ProjectRequest,
+) -> anyhow::Result<ProjectReply> {
     let reply = match command {
         ProjectRequest::Browse(args) => ProjectReply::Folders(client.browse_folders(&args).await?),
         ProjectRequest::Repositories(args) => {
@@ -102,11 +107,18 @@ async fn execute(client: &Client, command: ProjectRequest) -> anyhow::Result<Pro
             }
         }
         ProjectRequest::UploadIcon(project) => {
-            let icon = tokio::task::spawn_blocking(super::platform::pick_project_icon)
+            let file = tokio::task::spawn_blocking(super::platform::pick_project_icon)
                 .await
                 .map_err(std::io::Error::other)??;
-            let Some(icon) = icon else {
+            let Some(file) = file else {
                 return Ok(ProjectReply::UploadCancelled);
+            };
+            let staged = content
+                .stage_blob(&file.name, &file.mime, &file.bytes)
+                .await?;
+            let icon = ProjectIconChange::Uploaded {
+                media_type: file.mime,
+                blob: staged.blob,
             };
             save(
                 client,
@@ -154,13 +166,6 @@ async fn save(
             .await?
             .project,
     ))
-}
-
-pub(super) fn uploaded_icon(file: viz_client::protocol::Attachment) -> ProjectIconChange {
-    ProjectIconChange::Uploaded {
-        media_type: file.mime,
-        data: file.data,
-    }
 }
 
 async fn create_git_project(client: &Client, path: String) -> anyhow::Result<ProjectReply> {

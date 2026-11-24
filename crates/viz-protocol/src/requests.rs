@@ -6,7 +6,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use super::{
-    Attachment, ConfigOption, Harness, OptionValue, Origin, Project, RunId, ThreadId,
+    BlobAttachment, ConfigOption, Harness, OptionValue, Origin, Project, RunId, ThreadId,
     ThreadWorktree, WorktreeTarget,
 };
 
@@ -411,26 +411,15 @@ pub enum FileBody {
         #[serde(default)]
         has_more: bool,
     },
-    /// Raster or vector image bytes.
-    Image {
-        /// Base64-encoded image bytes.
-        data: String,
-    },
+    /// Raster or vector image whose bytes are fetched via the content
+    /// WebSocket (`GetFile`).
+    Image {},
     /// Non-text binary file or image exceeding the preview byte limit.
     Binary {
         /// Whether an image exceeded the inline preview size ceiling.
         #[serde(default)]
         too_large: bool,
     },
-}
-
-/// Read one stored attachment belonging to a thread (`thread.attachment`).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReadAttachment {
-    /// Thread owning the attachment.
-    pub thread: ThreadId,
-    /// Attachment identifier within the thread.
-    pub id: String,
 }
 
 /// Read metadata for one stored attachment belonging to a thread (`blob.stat`).
@@ -471,9 +460,10 @@ pub struct SendInput {
     /// Where the input came from.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub origin: Option<Origin>,
-    /// Files to attach to this input.
+    /// Content-addressed blobs staged over the content WebSocket to attach to
+    /// this input.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub attachments: Vec<Attachment>,
+    pub attachments: Vec<BlobAttachment>,
     /// Ids of attachments this thread already stores, attached again, such as
     /// those of a forked prompt.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

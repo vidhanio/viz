@@ -234,7 +234,7 @@ fn append_turn(
     }
 
     for media in &turn.media {
-        list = list.child(lane(dividers::media_card(media, t)));
+        list = list.child(lane(dividers::media_card(s, media, t)));
     }
 
     for (key, source) in &turn.omitted {

@@ -257,6 +257,9 @@ pub struct MediaItem {
     pub key: String,
     /// ACP content block payload.
     pub block: ContentBlock,
+    /// Content-addressed blob reference when inline binary bytes were extracted
+    /// on the server.
+    pub blob: Option<viz_client::protocol::MediaBlob>,
 }
 
 /// A settled run boundary carrying copyable reply text, stop reason, and usage.

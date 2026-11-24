@@ -44,8 +44,8 @@ pub use self::{
     },
     composer_state::{
         AttachmentStatus, AttachmentTarget, CompletionKind, CompletionToken, ComposerState,
-        DraftCursor, DraftData, DraftPill, PROMPT_CHAR_LIMIT, PROMPT_WARN_LIMIT, PaletteChoice,
-        PaletteCommand, PaletteSearch, PaletteState,
+        DraftAttachment, DraftCursor, DraftData, DraftPill, PROMPT_CHAR_LIMIT, PROMPT_WARN_LIMIT,
+        PaletteChoice, PaletteCommand, PaletteSearch, PaletteState,
     },
     home::{HomeProjectOption, draft_branch_options, home_project_options},
     model_list::{ListEmpty, ListItem, ModelRow, PickerList, picker_list},

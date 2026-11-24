@@ -1,16 +1,20 @@
 //! Timeline-specific asynchronous RPC helpers (`thread.fork`,
-//! `thread.entry_chunk`) kept separate from `requests.rs`.
+//! `thread.entry_chunk`, file previews, and content-channel attachment fetches)
+//! kept separate from `requests.rs`.
 
 use viz_client::{
-    Client, Result,
+    Client, ContentClient, Result,
     protocol::{
-        EntryData, EntrySource, FileRoot, ForkThread, LineWindow, ReadAttachment, ReadEntryChunk,
-        ReadFile, ThreadId, TranscriptEntry,
+        ContentVariant, EntryData, EntrySource, FileBody, FileRoot, ForkThread, LineWindow,
+        ReadEntryChunk, ReadFile, StatBlob, ThreadId, TranscriptEntry, limits,
     },
 };
 
 use super::server::Session;
-use crate::{model::LoadedEntry, update::ServerMsg};
+use crate::{
+    model::{DraftAttachment, LoadedEntry},
+    update::ServerMsg,
+};
 
 impl Session<'_> {
     pub(super) async fn fork_thread(&self, params: ForkThread, load_prompt: bool) -> Result<()> {
@@ -43,11 +47,33 @@ impl Session<'_> {
         window: Option<LineWindow>,
     ) {
         let client: Client = self.client.clone();
+        let content_client: ContentClient = self.content.clone();
         self.spawn_msg(async move {
-            let result = client
-                .request(&ReadFile { root, path, window })
-                .await
-                .map_err(|error| error.to_string());
+            let result = async {
+                let file = client
+                    .request(&ReadFile {
+                        root: root.clone(),
+                        path: path.clone(),
+                        window,
+                    })
+                    .await
+                    .map_err(|error| error.to_string())?;
+                if matches!(file.body, FileBody::Image {}) {
+                    let payload = content_client
+                        .get_file(
+                            root,
+                            &path,
+                            ContentVariant::Preview { max_px: 1600 },
+                            limits::PREVIEW_IMAGE_BYTES,
+                        )
+                        .await
+                        .map_err(|error| error.to_string())?;
+                    Ok((file, Some(payload.bytes)))
+                } else {
+                    Ok((file, None))
+                }
+            }
+            .await;
             ServerMsg::FilePreviewLoaded { request, result }
         });
     }
@@ -59,14 +85,36 @@ impl Session<'_> {
         preview_request: Option<u64>,
     ) {
         let client: Client = self.client.clone();
+        let content_client: ContentClient = self.content.clone();
         self.spawn_msg(async move {
-            let result = client
-                .request(&ReadAttachment {
-                    thread,
-                    id: id.clone(),
+            let variant = if preview_request.is_some() {
+                ContentVariant::Original
+            } else {
+                ContentVariant::Preview { max_px: 1024 }
+            };
+            let result = async {
+                let payload = content_client
+                    .get_attachment(thread, &id, variant, limits::ATTACHMENT_TOTAL_BYTES)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let name = if preview_request.is_some() {
+                    client
+                        .request(&StatBlob {
+                            thread,
+                            id: id.clone(),
+                        })
+                        .await
+                        .map_or_else(|_| String::new(), |info| info.name)
+                } else {
+                    String::new()
+                };
+                Ok(DraftAttachment {
+                    name,
+                    mime: payload.mime,
+                    bytes: payload.bytes,
                 })
-                .await
-                .map_err(|error| error.to_string());
+            }
+            .await;
             ServerMsg::ThreadAttachmentLoaded {
                 thread,
                 id,

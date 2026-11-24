@@ -17,13 +17,14 @@ pub enum Rejection {
     BranchPrefix,
 }
 
-/// The persisted preferences and their optional uploaded image.
+/// Persisted project preferences. Uploaded icons are stored as
+/// content-addressed blobs in the workspace blob store and referenced by
+/// SHA-256 hex digest.
 #[derive(Debug, Default, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Preferences {
     #[serde(flatten)]
     pub settings: ProjectSettings,
-    pub icon_data: Option<String>,
 }
 
 /// Apply a patch to persisted preferences using validated filesystem and
@@ -50,7 +51,6 @@ pub fn edit(
         return Err(Rejection::BranchPrefix);
     }
     if let Some(icon) = patch.icon {
-        current.icon_data = None;
         current.settings.icon = match icon {
             ProjectIconChange::Automatic => ProjectIcon::Automatic,
             ProjectIconChange::OwnerAvatar => ProjectIcon::OwnerAvatar,
@@ -62,11 +62,17 @@ pub fn edit(
             ProjectIconChange::Emoji { emoji } if !emoji.trim().is_empty() && emoji.len() <= 64 => {
                 ProjectIcon::Emoji { emoji }
             }
-            ProjectIconChange::Uploaded { media_type, data } => {
-                current.icon_data = Some(data);
-                ProjectIcon::Uploaded { media_type }
+            ProjectIconChange::Uploaded { media_type, blob }
+                if blob.len() == 64
+                    && blob
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f')) =>
+            {
+                ProjectIcon::Uploaded { media_type, blob }
             }
-            ProjectIconChange::Lucide { .. } | ProjectIconChange::Emoji { .. } => {
+            ProjectIconChange::Lucide { .. }
+            | ProjectIconChange::Emoji { .. }
+            | ProjectIconChange::Uploaded { .. } => {
                 return Err(Rejection::Icon);
             }
         };

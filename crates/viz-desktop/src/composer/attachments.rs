@@ -4,11 +4,12 @@
 
 use rune::{El, SurfaceFit, col, el, icon, row, text};
 use rune_kit::{IconButtonVariant, Preview};
-use viz_client::protocol::{Attachment, attachment_ref_labels};
+use viz_client::protocol::attachment_ref_labels;
 
 use crate::{
     app::Desktop,
-    attachments::{compact_bytes, decoded_size},
+    attachments::compact_bytes,
+    model::DraftAttachment,
     motion,
     theme::{
         HAIRLINE, ICON, ICON_MD, ICON_SMALL, RADIUS_CONTROL, RADIUS_PILL, RADIUS_SM, S4, S6, S8,
@@ -82,7 +83,7 @@ pub fn strip(s: &Desktop, t: &Theme) -> Option<El> {
 fn media_tile(
     s: &Desktop,
     index: usize,
-    attachment: &Attachment,
+    attachment: &DraftAttachment,
     ref_label: &str,
     t: &Theme,
 ) -> El {
@@ -197,10 +198,16 @@ fn media_tile(
     tile.children(ref_badge).child(close)
 }
 
-fn file_row(s: &Desktop, index: usize, attachment: &Attachment, ref_label: &str, t: &Theme) -> El {
+fn file_row(
+    s: &Desktop,
+    index: usize,
+    attachment: &DraftAttachment,
+    ref_label: &str,
+    t: &Theme,
+) -> El {
     let status = s.model.composer.draft.attachment_status(index);
     let is_error = matches!(status, crate::model::AttachmentStatus::Error(_));
-    let bytes = decoded_size(&attachment.data);
+    let bytes = attachment.bytes.len();
     let size_label = (bytes > 0).then(|| compact_bytes(bytes));
     let glyph = rune_kit::file_icon(&attachment.name);
     let border = if is_error { t.danger } else { t.hairline };

@@ -1,5 +1,5 @@
-//! OS platform effects: file-dialog attachment loading, base64 encoding, and
-//! desktop notifications.
+//! OS platform effects: file-dialog attachment loading and desktop
+//! notifications.
 
 use std::{
     fs::{self, File},
@@ -7,22 +7,20 @@ use std::{
     path::Path,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use rune::AppHandle;
-use viz_client::protocol::{Attachment, ThreadId};
+use viz_client::protocol::ThreadId;
 
 use super::{AttachmentSource, LoadedAttachments};
 use crate::{
     app::Desktop,
-    model::AttachmentTarget,
+    model::{AttachmentTarget, DraftAttachment},
     update::{Msg, ServerMsg},
 };
 
-/// Maximum single-file size before base64 encoding.
+/// Maximum raw attachment size matching the server's prompt budget.
 const FILE_LIMIT: usize = viz_client::protocol::limits::ATTACHMENT_TOTAL_BYTES;
-/// Maximum total base64 bytes for attachments matching the server's prompt
-/// budget.
-pub const ENCODED_LIMIT: usize = viz_client::protocol::limits::ATTACHMENT_ENCODED_LIMIT;
+/// Maximum uploaded project icon size matching the server's 1 MiB cap.
+const ICON_LIMIT: usize = 1024 * 1024;
 
 /// Loads attachments synchronously from `source` (intended for the blocking
 /// thread pool).
@@ -42,21 +40,21 @@ pub fn load_attachments(source: AttachmentSource) -> LoadedAttachments {
                 };
             }
             return LoadedAttachments {
-                attachments: vec![Attachment {
+                attachments: vec![DraftAttachment {
                     name: "Clipboard.png".into(),
                     mime: "image/png".into(),
-                    data: STANDARD.encode(png),
+                    bytes: png,
                 }],
                 errors: Vec::new(),
             };
         }
     };
     let mut loaded = LoadedAttachments::default();
-    let mut encoded_size = 0;
+    let mut total_size = 0usize;
     for path in paths {
-        match read_file(&path) {
-            Ok(file) if file.data.len() + encoded_size <= ENCODED_LIMIT => {
-                encoded_size += file.data.len();
+        match read_file(&path, FILE_LIMIT, "exceeds 20 MiB") {
+            Ok(file) if file.bytes.len() + total_size <= FILE_LIMIT => {
+                total_size += file.bytes.len();
                 loaded.attachments.push(file);
             }
             Ok(file) => loaded.errors.push(format!(
@@ -74,32 +72,32 @@ pub fn load_attachments(source: AttachmentSource) -> LoadedAttachments {
     loaded
 }
 
-fn read_file(path: &Path) -> io::Result<Attachment> {
+fn read_file(path: &Path, max_bytes: usize, too_large: &str) -> io::Result<DraftAttachment> {
     let metadata = fs::metadata(path)?;
     if !metadata.is_file() {
         return Err(io::Error::other("not a file"));
     }
-    let limit = u64::try_from(FILE_LIMIT).unwrap_or(u64::MAX);
+    let limit = u64::try_from(max_bytes).unwrap_or(u64::MAX);
     if metadata.len() > limit {
-        return Err(io::Error::other("exceeds 20 MiB"));
+        return Err(io::Error::other(too_large));
     }
     let mut bytes = Vec::with_capacity(usize::try_from(metadata.len()).unwrap_or(0));
     File::open(path)?
         .take(limit.saturating_add(1))
         .read_to_end(&mut bytes)?;
-    if bytes.len() > FILE_LIMIT {
-        return Err(io::Error::other("exceeds 20 MiB"));
+    if bytes.len() > max_bytes {
+        return Err(io::Error::other(too_large));
     }
     let name = path
         .file_name()
         .ok_or_else(|| io::Error::other("missing file name"))?
         .to_string_lossy();
-    Ok(Attachment {
+    Ok(DraftAttachment {
         name: name.into_owned(),
         mime: mime_guess::from_path(path)
             .first_or_octet_stream()
             .to_string(),
-        data: STANDARD.encode(bytes),
+        bytes,
     })
 }
 
@@ -182,7 +180,7 @@ pub fn spawn_notify(thread: ThreadId, title: &str, body: &'static str) {
 }
 
 /// Read a user-selected icon file on the blocking pool.
-pub(super) fn pick_project_icon() -> io::Result<Option<viz_client::protocol::ProjectIconChange>> {
+pub(super) fn pick_project_icon() -> io::Result<Option<DraftAttachment>> {
     let Some(path) = rfd::FileDialog::new()
         .set_title("Choose project icon")
         .add_filter(
@@ -193,7 +191,5 @@ pub(super) fn pick_project_icon() -> io::Result<Option<viz_client::protocol::Pro
     else {
         return Ok(None);
     };
-    read_file(&path)
-        .map(super::projects::uploaded_icon)
-        .map(Some)
+    read_file(&path, ICON_LIMIT, "exceeds 1 MiB").map(Some)
 }

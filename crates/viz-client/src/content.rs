@@ -44,6 +44,21 @@ pub struct DownloadedContent {
     pub total_size: u64,
 }
 
+/// Outcome of fetching a project's image icon over the content plane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProjectIconFetch {
+    /// The project has no raster or SVG image icon.
+    None,
+    /// The cached `ETag` still matches the current icon.
+    Unchanged { etag: String },
+    /// Raw icon bytes and metadata.
+    Image {
+        etag: String,
+        mime: String,
+        bytes: Vec<u8>,
+    },
+}
+
 /// Dedicated bulk-content WebSocket handle. Cheap to clone; pull requests may
 /// run concurrently without blocking control-plane RPCs.
 #[derive(Debug, Clone)]
@@ -254,8 +269,29 @@ impl ContentClient {
         .await
     }
 
+    /// Streams raw bytes in 256 KiB binary chunks and commits them into the
+    /// blob store under a principal-scoped staging lease so a subsequent
+    /// `thread.launch`, `thread.send`, `task.delegate`, or `project.update`
+    /// can claim them without base64 on the control plane.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Rpc`] on server rejection or [`Error::Closed`] if the
+    /// content socket disconnects.
+    pub async fn stage_blob(&self, name: &str, mime: &str, bytes: &[u8]) -> Result<BlobInfo> {
+        let upload = self.stream_upload_chunks(bytes).await?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let stage = ContentRequest::UploadStage {
+            id,
+            upload,
+            name: name.to_owned(),
+            mime: mime.to_owned(),
+        };
+        self.finish_upload(id, &stage, "content.upload_stage").await
+    }
+
     /// Streams raw attachment bytes in 256 KiB binary chunks and commits them
-    /// to `thread`.
+    /// directly to `thread`.
     ///
     /// # Errors
     ///
@@ -268,6 +304,122 @@ impl ContentClient {
         mime: &str,
         bytes: &[u8],
     ) -> Result<BlobInfo> {
+        let upload = self.stream_upload_chunks(bytes).await?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let finish = ContentRequest::UploadFinish {
+            id,
+            upload,
+            thread,
+            name: name.to_owned(),
+            mime: mime.to_owned(),
+        };
+        self.finish_upload(id, &finish, "content.upload_finish")
+            .await
+    }
+
+    /// Pulls a project's image icon over the content plane, honoring `etag` to
+    /// skip unchanged payloads.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Rpc`] on server rejection or [`Error::Closed`] if the
+    /// content socket disconnects.
+    pub async fn get_project_icon(
+        &self,
+        project: &str,
+        etag: Option<&str>,
+        max_bytes: usize,
+    ) -> Result<ProjectIconFetch> {
+        let chunk_len = u32::try_from(limits::CONTENT_CHUNK_BYTES).unwrap_or(u32::MAX);
+        let mut bytes = Vec::new();
+        let mut offset = 0u64;
+        let mut mime = String::new();
+        let mut resolved_etag = String::new();
+        loop {
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let req = ContentRequest::GetProjectIcon {
+                id,
+                project: project.to_owned(),
+                etag: (offset == 0).then(|| etag.map(str::to_owned)).flatten(),
+                offset,
+                len: chunk_len,
+            };
+            let (resp, payload) = self.call(id, &req, &[]).await?;
+            match resp {
+                ContentResponse::Empty { .. } => return Ok(ProjectIconFetch::None),
+                ContentResponse::NotModified { etag, .. } => {
+                    return Ok(ProjectIconFetch::Unchanged { etag });
+                }
+                ContentResponse::Chunk {
+                    total_size,
+                    mime: reported_mime,
+                    offset: reported_offset,
+                    eof,
+                    etag: reported_etag,
+                    ..
+                } => {
+                    if reported_offset != offset {
+                        return Err(Error::Rpc {
+                            method: "content.get_project_icon",
+                            code: -32603,
+                            message: "out-of-order icon chunk offset".into(),
+                            git_failure: None,
+                        });
+                    }
+                    if offset == 0 {
+                        if total_size > max_bytes as u64 {
+                            return Err(Error::Rpc {
+                                method: "content.get_project_icon",
+                                code: -32602,
+                                message: format!("icon exceeds {max_bytes}-byte client limit"),
+                                git_failure: None,
+                            });
+                        }
+                        mime = reported_mime;
+                        resolved_etag = reported_etag.unwrap_or_default();
+                        let reserve = usize::try_from(total_size).unwrap_or(0).min(max_bytes);
+                        bytes.reserve(reserve);
+                    }
+                    if bytes.len().saturating_add(payload.len()) > max_bytes {
+                        return Err(Error::Rpc {
+                            method: "content.get_project_icon",
+                            code: -32602,
+                            message: format!("icon exceeds {max_bytes}-byte client limit"),
+                            git_failure: None,
+                        });
+                    }
+                    bytes.extend_from_slice(&payload);
+                    offset = offset.saturating_add(payload.len() as u64);
+                    if eof || payload.is_empty() {
+                        break;
+                    }
+                }
+                ContentResponse::Error { code, message, .. } => {
+                    return Err(Error::Rpc {
+                        method: "content.get_project_icon",
+                        code: i64::from(code),
+                        message,
+                        git_failure: None,
+                    });
+                }
+                _ => {
+                    return Err(Error::Rpc {
+                        method: "content.get_project_icon",
+                        code: -32603,
+                        message: "unexpected project icon response".into(),
+                        git_failure: None,
+                    });
+                }
+            }
+        }
+        Ok(ProjectIconFetch::Image {
+            etag: resolved_etag,
+            mime,
+            bytes,
+        })
+    }
+
+    async fn stream_upload_chunks(&self, bytes: &[u8]) -> Result<u64> {
         let upload = self.next_upload.fetch_add(1, Ordering::Relaxed);
         let mut offset = 0usize;
         while offset < bytes.len() {
@@ -299,25 +451,26 @@ impl ContentClient {
                 }
             }
         }
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let finish = ContentRequest::UploadFinish {
-            id,
-            upload,
-            thread,
-            name: name.to_owned(),
-            mime: mime.to_owned(),
-        };
-        let (resp, _) = self.call(id, &finish, &[]).await?;
+        Ok(upload)
+    }
+
+    async fn finish_upload(
+        &self,
+        id: u64,
+        req: &ContentRequest,
+        method: &'static str,
+    ) -> Result<BlobInfo> {
+        let (resp, _) = self.call(id, req, &[]).await?;
         match resp {
             ContentResponse::Uploaded { info, .. } => Ok(info),
             ContentResponse::Error { code, message, .. } => Err(Error::Rpc {
-                method: "content.upload_finish",
+                method,
                 code: i64::from(code),
                 message,
                 git_failure: None,
             }),
             _ => Err(Error::Rpc {
-                method: "content.upload_finish",
+                method,
                 code: -32603,
                 message: "unexpected content finish response".into(),
                 git_failure: None,

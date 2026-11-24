@@ -88,6 +88,8 @@ pub enum ProjectIcon {
     },
     Uploaded {
         media_type: String,
+        /// Lowercase SHA-256 hex digest stored in the workspace blob store.
+        blob: String,
     },
 }
 
@@ -107,35 +109,9 @@ pub enum ProjectIconChange {
     Emoji {
         emoji: String,
     },
-    /// Base64-encoded raster or SVG image.
+    /// Content-addressed image blob staged via the content WebSocket.
     Uploaded {
         media_type: String,
-        data: String,
-    },
-}
-
-/// Read an image icon only when it differs from an already cached
-/// representation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ReadProjectIcon {
-    pub project: String,
-    pub etag: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[serde(
-    tag = "kind",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum ProjectIconResult {
-    None,
-    Unchanged {
-        etag: String,
-    },
-    Image {
-        etag: String,
-        media_type: String,
-        data: String,
+        blob: String,
     },
 }

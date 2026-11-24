@@ -32,6 +32,7 @@ impl Workspace {
     /// job, so a caller that stops waiting cannot strand a new worktree.
     pub(super) async fn launch(
         self: &Arc<Self>,
+        principal_key: String,
         mut args: LaunchThread,
     ) -> Result<Launched, Error> {
         threads::validate_request_id(args.request_id.as_deref())?;
@@ -44,7 +45,7 @@ impl Workspace {
         }
         let Some(target) = args.worktree.clone() else {
             return self
-                .launch_in(args, None)
+                .launch_in(principal_key, args, None)
                 .await
                 .map(|(launched, _)| launched);
         };
@@ -77,7 +78,9 @@ impl Workspace {
                 let placement = workspace
                     .place(&project, Path::new(&project), &target, &title)
                     .await?;
-                let result = workspace.launch_in(args, Some(&placement)).await;
+                let result = workspace
+                    .launch_in(principal_key, args, Some(&placement))
+                    .await;
                 if !matches!(result, Ok((_, true))) {
                     worktree::discard(&workspace.worktrees, Path::new(&project), &placement).await;
                 }
@@ -91,6 +94,7 @@ impl Workspace {
     /// with the same ID launched (with `false`).
     async fn launch_in(
         self: &Arc<Self>,
+        principal_key: String,
         args: LaunchThread,
         placement: Option<&Placement>,
     ) -> Result<(Launched, bool), Error> {
@@ -103,7 +107,9 @@ impl Workspace {
         } else {
             None
         };
-        let result = self.launch_tx(args, placement, scratch.as_ref()).await;
+        let result = self
+            .launch_tx(principal_key, args, placement, scratch.as_ref())
+            .await;
         if !matches!(result, Ok((_, true)))
             && let Some(scratch) = scratch
         {
@@ -114,11 +120,11 @@ impl Workspace {
 
     async fn launch_tx(
         self: &Arc<Self>,
-        mut args: LaunchThread,
+        principal_key: String,
+        args: LaunchThread,
         placement: Option<&Placement>,
         scratch: Option<&super::scratch::PreparedScratch>,
     ) -> Result<(Launched, bool), Error> {
-        let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
         let placement_checkout = placement.map(|p| p.checkout.clone());
         let scratch_cwd = scratch.map(|s| s.cwd.clone());
         let ws = Arc::clone(self);
@@ -169,8 +175,15 @@ impl Workspace {
                 if let Some(access) = &access {
                     store::save_thread_access(&tx, thread, Some(access))?;
                 }
-                let run = if args.text.is_some() || !staged.is_empty() {
-                    let attachments = attachments::commit(&tx, thread, &staged, &[])?;
+                let run = if args.text.is_some() || !args.attachments.is_empty() {
+                    let attachments = attachments::claim_staged(
+                        &tx,
+                        &ws.leases,
+                        &principal_key,
+                        thread,
+                        &args.attachments,
+                        &[],
+                    )?;
                     Some(runs::enqueue(
                         &tx,
                         thread,
@@ -191,7 +204,6 @@ impl Workspace {
                     )?;
                 }
                 tx.commit()?;
-                drop(staged);
                 ws.kick(thread, run.is_none());
                 Ok((Launched { thread, run }, true))
             })
@@ -202,10 +214,13 @@ impl Workspace {
         Ok((launched, created))
     }
 
-    pub(crate) async fn send(self: &Arc<Self>, mut args: SendInput) -> Result<Sent, Error> {
+    pub(crate) async fn send(
+        self: &Arc<Self>,
+        principal_key: String,
+        args: SendInput,
+    ) -> Result<Sent, Error> {
         let thread = args.thread;
         threads::validate_request_id(args.request_id.as_deref())?;
-        let staged = attachments::stage(self, std::mem::take(&mut args.attachments)).await?;
         let ws = Arc::clone(self);
         let (sent, created) = self
             .db
@@ -228,7 +243,14 @@ impl Workspace {
                     decisions::Submission::Replay(run) => return Ok((Sent { run }, false)),
                     decisions::Submission::Enqueue { place, steer } => (place, steer),
                 };
-                let attachments = attachments::commit(&tx, thread, &staged, &args.stored)?;
+                let attachments = attachments::claim_staged(
+                    &tx,
+                    &ws.leases,
+                    &principal_key,
+                    thread,
+                    &args.attachments,
+                    &args.stored,
+                )?;
                 let run = runs::enqueue(
                     &tx,
                     thread,
@@ -245,7 +267,6 @@ impl Workspace {
                     store::withdraw_requests(&tx, Some(active), Withdrawal::Steered)?;
                 }
                 tx.commit()?;
-                drop(staged);
                 if let Some(active) = steer {
                     ws.steer_active(thread, active);
                 }

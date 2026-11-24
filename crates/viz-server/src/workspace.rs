@@ -52,6 +52,12 @@ use viz_core::{
 };
 use viz_protocol::{EntryId, Lifecycle, RunId, TaskId, ThreadId};
 
+pub(crate) use self::{
+    icons::ProjectIconChunk,
+    notifications::{Change, WatchChange},
+    rpc::ROUTES,
+    runs::{active_run_from, run_from},
+};
 use self::{
     notifications::Updates,
     reconcile::ResourceLeases,
@@ -60,16 +66,11 @@ use self::{
     sql::{Conn, Database, exec, row, rows},
     worker::Workers,
 };
-pub(crate) use self::{
-    notifications::{Change, WatchChange},
-    rpc::ROUTES,
-    runs::{active_run_from, run_from},
-};
 use crate::{
     acp::Mcp,
     config::{Config, HarnessConfig},
     error::Error,
-    wire::{Attachment, Entry, EntryPage, NewEntry, Origin, ThreadState, WaitResult},
+    wire::{BlobAttachment, Entry, EntryPage, NewEntry, Origin, ThreadState, WaitResult},
 };
 
 pub(crate) struct Workspace {
@@ -421,14 +422,6 @@ impl Workspace {
         }
     }
 
-    pub(crate) async fn attachments(
-        &self,
-        thread: ThreadId,
-        ids: &[String],
-    ) -> Result<Vec<Attachment>, Error> {
-        attachments::load_inputs(self, thread, ids).await
-    }
-
     pub(crate) async fn stat_blob(
         &self,
         thread: ThreadId,
@@ -493,11 +486,22 @@ impl Workspace {
 
     pub(crate) async fn prepare_delegated_attachments(
         &self,
+        principal_key: &str,
         parent: ThreadId,
-        uploads: Vec<Attachment>,
+        uploads: Vec<BlobAttachment>,
         stored_ids: &[String],
     ) -> Result<Vec<viz_protocol::peer::PeerAttachment>, Error> {
-        attachments::prepare_delegated(self, parent, uploads, stored_ids).await
+        attachments::prepare_delegated(self, principal_key, parent, uploads, stored_ids).await
+    }
+
+    pub(crate) async fn stage_uploaded_blob(
+        &self,
+        principal_key: &str,
+        name: String,
+        mime: String,
+        bytes: Vec<u8>,
+    ) -> Result<viz_protocol::BlobInfo, Error> {
+        attachments::stage_raw(self, principal_key, name, mime, bytes).await
     }
 
     pub(crate) async fn store_uploaded_attachment(

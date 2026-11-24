@@ -4,9 +4,9 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use viz_client::protocol::{Attachment, ThreadId};
+use viz_client::protocol::ThreadId;
 
-use super::{Model, Tool, is_command};
+use super::{DraftAttachment, Model, Tool, is_command};
 
 /// Active file or attachment preview overlay state.
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub struct FilePreview {
 /// Content state of [`FilePreview`].
 #[derive(Debug, Clone)]
 pub enum FilePreviewBody {
-    /// Waiting for `files.read` or `thread.attachment`.
+    /// Waiting for `files.read` or a content-channel download.
     Loading,
     /// UTF-8 text or source code.
     Text {
@@ -78,7 +78,7 @@ pub struct TimelineState {
     pub file_preview_seq: u64,
     /// Stored thread attachments fetched lazily for inline Markdown previews,
     /// keyed by `(environment, thread, attachment_id)`.
-    pub loaded_attachments: HashMap<(String, ThreadId, String), Attachment>,
+    pub loaded_attachments: HashMap<(String, ThreadId, String), DraftAttachment>,
     /// In-flight `(environment, thread, attachment_id)` fetches to avoid
     /// duplicate RPCs.
     pub pending_attachments: HashSet<(String, ThreadId, String)>,

@@ -7,7 +7,7 @@ use std::{sync::Arc, time::Duration};
 use rune::AppHandle;
 use tokio::{sync::mpsc, task::JoinSet};
 use viz_client::{
-    Client, Connection, Endpoint, Error,
+    Client, Connection, ContentClient, Endpoint, Error,
     protocol::{
         CancelTask, ClientInfo, ClientKind, ConfigureThread, DeleteThread, ListEnvironments,
         ListTasks, MoveThread, Notification, ThreadId,
@@ -114,28 +114,38 @@ async fn run(
             kind: ClientKind::App,
             name: "desktop".into(),
         };
-        let lost = match Client::connect(&endpoint, info, environment.clone()).await {
+        let lost = match Client::connect(&endpoint, info.clone(), environment.clone()).await {
             Ok(connection) => {
-                next_session = next_session.wrapping_add(1).max(1);
-                let session_id = SessionId(next_session);
-                match session(
-                    ui,
-                    session_id,
-                    connection,
-                    &mut commands,
-                    &mut selected,
-                    &mut first,
-                )
-                .await
-                {
-                    Ended::Quit => return,
-                    Ended::Environment { target, thread } => {
-                        selected = thread;
-                        environment = Some(target);
-                        continue;
+                let target_env = Some(connection.hello.environment.clone());
+                match ContentClient::connect(&endpoint, info, target_env).await {
+                    Ok(content) => {
+                        next_session = next_session.wrapping_add(1).max(1);
+                        let session_id = SessionId(next_session);
+                        match session(
+                            ui,
+                            session_id,
+                            connection,
+                            content,
+                            &mut commands,
+                            &mut selected,
+                            &mut first,
+                        )
+                        .await
+                        {
+                            Ended::Quit => return,
+                            Ended::Environment { target, thread } => {
+                                selected = thread;
+                                environment = Some(target);
+                                continue;
+                            }
+                            Ended::Lost(error) => {
+                                toast(ui, "Lost the connection to the server", error.to_string());
+                                error.to_string()
+                            }
+                        }
                     }
-                    Ended::Lost(error) => {
-                        toast(ui, "Lost the connection to the server", error.to_string());
+                    Err(error) => {
+                        connection.client.close();
                         error.to_string()
                     }
                 }
@@ -177,106 +187,34 @@ async fn session(
     ui: &AppHandle<Desktop>,
     id: SessionId,
     connection: Connection,
+    content: ContentClient,
     commands: &mut mpsc::UnboundedReceiver<ServerEffect>,
     selected: &mut Option<ThreadId>,
     first: &mut Option<std::sync::mpsc::Sender<()>>,
 ) -> Ended {
     let Connection {
         client,
-        mut notifications,
+        notifications,
         hello,
     } = connection;
     let mut session = Session {
         id,
         ui,
         client,
+        content,
         environment: Arc::from(hello.environment.as_str()),
         watched: None,
         git_watched: None,
         jobs: JoinSet::new(),
     };
     if let Err(error) = session.start(hello, selected).await {
+        session.close();
         return Ended::Lost(error);
     }
     signal(first);
-    let mut configs: std::collections::VecDeque<(
-        ThreadId,
-        String,
-        viz_client::protocol::OptionValue,
-    )> = std::collections::VecDeque::new();
-    let mut configuring = false;
-    loop {
-        if !configuring && let Some((thread, option, value)) = configs.pop_front() {
-            configuring = true;
-            let client = session.client.clone();
-            session.jobs.spawn(async move {
-                let result = client
-                    .configure_thread(&ConfigureThread {
-                        thread,
-                        option,
-                        value,
-                    })
-                    .await;
-                BackgroundReply::Configured(result)
-            });
-        }
-        let result = tokio::select! {
-            notification = notifications.recv() => match notification {
-                Some(notification) => session.on_notification(notification).await,
-                None => Err(Error::Closed),
-            },
-            done = session.jobs.join_next(), if !session.jobs.is_empty() => match done {
-                Some(Ok(
-                    BackgroundReply::Msg(msg) | BackgroundReply::OptionalMsg(Some(msg)),
-                )) => {
-                    session.dispatch(msg);
-                    Ok(())
-                }
-                Some(Ok(BackgroundReply::OptionalMsg(None))) | None => Ok(()),
-                Some(Ok(BackgroundReply::Configured(result))) => {
-                    configuring = false;
-                    result
-                }
-                Some(Ok(BackgroundReply::Git { reply, refresh })) => {
-                    session.dispatch(reply);
-                    if refresh { session.refresh_list().await } else { Ok(()) }
-                }
-                Some(Err(error)) => {
-                    tracing::error!(%error, "desktop request task ended unexpectedly");
-                    return Ended::Lost(Error::Closed);
-                }
-            },
-            command = commands.recv() => match command {
-                Some(ServerEffect::Environment { environment, thread }) => {
-                    session.client.close();
-                    return Ended::Environment { target: environment, thread };
-                }
-                Some(ServerEffect::Git { request: git::Request::Watch(next), .. }) => session.watch_git(next).await,
-                Some(ServerEffect::Git { thread, serial, request }) => {
-                    if session.watched == Some(thread) {
-                        let client = session.client.clone();
-                        let refresh = matches!(&request, git::Request::Init(_) | git::Request::CreatePull { .. });
-                        session.jobs.spawn(async move {
-                            let reply = git::execute(client, thread, serial, request).await;
-                            BackgroundReply::Git { reply, refresh }
-                        });
-                    }
-                    Ok(())
-                }
-                Some(ServerEffect::Configure { thread, option, value }) => {
-                    configs.push_back((thread, option, value));
-                    Ok(())
-                }
-                Some(command) => session.on_command(command, selected).await,
-                None => return Ended::Quit,
-            },
-        };
-        match result {
-            Ok(()) => {}
-            Err(Error::Closed) => return Ended::Lost(Error::Closed),
-            Err(error) => toast(ui, "Request failed", error.to_string()),
-        }
-    }
+    let ended = session.drive(notifications, commands, selected).await;
+    session.close();
+    ended
 }
 
 pub(super) enum BackgroundReply {
@@ -291,6 +229,7 @@ pub(super) struct Session<'a> {
     pub(super) id: SessionId,
     pub(super) ui: &'a AppHandle<Desktop>,
     pub(super) client: Client,
+    pub(super) content: ContentClient,
     pub(super) environment: Arc<str>,
     pub(super) watched: Option<ThreadId>,
     pub(super) git_watched: Option<ThreadId>,
@@ -298,6 +237,96 @@ pub(super) struct Session<'a> {
 }
 
 impl Session<'_> {
+    fn close(&self) {
+        self.client.close();
+        self.content.close();
+    }
+
+    async fn drive(
+        &mut self,
+        mut notifications: mpsc::Receiver<Notification>,
+        commands: &mut mpsc::UnboundedReceiver<ServerEffect>,
+        selected: &mut Option<ThreadId>,
+    ) -> Ended {
+        let mut configs: std::collections::VecDeque<(
+            ThreadId,
+            String,
+            viz_client::protocol::OptionValue,
+        )> = std::collections::VecDeque::new();
+        let mut configuring = false;
+        loop {
+            if !configuring && let Some((thread, option, value)) = configs.pop_front() {
+                configuring = true;
+                let client = self.client.clone();
+                self.jobs.spawn(async move {
+                    let result = client
+                        .configure_thread(&ConfigureThread {
+                            thread,
+                            option,
+                            value,
+                        })
+                        .await;
+                    BackgroundReply::Configured(result)
+                });
+            }
+            let result = tokio::select! {
+                notification = notifications.recv() => match notification {
+                    Some(notification) => self.on_notification(notification).await,
+                    None => Err(Error::Closed),
+                },
+                done = self.jobs.join_next(), if !self.jobs.is_empty() => match done {
+                    Some(Ok(
+                        BackgroundReply::Msg(msg) | BackgroundReply::OptionalMsg(Some(msg)),
+                    )) => {
+                        self.dispatch(msg);
+                        Ok(())
+                    }
+                    Some(Ok(BackgroundReply::OptionalMsg(None))) | None => Ok(()),
+                    Some(Ok(BackgroundReply::Configured(result))) => {
+                        configuring = false;
+                        result
+                    }
+                    Some(Ok(BackgroundReply::Git { reply, refresh })) => {
+                        self.dispatch(reply);
+                        if refresh { self.refresh_list().await } else { Ok(()) }
+                    }
+                    Some(Err(error)) => {
+                        tracing::error!(%error, "desktop request task ended unexpectedly");
+                        return Ended::Lost(Error::Closed);
+                    }
+                },
+                command = commands.recv() => match command {
+                    Some(ServerEffect::Environment { environment, thread }) => {
+                        return Ended::Environment { target: environment, thread };
+                    }
+                    Some(ServerEffect::Git { request: git::Request::Watch(next), .. }) => self.watch_git(next).await,
+                    Some(ServerEffect::Git { thread, serial, request }) => {
+                        if self.watched == Some(thread) {
+                            let client = self.client.clone();
+                            let refresh = matches!(&request, git::Request::Init(_) | git::Request::CreatePull { .. });
+                            self.jobs.spawn(async move {
+                                let reply = git::execute(client, thread, serial, request).await;
+                                BackgroundReply::Git { reply, refresh }
+                            });
+                        }
+                        Ok(())
+                    }
+                    Some(ServerEffect::Configure { thread, option, value }) => {
+                        configs.push_back((thread, option, value));
+                        Ok(())
+                    }
+                    Some(command) => self.on_command(command, selected).await,
+                    None => return Ended::Quit,
+                },
+            };
+            match result {
+                Ok(()) => {}
+                Err(Error::Closed) => return Ended::Lost(Error::Closed),
+                Err(error) => toast(self.ui, "Request failed", error.to_string()),
+            }
+        }
+    }
+
     pub(super) fn dispatch(&self, msg: ServerMsg) {
         dispatch_session(self.ui, self.id, msg);
     }
@@ -382,8 +411,9 @@ impl Session<'_> {
             ServerEffect::Create {
                 draft,
                 params,
+                attachments,
                 recovery,
-            } => self.launch(draft, *params, recovery).await,
+            } => self.launch(draft, *params, attachments, recovery).await,
             ServerEffect::CancelTask(task) => {
                 self.client
                     .request(&CancelTask {
@@ -484,7 +514,11 @@ impl Session<'_> {
                 platform::spawn_attach(self.ui, scope, target, source);
                 Ok(())
             }
-            ServerEffect::SendInput { input, recovery } => self.send_input(input, recovery).await,
+            ServerEffect::SendInput {
+                input,
+                attachments,
+                recovery,
+            } => self.send_input(input, attachments, recovery).await,
             ServerEffect::Fork {
                 params,
                 load_prompt,

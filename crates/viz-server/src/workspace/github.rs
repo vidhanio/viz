@@ -190,6 +190,7 @@ impl Workspace {
 
     pub(super) async fn github_launch(
         self: &Arc<Self>,
+        principal_key: String,
         args: GitHubLaunch,
     ) -> Result<viz_protocol::Launched, Error> {
         let mut launch = args.launch;
@@ -216,7 +217,7 @@ impl Workspace {
             "{text}\n\nGitHub {kind} #{}: {}\n{}\n\n{body}",
             issue.number, issue.title, issue.html_url,
         ));
-        self.launch(launch).await
+        self.launch(principal_key, launch).await
     }
 }
 

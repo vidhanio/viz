@@ -311,10 +311,11 @@ impl Workspace {
         thread: ThreadId,
         run: RunId,
         session: &str,
-        entries: Vec<Output>,
-        live: Option<viz_acp::LiveTurn>,
+        mut entries: Vec<Output>,
+        mut live: Option<viz_acp::LiveTurn>,
         snapshot: Option<SessionSnapshot>,
     ) -> Result<Vec<(String, ToolCallStatus)>, Error> {
+        let extracted = attachments::extract_media_blobs(self, &mut entries, live.as_mut()).await?;
         let session = session.to_owned();
         let workers = Arc::clone(&self.workers);
         let updates = Arc::clone(&self.updates);
@@ -330,8 +331,9 @@ impl Workspace {
                     return Ok((false, false, patches));
                 }
                 let mut relist = false;
-                if !entries.is_empty() || snapshot.is_some() {
+                if !entries.is_empty() || !extracted.is_empty() || snapshot.is_some() {
                     let tx = sql::immediate(conn)?;
+                    attachments::link_media_blobs(&tx, thread, &extracted)?;
                     if let Some(snapshot) = snapshot {
                         relist = persist_snapshot(&tx, thread, snapshot, None)?;
                     }
@@ -344,6 +346,7 @@ impl Workspace {
                     }
                     tx.commit()?;
                 }
+                drop(extracted);
                 updates.live(thread, live);
                 Ok((true, relist, patches))
             })

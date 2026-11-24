@@ -56,7 +56,7 @@ pub use github::{
     GitHubSearch, GitHubSearchResult,
 };
 pub use history::{
-    Attachment, AttachmentCapabilities, Entry, EntryChunk, EntryData, EntryPage, EntrySource,
+    AttachmentCapabilities, BlobAttachment, Entry, EntryChunk, EntryData, EntryPage, EntrySource,
     ListEntries, PlanEntry, PlanPriority, PlanStatus, PromptAttachment, PromptContext, QueuedInput,
     ReadEntryChunk, RemoveQueuedInput, RunEnd, SearchHit, SearchHits, SearchThreads,
     SteerQueuedInput, TurnTokens, TurnUsage, UpdateQueuedInput, UsageCost, attachment_inline_md,
@@ -73,17 +73,16 @@ pub use lifecycle::{
     ThreadUpdated, TriageAction, TriageThread, Triaged,
 };
 pub use project_settings::{
-    DefaultCheckout, ProjectAutoSettle, ProjectIcon, ProjectIconChange, ProjectIconResult,
-    ProjectSettings, ProjectSettingsPatch, ReadProjectIcon, Setting,
+    DefaultCheckout, ProjectAutoSettle, ProjectIcon, ProjectIconChange, ProjectSettings,
+    ProjectSettingsPatch, Setting,
 };
 pub use requests::{
     BlobInfo, BranchList, ConfigureThread, CreateProject, DeleteThread, Empty, FileBody,
     FileContent, FileList, FileRoot, FileSearchKind, FileSearchMatch, GitBranch, HarnessList,
     HarnessOptions, HarnessOptionsResult, LineWindow, ListBranches, ListHarnesses, ListProjects,
     ListWorktrees, MoveThread, Moved, Patch, ProjectList, ProjectResult, PromoteThread,
-    PromotedThread, ReadAttachment, ReadFile, RemoveProject, RemoveWorktree, SearchFiles,
-    SendInput, SendMode, Sent, StatBlob, StopThread, UpdateProject, UpdateThread, Worktree,
-    WorktreeList,
+    PromotedThread, ReadFile, RemoveProject, RemoveWorktree, SearchFiles, SendInput, SendMode,
+    Sent, StatBlob, StopThread, UpdateProject, UpdateThread, Worktree, WorktreeList,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -97,7 +96,7 @@ pub use tool::{
 };
 pub use transcript::{
     Body, Compaction, CompactionStatus, ContentBlock, ContentKind, LiveDelta, LiveTurn, Media,
-    Plan, PlanContent, Segment, TextKind, TranscriptEntry,
+    MediaBlob, Plan, PlanContent, Segment, TextKind, TranscriptEntry,
 };
 
 /// The protocol version this crate speaks.
@@ -227,7 +226,6 @@ methods! {
     ListProjects => "projects.list", ProjectList, OP_CONN_PEER;
     CreateProject => "project.create", ProjectResult, OP_PEER;
     UpdateProject => "project.update", Empty, OP_PEER;
-    ReadProjectIcon => "project.icon", ProjectIconResult, OP;
     BrowseFolders => "folders.browse", FolderEntries, OP;
     CreateFolder => "folder.create", FolderCreated, OP;
     GitStatusRequest => "git.status", GitStatus, OP;
@@ -254,7 +252,6 @@ methods! {
     ImportSession => "thread.import", Launched, OP;
     SearchFiles => "files.search", FileList, OP;
     ReadFile => "files.read", FileContent, OP;
-    ReadAttachment => "thread.attachment", Attachment, OP_CONN;
     StatBlob => "blob.stat", BlobInfo, OP_CONN;
     LaunchThread => "thread.launch", Launched, OP_CONN_PEER;
     ForkThread => "thread.fork", Forked, OP_PEER;

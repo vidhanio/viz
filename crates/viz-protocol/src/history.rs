@@ -1,30 +1,20 @@
 //! Transcript history, search, queued inputs, and attachments.
 
-use std::fmt;
-
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use super::{EntryId, Origin, Patch, RunId, ThreadId, ToolCall, TranscriptEntry};
 
-/// A file attached to an input.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct Attachment {
+/// Reference to a binary blob already staged via the content WebSocket.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BlobAttachment {
+    /// Canonical lowercase SHA-256 hex digest returned by `UploadStage` or
+    /// `UploadFinish`.
+    pub blob: String,
     /// Display name.
     pub name: String,
     /// Media type.
     pub mime: String,
-    /// Base64 bytes, at most 20 MiB decoded.
-    pub data: String,
-}
-
-impl fmt::Debug for Attachment {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Attachment")
-            .field("name", &self.name)
-            .field("mime", &self.mime)
-            .finish_non_exhaustive()
-    }
 }
 
 /// Assigns deterministic Markdown reference labels (`img-N`, `file-N`) in slice

@@ -81,8 +81,8 @@ handlers! {
         ListTasks, |tasks, ListTasks { parent }| {
             Ok(TaskList { tasks: tasks.list(parent).await? })
         }
-        DelegateTask, |tasks, DelegateTask { parent, input }| {
-            Ok(TaskResult { task: tasks.delegate(parent, None, input).await? })
+        DelegateTask, |tasks, ctx, DelegateTask { parent, input }| {
+            Ok(TaskResult { task: tasks.delegate(&ctx.principal.key(), parent, None, input).await? })
         }
         TaskStatusRequest, |tasks, TaskStatusRequest { task, wait, timeout_ms }| {
             tasks.status(&task, None, wait, timeout_ms).await
@@ -166,6 +166,7 @@ impl Tasks {
 
     pub(crate) async fn delegate(
         &self,
+        principal_key: &str,
         parent: ThreadId,
         turn: Option<RunId>,
         input: DelegateInput,
@@ -190,7 +191,12 @@ impl Tasks {
         }
         let attachments = self
             .workspace
-            .prepare_delegated_attachments(parent, input.attachments, &input.attachment_ids)
+            .prepare_delegated_attachments(
+                principal_key,
+                parent,
+                input.attachments,
+                &input.attachment_ids,
+            )
             .await?;
 
         let local_env = self.peers.local.clone();

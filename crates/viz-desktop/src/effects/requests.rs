@@ -2,19 +2,21 @@
 
 use std::io;
 
-use base64::Engine as _;
 use sha2::{Digest, Sha256};
 use viz_client::{
-    Error, Result,
+    ContentClient, Error, ProjectIconFetch, Result,
     protocol::{
-        EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries, ListTasks, ListWorktrees,
-        Patch, ProjectIconResult, ProjectSettingsPatch, ReadProjectIcon, RetitleThread,
-        SearchThreads, SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
+        BlobAttachment, EntryId, HarnessOptions, LaunchThread, ListBranches, ListEntries,
+        ListTasks, ListWorktrees, Patch, ProjectSettingsPatch, RetitleThread, SearchThreads,
+        SendInput, ThreadId, TriageThread, UpdateProject, UpdateThread,
     },
 };
 
 use super::{ProjectChange, ThreadChange, server::Session};
-use crate::{model::Checkouts, update::ServerMsg};
+use crate::{
+    model::{Checkouts, DraftAttachment},
+    update::ServerMsg,
+};
 
 impl Session<'_> {
     /// Relists harnesses so the model picker's catalog stays current.
@@ -40,11 +42,19 @@ impl Session<'_> {
         &self,
         draft: u64,
         mut params: LaunchThread,
+        attachments: Vec<DraftAttachment>,
         mut recovery: Box<crate::model::DraftData>,
     ) -> Result<()> {
-        let fingerprint = submission_fingerprint(&self.environment, &params);
-        params.request_id = Some(submission_id(&mut recovery, fingerprint));
-        match self.client.launch_thread(&params).await {
+        let outcome = async {
+            if !attachments.is_empty() {
+                params.attachments = stage_draft_attachments(&self.content, &attachments).await?;
+            }
+            let fingerprint = submission_fingerprint(&self.environment, &params);
+            params.request_id = Some(submission_id(&mut recovery, fingerprint));
+            self.client.launch_thread(&params).await
+        }
+        .await;
+        match outcome {
             Ok(thread) => self.dispatch(ServerMsg::ThreadCreated { draft, thread }),
             Err(error) => {
                 let detail = error.to_string();
@@ -69,15 +79,23 @@ impl Session<'_> {
     pub(super) async fn send_input(
         &self,
         mut input: SendInput,
+        attachments: Vec<DraftAttachment>,
         mut recovery: Option<Box<super::DraftRecovery>>,
     ) -> Result<()> {
-        if let Some(recovery) = &mut recovery {
-            let mode = input.mode.take();
-            let fingerprint = submission_fingerprint(&self.environment, &input);
-            input.mode = mode;
-            input.request_id = Some(submission_id(&mut recovery.draft, fingerprint));
+        let outcome = async {
+            if !attachments.is_empty() {
+                input.attachments = stage_draft_attachments(&self.content, &attachments).await?;
+            }
+            if let Some(recovery) = &mut recovery {
+                let mode = input.mode.take();
+                let fingerprint = submission_fingerprint(&self.environment, &input);
+                input.mode = mode;
+                input.request_id = Some(submission_id(&mut recovery.draft, fingerprint));
+            }
+            self.client.send(&input).await
         }
-        match self.client.send(&input).await {
+        .await;
+        match outcome {
             Ok(_) => Ok(()),
             Err(error) => {
                 let detail = error.to_string();
@@ -186,28 +204,20 @@ impl Session<'_> {
     }
 
     pub(super) fn read_project_icon(&mut self, project: String, etag: Option<String>) {
-        let client = self.client.clone();
+        let content = self.content.clone();
         let environment = self.environment.to_string();
         self.spawn_opt_msg(async move {
-            let Ok(reply) = client
-                .project_icon(&ReadProjectIcon {
-                    project: project.clone(),
-                    etag,
-                })
+            let Ok(reply) = content
+                .get_project_icon(&project, etag.as_deref(), 1024 * 1024)
                 .await
             else {
                 return None;
             };
             let payload = match reply {
-                ProjectIconResult::None => Some((None, None)),
-                ProjectIconResult::Unchanged { .. } => None,
-                ProjectIconResult::Image {
-                    etag,
-                    media_type,
-                    data,
-                } => {
-                    let bytes = base64::engine::general_purpose::STANDARD.decode(data).ok();
-                    Some((Some(etag), bytes.map(|bytes| (media_type, bytes))))
+                ProjectIconFetch::None => Some((None, None)),
+                ProjectIconFetch::Unchanged { .. } => None,
+                ProjectIconFetch::Image { etag, mime, bytes } => {
+                    Some((Some(etag), Some((mime, bytes))))
                 }
             };
             payload.map(|(etag, image)| ServerMsg::ProjectIconLoaded {
@@ -395,6 +405,24 @@ impl Session<'_> {
         });
         Ok(())
     }
+}
+
+async fn stage_draft_attachments(
+    content: &ContentClient,
+    attachments: &[DraftAttachment],
+) -> Result<Vec<BlobAttachment>> {
+    let mut staged = Vec::with_capacity(attachments.len());
+    for file in attachments {
+        let info = content
+            .stage_blob(&file.name, &file.mime, &file.bytes)
+            .await?;
+        staged.push(BlobAttachment {
+            blob: info.blob,
+            name: file.name.clone(),
+            mime: file.mime.clone(),
+        });
+    }
+    Ok(staged)
 }
 
 /// Writes serialized parameters straight into a digest so large attachments

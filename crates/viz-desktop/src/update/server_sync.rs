@@ -8,7 +8,7 @@ use viz_client::protocol::{
 
 use super::selection::{clear_selection, focus_draft, select_thread, show_thread};
 use crate::{
-    effects::{ATTACHMENT_ENCODED_LIMIT, EditSync, Effect, LoadedAttachments, ServerEffect},
+    effects::{ATTACHMENT_TOTAL_BYTES, EditSync, Effect, LoadedAttachments, ServerEffect},
     model::{
         AttachmentStatus, AttachmentTarget, DraftData, Model, OptimisticUndo, PaneSwitch,
         Transcript, sync_summary_derived, thread_title,
@@ -389,15 +389,15 @@ pub(super) fn apply_attachments_loaded(
         };
         let existing = std::sync::Arc::make_mut(&mut draft.attachments);
         let prior_len = existing.len();
-        let mut size: usize = existing.iter().map(|file| file.data.len()).sum();
+        let mut size: usize = existing.iter().map(|file| file.bytes.len()).sum();
         for file in loaded.attachments {
-            if size + file.data.len() > ATTACHMENT_ENCODED_LIMIT {
+            if size + file.bytes.len() > ATTACHMENT_TOTAL_BYTES {
                 errors.push(format!(
                     "{}: attachments exceed the message limit",
                     file.name
                 ));
             } else {
-                size += file.data.len();
+                size += file.bytes.len();
                 existing.push(file);
             }
         }

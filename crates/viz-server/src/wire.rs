@@ -5,7 +5,7 @@ pub(crate) use jsonrpsee_types::{Id, Request};
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 pub(crate) use viz_protocol::{
-    Attachment, AttachmentCapabilities, ClientKind, ConfigOption, ContextUsage as Usage, Entry,
+    AttachmentCapabilities, BlobAttachment, ClientKind, ConfigOption, ContextUsage as Usage, Entry,
     EntryData as NewEntry, EntryId, EntryPage, Environment, EnvironmentStatus, Harness, Hello,
     HelloParams, LiveTurn, Notification, OptionValue, Origin, PROTOCOL_VERSION, Project,
     PromptAttachment, PromptContext, QueuedInput, Run, RunId, RunKind, RunStatus, SearchHit,

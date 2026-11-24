@@ -66,6 +66,7 @@ impl Workspace {
 
     pub(super) async fn update_project(
         &self,
+        principal_key: &str,
         path: &str,
         name: Option<String>,
         mut changes: ProjectSettingsPatch,
@@ -89,7 +90,8 @@ impl Workspace {
             dirs.sort_unstable();
             dirs.dedup();
         }
-        super::icons::validate_upload(changes.icon.as_ref())?;
+        self.validate_uploaded_icon(principal_key, path, changes.icon.as_ref())
+            .await?;
         let path = path.to_owned();
         self.db
             .write_tx(move |tx| {

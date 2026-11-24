@@ -7,8 +7,30 @@ use std::{
 };
 
 use viz_client::protocol::{
-    Attachment, FileSearchMatch, GitHubItem, PromptContext, RunId, SearchHit, ThreadId,
+    FileSearchMatch, GitHubItem, PromptContext, RunId, SearchHit, ThreadId,
 };
+
+/// Local unsent or fetched raw-byte attachment held in memory without base64
+/// encoding.
+#[derive(Clone, PartialEq, Eq)]
+pub struct DraftAttachment {
+    /// Display filename.
+    pub name: String,
+    /// MIME media type.
+    pub mime: String,
+    /// Raw unencoded file bytes.
+    pub bytes: Vec<u8>,
+}
+
+impl std::fmt::Debug for DraftAttachment {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DraftAttachment")
+            .field("name", &self.name)
+            .field("mime", &self.mime)
+            .field("bytes_len", &self.bytes.len())
+            .finish()
+    }
+}
 
 /// Maximum prompt characters before warning and disabling Send.
 pub const PROMPT_CHAR_LIMIT: usize = 200_000;
@@ -132,7 +154,7 @@ pub struct DraftData {
     /// Atomic inline chips synced with `ShellWidgets::draft`.
     pub pills: Vec<DraftPill>,
     /// Prepared attachments queued for the next send.
-    pub attachments: std::sync::Arc<Vec<Attachment>>,
+    pub attachments: std::sync::Arc<Vec<DraftAttachment>>,
     /// Per-attachment transient status (defaults to `Ready` when shorter than
     /// `attachments`).
     pub attachment_statuses: Vec<AttachmentStatus>,

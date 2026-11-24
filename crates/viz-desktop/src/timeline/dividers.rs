@@ -338,7 +338,7 @@ pub fn omitted_divider(s: &Desktop, key: &str, source: &EntrySource, t: &Theme) 
 
 /// Compact surface card for non-text ACP media blocks (`Image`, `Audio`,
 /// `ResourceLink`, `Resource`).
-pub fn media_card(media: &MediaItem, t: &Theme) -> El {
+pub fn media_card(s: &Desktop, media: &MediaItem, t: &Theme) -> El {
     let (label, glyph) = match media.block.kind {
         ContentKind::Image => ("Image", &ui::FILE),
         ContentKind::Audio => ("Audio", &ui::FILE),
@@ -384,6 +384,31 @@ pub fn media_card(media: &MediaItem, t: &Theme) -> El {
                 .min_w(0.0)
                 .truncate(),
         );
+
+    if let (Some(thread), Some(blob)) = (s.model.selection.selected, &media.blob) {
+        let id = blob.id.clone();
+        let mime = blob.mime.clone();
+        let preview_name = name.to_owned();
+        card = card.child(
+            rune_kit::Button::new("Preview")
+                .variant(rune_kit::ButtonVariant::GhostMuted)
+                .control_size(crate::theme::Size::Micro.kit())
+                .icon(&ui::EYE)
+                .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
+                    s.dispatch(
+                        Msg::Timeline(TimelineMsg::OpenAttachmentPreview {
+                            thread,
+                            id: id.clone(),
+                            name: preview_name.clone(),
+                            mime: mime.clone(),
+                        }),
+                        tx,
+                    );
+                })
+                .build(&t.k)
+                .key("preview"),
+        );
+    }
 
     if let Some(url) = uri {
         card = card.child(

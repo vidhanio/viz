@@ -89,11 +89,28 @@ pub struct Segment {
     pub ended_at: Option<i64>,
 }
 
+/// On-disk content-addressed media payload extracted at server ingestion.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaBlob {
+    /// Thread-scoped attachment identifier (canonical SHA-256 hex digest)
+    /// readable via the content WebSocket (`GetAttachment`).
+    pub id: String,
+    /// Media MIME type.
+    pub mime: String,
+    /// Decoded byte length stored on disk.
+    pub size: u64,
+}
+
 /// An image, audio clip, or resource in the agent's own output.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct Media {
     pub block: ContentBlock,
+    /// Content-addressed blob reference when inline binary bytes were extracted
+    /// to disk at ingestion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub blob: Option<MediaBlob>,
     pub source: TextKind,
     /// Unix milliseconds when the block was observed.
     pub at: i64,

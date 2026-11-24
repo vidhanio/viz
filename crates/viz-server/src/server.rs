@@ -115,7 +115,12 @@ impl Listener {
         Router::new()
             .route(HEALTH_PATH, get(health))
             .route(RPC_PATH, get(upgrade).post(peer_rpc))
-            .route(BLOBS_PATH, put(peer_put_blob))
+            .route(
+                BLOBS_PATH,
+                put(peer_put_blob).layer(DefaultBodyLimit::max(
+                    viz_protocol::limits::ATTACHMENT_TOTAL_BYTES,
+                )),
+            )
             .layer(middleware::from_fn_with_state(guard_state, guard))
             .layer(DefaultBodyLimit::max(MAX_FRAME))
             .with_state(self)

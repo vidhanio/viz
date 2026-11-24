@@ -93,8 +93,25 @@ pub enum ContentRequest {
         /// Maximum chunk bytes requested (clamped server-side to 256 KiB).
         len: u32,
     },
+    /// Pull one chunk (at most `CONTENT_CHUNK_BYTES`) of a project's image
+    /// icon. When `etag` matches the current icon, the server responds with
+    /// [`ContentResponse::NotModified`]; when no image icon applies, it
+    /// responds with [`ContentResponse::Empty`].
+    GetProjectIcon {
+        /// Caller-assigned request id echoed on the reply.
+        id: u64,
+        /// Registered project path.
+        project: String,
+        /// Optional cached `ETag` to avoid resending unchanged bytes.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        etag: Option<String>,
+        /// Byte offset within the icon stream.
+        offset: u64,
+        /// Maximum chunk bytes requested (clamped server-side to 256 KiB).
+        len: u32,
+    },
     /// Stream one contiguous payload chunk (at most 256 KiB) into an in-flight
-    /// attachment upload identified by `upload`.
+    /// blob upload identified by `upload`.
     UploadChunk {
         /// Caller-assigned request id echoed on the reply.
         id: u64,
@@ -103,8 +120,21 @@ pub enum ContentRequest {
         /// Byte offset of this chunk (must equal bytes received so far).
         offset: u64,
     },
-    /// Commit a streamed upload into `thread`'s attachments and return its
-    /// [`BlobInfo`].
+    /// Commit a streamed upload into the content-addressed blob store with a
+    /// principal-scoped lease so a subsequent `thread.launch`, `thread.send`,
+    /// `task.delegate`, or `project.update` can claim it without base64.
+    UploadStage {
+        /// Caller-assigned request id echoed on the reply.
+        id: u64,
+        /// Connection-local upload identifier.
+        upload: u64,
+        /// Original filename.
+        name: String,
+        /// MIME media type.
+        mime: String,
+    },
+    /// Commit a streamed upload directly into `thread`'s attachments and
+    /// return its [`BlobInfo`].
     UploadFinish {
         /// Caller-assigned request id echoed on the reply.
         id: u64,
@@ -133,7 +163,9 @@ impl ContentRequest {
         match self {
             Self::GetAttachment { id, .. }
             | Self::GetFile { id, .. }
+            | Self::GetProjectIcon { id, .. }
             | Self::UploadChunk { id, .. }
+            | Self::UploadStage { id, .. }
             | Self::UploadFinish { id, .. }
             | Self::UploadAbort { id, .. } => *id,
         }
@@ -157,6 +189,22 @@ pub enum ContentResponse {
         offset: u64,
         /// Whether this chunk reaches the end of the variant.
         eof: bool,
+        /// Content `ETag` for cacheable resources such as project icons.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        etag: Option<String>,
+    },
+    /// Resource has not changed since the caller's supplied `etag`.
+    NotModified {
+        /// Echoed request id.
+        id: u64,
+        /// Current `ETag`.
+        etag: String,
+    },
+    /// Resource intentionally has no binary content (e.g., a project without
+    /// a raster/SVG icon).
+    Empty {
+        /// Echoed request id.
+        id: u64,
     },
     /// Acknowledgement for an [`ContentRequest::UploadChunk`] or
     /// [`ContentRequest::UploadAbort`].
@@ -168,11 +216,12 @@ pub enum ContentResponse {
         /// Total bytes buffered so far for `upload`.
         received: u64,
     },
-    /// Result of [`ContentRequest::UploadFinish`].
+    /// Result of [`ContentRequest::UploadStage`] or
+    /// [`ContentRequest::UploadFinish`].
     Uploaded {
         /// Echoed request id.
         id: u64,
-        /// Persisted content-addressed attachment metadata.
+        /// Persisted content-addressed blob metadata.
         info: BlobInfo,
     },
     /// Error reply for a failed content-plane operation.
@@ -192,6 +241,8 @@ impl ContentResponse {
     pub const fn id(&self) -> u64 {
         match self {
             Self::Chunk { id, .. }
+            | Self::NotModified { id, .. }
+            | Self::Empty { id }
             | Self::UploadAck { id, .. }
             | Self::Uploaded { id, .. }
             | Self::Error { id, .. } => *id,

@@ -355,6 +355,7 @@ impl Transcript {
             output.push(
                 self.allocate(Body::Media(Box::new(Media {
                     block: block(content),
+                    blob: None,
                     source: kind,
                     at: observed_at,
                 })))

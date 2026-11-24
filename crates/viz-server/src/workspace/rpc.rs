@@ -6,7 +6,6 @@ use std::{
     time::Duration,
 };
 
-use base64::{Engine as _, engine::general_purpose::STANDARD};
 use viz_fs::{FsError, LineWindowSpec, RelPath, Root, sniff_mime};
 use viz_protocol::{
     AnswerRequest, BranchList, BrowseFolders, CancelClone, ConfigureThread, CreateFolder,
@@ -15,12 +14,12 @@ use viz_protocol::{
     GitHubPullPage, GitHubRepositories, GitHubSearch, GitStatusRequest, HarnessList,
     HarnessOptions, HarnessOptionsResult, ImportSession, InitRepository, LaunchThread,
     ListBranches, ListEntries, ListHarnessSessions, ListHarnesses, ListProjects, ListThreads,
-    ListWorktrees, MoveThread, ProjectList, ProjectResult, PromoteThread, ReadAttachment,
-    ReadClone, ReadEntryChunk, ReadFile, ReadProject, ReadProjectIcon, ReadThreadState,
-    RemoveProject, RemoveQueuedInput, RemoveWorktree, RestoreCheckpoint, RetitleThread,
-    SearchFiles, SearchHits, SearchThreads, SendInput, SetProjectAccess, SetThreadAccess,
-    StartClone, StatBlob, SteerQueuedInput, StopThread, ThreadList, ThreadStateResult,
-    TriageThread, UpdateProject, UpdateQueuedInput, UpdateThread, WaitThread,
+    ListWorktrees, MoveThread, ProjectList, ProjectResult, PromoteThread, ReadClone,
+    ReadEntryChunk, ReadFile, ReadProject, ReadThreadState, RemoveProject, RemoveQueuedInput,
+    RemoveWorktree, RestoreCheckpoint, RetitleThread, SearchFiles, SearchHits, SearchThreads,
+    SendInput, SetProjectAccess, SetThreadAccess, StartClone, StatBlob, SteerQueuedInput,
+    StopThread, ThreadList, ThreadStateResult, TriageThread, UpdateProject, UpdateQueuedInput,
+    UpdateThread, WaitThread,
 };
 
 use super::{Workspace, runs, store};
@@ -75,12 +74,6 @@ handlers! {
         ReadFile, |workspace, args| {
             workspace.read_file_preview(args).await
         }
-        ReadAttachment, |workspace, ReadAttachment { thread, id }| {
-            let mut items = workspace.attachments(thread, &[id]).await?;
-            items
-                .pop()
-                .ok_or_else(|| Error::invalid("attachment not found"))
-        }
         StatBlob, |workspace, StatBlob { thread, id }| {
             workspace.stat_blob(thread, &id).await
         }
@@ -95,8 +88,10 @@ handlers! {
         CreateProject, |workspace, CreateProject { path, name }| {
             Ok(ProjectResult { project: workspace.create_project(&path, name).await? })
         }
-        UpdateProject, |workspace, UpdateProject { project, name, changes }| {
-            workspace.update_project(&project, name, changes.unwrap_or_default()).await?;
+        UpdateProject, |workspace, ctx, UpdateProject { project, name, changes }| {
+            workspace
+                .update_project(&ctx.principal.key(), &project, name, changes.unwrap_or_default())
+                .await?;
             Ok(Empty {})
         }
         BrowseFolders, |workspace, args| { workspace.browse_folders(args).await }
@@ -124,12 +119,9 @@ handlers! {
         GitHubChecks, |workspace, args| { workspace.github_checks(args).await }
         GitHubPullPage, |workspace, args| { workspace.github_reviews(args).await }
         GitHubCreatePull, |workspace, args| { workspace.github_create_pull(args).await }
-        GitHubLaunch, |workspace, args| { workspace.github_launch(args).await }
+        GitHubLaunch, |workspace, ctx, args| { workspace.github_launch(ctx.principal.key(), args).await }
         GitHubRepositories, |workspace, args| { workspace.github_repositories(args).await }
         PromoteThread, |workspace, args| { workspace.promote_thread(args).await }
-        ReadProjectIcon, |workspace, args| {
-            workspace.project_icon(args).await
-        }
         RemoveProject, |workspace, RemoveProject { project }| {
             workspace.remove_project(&project).await?;
             Ok(Empty {})
@@ -164,8 +156,8 @@ handlers! {
         MoveThread, |workspace, input| {
             workspace.move_thread(input).await
         }
-        LaunchThread, |workspace, input| {
-            workspace.launch(input).await
+        LaunchThread, |workspace, ctx, input| {
+            workspace.launch(ctx.principal.key(), input).await
         }
         ForkThread, |workspace, input| {
             workspace.fork(input).await
@@ -184,7 +176,7 @@ handlers! {
                     }
                 }
             }
-            workspace.send(input).await
+            workspace.send(ctx.principal.key(), input).await
         }
         WaitThread, |workspace, WaitThread { thread, run, timeout_ms }| {
             let timeout = timeout_ms.unwrap_or(30_000);
@@ -348,21 +340,19 @@ impl Workspace {
                 .first_raw()
                 .unwrap_or("application/octet-stream");
             if guessed.starts_with("image/") {
-                let read = file
-                    .read_bounded(IMAGE_LIMIT)
-                    .map_err(|error| Error::invalid(format!("couldn't read image: {error}")))?;
-                let mime = sniff_mime(rel.as_path(), &read.bytes);
-                let body = if read.truncated {
+                let (header, total) = file
+                    .read_range(0, 4096)
+                    .map_err(|error| Error::invalid(format!("couldn't inspect image: {error}")))?;
+                let mime = sniff_mime(rel.as_path(), &header);
+                let body = if total > IMAGE_LIMIT as u64 {
                     FileBody::Binary { too_large: true }
                 } else {
-                    FileBody::Image {
-                        data: STANDARD.encode(&read.bytes),
-                    }
+                    FileBody::Image {}
                 };
                 return Ok(FileContent {
                     path: path_str,
                     mime,
-                    size: read.size,
+                    size: total,
                     body,
                 });
             }
