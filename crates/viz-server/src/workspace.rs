@@ -53,6 +53,7 @@ use viz_core::{
 use viz_protocol::{EntryId, Lifecycle, RunId, TaskId, ThreadId};
 
 pub(crate) use self::{
+    blobs::StagedUpload,
     icons::ProjectIconChunk,
     notifications::{Change, EntityChange, WatchChange},
     rpc::ROUTES,
@@ -82,7 +83,6 @@ pub(crate) struct Workspace {
     dir: PathBuf,
     leases: Arc<ResourceLeases>,
     blobs: blobs::BlobStore,
-    thumbs: thumbs::ThumbCache,
     entry_chunks: Arc<store::EntryChunkCache>,
     /// Canonical parent of the worktrees viz creates. A checkout below it
     /// also needs a matching ownership marker before viz can remove it.
@@ -96,7 +96,6 @@ pub(crate) struct Workspace {
     icons: icons::Icons,
     clones: clones::Clones,
     reservations: Arc<git::Reservations>,
-    pulls: pulls::Pulls,
     pull_due: Notify,
     github: Mutex<BTreeMap<String, viz_github::GitHub>>,
     requests: Arc<Requests>,
@@ -165,7 +164,6 @@ impl Workspace {
             dir,
             leases,
             blobs,
-            thumbs: thumbs::ThumbCache::default(),
             entry_chunks: Arc::new(store::EntryChunkCache::default()),
             worktrees,
             default_harness: config.default_harness.clone(),
@@ -176,7 +174,6 @@ impl Workspace {
             icons: icons::Icons::default(),
             clones: clones::Clones::default(),
             reservations: Arc::new(git::Reservations::default()),
-            pulls: pulls::Pulls::default(),
             pull_due: Notify::new(),
             github: Mutex::default(),
             requests: Arc::new(Requests::default()),
@@ -258,7 +255,6 @@ impl Workspace {
         else {
             return Ok(None);
         };
-        record.summary.pull_request = self.pull_summary(record.summary.id, &record.cwd);
         record.summary.harness_name = self.harness_name(&record.summary.harness).to_owned();
         if let Some(path) = record.worktree_path {
             record.summary.worktree = store::thread_worktree(Some(path)).await;
@@ -295,7 +291,6 @@ impl Workspace {
         let mut threads: Vec<_> = records
             .into_iter()
             .map(|mut record| {
-                record.summary.pull_request = self.pull_summary(record.summary.id, &record.cwd);
                 record.summary.harness_name = self.harness_name(&record.summary.harness).to_owned();
                 if let Some(path) = record.worktree_path.as_deref() {
                     record.summary.worktree = resolved.get(path).cloned();
@@ -526,28 +521,44 @@ impl Workspace {
         attachments::prepare_delegated(self, principal_key, parent, uploads, stored_ids).await
     }
 
-    pub(crate) async fn stage_uploaded_blob(
+    /// Begins a disk-streamed upload into `$STATE/<env>/blobs/uploads/`.
+    pub(crate) async fn begin_upload(&self) -> Result<StagedUpload, Error> {
+        self.blobs.begin_upload().await
+    }
+
+    /// Commits a disk-streamed upload under a principal-scoped stage lease.
+    pub(crate) async fn stage_committed_blob(
         &self,
         principal_key: &str,
         name: String,
         mime: String,
-        bytes: Vec<u8>,
+        upload: Option<StagedUpload>,
     ) -> Result<viz_protocol::BlobInfo, Error> {
-        attachments::stage_raw(self, principal_key, name, mime, bytes).await
+        let (blob_id, size, permit) = match upload {
+            Some(upload) => upload.finish().await?,
+            None => self.blobs.put(Vec::new()).await?,
+        };
+        attachments::stage_committed(self, principal_key, name, mime, blob_id, size, permit).await
     }
 
-    pub(crate) async fn store_uploaded_attachment(
+    /// Commits a disk-streamed upload directly onto `thread`.
+    pub(crate) async fn store_committed_attachment(
         &self,
         thread: ThreadId,
         name: String,
         mime: String,
-        bytes: Vec<u8>,
+        upload: Option<StagedUpload>,
     ) -> Result<viz_protocol::BlobInfo, Error> {
-        attachments::store_raw(self, thread, name, mime, bytes).await
+        let (blob_id, size, permit) = match upload {
+            Some(upload) => upload.finish().await?,
+            None => self.blobs.put(Vec::new()).await?,
+        };
+        attachments::store_committed(self, thread, name, mime, blob_id, size, permit).await
     }
 
-    /// Reads one content-plane chunk for a thread-owned attachment, either raw
-    /// bytes or a cached server-rendered preview thumbnail.
+    /// Reads one content-plane chunk for a thread-owned attachment, serving
+    /// originals and persisted 1024 px previews directly via `read_range`
+    /// without an in-RAM thumbnail cache.
     pub(crate) async fn read_attachment_chunk(
         &self,
         thread: ThreadId,
@@ -563,29 +574,63 @@ impl Workspace {
                 Ok((bytes, total, info.mime))
             }
             viz_protocol::ContentVariant::Preview { max_px } => {
-                let rendered = if let Some(hit) = self.thumbs.get(&info.blob, max_px) {
-                    hit
+                let clamped = thumbs::clamp_px(max_px);
+                if clamped == thumbs::ATTACHMENT_PREVIEW_PX {
+                    if let Some((preview_blob, preview_mime)) =
+                        attachments::ensure_preview(self, &info.blob, &info.mime, info.size).await?
+                        && let Ok((bytes, total)) =
+                            self.blobs.read_range(&preview_blob, offset, len).await
+                    {
+                        return Ok((bytes, total, preview_mime));
+                    }
+                    let (bytes, total) = self.blobs.read_range(&info.blob, offset, len).await?;
+                    return Ok((bytes, total, info.mime));
+                }
+                if !thumbs::is_raster_image_mime(&info.mime) {
+                    let (bytes, total) = self.blobs.read_range(&info.blob, offset, len).await?;
+                    return Ok((bytes, total, info.mime));
+                }
+                let (header, _) = self
+                    .blobs
+                    .read_range(&info.blob, 0, thumbs::HEADER_PROBE_BYTES)
+                    .await?;
+                if let Some((width, height)) = thumbs::probe_dimensions(&header)
+                    && width <= clamped
+                    && height <= clamped
+                {
+                    let (bytes, total) = self.blobs.read_range(&info.blob, offset, len).await?;
+                    return Ok((bytes, total, info.mime));
+                }
+                let raw = self
+                    .blobs
+                    .read(
+                        &info.blob,
+                        info.size
+                            .min(viz_protocol::limits::ATTACHMENT_TOTAL_BYTES as u64),
+                    )
+                    .await?;
+                let original_mime = info.mime.clone();
+                let rendered = tokio::task::spawn_blocking(move || {
+                    thumbs::render_if_larger(&original_mime, &raw, clamped)
+                })
+                .await
+                .map_err(|error| {
+                    Error::unavailable(format!("thumbnail worker failed: {error}"))
+                })??;
+                if let Some(preview) = rendered {
+                    Ok(slice_preview(&preview, offset, len))
                 } else {
-                    let raw = self
-                        .blobs
-                        .read(
-                            &info.blob,
-                            info.size
-                                .min(viz_protocol::limits::ATTACHMENT_TOTAL_BYTES as u64),
-                        )
-                        .await?;
-                    self.thumbs
-                        .render(info.blob, info.mime, raw, max_px)
-                        .await?
-                };
-                Ok(slice_rendered(&rendered, offset, len))
+                    let (bytes, total) = self.blobs.read_range(&info.blob, offset, len).await?;
+                    Ok((bytes, total, info.mime))
+                }
             }
         }
     }
 
     /// Reads one content-plane chunk for a file confined inside a thread or
-    /// project root, either raw bytes or a cached server-rendered preview
-    /// thumbnail.
+    /// project root. Mutable workspace images probe header dimensions first and
+    /// pass through via `read_range` when already within `max_px`, without an
+    /// in-RAM cache.
     pub(crate) async fn read_file_chunk(
         &self,
         root: viz_protocol::FileRoot,
@@ -609,48 +654,70 @@ impl Workspace {
             }
         };
         let root_path = PathBuf::from(root_dir);
-        match variant {
-            viz_protocol::ContentVariant::Original => tokio::task::spawn_blocking(move || {
-                let root = viz_fs::Root::open(&root_path)
-                    .map_err(|error| Error::invalid(format!("couldn't open root: {error}")))?;
-                let file = root
-                    .open_regular(&rel)
-                    .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
-                let (bytes, total) = file
-                    .read_range(offset, len)
-                    .map_err(|error| Error::invalid(format!("couldn't read file: {error}")))?;
-                let mime = if offset == 0 {
-                    viz_fs::sniff_mime(rel.as_path(), &bytes)
-                } else {
-                    mime_guess::from_path(rel.as_path())
-                        .first_raw()
-                        .unwrap_or("application/octet-stream")
-                        .to_owned()
-                };
-                Ok((bytes, total, mime))
-            })
-            .await
-            .map_err(|error| Error::unavailable(format!("file reader failed: {error}")))?,
-            viz_protocol::ContentVariant::Preview { max_px } => {
-                let (raw, mime) = tokio::task::spawn_blocking(move || {
-                    let root = viz_fs::Root::open(&root_path)
-                        .map_err(|error| Error::invalid(format!("couldn't open root: {error}")))?;
-                    let file = root
+        tokio::task::spawn_blocking(move || {
+            let root = viz_fs::Root::open(&root_path)
+                .map_err(|error| Error::invalid(format!("couldn't open root: {error}")))?;
+            let file = root
+                .open_regular(&rel)
+                .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
+            match variant {
+                viz_protocol::ContentVariant::Original => {
+                    let (bytes, total) = file
+                        .read_range(offset, len)
+                        .map_err(|error| Error::invalid(format!("couldn't read file: {error}")))?;
+                    let mime = if offset == 0 {
+                        viz_fs::sniff_mime(rel.as_path(), &bytes)
+                    } else {
+                        mime_guess::from_path(rel.as_path())
+                            .first_raw()
+                            .unwrap_or("application/octet-stream")
+                            .to_owned()
+                    };
+                    Ok((bytes, total, mime))
+                }
+                viz_protocol::ContentVariant::Preview { max_px } => {
+                    let clamped = thumbs::clamp_px(max_px);
+                    let (header, total) =
+                        file.read_range(0, thumbs::HEADER_PROBE_BYTES)
+                            .map_err(|error| {
+                                Error::invalid(format!("couldn't inspect image: {error}"))
+                            })?;
+                    let mime = viz_fs::sniff_mime(rel.as_path(), &header);
+                    if !thumbs::is_raster_image_mime(&mime)
+                        || thumbs::probe_dimensions(&header)
+                            .is_some_and(|(w, h)| w <= clamped && h <= clamped)
+                    {
+                        let end = offset.saturating_add(len as u64);
+                        if end <= header.len() as u64 {
+                            let start = usize::try_from(offset).unwrap_or(header.len());
+                            let finish = usize::try_from(end).unwrap_or(header.len());
+                            return Ok((header[start..finish].to_vec(), total, mime));
+                        }
+                        let (bytes, total) = root
+                            .open_regular(&rel)
+                            .map_err(|error| {
+                                Error::invalid(format!("couldn't open file: {error}"))
+                            })?
+                            .read_range(offset, len)
+                            .map_err(|error| {
+                                Error::invalid(format!("couldn't read image: {error}"))
+                            })?;
+                        return Ok((bytes, total, mime));
+                    }
+                    let raw = root
                         .open_regular(&rel)
-                        .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?;
-                    let raw = file
+                        .map_err(|error| Error::invalid(format!("couldn't open file: {error}")))?
                         .read_exact_bounded(viz_protocol::limits::PREVIEW_IMAGE_BYTES as u64)
                         .map_err(|error| Error::invalid(format!("couldn't read image: {error}")))?;
-                    let mime = viz_fs::sniff_mime(rel.as_path(), &raw);
-                    Ok::<_, Error>((raw, mime))
-                })
-                .await
-                .map_err(|error| Error::unavailable(format!("file reader failed: {error}")))??;
-                let key = blobs::sha256_hex(&raw);
-                let rendered = self.thumbs.render(key, mime, raw, max_px).await?;
-                Ok(slice_rendered(&rendered, offset, len))
+                    Ok(thumbs::render_if_larger(&mime, &raw, clamped)?.map_or_else(
+                        || slice_bytes(&raw, mime, offset, len),
+                        |preview| slice_preview(&preview, offset, len),
+                    ))
+                }
             }
-        }
+        })
+        .await
+        .map_err(|error| Error::unavailable(format!("file reader failed: {error}")))?
     }
 
     fn attachment_dir(&self, thread: ThreadId) -> PathBuf {
@@ -783,19 +850,19 @@ impl Workspace {
     }
 }
 
-fn slice_rendered(
-    rendered: &thumbs::RenderedImage,
+fn slice_preview(
+    rendered: &thumbs::RenderedPreview,
     offset: u64,
     len: usize,
 ) -> (Vec<u8>, u64, String) {
-    let total = rendered.bytes.len() as u64;
+    slice_bytes(&rendered.bytes, rendered.mime.clone(), offset, len)
+}
+
+fn slice_bytes(bytes: &[u8], mime: String, offset: u64, len: usize) -> (Vec<u8>, u64, String) {
+    let total = bytes.len() as u64;
     let start = usize::try_from(offset)
-        .unwrap_or(rendered.bytes.len())
-        .min(rendered.bytes.len());
-    let end = start.saturating_add(len).min(rendered.bytes.len());
-    (
-        rendered.bytes[start..end].to_vec(),
-        total,
-        rendered.mime.clone(),
-    )
+        .unwrap_or(bytes.len())
+        .min(bytes.len());
+    let end = start.saturating_add(len).min(bytes.len());
+    (bytes[start..end].to_vec(), total, mime)
 }

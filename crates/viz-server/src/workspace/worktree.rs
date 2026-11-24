@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use tokio_util::sync::CancellationToken;
 use viz_core::placement::{self, Checkout};
-use viz_git::{Head, Repository, WorktreeRemoval};
+use viz_git::{Repository, WorktreeRemoval};
 
 use super::store;
 use crate::error::Error;
@@ -12,12 +12,10 @@ use crate::error::Error;
 const OWNER_MARKER: &str = "viz-managed-checkout";
 
 pub(super) async fn head(path: &Path) -> Option<Option<String>> {
-    let cancel = CancellationToken::new();
-    let repo = Repository::discover(path, &cancel).await.ok()?;
-    Some(match repo.head(&cancel).await.ok()? {
-        Head::Branch { name, .. } | Head::Unborn { name } => Some(name),
-        Head::Detached { .. } => None,
-    })
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || viz_git::fast_head_branch(&path))
+        .await
+        .ok()?
 }
 
 pub(super) async fn repository(path: &str) -> Option<placement::Repository> {

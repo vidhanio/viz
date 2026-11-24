@@ -3,7 +3,7 @@
 use jsonrpsee_types::{ErrorObject, Response as JsonResponse, ResponsePayload};
 pub(crate) use jsonrpsee_types::{Id, Request};
 use serde::{Serialize, de::DeserializeOwned};
-use serde_json::Value;
+use serde_json::{Value, value::RawValue};
 pub(crate) use viz_protocol::{
     AttachmentCapabilities, BlobAttachment, ClientKind, ConfigOption, ContextUsage as Usage, Entry,
     EntryData as NewEntry, EntryId, EntryPage, Environment, EnvironmentStatus, Harness, Hello,
@@ -94,8 +94,8 @@ pub(crate) fn decode<T: DeserializeOwned>(params: Value) -> Result<T, Error> {
     serde_json::from_value(params).map_err(|error| Error::invalid(error.to_string()))
 }
 
-pub(crate) fn encode(value: impl Serialize) -> Result<Value, Error> {
-    Ok(serde_json::to_value(value)?)
+pub(crate) fn encode(value: impl Serialize) -> Result<Box<RawValue>, Error> {
+    Ok(serde_json::value::to_raw_value(&value)?)
 }
 
 pub(crate) fn raw_params<'a>(request: &'a Request<'_>) -> &'a str {

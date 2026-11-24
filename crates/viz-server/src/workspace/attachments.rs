@@ -15,7 +15,7 @@ use super::{
     Workspace, blobs,
     reconcile::{BlobPermit, ResourceLeases},
     sql::{Conn, exec, row},
-    store,
+    store, thumbs,
 };
 use crate::{
     acp::Output,
@@ -36,22 +36,24 @@ pub(super) struct ExtractedMedia {
     _permit: BlobPermit,
 }
 
-/// Validates and persists raw bytes uploaded via `ContentRequest::UploadStage`,
-/// recording a `blobs` row and granting `principal_key` a temporary stage lease
-/// so a subsequent `thread.launch`, `thread.send`, `task.delegate`, or
-/// `project.update` can claim the blob without re-sending bytes.
-pub(super) async fn stage_raw(
+/// Records a disk-streamed upload from `ContentRequest::UploadStage` in
+/// `blobs`, pre-renders a compact 1024 px preview blob for large raster images,
+/// and grants `principal_key` a temporary stage lease so a subsequent
+/// `thread.launch`, `thread.send`, `task.delegate`, or `project.update` can
+/// claim the blob without re-sending bytes.
+pub(super) async fn stage_committed(
     workspace: &Workspace,
     principal_key: &str,
     name: String,
     mime: String,
-    bytes: Vec<u8>,
+    blob_id: String,
+    size: u64,
+    permit: BlobPermit,
 ) -> Result<BlobInfo, Error> {
     validate_name(&name)?;
-    if bytes.len() > TOTAL_LIMIT {
+    if size > TOTAL_LIMIT as u64 {
         return Err(too_large());
     }
-    let (blob_id, size, permit) = workspace.blobs.put(bytes).await?;
     let now = store::now();
     let blob_for_write = blob_id.clone();
     let mime_for_write = mime.clone();
@@ -73,6 +75,9 @@ pub(super) async fn stage_raw(
         })
         .await?;
     workspace.leases.mark_client_staged(principal_key, &blob_id);
+    if thumbs::is_raster_image_mime(&mime) {
+        let _ = ensure_preview(workspace, &blob_id, &mime, size).await;
+    }
     drop(permit);
     Ok(BlobInfo {
         id: blob_id.clone(),
@@ -81,6 +86,117 @@ pub(super) async fn stage_raw(
         mime,
         size,
     })
+}
+
+/// Ensures a persisted 1024 px preview blob exists for oversized raster
+/// attachments, returning `Ok(Some((preview_blob_id, preview_mime)))` when a
+/// downscaled blob should be served or `Ok(None)` when the original blob
+/// already fits (or is non-raster) and should be served directly via
+/// `read_range`.
+pub(super) async fn ensure_preview(
+    workspace: &Workspace,
+    blob_id: &str,
+    original_mime: &str,
+    size: u64,
+) -> Result<Option<(String, String)>, Error> {
+    if !thumbs::is_raster_image_mime(original_mime) {
+        return Ok(None);
+    }
+    let id_for_read = blob_id.to_owned();
+    let stored = workspace
+        .db
+        .read(move |conn| {
+            row(
+                conn,
+                "SELECT preview, preview_mime FROM blobs WHERE id = ?1",
+                [id_for_read.as_str().into()],
+            )?
+            .map(|mut r| Ok::<_, Error>((r.opt_str(0)?, r.opt_str(1)?)))
+            .transpose()
+        })
+        .await?;
+    if let Some((preview, preview_mime)) = stored {
+        if preview_mime.as_deref() == Some(thumbs::PREVIEW_ORIGINAL_SENTINEL) {
+            return Ok(None);
+        }
+        if let (Some(preview), Some(preview_mime)) = (preview, preview_mime) {
+            return Ok(Some((preview, preview_mime)));
+        }
+    }
+    let (header, _) = workspace
+        .blobs
+        .read_range(blob_id, 0, thumbs::HEADER_PROBE_BYTES)
+        .await?;
+    if let Some((width, height)) = thumbs::probe_dimensions(&header)
+        && width <= thumbs::ATTACHMENT_PREVIEW_PX
+        && height <= thumbs::ATTACHMENT_PREVIEW_PX
+    {
+        mark_preview_original(workspace, blob_id).await?;
+        return Ok(None);
+    }
+    let raw = workspace
+        .blobs
+        .read(blob_id, size.min(TOTAL_LIMIT as u64))
+        .await?;
+    let mime_owned = original_mime.to_owned();
+    let rendered = tokio::task::spawn_blocking(move || {
+        thumbs::render_if_larger(&mime_owned, &raw, thumbs::ATTACHMENT_PREVIEW_PX)
+    })
+    .await
+    .map_err(|error| Error::unavailable(format!("thumbnail worker failed: {error}")))??;
+    let Some(rendered) = rendered else {
+        mark_preview_original(workspace, blob_id).await?;
+        return Ok(None);
+    };
+    let (preview_id, preview_size, permit) = workspace.blobs.put(rendered.bytes).await?;
+    let now = store::now();
+    let parent_id = blob_id.to_owned();
+    let preview_for_tx = preview_id.clone();
+    let preview_mime = rendered.mime.clone();
+    let preview_mime_tx = preview_mime.clone();
+    workspace
+        .db
+        .write_tx(move |tx| {
+            exec(
+                tx,
+                "INSERT INTO blobs (id, size, mime, created_at) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT DO NOTHING",
+                [
+                    preview_for_tx.as_str().into(),
+                    preview_size.into(),
+                    preview_mime_tx.as_str().into(),
+                    now.into(),
+                ],
+            )?;
+            exec(
+                tx,
+                "UPDATE blobs SET preview = ?2, preview_mime = ?3 WHERE id = ?1",
+                [
+                    parent_id.as_str().into(),
+                    preview_for_tx.as_str().into(),
+                    preview_mime_tx.as_str().into(),
+                ],
+            )?;
+            Ok(())
+        })
+        .await?;
+    drop(permit);
+    Ok(Some((preview_id, preview_mime)))
+}
+
+async fn mark_preview_original(workspace: &Workspace, blob_id: &str) -> Result<(), Error> {
+    let id = blob_id.to_owned();
+    workspace
+        .db
+        .write(move |conn| {
+            exec(
+                conn,
+                "UPDATE blobs SET preview = NULL, preview_mime = ?2 WHERE id = ?1",
+                [id.as_str().into(), thumbs::PREVIEW_ORIGINAL_SENTINEL.into()],
+            )?;
+            Ok(())
+        })
+        .await
 }
 
 /// Authorizes and links content-plane staged blobs and thread-owned stored
@@ -368,20 +484,21 @@ pub(super) fn link_peer(
     Ok(attachments)
 }
 
-/// Validates and stores raw uploaded attachment bytes for `thread`, returning
+/// Records a disk-streamed attachment upload directly on `thread`, returning
 /// its persisted [`BlobInfo`].
-pub(super) async fn store_raw(
+pub(super) async fn store_committed(
     workspace: &Workspace,
     thread: ThreadId,
     name: String,
     mime: String,
-    bytes: Vec<u8>,
+    blob_id: String,
+    size: u64,
+    permit: BlobPermit,
 ) -> Result<BlobInfo, Error> {
     validate_name(&name)?;
-    if bytes.len() > TOTAL_LIMIT {
+    if size > TOTAL_LIMIT as u64 {
         return Err(too_large());
     }
-    let (blob_id, size, permit) = workspace.blobs.put(bytes).await?;
     let now = store::now();
     let blob_for_tx = blob_id.clone();
     let name_for_tx = name.clone();
@@ -417,6 +534,9 @@ pub(super) async fn store_raw(
             Ok(())
         })
         .await?;
+    if thumbs::is_raster_image_mime(&mime) {
+        let _ = ensure_preview(workspace, &blob_id, &mime, size).await;
+    }
     drop(permit);
     Ok(BlobInfo {
         id: blob_id.clone(),

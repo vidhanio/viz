@@ -22,7 +22,7 @@ use axum::{
     response::{IntoResponse, Response as HttpResponse},
     routing::{get, put},
 };
-use serde_json::{Value, json};
+use serde_json::{Value, json, value::RawValue};
 use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, UnixListener};
 use tokio_util::sync::CancellationToken;
@@ -237,7 +237,7 @@ impl Server {
         }
     }
 
-    async fn call(&self, ctx: &CallCtx, method: &str, raw: &str) -> Result<Value, Error> {
+    async fn call(&self, ctx: &CallCtx, method: &str, raw: &str) -> Result<Box<RawValue>, Error> {
         if let Some(route) = Route::find(ROUTES, method) {
             route.call(self, ctx, raw).await
         } else if let Some(route) = Route::find(tasks::ROUTES, method) {

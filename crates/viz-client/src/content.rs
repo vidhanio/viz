@@ -9,7 +9,8 @@ use std::{
     },
 };
 
-use futures_util::{SinkExt, StreamExt};
+use bytes::Bytes;
+use futures_util::{SinkExt, StreamExt, stream::FuturesOrdered};
 use serde::Deserialize;
 use tokio::{
     io::{AsyncRead, AsyncWrite},
@@ -18,12 +19,12 @@ use tokio::{
 use tokio_tungstenite::{
     WebSocketStream,
     tungstenite::{
-        Bytes, Message, client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig,
+        Message, client::IntoClientRequest, http::HeaderValue, protocol::WebSocketConfig,
     },
 };
 use viz_protocol::{
     BlobInfo, ClientInfo, ConnectionChannel, ContentRequest, ContentResponse, ContentVariant,
-    FileRoot, Hello, HelloParams, Method, PROTOCOL_VERSION, ThreadId, decode_content_frame,
+    FileRoot, Hello, HelloParams, Method, PROTOCOL_VERSION, ThreadId, decode_content_frame_offset,
     encode_content_frame, limits,
 };
 
@@ -31,6 +32,7 @@ use crate::{Endpoint, Error, Result};
 
 const RPC_PATH: &str = "/v2/rpc";
 const OUTGOING_CAPACITY: usize = 64;
+const PULL_PIPELINE: usize = 4;
 
 /// A downloaded attachment or workspace file fetched over the content plane.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -318,7 +320,8 @@ impl ContentClient {
     }
 
     /// Pulls a project's image icon over the content plane, honoring `etag` to
-    /// skip unchanged payloads.
+    /// skip unchanged payloads and pipelining remaining chunks when
+    /// multi-chunk.
     ///
     /// # Errors
     ///
@@ -331,86 +334,81 @@ impl ContentClient {
         max_bytes: usize,
     ) -> Result<ProjectIconFetch> {
         let chunk_len = u32::try_from(limits::CONTENT_CHUNK_BYTES).unwrap_or(u32::MAX);
-        let mut bytes = Vec::new();
-        let mut offset = 0u64;
-        let mut mime = String::new();
-        let mut resolved_etag = String::new();
-        loop {
-            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            let req = ContentRequest::GetProjectIcon {
-                id,
-                project: project.to_owned(),
-                etag: (offset == 0).then(|| etag.map(str::to_owned)).flatten(),
+        let first_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let first_req = ContentRequest::GetProjectIcon {
+            id: first_id,
+            project: project.to_owned(),
+            etag: etag.map(str::to_owned),
+            offset: 0,
+            len: chunk_len,
+        };
+        let (resp, payload) = self.call(first_id, &first_req, &[]).await?;
+        let (total_size, mime, resolved_etag, eof) = match resp {
+            ContentResponse::Empty { .. } => return Ok(ProjectIconFetch::None),
+            ContentResponse::NotModified { etag, .. } => {
+                return Ok(ProjectIconFetch::Unchanged { etag });
+            }
+            ContentResponse::Chunk {
+                total_size,
+                mime,
                 offset,
-                len: chunk_len,
-            };
-            let (resp, payload) = self.call(id, &req, &[]).await?;
-            match resp {
-                ContentResponse::Empty { .. } => return Ok(ProjectIconFetch::None),
-                ContentResponse::NotModified { etag, .. } => {
-                    return Ok(ProjectIconFetch::Unchanged { etag });
-                }
-                ContentResponse::Chunk {
-                    total_size,
-                    mime: reported_mime,
-                    offset: reported_offset,
-                    eof,
-                    etag: reported_etag,
-                    ..
-                } => {
-                    if reported_offset != offset {
-                        return Err(Error::Rpc {
-                            method: "content.get_project_icon",
-                            code: -32603,
-                            message: "out-of-order icon chunk offset".into(),
-                            git_failure: None,
-                        });
-                    }
-                    if offset == 0 {
-                        if total_size > max_bytes as u64 {
-                            return Err(Error::Rpc {
-                                method: "content.get_project_icon",
-                                code: -32602,
-                                message: format!("icon exceeds {max_bytes}-byte client limit"),
-                                git_failure: None,
-                            });
-                        }
-                        mime = reported_mime;
-                        resolved_etag = reported_etag.unwrap_or_default();
-                        let reserve = usize::try_from(total_size).unwrap_or(0).min(max_bytes);
-                        bytes.reserve(reserve);
-                    }
-                    if bytes.len().saturating_add(payload.len()) > max_bytes {
-                        return Err(Error::Rpc {
-                            method: "content.get_project_icon",
-                            code: -32602,
-                            message: format!("icon exceeds {max_bytes}-byte client limit"),
-                            git_failure: None,
-                        });
-                    }
-                    bytes.extend_from_slice(&payload);
-                    offset = offset.saturating_add(payload.len() as u64);
-                    if eof || payload.is_empty() {
-                        break;
-                    }
-                }
-                ContentResponse::Error { code, message, .. } => {
-                    return Err(Error::Rpc {
-                        method: "content.get_project_icon",
-                        code: i64::from(code),
-                        message,
-                        git_failure: None,
-                    });
-                }
-                _ => {
+                eof,
+                etag,
+                ..
+            } => {
+                if offset != 0 {
                     return Err(Error::Rpc {
                         method: "content.get_project_icon",
                         code: -32603,
-                        message: "unexpected project icon response".into(),
+                        message: "out-of-order icon chunk offset".into(),
                         git_failure: None,
                     });
                 }
+                if total_size > max_bytes as u64 || payload.len() > max_bytes {
+                    return Err(Error::Rpc {
+                        method: "content.get_project_icon",
+                        code: -32602,
+                        message: format!("icon exceeds {max_bytes}-byte client limit"),
+                        git_failure: None,
+                    });
+                }
+                (total_size, mime, etag.unwrap_or_default(), eof)
             }
+            ContentResponse::Error { code, message, .. } => {
+                return Err(Error::Rpc {
+                    method: "content.get_project_icon",
+                    code: i64::from(code),
+                    message,
+                    git_failure: None,
+                });
+            }
+            _ => {
+                return Err(Error::Rpc {
+                    method: "content.get_project_icon",
+                    code: -32603,
+                    message: "unexpected project icon response".into(),
+                    git_failure: None,
+                });
+            }
+        };
+        let reserve = usize::try_from(total_size).unwrap_or(0).min(max_bytes);
+        let mut bytes = Vec::with_capacity(reserve);
+        bytes.extend_from_slice(&payload);
+        if !eof && !payload.is_empty() && (bytes.len() as u64) < total_size {
+            self.pull_remaining(
+                "content.get_project_icon",
+                total_size,
+                max_bytes,
+                &mut bytes,
+                |id, offset, len| ContentRequest::GetProjectIcon {
+                    id,
+                    project: project.to_owned(),
+                    etag: None,
+                    offset,
+                    len,
+                },
+            )
+            .await?;
         }
         Ok(ProjectIconFetch::Image {
             etag: resolved_etag,
@@ -484,75 +482,58 @@ impl ContentClient {
         mut build: impl FnMut(u64, u64, u32) -> ContentRequest,
     ) -> Result<DownloadedContent> {
         let chunk_len = u32::try_from(limits::CONTENT_CHUNK_BYTES).unwrap_or(u32::MAX);
-        let mut bytes = Vec::new();
-        let mut offset = 0u64;
-        let mut mime = String::new();
-        let mut total_size = 0u64;
-        loop {
-            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-            let req = build(id, offset, chunk_len);
-            let (resp, payload) = self.call(id, &req, &[]).await?;
-            match resp {
-                ContentResponse::Chunk {
-                    total_size: reported_total,
-                    mime: reported_mime,
-                    offset: reported_offset,
-                    eof,
-                    ..
-                } => {
-                    if reported_offset != offset {
-                        return Err(Error::Rpc {
-                            method: "content.get",
-                            code: -32603,
-                            message: "out-of-order content chunk offset".into(),
-                            git_failure: None,
-                        });
-                    }
-                    if offset == 0 {
-                        if reported_total > max_bytes as u64 {
-                            return Err(Error::Rpc {
-                                method: "content.get",
-                                code: -32602,
-                                message: format!("content exceeds {max_bytes}-byte client limit"),
-                                git_failure: None,
-                            });
-                        }
-                        mime = reported_mime;
-                        total_size = reported_total;
-                        let reserve = usize::try_from(total_size).unwrap_or(0).min(max_bytes);
-                        bytes.reserve(reserve);
-                    }
-                    if bytes.len().saturating_add(payload.len()) > max_bytes {
-                        return Err(Error::Rpc {
-                            method: "content.get",
-                            code: -32602,
-                            message: format!("content exceeds {max_bytes}-byte client limit"),
-                            git_failure: None,
-                        });
-                    }
-                    bytes.extend_from_slice(&payload);
-                    offset = offset.saturating_add(payload.len() as u64);
-                    if eof || payload.is_empty() {
-                        break;
-                    }
-                }
-                ContentResponse::Error { code, message, .. } => {
-                    return Err(Error::Rpc {
-                        method: "content.get",
-                        code: i64::from(code),
-                        message,
-                        git_failure: None,
-                    });
-                }
-                _ => {
+        let first_id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let first_req = build(first_id, 0, chunk_len);
+        let (resp, payload) = self.call(first_id, &first_req, &[]).await?;
+        let (total_size, mime, eof) = match resp {
+            ContentResponse::Chunk {
+                total_size,
+                mime,
+                offset,
+                eof,
+                ..
+            } => {
+                if offset != 0 {
                     return Err(Error::Rpc {
                         method: "content.get",
                         code: -32603,
-                        message: "unexpected content response".into(),
+                        message: "out-of-order content chunk offset".into(),
                         git_failure: None,
                     });
                 }
+                if total_size > max_bytes as u64 || payload.len() > max_bytes {
+                    return Err(Error::Rpc {
+                        method: "content.get",
+                        code: -32602,
+                        message: format!("content exceeds {max_bytes}-byte client limit"),
+                        git_failure: None,
+                    });
+                }
+                (total_size, mime, eof)
             }
+            ContentResponse::Error { code, message, .. } => {
+                return Err(Error::Rpc {
+                    method: "content.get",
+                    code: i64::from(code),
+                    message,
+                    git_failure: None,
+                });
+            }
+            _ => {
+                return Err(Error::Rpc {
+                    method: "content.get",
+                    code: -32603,
+                    message: "unexpected content response".into(),
+                    git_failure: None,
+                });
+            }
+        };
+        let reserve = usize::try_from(total_size).unwrap_or(0).min(max_bytes);
+        let mut bytes = Vec::with_capacity(reserve);
+        bytes.extend_from_slice(&payload);
+        if !eof && !payload.is_empty() && (bytes.len() as u64) < total_size {
+            self.pull_remaining("content.get", total_size, max_bytes, &mut bytes, build)
+                .await?;
         }
         Ok(DownloadedContent {
             bytes,
@@ -561,12 +542,97 @@ impl ContentClient {
         })
     }
 
+    async fn pull_remaining(
+        &self,
+        method: &'static str,
+        total_size: u64,
+        max_bytes: usize,
+        bytes: &mut Vec<u8>,
+        mut build: impl FnMut(u64, u64, u32) -> ContentRequest,
+    ) -> Result<()> {
+        let chunk_len = u32::try_from(limits::CONTENT_CHUNK_BYTES).unwrap_or(u32::MAX);
+        let chunk_step = u64::from(chunk_len);
+        let mut next_offset = bytes.len() as u64;
+        let mut in_flight = FuturesOrdered::new();
+        while in_flight.len() < PULL_PIPELINE && next_offset < total_size {
+            let expected = next_offset;
+            let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+            let req = build(id, expected, chunk_len);
+            next_offset = next_offset.saturating_add(chunk_step);
+            in_flight.push_back(self.fetch_chunk(expected, id, req));
+        }
+        while let Some((expected, result)) = in_flight.next().await {
+            let (resp, payload) = result?;
+            match resp {
+                ContentResponse::Chunk {
+                    offset: reported_offset,
+                    eof,
+                    ..
+                } => {
+                    if reported_offset != expected || expected != bytes.len() as u64 {
+                        return Err(Error::Rpc {
+                            method,
+                            code: -32603,
+                            message: "out-of-order content chunk offset".into(),
+                            git_failure: None,
+                        });
+                    }
+                    if bytes.len().saturating_add(payload.len()) > max_bytes {
+                        return Err(Error::Rpc {
+                            method,
+                            code: -32602,
+                            message: format!("content exceeds {max_bytes}-byte client limit"),
+                            git_failure: None,
+                        });
+                    }
+                    bytes.extend_from_slice(&payload);
+                    if eof || payload.is_empty() {
+                        break;
+                    }
+                    if next_offset < total_size {
+                        let expected = next_offset;
+                        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+                        let req = build(id, expected, chunk_len);
+                        next_offset = next_offset.saturating_add(chunk_step);
+                        in_flight.push_back(self.fetch_chunk(expected, id, req));
+                    }
+                }
+                ContentResponse::Error { code, message, .. } => {
+                    return Err(Error::Rpc {
+                        method,
+                        code: i64::from(code),
+                        message,
+                        git_failure: None,
+                    });
+                }
+                _ => {
+                    return Err(Error::Rpc {
+                        method,
+                        code: -32603,
+                        message: "unexpected content response".into(),
+                        git_failure: None,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn fetch_chunk(
+        &self,
+        expected: u64,
+        id: u64,
+        req: ContentRequest,
+    ) -> (u64, Result<(ContentResponse, Bytes)>) {
+        (expected, self.call(id, &req, &[]).await)
+    }
+
     async fn call(
         &self,
         id: u64,
         header: &ContentRequest,
         payload: &[u8],
-    ) -> Result<(ContentResponse, Vec<u8>)> {
+    ) -> Result<(ContentResponse, Bytes)> {
         let frame = encode_content_frame(header, payload).map_err(|error| Error::Rpc {
             method: "content",
             code: -32602,
@@ -587,7 +653,7 @@ impl ContentClient {
     }
 }
 
-type ContentResponder = oneshot::Sender<(ContentResponse, Vec<u8>)>;
+type ContentResponder = oneshot::Sender<(ContentResponse, Bytes)>;
 
 #[derive(Default)]
 struct PendingContent(Mutex<HashMap<u64, ContentResponder>>);
@@ -664,10 +730,11 @@ where
                     let Some(Ok(message)) = incoming else { break };
                     match message {
                         Message::Binary(bytes) => {
-                            match decode_content_frame::<ContentResponse>(&bytes) {
-                                Ok((resp, payload)) => {
+                            match decode_content_frame_offset::<ContentResponse>(&bytes) {
+                                Ok((resp, payload_start)) => {
                                     if let Some(responder) = pending.take(resp.id()) {
-                                        let _ = responder.send((resp, payload.to_vec()));
+                                        let _ = responder
+                                            .send((resp, bytes.slice(payload_start..)));
                                     }
                                 }
                                 Err(error) => {

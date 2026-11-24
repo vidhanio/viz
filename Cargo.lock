@@ -6259,6 +6259,7 @@ dependencies = [
 name = "viz-client"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "rustls",
  "serde",
@@ -6385,6 +6386,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.23.1",
+ "bytes",
  "chrono",
  "clap",
  "futures",

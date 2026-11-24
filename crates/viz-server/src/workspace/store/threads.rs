@@ -203,12 +203,11 @@ pub(in crate::workspace) fn create_thread(
     row.id(0)
 }
 
-/// Raw persisted thread record ready to be enriched with in-memory pull/harness
-/// labels and worktree Git branches outside any database lock.
+/// Raw persisted thread record ready to be enriched with harness labels and
+/// worktree Git branches outside any database lock.
 pub(in crate::workspace) struct ThreadRecord {
     pub(in crate::workspace) summary: ThreadSummary,
     pub(in crate::workspace) activity: triage::Activity,
-    pub(in crate::workspace) cwd: String,
     pub(in crate::workspace) worktree_path: Option<String>,
 }
 
@@ -219,8 +218,10 @@ pub(in crate::workspace) fn thread_rows(
 ) -> Result<Vec<ThreadRecord>, Error> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
-            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, t.cwd, {}
-        FROM threads AS t WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)",
+            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, tp.pull_json, {}
+        FROM threads AS t
+        LEFT JOIN thread_pulls AS tp ON tp.thread = t.id AND tp.cwd = t.cwd
+        WHERE (?1 IS NULL OR t.archived = ?1) AND (?2 IS NULL OR t.project = ?2)",
         lifecycle::COLUMNS
     );
     let now = now();
@@ -237,8 +238,10 @@ pub(in crate::workspace) fn thread_row(
 ) -> Result<Option<ThreadRecord>, Error> {
     let query = format!(
         "SELECT t.id, t.title, t.parent, t.parent_environment, t.project, t.harness,
-            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, t.cwd, {}
-        FROM threads AS t WHERE t.id = ?1",
+            t.model, t.thinking, t.worktree, t.forked_from, t.forked_at, tp.pull_json, {}
+        FROM threads AS t
+        LEFT JOIN thread_pulls AS tp ON tp.thread = t.id AND tp.cwd = t.cwd
+        WHERE t.id = ?1",
         lifecycle::COLUMNS
     );
     let now = now();
@@ -253,7 +256,7 @@ fn decode_thread_record(mut row: super::super::sql::Row, now: i64) -> Result<Thr
     let id = row.id(0)?;
     let shelf = triage::shelf(&lifecycle, &activity, now);
     let worktree_path = row.opt_str(8)?;
-    let cwd = row.str(11)?;
+    let pull_request = row.opt_str(11)?.and_then(|json| from_json(&json).ok());
     let summary = ThreadSummary {
         id,
         title: row.str(1)?,
@@ -270,7 +273,7 @@ fn decode_thread_record(mut row: super::super::sql::Row, now: i64) -> Result<Thr
             .transpose()?,
         project: row.opt_str(4)?,
         worktree: None,
-        pull_request: None,
+        pull_request,
         harness_name: String::new(),
         harness,
         status,
@@ -286,7 +289,6 @@ fn decode_thread_record(mut row: super::super::sql::Row, now: i64) -> Result<Thr
     Ok(ThreadRecord {
         summary,
         activity,
-        cwd,
         worktree_path,
     })
 }

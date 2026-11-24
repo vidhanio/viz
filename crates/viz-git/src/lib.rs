@@ -36,7 +36,7 @@ pub use diff::{Diff, DiffFile, DiffLine, DiffTarget, FileKind, Hunk, LineStats, 
 pub use files::{FileMatch, PathKind, find_files};
 pub use icons::{icon_candidate_paths, read_icon};
 pub use remotes::{AheadBehind, Remote, RemoteRepository, parse_remote};
-pub use repository::{Commit, Head, Identity, Repository};
+pub use repository::{Commit, Head, Identity, Repository, fast_head_branch};
 pub use status::StatusEntry;
 use tokio_util::sync::CancellationToken;
 pub use watch::StatusWatch;

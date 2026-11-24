@@ -1,26 +1,27 @@
 //! Dedicated binary content-plane WebSocket session
 //! (`ConnectionChannel::Content`).
 //!
-//! Handles pull-based 256 KiB chunk reads for attachments and workspace files
-//! (original or server-rendered thumbnails) plus streamed binary attachment
-//! uploads without contending with the JSON-RPC control socket.
+//! Handles pull-based 256 KiB chunk reads for attachments, workspace files,
+//! and project icons plus disk-streamed binary uploads without contending with
+//! the JSON-RPC control socket or buffering 20 MiB uploads in RAM.
 
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
+use bytes::Bytes;
 use futures_util::{SinkExt, StreamExt};
 use tokio::{
     sync::{Mutex, mpsc},
     task::JoinSet,
 };
 use viz_protocol::{
-    ContentRequest, ContentResponse, MethodScope, decode_content_frame, encode_content_frame,
-    limits,
+    ContentRequest, ContentResponse, MethodScope, decode_content_frame_offset,
+    encode_content_frame, limits,
 };
 
 use super::Server;
-use crate::{error::Error, rpc::CallCtx, wire::error_code};
+use crate::{error::Error, rpc::CallCtx, wire::error_code, workspace::StagedUpload};
 
 const MAX_IN_FLIGHT: usize = 8;
 const MAX_CONCURRENT_UPLOADS: usize = 4;
@@ -45,7 +46,7 @@ pub(super) async fn session(socket: WebSocket, server: Arc<Server>, ctx: CallCtx
         }
     });
 
-    let uploads: Arc<Mutex<HashMap<u64, Vec<u8>>>> = Arc::default();
+    let uploads: Arc<Mutex<HashMap<u64, StagedUpload>>> = Arc::default();
     let mut jobs = JoinSet::new();
 
     let result = async {
@@ -60,8 +61,8 @@ pub(super) async fn session(socket: WebSocket, server: Arc<Server>, ctx: CallCtx
                     match frame {
                         Message::Close(_) => break,
                         Message::Binary(bytes) => {
-                            let (request, payload) = match decode_content_frame::<ContentRequest>(&bytes) {
-                                Ok((req, payload)) => (req, payload.to_vec()),
+                            let (request, payload) = match decode_content_frame_offset::<ContentRequest>(&bytes) {
+                                Ok((req, payload_start)) => (req, bytes.slice(payload_start..)),
                                 Err(error) => {
                                     send_error(&outgoing, 0, &Error::invalid(error.to_string())).await?;
                                     continue;
@@ -126,10 +127,10 @@ const fn request_scope(request: &ContentRequest) -> (MethodScope, &'static str) 
 async fn handle_request(
     server: &Server,
     ctx: &CallCtx,
-    uploads: &Mutex<HashMap<u64, Vec<u8>>>,
+    uploads: &Mutex<HashMap<u64, StagedUpload>>,
     outgoing: &mpsc::Sender<Message>,
     request: ContentRequest,
-    payload: Vec<u8>,
+    payload: Bytes,
 ) -> Result<()> {
     let (scope, method) = request_scope(&request);
     if let Err(error) = ctx.require(scope, method) {
@@ -178,7 +179,7 @@ async fn handle_request(
             send_project_icon_reply(outgoing, id, offset, reply).await?;
         }
         ContentRequest::UploadChunk { id, upload, offset } => {
-            match append_upload_chunk(uploads, upload, offset, &payload).await {
+            match append_upload_chunk(server, uploads, upload, offset, payload).await {
                 Ok(received) => send_upload_ack(outgoing, id, upload, received).await?,
                 Err(error) => send_error(outgoing, id, &error).await?,
             }
@@ -189,10 +190,10 @@ async fn handle_request(
             name,
             mime,
         } => {
-            let bytes = { uploads.lock().await.remove(&upload) }.unwrap_or_default();
+            let staged = uploads.lock().await.remove(&upload);
             let reply = server
                 .workspace
-                .stage_uploaded_blob(&ctx.principal.key(), name, mime, bytes)
+                .stage_committed_blob(&ctx.principal.key(), name, mime, staged)
                 .await;
             send_uploaded_reply(outgoing, id, reply).await?;
         }
@@ -203,10 +204,10 @@ async fn handle_request(
             name,
             mime,
         } => {
-            let bytes = { uploads.lock().await.remove(&upload) }.unwrap_or_default();
+            let staged = uploads.lock().await.remove(&upload);
             let reply = server
                 .workspace
-                .store_uploaded_attachment(thread, name, mime, bytes)
+                .store_committed_attachment(thread, name, mime, staged)
                 .await;
             send_uploaded_reply(outgoing, id, reply).await?;
         }
@@ -319,30 +320,43 @@ async fn send_chunk_reply(
 }
 
 async fn append_upload_chunk(
-    uploads: &Mutex<HashMap<u64, Vec<u8>>>,
+    server: &Server,
+    uploads: &Mutex<HashMap<u64, StagedUpload>>,
     upload: u64,
     offset: u64,
-    payload: &[u8],
+    payload: Bytes,
 ) -> Result<u64, Error> {
-    let mut map = uploads.lock().await;
-    if !map.contains_key(&upload) && map.len() >= MAX_CONCURRENT_UPLOADS {
-        drop(map);
-        return Err(Error::unavailable("too many concurrent uploads"));
+    let existing = {
+        let map = uploads.lock().await;
+        if let Some(handle) = map.get(&upload) {
+            Some(handle.clone())
+        } else if map.len() >= MAX_CONCURRENT_UPLOADS {
+            drop(map);
+            return Err(Error::unavailable("too many concurrent uploads"));
+        } else {
+            None
+        }
+    };
+    let handle = if let Some(handle) = existing {
+        handle
+    } else {
+        let created = server.workspace.begin_upload().await?;
+        let mut map = uploads.lock().await;
+        if let Some(existing) = map.get(&upload) {
+            existing.clone()
+        } else if map.len() >= MAX_CONCURRENT_UPLOADS {
+            drop(map);
+            return Err(Error::unavailable("too many concurrent uploads"));
+        } else {
+            map.insert(upload, created.clone());
+            created
+        }
+    };
+    let result = handle.append(offset, payload).await;
+    if result.is_err() {
+        uploads.lock().await.remove(&upload);
     }
-    let buf = map.entry(upload).or_default();
-    if offset != buf.len() as u64 {
-        drop(map);
-        return Err(Error::invalid("out-of-order upload chunk offset"));
-    }
-    if buf.len().saturating_add(payload.len()) > limits::ATTACHMENT_TOTAL_BYTES {
-        map.remove(&upload);
-        drop(map);
-        return Err(Error::invalid("attachment exceeds 20 MiB limit"));
-    }
-    buf.extend_from_slice(payload);
-    let received = buf.len() as u64;
-    drop(map);
-    Ok(received)
+    result
 }
 
 async fn send_error(outgoing: &mpsc::Sender<Message>, id: u64, error: &Error) -> Result<()> {

@@ -13,7 +13,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
-use serde_json::{Value, json};
+use serde_json::{Value, json, value::RawValue};
 use tokio::{
     sync::{broadcast, mpsc},
     task::{AbortHandle, JoinSet},
@@ -533,7 +533,7 @@ async fn update_git_watch(
     watches: &mut HashMap<ThreadId, AbortHandle>,
     jobs: &mut JoinSet<()>,
     outgoing: &mpsc::Sender<Message>,
-) -> Result<Value, Error> {
+) -> Result<Box<RawValue>, Error> {
     if request.method_name() == UnwatchGit::NAME {
         let UnwatchGit { thread } = params(request)?;
         if let Some(handle) = watches.remove(&thread) {
@@ -681,7 +681,7 @@ async fn client_call(
     let route_reply = if method == SendInput::NAME
         && let Some(connector) = ctx.connector()
         && let Ok(ref value) = result
-        && let Ok(sent) = serde_json::from_value::<viz_protocol::Sent>(value.clone())
+        && let Ok(sent) = serde_json::from_str::<viz_protocol::Sent>(value.get())
         && let Ok(input) = rpc::parse::<SendInput>(raw)
         && input.origin.is_some()
     {

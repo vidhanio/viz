@@ -8,7 +8,7 @@ use std::{future::Future, sync::Arc};
 
 use futures_util::future::BoxFuture;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::value::RawValue;
 use viz_protocol::{ClientInfo, ClientKind, Method, MethodScope};
 
 use crate::{
@@ -120,7 +120,8 @@ pub(crate) trait Handler<M: Method> {
     ) -> impl Future<Output = Result<M::Response, Error>> + Send;
 }
 
-type Dispatch<C> = for<'a> fn(&'a C, &'a CallCtx, &'a str) -> BoxFuture<'a, Result<Value, Error>>;
+type Dispatch<C> =
+    for<'a> fn(&'a C, &'a CallCtx, &'a str) -> BoxFuture<'a, Result<Box<RawValue>, Error>>;
 
 #[derive(Debug)]
 pub(crate) struct Route<C> {
@@ -138,7 +139,7 @@ impl<C: 'static> Route<C> {
             context: &'a C,
             ctx: &'a CallCtx,
             raw: &'a str,
-        ) -> BoxFuture<'a, Result<Value, Error>>
+        ) -> BoxFuture<'a, Result<Box<RawValue>, Error>>
         where
             C: Handler<M> + Sync,
             M: Method,
@@ -164,7 +165,7 @@ impl<C: 'static> Route<C> {
         service: &'a C,
         ctx: &'a CallCtx,
         raw: &'a str,
-    ) -> BoxFuture<'a, Result<Value, Error>> {
+    ) -> BoxFuture<'a, Result<Box<RawValue>, Error>> {
         if let Err(error) = ctx.require(self.scope, self.name) {
             return Box::pin(async move { Err(error) });
         }

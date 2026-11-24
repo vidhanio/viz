@@ -271,6 +271,7 @@ pub(super) async fn reconcile_startup(
     let blobs_root = blobs_root.to_owned();
     tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
         reconcile_blob_dir(&blobs_root.join("sha256"), &known_blobs)?;
+        sweep_upload_temps(&blobs_root.join("uploads"));
         sweep_attachment_dirs(&dir.join("attachments"), &live_threads);
         sweep_scratch_dirs(&dir.join("scratch"), &live_paths);
         Ok(())
@@ -300,34 +301,43 @@ impl Workspace {
         let removed: Vec<String> = self
             .db
             .write_tx(move |tx| {
-                let candidates: Vec<String> = rows(
-                    tx,
-                    "SELECT id FROM blobs
-                     WHERE NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)
-                       AND NOT EXISTS (SELECT 1 FROM projects WHERE json_extract(settings, '$.icon.blob') = blobs.id)",
-                    [],
-                )?
-                .map(|mut row| row.str(0))
-                .collect::<Result<_, _>>()?;
-                if candidates.is_empty() {
-                    return Ok(Vec::new());
-                }
                 let active = leases.active_blobs();
                 let mut deleted = Vec::new();
-                for id in candidates {
-                    if active.contains(&id) {
-                        continue;
-                    }
-                    let count = exec(
+                for _ in 0..2 {
+                    let candidates: Vec<String> = rows(
                         tx,
-                        "DELETE FROM blobs
-                         WHERE id = ?1
-                           AND NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)
-                           AND NOT EXISTS (SELECT 1 FROM projects WHERE json_extract(settings, '$.icon.blob') = blobs.id)",
-                        [id.as_str().into()],
-                    )?;
-                    if count > 0 {
-                        deleted.push(id);
+                        "SELECT id FROM blobs
+                         WHERE NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)
+                           AND NOT EXISTS (SELECT 1 FROM blobs AS parent WHERE parent.preview = blobs.id)
+                           AND NOT EXISTS (SELECT 1 FROM projects WHERE icon_blob = blobs.id OR json_extract(settings, '$.icon.blob') = blobs.id)",
+                        [],
+                    )?
+                    .map(|mut row| row.str(0))
+                    .collect::<Result<_, _>>()?;
+                    if candidates.is_empty() {
+                        break;
+                    }
+                    let mut pass_deleted = 0usize;
+                    for id in candidates {
+                        if active.contains(&id) {
+                            continue;
+                        }
+                        let count = exec(
+                            tx,
+                            "DELETE FROM blobs
+                             WHERE id = ?1
+                               AND NOT EXISTS (SELECT 1 FROM thread_attachments WHERE blob = blobs.id)
+                               AND NOT EXISTS (SELECT 1 FROM blobs AS parent WHERE parent.preview = blobs.id)
+                               AND NOT EXISTS (SELECT 1 FROM projects WHERE icon_blob = blobs.id OR json_extract(settings, '$.icon.blob') = blobs.id)",
+                            [id.as_str().into()],
+                        )?;
+                        if count > 0 {
+                            deleted.push(id);
+                            pass_deleted += 1;
+                        }
+                    }
+                    if pass_deleted == 0 {
+                        break;
                     }
                 }
                 Ok(deleted)
@@ -458,6 +468,12 @@ fn reconcile_blob_dir(sha_dir: &Path, known: &HashSet<String>) -> anyhow::Result
         }
     }
     Ok(())
+}
+
+fn sweep_upload_temps(root: &Path) {
+    for (_, path) in list_child_entries(root) {
+        remove_path(&path, "orphaned startup upload temporary file");
+    }
 }
 
 fn sweep_attachment_dirs(root: &Path, live_threads: &HashSet<String>) {

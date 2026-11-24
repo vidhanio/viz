@@ -1,11 +1,12 @@
-//! Ignore-aware file and directory lookup with a short-lived listing per root.
+//! Single-pass ignore-aware file and directory lookup with bounded top-K
+//! scoring and zero global caching.
 
 use std::{
     cmp::Reverse,
-    collections::{BinaryHeap, HashMap},
+    collections::{BinaryHeap, HashSet},
+    io::{BufRead as _, BufReader},
     path::{Path, PathBuf},
-    sync::{Arc, LazyLock, Mutex},
-    time::{Duration, Instant},
+    process::{Command, Stdio},
 };
 
 use ignore::WalkBuilder;
@@ -17,12 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{Error, blocking, check};
 
-const LISTING_TTL: Duration = Duration::from_secs(30);
-const CACHED_ROOTS: usize = 8;
 const MAX_ENTRIES_PER_ROOT: usize = 200_000;
-const MAX_CACHE_BYTES: usize = 32 * 1024 * 1024;
-
-static LISTINGS: LazyLock<Mutex<HashMap<PathBuf, Listing>>> = LazyLock::new(Mutex::default);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PathKind {
@@ -39,21 +35,15 @@ pub struct FileMatch {
     pub positions: Vec<u32>,
 }
 
-#[derive(Clone)]
-struct Listing {
-    entries: Arc<[Entry]>,
-    bytes: usize,
-    scanned_at: Instant,
-}
-
-struct Entry {
-    path: PathBuf,
-    display: String,
-    kind: PathKind,
-}
+type Ranked = (Reverse<u32>, PathBuf, bool, String);
 
 /// Find files and directories relative to a root, ordered by descending score
 /// then path.
+///
+/// Inside a Git checkout, streams `git ls-files -z --cached --others
+/// --exclude-standard` directly into a bounded top-K heap without buffering the
+/// full repository listing in memory. Outside Git, falls back to a single-pass
+/// `ignore::WalkBuilder` scan.
 ///
 /// # Errors
 /// Returns an error if walking the root fails or the request is cancelled.
@@ -68,41 +58,46 @@ pub async fn find_files(
         if limit == 0 {
             return Ok(Vec::new());
         }
+        let canonical = root.canonicalize()?;
         let pattern = Pattern::parse(&query, CaseMatching::Smart, Normalization::Smart);
-        let entries = listing(&root.canonicalize()?, cancel)?;
         let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
         let mut utf32 = Vec::new();
         let mut selected = BinaryHeap::new();
-        for entry in entries.iter() {
-            check(cancel)?;
-            if let Some(score) =
-                pattern.score(Utf32Str::new(&entry.display, &mut utf32), &mut matcher)
-            {
-                selected.push((
-                    Reverse(score),
-                    &entry.path,
-                    entry.kind == PathKind::Directory,
-                    &entry.display,
-                ));
-                if selected.len() > limit {
-                    selected.pop();
-                }
-            }
+
+        if !scan_git_files(
+            &canonical,
+            &pattern,
+            &mut matcher,
+            &mut utf32,
+            &mut selected,
+            limit,
+            cancel,
+        )? {
+            scan_walk(
+                &canonical,
+                &pattern,
+                &mut matcher,
+                &mut utf32,
+                &mut selected,
+                limit,
+                cancel,
+            )?;
         }
+
         Ok(selected
             .into_sorted_vec()
             .into_iter()
             .map(|(Reverse(score), path, directory, display)| {
                 let mut positions = Vec::new();
                 pattern.indices(
-                    Utf32Str::new(display, &mut utf32),
+                    Utf32Str::new(&display, &mut utf32),
                     &mut matcher,
                     &mut positions,
                 );
                 positions.sort_unstable();
                 positions.dedup();
                 FileMatch {
-                    path: path.clone(),
+                    path,
                     kind: if directory {
                         PathKind::Directory
                     } else {
@@ -117,25 +112,129 @@ pub async fn find_files(
     .await
 }
 
-fn listing(root: &Path, cancel: &CancellationToken) -> Result<Arc<[Entry]>, Error> {
-    let cached = LISTINGS
-        .lock()
-        .map_err(|_| Error::Invalid("file listing lock"))?
-        .get(root)
-        .cloned();
-    if let Some(cached) = cached
-        && cached.scanned_at.elapsed() < LISTING_TTL
-    {
-        return Ok(cached.entries);
+fn push_candidate(
+    display: &str,
+    directory: bool,
+    pattern: &Pattern,
+    matcher: &mut Matcher,
+    utf32: &mut Vec<char>,
+    selected: &mut BinaryHeap<Ranked>,
+    limit: usize,
+) {
+    if let Some(score) = pattern.score(Utf32Str::new(display, utf32), matcher) {
+        selected.push((
+            Reverse(score),
+            PathBuf::from(display),
+            directory,
+            display.to_owned(),
+        ));
+        if selected.len() > limit {
+            selected.pop();
+        }
     }
+}
+
+/// Streams `git ls-files -z` when `root` sits inside a Git repository,
+/// returning `Ok(true)` if Git handled the scan or `Ok(false)` to fall back to
+/// `ignore::WalkBuilder`.
+fn scan_git_files(
+    root: &Path,
+    pattern: &Pattern,
+    matcher: &mut Matcher,
+    utf32: &mut Vec<char>,
+    selected: &mut BinaryHeap<Ranked>,
+    limit: usize,
+    cancel: &CancellationToken,
+) -> Result<bool, Error> {
+    if crate::fast_head_branch(root).is_none() {
+        return Ok(false);
+    }
+    let Ok(mut child) = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return Ok(false);
+    };
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Ok(false);
+    };
+    let mut reader = BufReader::new(stdout);
+    let mut buf = Vec::with_capacity(256);
+    let mut seen_dirs = HashSet::new();
+    let mut count = 0usize;
+    loop {
+        if count.is_multiple_of(512) && cancel.is_cancelled() {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(Error::Cancelled);
+        }
+        buf.clear();
+        let read = reader.read_until(0, &mut buf)?;
+        if read == 0 {
+            break;
+        }
+        if buf.last() == Some(&0) {
+            buf.pop();
+        }
+        if buf.is_empty() {
+            continue;
+        }
+        count += 1;
+        if count > MAX_ENTRIES_PER_ROOT {
+            let _ = child.kill();
+            break;
+        }
+        let Ok(display) = std::str::from_utf8(&buf) else {
+            continue;
+        };
+        push_candidate(display, false, pattern, matcher, utf32, selected, limit);
+        let mut cursor = display;
+        while let Some((parent, _)) = cursor.rsplit_once('/') {
+            if !seen_dirs.insert(parent.to_owned()) {
+                break;
+            }
+            push_candidate(parent, true, pattern, matcher, utf32, selected, limit);
+            cursor = parent;
+        }
+    }
+    let status = child.wait()?;
+    if count <= MAX_ENTRIES_PER_ROOT && !status.success() {
+        selected.clear();
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+fn scan_walk(
+    root: &Path,
+    pattern: &Pattern,
+    matcher: &mut Matcher,
+    utf32: &mut Vec<char>,
+    selected: &mut BinaryHeap<Ranked>,
+    limit: usize,
+    cancel: &CancellationToken,
+) -> Result<(), Error> {
     let mut walk = WalkBuilder::new(root);
     walk.require_git(false)
         .filter_entry(|entry| entry.depth() == 0 || entry.file_name() != ".git");
-    let mut entries = Vec::new();
-    let mut bytes = 0usize;
-    for entry in walk.build() {
-        check(cancel)?;
-        if entries.len() >= MAX_ENTRIES_PER_ROOT {
+    for (count, entry) in walk.build().enumerate() {
+        if count.is_multiple_of(256) {
+            check(cancel)?;
+        }
+        if count >= MAX_ENTRIES_PER_ROOT {
             break;
         }
         let entry = entry?;
@@ -155,44 +254,15 @@ fn listing(root: &Path, cancel: &CancellationToken) -> Result<Arc<[Entry]>, Erro
         let Some(display) = path.to_str() else {
             continue;
         };
-        bytes = bytes.saturating_add(display.len() * 2 + std::mem::size_of::<Entry>());
-        entries.push(Entry {
-            path: path.to_owned(),
-            display: display.to_owned(),
-            kind: if kind.is_dir() {
-                PathKind::Directory
-            } else {
-                PathKind::File
-            },
-        });
-    }
-    let entries = Arc::from(entries);
-    if bytes <= MAX_CACHE_BYTES {
-        let mut cache = LISTINGS
-            .lock()
-            .map_err(|_| Error::Invalid("file listing lock"))?;
-        cache.remove(root);
-        let mut total_bytes: usize = cache.values().map(|listing| listing.bytes).sum();
-        while cache.len() >= CACHED_ROOTS || total_bytes.saturating_add(bytes) > MAX_CACHE_BYTES {
-            let Some(oldest) = cache
-                .iter()
-                .min_by_key(|(_, listing)| listing.scanned_at)
-                .map(|(root, _)| root.clone())
-            else {
-                break;
-            };
-            if let Some(removed) = cache.remove(&oldest) {
-                total_bytes = total_bytes.saturating_sub(removed.bytes);
-            }
-        }
-        cache.insert(
-            root.to_owned(),
-            Listing {
-                entries: Arc::clone(&entries),
-                bytes,
-                scanned_at: Instant::now(),
-            },
+        push_candidate(
+            display,
+            kind.is_dir(),
+            pattern,
+            matcher,
+            utf32,
+            selected,
+            limit,
         );
     }
-    Ok(entries)
+    Ok(())
 }

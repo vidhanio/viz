@@ -36,7 +36,8 @@ pub use connections::{
 };
 pub use content::{
     CONTENT_PROTOCOL_VERSION, ConnectionChannel, ContentFrameError, ContentRequest,
-    ContentResponse, ContentVariant, decode_content_frame, encode_content_frame,
+    ContentResponse, ContentVariant, decode_content_frame, decode_content_frame_offset,
+    encode_content_frame,
 };
 pub use folders::{
     BrowseFolders, CancelClone, CloneId, ClonePhase, CloneState, CloneStatus, CreateFolder,

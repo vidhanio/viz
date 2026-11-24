@@ -95,7 +95,7 @@ impl Workspace {
         let result = run_action(&repo, action, &self.closing).await;
         drop(reservation);
         if exclusive && result.is_ok() {
-            self.invalidate_checkout_pulls(&checkout);
+            self.invalidate_checkout_pulls(&checkout).await;
         }
         result.map(|commit| GitActionResult { commit })
     }

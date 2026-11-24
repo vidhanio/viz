@@ -1,9 +1,10 @@
-//! Batch GitHub branch lookups outside the workspace write lease.
+//! Batch GitHub branch lookups persisted in SQLite `thread_pulls` outside any
+//! database write lock.
 
 use std::{
     collections::{BTreeMap, HashMap},
     path::Path,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -11,17 +12,20 @@ use viz_git::{Head, RemoteRepository, Repository};
 use viz_github::{PollState, PullRequest, poll_delay};
 use viz_protocol::{GitHubPull, GitHubPullState, ThreadId};
 
-use super::{Workspace, sql::rows};
+use super::{
+    Workspace,
+    sql::{exec, row, rows},
+    store,
+};
 use crate::error::Error;
 
-#[derive(Default)]
-pub(super) struct Pulls(Mutex<HashMap<ThreadId, Cached>>);
+type PullCandidate = (ThreadId, String, bool, bool);
 
 #[derive(Clone, PartialEq, Eq)]
-struct Cached {
+struct StoredPull {
     cwd: String,
-    pull: GitHubPull,
     remote: RemoteRepository,
+    pull: GitHubPull,
     finished_at: Option<i64>,
 }
 
@@ -32,25 +36,30 @@ struct Backoff {
 }
 
 impl Workspace {
-    pub(super) fn pull_summary(&self, thread: ThreadId, cwd: &str) -> Option<GitHubPull> {
-        self.pulls
-            .0
-            .lock()
-            .expect("pull requests lock poisoned")
-            .get(&thread)
-            .filter(|cached| cached.cwd == cwd)
-            .map(|cached| cached.pull.clone())
-    }
-
-    pub(super) fn invalidate_checkout_pulls(&self, checkout: &Path) {
-        let mut pulls = self.pulls.0.lock().expect("pull requests lock poisoned");
-        let affected: Vec<ThreadId> = pulls
-            .iter()
-            .filter(|(_, cached)| Path::new(&cached.cwd).starts_with(checkout))
-            .map(|(thread, _)| *thread)
-            .collect();
-        pulls.retain(|_, cached| !Path::new(&cached.cwd).starts_with(checkout));
-        drop(pulls);
+    pub(super) async fn invalidate_checkout_pulls(&self, checkout: &Path) {
+        let checkout = checkout.to_owned();
+        let affected = self
+            .db
+            .write_tx(move |tx| {
+                let existing: Vec<(ThreadId, String)> =
+                    rows(tx, "SELECT thread, cwd FROM thread_pulls", [])?
+                        .map(|mut row| Ok((row.id(0)?, row.str(1)?)))
+                        .collect::<Result<_, Error>>()?;
+                let mut removed = Vec::new();
+                for (thread, cwd) in existing {
+                    if Path::new(&cwd).starts_with(&checkout) {
+                        exec(
+                            tx,
+                            "DELETE FROM thread_pulls WHERE thread = ?1",
+                            [thread.into()],
+                        )?;
+                        removed.push(thread);
+                    }
+                }
+                Ok(removed)
+            })
+            .await
+            .unwrap_or_default();
         for thread in affected {
             self.relist(thread);
         }
@@ -62,26 +71,44 @@ impl Workspace {
         thread: ThreadId,
         cwd: &str,
     ) -> Option<viz_core::lifecycle::PullRequest> {
-        let cached = self
-            .pulls
-            .0
-            .lock()
-            .expect("pull requests lock poisoned")
-            .get(&thread)
-            .filter(|cached| cached.cwd == cwd && cached.finished_at.is_some())
-            .cloned()?;
+        let cwd_key = cwd.to_owned();
+        let stored = self
+            .db
+            .read(move |conn| {
+                let Some(mut record) = row(
+                    conn,
+                    "SELECT remote_host, remote_owner, remote_repo, pull_json, finished_at
+                     FROM thread_pulls
+                     WHERE thread = ?1 AND cwd = ?2 AND finished_at IS NOT NULL",
+                    [thread.into(), cwd_key.as_str().into()],
+                )?
+                else {
+                    return Ok(None);
+                };
+                let remote = RemoteRepository {
+                    host: record.str(0)?,
+                    owner: record.str(1)?,
+                    repo: record.str(2)?,
+                };
+                let pull: GitHubPull = store::from_json(&record.str(3)?)?;
+                let finished_at = record.opt_i64(4)?;
+                Ok(Some((remote, pull, finished_at)))
+            })
+            .await
+            .ok()??;
+        let (remote, pull, finished_at) = stored;
         let repo = Repository::discover(Path::new(cwd), &self.closing)
             .await
             .ok()?;
         let Head::Branch { name, commit } = repo.head(&self.closing).await.ok()? else {
             return None;
         };
-        (name == cached.pull.head
-            && commit == cached.pull.head_commit
-            && self.github_remote(&repo).await.ok()? == cached.remote)
+        (name == pull.head
+            && commit == pull.head_commit
+            && self.github_remote(&repo).await.ok()? == remote)
             .then_some(viz_core::lifecycle::PullRequest {
                 finished: true,
-                changed_at: cached.finished_at?,
+                changed_at: finished_at?,
             })
     }
 
@@ -104,22 +131,55 @@ impl Workspace {
         }
     }
 
-    async fn refresh_pulls(
+    async fn load_pull_snapshot(
         &self,
-        backoff: &mut BTreeMap<RemoteRepository, Backoff>,
-    ) -> Result<(), Error> {
-        let candidates: Vec<(ThreadId, String, bool, bool)> = self
-            .db
-            .read(|conn| {
-                rows(
-                    conn,
+    ) -> Result<(Vec<PullCandidate>, HashMap<ThreadId, StoredPull>), Error> {
+        self.db
+            .read_snapshot(|tx| {
+                let candidates: Vec<PullCandidate> = rows(
+                    tx,
                     "SELECT id, cwd, archived, settled_at IS NOT NULL FROM threads WHERE project IS NOT NULL",
                     [],
                 )?
                 .map(|mut row| Ok((row.id(0)?, row.str(1)?, row.flag(2)?, row.flag(3)?)))
-                .collect()
+                .collect::<Result<_, Error>>()?;
+                let mut existing = HashMap::new();
+                for mut record in rows(
+                    tx,
+                    "SELECT thread, cwd, remote_host, remote_owner, remote_repo, pull_json, finished_at
+                     FROM thread_pulls",
+                    [],
+                )? {
+                    let thread: ThreadId = record.id(0)?;
+                    let cwd = record.str(1)?;
+                    let remote = RemoteRepository {
+                        host: record.str(2)?,
+                        owner: record.str(3)?,
+                        repo: record.str(4)?,
+                    };
+                    if let Ok(pull) = store::from_json(&record.str(5)?) {
+                        existing.insert(
+                            thread,
+                            StoredPull {
+                                cwd,
+                                remote,
+                                pull,
+                                finished_at: record.opt_i64(6)?,
+                            },
+                        );
+                    }
+                }
+                Ok((candidates, existing))
             })
-            .await?;
+            .await
+    }
+
+    async fn refresh_pulls(
+        &self,
+        backoff: &mut BTreeMap<RemoteRepository, Backoff>,
+    ) -> Result<(), Error> {
+        let (candidates, mut existing) = self.load_pull_snapshot().await?;
+
         let mut known = HashMap::new();
         let mut checkouts: BTreeMap<String, Vec<ThreadId>> = BTreeMap::new();
         for (thread, cwd, archived, settled) in candidates {
@@ -128,10 +188,17 @@ impl Workspace {
             }
             known.insert(thread, cwd);
         }
-        {
-            let mut pulls = self.pulls.0.lock().expect("pull requests lock poisoned");
-            pulls.retain(|thread, cached| known.get(thread) == Some(&cached.cwd));
+
+        let stale_threads: Vec<ThreadId> = existing
+            .iter()
+            .filter(|(thread, stored)| known.get(*thread) != Some(&stored.cwd))
+            .map(|(thread, _)| *thread)
+            .collect();
+        for thread in stale_threads {
+            existing.remove(&thread);
+            self.write_pull(thread, None).await?;
         }
+
         let mut batches: BTreeMap<_, BTreeMap<String, Vec<ThreadId>>> = BTreeMap::new();
         for (cwd, threads) in checkouts {
             let resolved = async {
@@ -146,20 +213,19 @@ impl Workspace {
             .await;
             let Some((remote, name)) = resolved else {
                 for thread in threads {
-                    self.update_pull(thread, None);
+                    if existing.remove(&thread).is_some() {
+                        self.write_pull(thread, None).await?;
+                    }
                 }
                 continue;
             };
             for &thread in &threads {
-                let stale = self
-                    .pulls
-                    .0
-                    .lock()
-                    .expect("pull requests lock poisoned")
+                let stale = existing
                     .get(&thread)
-                    .is_some_and(|cached| cached.pull.head != name || cached.remote != remote);
+                    .is_some_and(|stored| stored.pull.head != name || stored.remote != remote);
                 if stale {
-                    self.update_pull(thread, None);
+                    existing.remove(&thread);
+                    self.write_pull(thread, None).await?;
                 }
             }
             batches
@@ -181,11 +247,17 @@ impl Workspace {
                 for names in names.chunks(20) {
                     for (name, pull) in client.pulls_for_branches(&remote, names).await? {
                         for thread in &branches[&name] {
-                            self.update_pull(
-                                *thread,
-                                pull.as_ref()
-                                    .and_then(|pull| cached(pull, &known[thread], &remote)),
-                            );
+                            let next = pull
+                                .as_ref()
+                                .and_then(|pull| stored_pull(pull, &known[thread], &remote));
+                            if existing.get(thread) != next.as_ref() {
+                                if let Some(ref item) = next {
+                                    existing.insert(*thread, item.clone());
+                                } else {
+                                    existing.remove(thread);
+                                }
+                                self.write_pull(*thread, next).await?;
+                            }
                         }
                     }
                 }
@@ -197,24 +269,49 @@ impl Workspace {
         Ok(())
     }
 
-    fn update_pull(&self, thread: ThreadId, new: Option<Cached>) {
-        let changed = {
-            let mut pulls = self.pulls.0.lock().expect("pull requests lock poisoned");
-            if pulls.get(&thread) == new.as_ref() {
-                false
-            } else {
-                if let Some(cached) = new {
-                    pulls.insert(thread, cached);
+    async fn write_pull(&self, thread: ThreadId, next: Option<StoredPull>) -> Result<(), Error> {
+        let changed = self
+            .db
+            .write(move |conn| {
+                if let Some(stored) = next {
+                    let pull_json = store::json(&stored.pull)?;
+                    let count = exec(
+                        conn,
+                        "INSERT INTO thread_pulls (thread, cwd, remote_host, remote_owner, remote_repo, pull_json, finished_at)
+                         SELECT id, ?2, ?3, ?4, ?5, ?6, ?7 FROM threads WHERE id = ?1
+                         ON CONFLICT(thread) DO UPDATE SET
+                             cwd = excluded.cwd,
+                             remote_host = excluded.remote_host,
+                             remote_owner = excluded.remote_owner,
+                             remote_repo = excluded.remote_repo,
+                             pull_json = excluded.pull_json,
+                             finished_at = excluded.finished_at",
+                        [
+                            thread.into(),
+                            stored.cwd.into(),
+                            stored.remote.host.into(),
+                            stored.remote.owner.into(),
+                            stored.remote.repo.into(),
+                            pull_json.into(),
+                            stored.finished_at.into(),
+                        ],
+                    )?;
+                    Ok(count > 0)
                 } else {
-                    pulls.remove(&thread);
+                    let count = exec(
+                        conn,
+                        "DELETE FROM thread_pulls WHERE thread = ?1",
+                        [thread.into()],
+                    )?;
+                    Ok(count > 0)
                 }
-                true
-            }
-        };
+            })
+            .await?;
         if changed {
             self.relist(thread);
             self.due.notify_one();
         }
+        Ok(())
     }
 }
 
@@ -244,14 +341,14 @@ impl Backoff {
     }
 }
 
-fn cached(pull: &PullRequest, cwd: &str, remote: &RemoteRepository) -> Option<Cached> {
+fn stored_pull(pull: &PullRequest, cwd: &str, remote: &RemoteRepository) -> Option<StoredPull> {
     let (state, finished_at) = match pull.state.as_str() {
         "OPEN" => (GitHubPullState::Open, None),
         "MERGED" => (GitHubPullState::Merged, pull.merged_at.as_deref()),
         "CLOSED" => (GitHubPullState::Closed, pull.closed_at.as_deref()),
         _ => return None,
     };
-    Some(Cached {
+    Some(StoredPull {
         cwd: cwd.to_owned(),
         remote: remote.clone(),
         finished_at: finished_at

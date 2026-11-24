@@ -92,21 +92,38 @@ impl Workspace {
         }
         self.validate_uploaded_icon(principal_key, path, changes.icon.as_ref())
             .await?;
+        let icon_changed = changes.icon.is_some();
         let path_owned = path.to_owned();
         let path_for_tx = path_owned.clone();
         self.db
             .write_tx(move |tx| {
                 let (current_name, _, current) = store::preferences(tx, &path_for_tx)?;
                 let updated = projects::edit(current, changes)?;
-                exec(
-                    tx,
-                    "UPDATE projects SET name = ?2, settings = ?3 WHERE path = ?1",
-                    [
-                        path_for_tx.as_str().into(),
-                        name.unwrap_or(current_name).into(),
-                        store::json(&updated)?.into(),
-                    ],
-                )?;
+                if icon_changed {
+                    exec(
+                        tx,
+                        "UPDATE projects
+                         SET name = ?2, settings = ?3,
+                             icon_blob = NULL, icon_mime = NULL,
+                             icon_fetched_at = NULL, icon_mode = NULL
+                         WHERE path = ?1",
+                        [
+                            path_for_tx.as_str().into(),
+                            name.unwrap_or(current_name).into(),
+                            store::json(&updated)?.into(),
+                        ],
+                    )?;
+                } else {
+                    exec(
+                        tx,
+                        "UPDATE projects SET name = ?2, settings = ?3 WHERE path = ?1",
+                        [
+                            path_for_tx.as_str().into(),
+                            name.unwrap_or(current_name).into(),
+                            store::json(&updated)?.into(),
+                        ],
+                    )?;
+                }
                 Ok(())
             })
             .await?;

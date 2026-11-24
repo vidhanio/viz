@@ -330,16 +330,18 @@ pub fn encode_content_frame<T: Serialize>(
     Ok(frame)
 }
 
-/// Decodes a versioned binary content-plane frame and validates all header,
-/// payload, and version bounds before returning `(header, payload_slice)`.
+/// Decodes a binary content-plane frame and returns `(header, payload_offset)`.
+///
+/// Validates all header, payload, and version bounds so callers owning a shared
+/// byte buffer can slice the payload without copying.
 ///
 /// # Errors
 ///
 /// Returns [`ContentFrameError`] on oversized frames, truncated buffers,
 /// unsupported envelope versions, or invalid JSON headers.
-pub fn decode_content_frame<T: DeserializeOwned>(
+pub fn decode_content_frame_offset<T: DeserializeOwned>(
     frame: &[u8],
-) -> Result<(T, &[u8]), ContentFrameError> {
+) -> Result<(T, usize), ContentFrameError> {
     if frame.len() > limits::MAX_CONTENT_FRAME_BYTES {
         return Err(ContentFrameError::FrameTooLarge { len: frame.len() });
     }
@@ -356,14 +358,28 @@ pub fn decode_content_frame<T: DeserializeOwned>(
     if frame.len() < payload_start {
         return Err(ContentFrameError::TruncatedHeader);
     }
-    let payload = &frame[payload_start..];
-    if payload.len() > limits::CONTENT_CHUNK_BYTES {
-        return Err(ContentFrameError::PayloadTooLarge { len: payload.len() });
+    let payload_len = frame.len() - payload_start;
+    if payload_len > limits::CONTENT_CHUNK_BYTES {
+        return Err(ContentFrameError::PayloadTooLarge { len: payload_len });
     }
     let envelope: Envelope<T> = serde_json::from_slice(&frame[4..payload_start])
         .map_err(|error| ContentFrameError::Json(error.to_string()))?;
     if envelope.v != CONTENT_PROTOCOL_VERSION {
         return Err(ContentFrameError::UnsupportedVersion(envelope.v));
     }
-    Ok((envelope.body, payload))
+    Ok((envelope.body, payload_start))
+}
+
+/// Decodes a versioned binary content-plane frame and validates all header,
+/// payload, and version bounds before returning `(header, payload_slice)`.
+///
+/// # Errors
+///
+/// Returns [`ContentFrameError`] on oversized frames, truncated buffers,
+/// unsupported envelope versions, or invalid JSON headers.
+pub fn decode_content_frame<T: DeserializeOwned>(
+    frame: &[u8],
+) -> Result<(T, &[u8]), ContentFrameError> {
+    let (body, payload_start) = decode_content_frame_offset(frame)?;
+    Ok((body, &frame[payload_start..]))
 }

@@ -187,3 +187,48 @@ pub fn head_unborn(repo: &git2::Repository) -> Result<bool, Error> {
         Err(error) => Err(error.into()),
     }
 }
+
+/// Fast synchronous `HEAD` branch inspection without opening libgit2 or
+/// canonicalizing paths.
+///
+/// Walks upward from `path` to locate `.git` (directory or worktree pointer
+/// file) and reads `<git_dir>/HEAD` directly:
+/// - `None` — `path` is not inside a Git checkout.
+/// - `Some(Some(branch))` — `HEAD` points to `refs/heads/<branch>`.
+/// - `Some(None)` — `HEAD` is detached or points outside `refs/heads/`.
+#[must_use]
+pub fn fast_head_branch(path: &Path) -> Option<Option<String>> {
+    let git_dir = locate_git_dir(path)?;
+    let head_path = git_dir.join("HEAD");
+    let raw = std::fs::read_to_string(head_path).ok()?;
+    let trimmed = raw.trim_end_matches(['\r', '\n']);
+    Some(trimmed.strip_prefix("ref: refs/heads/").map(str::to_owned))
+}
+
+fn locate_git_dir(start: &Path) -> Option<PathBuf> {
+    let mut current = if start.is_file() {
+        start.parent()?
+    } else {
+        start
+    };
+    loop {
+        let dot_git = current.join(".git");
+        if let Ok(meta) = std::fs::symlink_metadata(&dot_git) {
+            if meta.is_dir() {
+                return Some(dot_git);
+            }
+            if meta.is_file() {
+                let text = std::fs::read_to_string(&dot_git).ok()?;
+                let first = text.lines().next()?.trim();
+                let target = first.strip_prefix("gitdir:")?.trim();
+                let target_path = Path::new(target);
+                return Some(if target_path.is_absolute() {
+                    target_path.to_path_buf()
+                } else {
+                    current.join(target_path)
+                });
+            }
+        }
+        current = current.parent()?;
+    }
+}
