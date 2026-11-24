@@ -2,10 +2,9 @@
 
 use std::fmt::Write as _;
 
-use rune::{El, col, row, text};
+use rune::{El, col, icon, row, text};
 use rune_kit::{
-    ButtonVariant, FileTree, IconButtonVariant, Placement, Popover, RadioGroup, RadioItem, Tree,
-    TreeItem,
+    ButtonVariant, FileTree, IconButtonVariant, Menu, MenuItem, Placement, Tree, TreeItem,
     diff::{self, DiffMode, DiffView, FileDiff, FileStatus},
 };
 use viz_client::protocol::{GitDiffFile, GitDiffTarget, GitFileKind, GitLineStats, RunId};
@@ -13,8 +12,9 @@ use viz_client::protocol::{GitDiffFile, GitDiffTarget, GitFileKind, GitLineStats
 use crate::{
     app::Desktop,
     effects::git::Request,
+    header::CHAT_HEADER_HEIGHT,
     model::git::{Dialog, Popup, default_branch},
-    theme::{Size, Theme},
+    theme::{ICON_SMALL, S2, S4, S6, S8, S12, Size, Theme},
     ui,
     update::GitMsg,
 };
@@ -55,7 +55,7 @@ pub fn sync(s: &mut Desktop) {
 }
 
 fn file(wire: &GitDiffFile) -> FileDiff {
-    let mut patch = String::from("diff --git a/file b/file\n--- a/file\n+++ b/file\n");
+    let mut patch = String::from("diff --git a/file b/file\n--- a/file\n+++ a/file\n");
     for hunk in &wire.hunks {
         let _ = writeln!(
             patch,
@@ -104,15 +104,17 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
         .child(ui::rule(t));
     if matches!(git.target, GitDiffTarget::Turn { .. }) && git.diff.is_some() {
         panel = panel.child(
-            rune_kit::Button::new("Restore checkpoint…")
-                .variant(ButtonVariant::Ghost)
-                .control_size(Size::Small.kit())
-                .disabled(s.model.busy())
-                .on_press_tx(|s: &mut Desktop, tx| {
-                    s.widgets.git_body = rune::TextEdit::new("");
-                    super::dispatch(s, GitMsg::Dialog(Some(Dialog::Restore)), tx);
-                })
-                .build(&t.k),
+            row().w_full().px(S12).py(S6).center_y().child(
+                rune_kit::Button::new("Restore checkpoint…")
+                    .variant(ButtonVariant::Ghost)
+                    .control_size(Size::Small.kit())
+                    .disabled(s.model.busy())
+                    .on_press_tx(|s: &mut Desktop, tx| {
+                        s.widgets.git_body = rune::TextEdit::new("");
+                        super::dispatch(s, GitMsg::Dialog(Some(Dialog::Restore)), tx);
+                    })
+                    .build(&t.k),
+            ),
         );
     }
     if git
@@ -124,21 +126,33 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
             text("This preview is incomplete.")
                 .font(t.small)
                 .color(t.muted)
-                .padding(8.0),
+                .px(S12)
+                .py(S6),
         );
     }
     if let Some(error) = &git.diff_error {
-        return panel.child(message(error, t));
+        return panel.child(empty_panel("Couldn’t load diff", Some(error.as_str()), t));
     }
     if s.widgets.git_diff.files().is_empty() {
-        return panel.child(message(
-            if git.diff.is_none() {
-                "Loading diff…"
-            } else {
-                "No changes in this scope"
-            },
-            t,
-        ));
+        return panel.child(if git.diff.is_none() {
+            col()
+                .grow(1.0)
+                .w_full()
+                .center()
+                .padding(S12)
+                .child(ui::loading_state(
+                    "Loading diff…",
+                    None,
+                    ui::LoadingDelay::Immediate,
+                    t,
+                ))
+        } else {
+            empty_panel(
+                "No changes in this scope",
+                Some("Switch scopes above to compare staged, branch, or thread changes."),
+                t,
+            )
+        });
     }
     let diff = DiffView::new(
         |s: &Desktop| &s.widgets.git_diff,
@@ -151,6 +165,10 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     if !s.widgets.git_tree_open {
         return panel.child(diff);
     }
+    panel.child(diff_with_files_tree(s, diff, t))
+}
+
+fn diff_with_files_tree(s: &Desktop, diff: El, t: &Theme) -> El {
     let tree = Tree::new(
         |s: &Desktop| &s.widgets.git_diff_tree,
         |s| &mut s.widgets.git_diff_tree,
@@ -171,174 +189,227 @@ pub fn view(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     })
     .name("Changed files")
     .build(s, &t.k);
-    panel.child(
-        row()
-            .grow(1.0)
-            .min_h(0.0)
-            .w_full()
-            .child(diff)
-            .child(rune::hairline(t.hairline).h_full())
-            .child(
-                col()
-                    .w(144.0)
-                    .min_h(0.0)
-                    .child(
-                        rune_kit::SidebarHeader::new("Files")
-                            .build(&t.k)
-                            .key("diff-files-title"),
-                    )
-                    .child(tree.grow(1.0).min_h(0.0)),
-            ),
-    )
+    row()
+        .grow(1.0)
+        .min_h(0.0)
+        .w_full()
+        .child(diff)
+        .child(rune::hairline(t.hairline).h_full())
+        .child(
+            col()
+                .w(160.0)
+                .min_h(0.0)
+                .child(
+                    rune_kit::SidebarHeader::new("Files")
+                        .build(&t.k)
+                        .key("diff-files-title"),
+                )
+                .child(tree.grow(1.0).min_h(0.0)),
+        )
 }
 
 fn toolbar(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let git = &s.model.git;
-    let selected = usize::from(s.widgets.git_diff.mode() == DiffMode::Split);
+    let split = s.widgets.git_diff.mode() == DiffMode::Split;
+    let stats = git
+        .diff
+        .as_ref()
+        .map(|diff| diff.stats)
+        .filter(|stats| stats.added > 0 || stats.removed > 0)
+        .map(|stats| stat(stats, t));
     row()
         .key("diff-toolbar")
-        .h(40.0)
-        .px(8.0)
-        .gap(4.0)
+        .h(CHAT_HEADER_HEIGHT)
+        .px(S8)
+        .gap(S6)
         .w_full()
         .center_y()
         .child(scope(s, t, layer))
-        .child(el_spacer())
-        .children(git.diff.as_ref().map(|d| stat(d.stats, t)))
+        .children(stats)
+        .child(rune::spacer())
         .child(
-            rune_kit::SegmentedControl::new(&["Unified", "Split"], Some(selected))
-                .fit()
-                .label("Diff layout")
-                .on_pick(|s: &mut Desktop, index, _| {
-                    s.widgets.git_diff.set_mode(if index == 0 {
-                        DiffMode::Unified
-                    } else {
-                        DiffMode::Split
-                    });
-                })
-                .build(&t.k),
-        )
-        .child(
-            rune_kit::IconButton::new(&ui::REFRESH_CW)
-                .help("Refresh diff")
-                .variant(IconButtonVariant::Ghost)
-                .control_size(Size::Small.kit())
-                .on_press_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::RefreshDiff, tx))
-                .build(&t.k),
-        )
-        .child(
-            rune_kit::IconButton::new(&ui::FOLDER_TREE)
-                .help("Toggle changed files")
-                .variant(IconButtonVariant::Ghost)
-                .control_size(Size::Small.kit())
-                .on_press(|s: &mut Desktop| s.widgets.git_tree_open = !s.widgets.git_tree_open)
-                .build(&t.k),
-        )
-        .child(
-            rune_kit::IconButton::new(&ui::CLOSE)
-                .help("Close diff")
-                .variant(IconButtonVariant::Ghost)
-                .control_size(Size::Small.kit())
-                .on_press_tx(|s: &mut Desktop, tx| super::dispatch(s, GitMsg::ToggleDiff, tx))
-                .build(&t.k),
+            row()
+                .gap(S2)
+                .center_y()
+                .child(
+                    rune_kit::IconButton::new(&ui::COLUMNS2)
+                        .help(if split { "Unified diff" } else { "Split diff" })
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Small.kit())
+                        .expanded(split)
+                        .on_press(|s: &mut Desktop| {
+                            let next = if s.widgets.git_diff.mode() == DiffMode::Split {
+                                DiffMode::Unified
+                            } else {
+                                DiffMode::Split
+                            };
+                            s.widgets.git_diff.set_mode(next);
+                        })
+                        .build(&t.k),
+                )
+                .child(
+                    rune_kit::IconButton::new(&ui::FOLDER_TREE)
+                        .help("Changed files")
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Small.kit())
+                        .expanded(s.widgets.git_tree_open)
+                        .on_press(|s: &mut Desktop| {
+                            s.widgets.git_tree_open = !s.widgets.git_tree_open;
+                        })
+                        .build(&t.k),
+                )
+                .child(
+                    rune_kit::IconButton::new(&ui::REFRESH_CW)
+                        .help("Refresh diff")
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Small.kit())
+                        .on_press_tx(|s: &mut Desktop, tx| {
+                            super::dispatch(s, GitMsg::RefreshDiff, tx);
+                        })
+                        .build(&t.k),
+                )
+                .child(
+                    rune_kit::IconButton::new(&ui::CLOSE)
+                        .help("Close diff")
+                        .variant(IconButtonVariant::GhostMuted)
+                        .control_size(Size::Small.kit())
+                        .on_press_tx(|s: &mut Desktop, tx| {
+                            super::dispatch(s, GitMsg::ToggleDiff, tx);
+                        })
+                        .build(&t.k),
+                ),
         )
 }
 
-fn el_spacer() -> El {
-    rune::el().grow(1.0)
-}
-
-fn message(label: &str, t: &Theme) -> El {
+fn empty_panel(title: &str, detail: Option<&str>, t: &Theme) -> El {
+    let mut state = ui::empty_state(title).icon(&ui::FILE_DIFF).compact();
+    if let Some(detail) = detail {
+        state = state.detail(detail);
+    }
     col()
         .grow(1.0)
         .w_full()
         .center()
-        .padding(12.0)
-        .child(text(label).font(t.small).color(t.muted).wrap_anywhere())
+        .padding(S12)
+        .child(state.build(t))
 }
 
 fn scope(s: &Desktop, t: &Theme, layer: &mut Vec<El>) -> El {
     let git = &s.model.git;
     let open = git.popup == Some(Popup::Scope);
-    let label = match git.target {
-        GitDiffTarget::Working => "Working",
-        GitDiffTarget::Staged => "Staged",
-        GitDiffTarget::Base { .. } => "vs Base",
-        GitDiffTarget::Commit { .. } => "Commit",
-        GitDiffTarget::Turn { .. } => "Turn",
-        GitDiffTarget::Thread => "Thread",
-    };
     let base = default_branch(&s.model).to_owned();
-    let scopes = [
-        ("Working", GitDiffTarget::Working),
-        ("Staged", GitDiffTarget::Staged),
-        ("vs Base", GitDiffTarget::Base { revision: base }),
-        ("Thread changes", GitDiffTarget::Thread),
-    ]
-    .into_iter()
-    .fold(RadioGroup::new(), |group, (label, target)| {
-        group.item(RadioItem::new(label, target == git.target).on_select_tx(
-            move |s: &mut Desktop, tx| {
-                super::dispatch(s, GitMsg::Scope(target.clone()), tx);
-            },
-        ))
-    });
-    let trigger = rune_kit::Button::new(label)
-        .variant(ButtonVariant::Outline)
-        .control_size(Size::Small.kit())
-        .on_press_tx(|s: &mut Desktop, tx| super::toggle_popup(s, Popup::Scope, tx))
-        .build(&t.k);
-    Popover::new(SCOPE)
+    let label = scope_label(&git.target);
+    let trigger = scope_trigger(&label, open, t);
+    let mut items = vec![
+        scope_item(
+            "Working tree",
+            "Uncommitted changes",
+            git.target == GitDiffTarget::Working,
+            GitDiffTarget::Working,
+        ),
+        scope_item(
+            "Staged changes",
+            "Ready to commit",
+            git.target == GitDiffTarget::Staged,
+            GitDiffTarget::Staged,
+        ),
+        scope_item(
+            &format!("Compare to {base}"),
+            "Changes since base branch",
+            matches!(git.target, GitDiffTarget::Base { .. }),
+            GitDiffTarget::Base { revision: base },
+        ),
+        scope_item(
+            "Thread changes",
+            "Files edited in this thread",
+            git.target == GitDiffTarget::Thread,
+            GitDiffTarget::Thread,
+        ),
+    ];
+    match &git.target {
+        GitDiffTarget::Commit { revision } => items.push(scope_item(
+            &format!("Commit {revision}"),
+            "Pinned commit diff",
+            true,
+            git.target.clone(),
+        )),
+        GitDiffTarget::Turn { run } => items.push(scope_item(
+            &format!("Turn #{run}"),
+            "Checkpoint diff",
+            true,
+            git.target.clone(),
+        )),
+        _ => {}
+    }
+    ui::menu_items(Menu::new(SCOPE), items)
         .trigger(trigger)
-        .title("Diff scope")
         .open(open)
         .placement(Placement::BottomStart)
+        .min_width(220.0)
         .on_close(super::close_popup)
-        .child(
-            col()
-                .w_full()
-                .gap(8.0)
-                .child(scopes.build(&t.overlay))
-                .child(input_scope(
-                    &s.widgets.git_revision,
-                    "Commit revision",
-                    false,
-                    t,
-                ))
-                .child(input_scope(&s.widgets.git_run, "Turn run ID", true, t)),
-        )
         .build(&t.overlay, layer)
 }
 
-fn input_scope(edit: &rune::TextEdit, label: &str, turn: bool, t: &Theme) -> El {
-    rune_kit::TextInput::new(edit)
-        .label(label)
-        .placeholder(label)
-        .width(None)
-        .on_edit(move |s: &mut Desktop| {
-            if turn {
-                &mut s.widgets.git_run
-            } else {
-                &mut s.widgets.git_revision
-            }
+fn scope_label(target: &GitDiffTarget) -> String {
+    match target {
+        GitDiffTarget::Working => "Working tree".to_owned(),
+        GitDiffTarget::Staged => "Staged".to_owned(),
+        GitDiffTarget::Base { revision } => format!("vs {revision}"),
+        GitDiffTarget::Commit { revision } => {
+            let short = &revision[..revision.len().min(7)];
+            format!("Commit {short}")
+        }
+        GitDiffTarget::Turn { run } => format!("Turn #{run}"),
+        GitDiffTarget::Thread => "Thread changes".to_owned(),
+    }
+}
+
+fn scope_trigger(label: &str, open: bool, t: &Theme) -> El {
+    row()
+        .key(format!("{SCOPE}-trigger"))
+        .role("combobox")
+        .label("Diff scope")
+        .a11y_value(label)
+        .expanded(open)
+        .h(Size::Small.height())
+        .px(S8)
+        .gap(S4)
+        .center_y()
+        .radius(Size::Small.radius())
+        .fill(if open {
+            t.hover_wash
+        } else {
+            rune::Color::TRANSPARENT
         })
-        .on_submit(move |s: &mut Desktop, tx| {
-            let target = if turn {
-                let Some(run) = run_id(&s.widgets.git_run.text) else {
-                    return;
-                };
-                GitDiffTarget::Turn { run }
-            } else {
-                let revision = s.widgets.git_revision.text.trim().to_owned();
-                if revision.is_empty() {
-                    return;
-                }
-                GitDiffTarget::Commit { revision }
-            };
-            super::dispatch(s, GitMsg::Scope(target), tx);
+        .hover_group()
+        .hover(t.hover_wash)
+        .press(t.pressed_wash)
+        .focusable(true)
+        .on_press_tx(|s: &mut Desktop, tx| super::toggle_popup(s, Popup::Scope, tx))
+        .child(
+            text(label)
+                .font(t.small_medium)
+                .color(t.text)
+                .shrink()
+                .min_w(0.0)
+                .truncate()
+                .a11y_hidden(),
+        )
+        .child(
+            icon(&ui::CHEVRON_OPEN, ICON_SMALL)
+                .color(t.muted)
+                .group_color(t.text)
+                .a11y_hidden(),
+        )
+}
+
+fn scope_item(title: &str, description: &str, selected: bool, target: GitDiffTarget) -> MenuItem {
+    MenuItem::new(title)
+        .description(description)
+        .checked(selected)
+        .on_select_tx(move |s: &mut Desktop, tx| {
+            super::dispatch(s, GitMsg::Scope(target.clone()), tx);
         })
-        .build(&t.k)
-        .key(label)
 }
 
 fn run_id(value: &str) -> Option<RunId> {
