@@ -30,21 +30,18 @@ pub fn task_result(s: &Desktop, result: &TaskResult, t: &Theme) -> El {
         );
     let heading = task_result_heading(s, result, fold_key, has_detail, open, t);
 
-    let mut card = motion::fold_container(
-        col()
-            .key(result.key.clone())
-            .w_full()
-            .my(S4)
-            .radius(RADIUS_CARD)
-            .fill(t.surface)
-            .border(HAIRLINE, t.hairline)
-            .clip_rounded(RADIUS_CARD),
-    )
-    .child(heading);
+    let mut card = col()
+        .key("card")
+        .w_full()
+        .radius(RADIUS_CARD)
+        .fill(t.surface)
+        .border(HAIRLINE, t.hairline)
+        .clip_rounded(RADIUS_CARD)
+        .child(heading);
 
     if open {
         let cwd = s.model.thread_state().map(|st| st.cwd.as_str());
-        card = card.child(motion::fold_row(
+        card = card.child(
             col().key("detail").w_full().child(ui::rule(t)).child(
                 col().w_full().padding(S12).child(
                     super::markdown::with_file_pills(
@@ -58,10 +55,15 @@ pub fn task_result(s: &Desktop, result: &TaskResult, t: &Theme) -> El {
                     .w_full(),
                 ),
             ),
-        ));
+        );
     }
 
-    card
+    col()
+        .key(result.key.clone())
+        .w_full()
+        .py(S4)
+        .arrives_whole()
+        .child(card)
 }
 
 fn task_result_heading(

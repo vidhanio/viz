@@ -54,10 +54,9 @@ pub fn changed_files_card(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> Option
 
     let mut card = Card::Surface
         .frame(t)
-        .key(format!("{}-changed-files", turn.key))
+        .key("card")
         .role("region")
         .label(format!("Changed files ({})", turn.changed_files.len()))
-        .mt(S8)
         .clip_rounded(RADIUS_CARD)
         .child(header)
         .child(ui::rule(t))
@@ -73,7 +72,13 @@ pub fn changed_files_card(s: &Desktop, turn: &TurnView<'_>, t: &Theme) -> Option
     if !t.k.dark {
         card = card.border(HAIRLINE, t.border_control);
     }
-    Some(card)
+    Some(
+        col()
+            .key(format!("{}-changed-files", turn.key))
+            .w_full()
+            .pt(S8)
+            .child(card),
+    )
 }
 
 fn changed_files_header(

@@ -92,19 +92,19 @@ pub fn plan_card(s: &Desktop, plan: &PlanCard, t: &Theme, layer: &mut Vec<El>) -
     } else {
         t.border_control
     };
-    col()
-        .key(plan.key.clone())
+    let card = col()
+        .key("card")
         .role("region")
         .label("Plan")
         .w_full()
-        .my(S6)
         .radius(RADIUS_CARD)
         .fill(t.surface)
         .border(HAIRLINE, border)
         .clip_rounded(RADIUS_CARD)
         .child(header)
         .child(ui::rule(t))
-        .child(body)
+        .child(body);
+    col().key(plan.key.clone()).w_full().py(S6).child(card)
 }
 
 fn plan_header_subtitle(s: &Desktop, plan: &PlanCard, t: &Theme) -> El {

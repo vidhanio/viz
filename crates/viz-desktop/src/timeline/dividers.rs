@@ -67,26 +67,26 @@ pub fn compaction_divider(s: &Desktop, notice: &CompactionNotice, t: &Theme) -> 
                 .a11y_hidden(),
         );
 
-    let mut block = motion::fold_container(col().key(notice.key.clone()).w_full()).child(line);
+    let mut block = col().key(notice.key.clone()).w_full().child(line);
     if open {
-        block = block.child(motion::fold_row(
-            col()
-                .key("summary")
-                .w_full()
-                .mb(S6)
-                .padding(CARD_INSET)
-                .radius(RADIUS_CARD)
-                .fill(t.surface_recessed)
-                .border(HAIRLINE, t.hairline)
-                .child(
-                    text(notice.summary.trim())
-                        .font(t.small)
-                        .color(t.muted)
-                        .wrap()
-                        .selectable(true)
-                        .selection_color(t.k.selection()),
-                ),
-        ));
+        block = block.child(
+            col().key("summary").w_full().pb(S6).child(
+                col()
+                    .w_full()
+                    .padding(CARD_INSET)
+                    .radius(RADIUS_CARD)
+                    .fill(t.surface_recessed)
+                    .border(HAIRLINE, t.hairline)
+                    .child(
+                        text(notice.summary.trim())
+                            .font(t.small)
+                            .color(t.muted)
+                            .wrap()
+                            .selectable(true)
+                            .selection_color(t.k.selection()),
+                    ),
+            ),
+        );
     }
     block
 }
@@ -372,9 +372,8 @@ pub fn media_card(media: &MediaItem, t: &Theme) -> El {
         .map(str::to_owned);
 
     let mut card = row()
-        .key(media.key.clone())
+        .key("card")
         .w_full()
-        .my(S4)
         .px(CARD_INSET)
         .py(S8)
         .gap(S8)
@@ -408,7 +407,7 @@ pub fn media_card(media: &MediaItem, t: &Theme) -> El {
         );
     }
 
-    card
+    col().key(media.key.clone()).w_full().py(S4).child(card)
 }
 
 /// Inline turn error banner distinguishing usage-limit warnings from auth and
@@ -462,7 +461,13 @@ pub fn error_banner(
             .key("dismiss"),
     );
 
-    Some(card.build(&t.k).key(key.to_owned()).my(S6))
+    Some(
+        col()
+            .key(key.to_owned())
+            .w_full()
+            .py(S6)
+            .child(card.build(&t.k)),
+    )
 }
 
 fn hairline_divider(
