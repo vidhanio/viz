@@ -112,30 +112,12 @@ pub fn path_to_file_url(path: &str) -> Option<String> {
     url::Url::from_file_path(path).ok().map(String::from)
 }
 
-/// Extracts a 1-based inclusive line range from JSON tool arguments such as
-/// `read_file` (`StartLine`/`EndLine`, `start_line`/`end_line`, or
-/// `offset`/`limit`).
+/// Converts a normalized location to the preview's line index type.
 #[must_use]
-pub fn extract_tool_line_range(raw_input: Option<&str>) -> Option<(usize, usize)> {
-    let value: serde_json::Value = serde_json::from_str(raw_input?).ok()?;
-    let obj = value.as_object()?;
-    let get_num = |keys: &[&str]| -> Option<usize> {
-        for key in keys {
-            if let Some(n) = obj.get(*key).and_then(serde_json::Value::as_u64) {
-                return usize::try_from(n).ok().filter(|&v| v > 0);
-            }
-        }
-        None
-    };
-    if let Some(start) = get_num(&["StartLine", "start_line", "startLine", "line"]) {
-        let end = get_num(&["EndLine", "end_line", "endLine"]).unwrap_or(start);
-        return Some((start, end.max(start)));
-    }
-    if let Some(offset) = get_num(&["offset", "Offset"]) {
-        let limit = get_num(&["limit", "Limit"]).unwrap_or(1);
-        return Some((offset, offset.saturating_add(limit.saturating_sub(1))));
-    }
-    None
+pub(super) fn line_range(location: viz_client::protocol::Location) -> Option<(usize, usize)> {
+    let start = usize::try_from(location.line?).ok()?;
+    let end = usize::try_from(location.end_line?).ok()?;
+    Some((start, end))
 }
 
 fn parse_line_fragment(fragment: &str) -> Option<(usize, usize)> {

@@ -2,14 +2,15 @@
 //! scenes.
 
 use viz_client::protocol::{
-    Body, ContextUsage, EntryData, Environment, EnvironmentStatus, GitBranch, LiveTurn, PlanEntry,
-    PlanPriority, PlanStatus, Project, RunEnd, Task, TaskStatus, ThreadId, ThreadStatus, ToolCall,
-    ToolCallStatus, ToolContent, ToolDiff, VizLink, Worktree,
+    Body, ContextUsage, EntryData, Environment, EnvironmentStatus, Exit, GitBranch, LiveTurn,
+    PlanEntry, PlanPriority, PlanStatus, Project, RunEnd, Task, TaskStatus, ThreadId, ThreadStatus,
+    ToolCall, ToolCallStatus, ToolContent, ToolDiff, ToolPayload, VizLink, Worktree,
 };
 
 use super::data::{
-    THREAD, WORKTREE, list, now_ms, preview_entry, preview_plan, preview_text, preview_thread,
-    preview_tool, preview_tool_entry, prompt, response, thread_state, transcript,
+    THREAD, WORKTREE, list, now_ms, preview_command, preview_edit, preview_entry, preview_plan,
+    preview_read, preview_text, preview_thread, preview_tool, preview_tool_entry, prompt, response,
+    thread_state, transcript,
 };
 use crate::model::{Checkouts, Model, PaneSwitch, Status, Transcript, async_slot::AsyncSlot};
 
@@ -84,21 +85,28 @@ pub(super) fn seed_activity(m: &mut Model) {
     m.cache_mut().open_thread_mut(THREAD).transcript = preview_thread(
         [
             prompt("Check the sample exports."),
-            preview_tool_entry(ToolCall {
-                raw_input: Some(r#"{"query":"export newline conventions"}"#.into()),
-                ..preview_tool("search-1", "Search", "search", ToolCallStatus::Completed)
-            }),
+            preview_tool_entry(preview_tool(
+                "search-1",
+                "Search",
+                ToolPayload::Search {
+                    query: Some("export newline conventions".into()),
+                    matches: Vec::new(),
+                },
+                ToolCallStatus::Completed,
+            )),
             EntryData::Transcript(preview_text(
                 "1:0",
                 "\n\n**Compare the output.** The only meaningful difference should be the final newline.\n\n\n\n",
                 true,
             )),
             preview_tool_entry(ToolCall {
-                raw_input: Some(r#"{"command":"wc -l old.md new.md"}"#.into()),
-                raw_output: Some(
-                    "Created At: 2026-11-20T19:51:26-05:00\nCompleted At: 2026-11-20T19:51:31-05:00\nCommand exited with code 0.\n\nCommand output:\n    42 old.md\n    43 new.md\n    85 total\n".into(),
-                ),
-                ..preview_tool("run-1", "Check line counts", "execute", ToolCallStatus::Completed)
+                display_output: Some("    42 old.md\n    43 new.md\n    85 total\n".into()),
+                ..preview_tool(
+                    "run-1",
+                    "Check line counts",
+                    preview_command("wc -l old.md new.md", None),
+                    ToolCallStatus::Completed,
+                )
             }),
             response("The updated export preserves the final newline."),
         ],
@@ -111,10 +119,7 @@ pub(super) fn seed_activity(m: &mut Model) {
 
 pub(super) fn seed_worklog(m: &mut Model) {
     seed_workspace(m);
-    let tool = |id: &str, title: &str, kind: &str, input: &str| ToolCall {
-        raw_input: Some(input.into()),
-        ..preview_tool(id, title, kind, ToolCallStatus::Completed)
-    };
+    let tool = |id, title, payload| preview_tool(id, title, payload, ToolCallStatus::Completed);
     m.cache_mut().open_thread_mut(THREAD).transcript = preview_thread(
         [
             prompt("Make the export keep CRLF line endings, then run the tests."),
@@ -140,46 +145,42 @@ pub(super) fn seed_worklog(m: &mut Model) {
             preview_tool_entry(tool(
                 "read-1",
                 "Read",
-                "read",
-                r#"{"path":"/work/workbench/src/export/markdown.rs"}"#,
+                preview_read("/work/workbench/src/export/markdown.rs", None),
             )),
-            preview_tool_entry(tool("grep-1", "Search", "search", r#"{"pattern":"join(\"\\n"}"#)),
+            preview_tool_entry(tool("grep-1", "Search", ToolPayload::Search {
+                query: Some("join(\"\\n".into()), matches: Vec::new()
+            })),
             preview_tool_entry(ToolCall {
-                raw_output: Some("Updated 1 file.".into()),
-                content: vec![ToolContent::Diff(ToolDiff {
-                    path: "/work/workbench/src/export/markdown.rs".into(),
-                    old_text: Some(
+                display_output: Some("Updated 1 file.".into()),
+                content: vec![ToolContent::Diff(ToolDiff::new("/work/workbench/src/export/markdown.rs".into(), Some(
                         "fn render(blocks: &[Block]) -> String {\n    let body = blocks.join(\"\\n\\n\");\n    body\n}\n"
                             .into(),
-                    ),
-                    new_text: "fn render(blocks: &[Block], ending: LineEnding) -> String {\n    let separator = ending.repeat(2);\n    let body = blocks.join(&separator);\n    body + ending.as_str()\n}\n"
-                        .into(),
-                    skip: 0,
-                })],
+                    ), "fn render(blocks: &[Block], ending: LineEnding) -> String {\n    let separator = ending.repeat(2);\n    let body = blocks.join(&separator);\n    body + ending.as_str()\n}\n"
+                        .into(),))],
                 ..tool(
                     "edit-1",
                     "Edit",
-                    "edit",
-                    r#"{"path":"/work/workbench/src/export/markdown.rs"}"#,
+                    preview_edit("/work/workbench/src/export/markdown.rs"),
                 )
             }),
             preview_tool_entry(ToolCall {
-                raw_output: Some(
-                    "Created At: 2026-11-20T19:51:26-05:00\nCompleted At: 2026-11-20T19:51:31-05:00\nCommand exited with code 101.\n\nCommand output:\nrunning 12 tests\ntest export::crlf ... FAILED\n\nfailures:\n    export::crlf: expected \"a\\r\\n\\r\\nb\\r\\n\", got \"a\\r\\n\\r\\nb\\n\"\n".into(),
+                exit: Some(Exit { code: Some(101), signal: None }),
+                display_output: Some(
+                    "running 12 tests\ntest export::crlf ... FAILED\n\nfailures:\n    export::crlf: expected \"a\\r\\n\\r\\nb\\r\\n\", got \"a\\r\\n\\r\\nb\\n\"\n".into(),
                 ),
                 ..tool(
                     "test-1",
                     "Run tests",
-                    "execute",
-                    r#"{"command":"cargo test -p workbench export::"}"#,
+                    preview_command("cargo test -p workbench export::", None),
                 )
             }),
-            preview_tool_entry(tool(
-                "mcp-1",
-                "mcp__docs__search_pages",
-                "mcp__docs__search_pages",
-                r#"{"query":"CRLF in CommonMark"}"#,
-            )),
+            preview_tool_entry(ToolCall {
+                name: Some("mcp__docs__search_pages".into()),
+                arguments: Some("{\n  \"query\": \"CRLF in CommonMark\"\n}".into()),
+                ..tool("mcp-1", "mcp__docs__search_pages", ToolPayload::Mcp {
+                    summary: Some("CRLF in CommonMark".into())
+                })
+            }),
             response("The test caught the last block's ending; I’ll fix that next."),
             EntryData::TaskResult {
                 task: "t-21".into(),
@@ -237,7 +238,7 @@ pub(super) fn seed_subagents(m: &mut Model) {
                 child: Some(ThreadId(20)),
                 environment: None,
             }),
-            ..preview_tool("spawn-1", "Compare exports", "other", ToolCallStatus::InProgress)
+            ..preview_tool("spawn-1", "Compare exports", ToolPayload::Other { summary: None }, ToolCallStatus::InProgress)
         }),
         preview_tool_entry(ToolCall {
             viz: Some(VizLink {
@@ -245,8 +246,8 @@ pub(super) fn seed_subagents(m: &mut Model) {
                 child: Some(ThreadId(21)),
                 environment: None,
             }),
-            raw_output: Some("CRLF survives the join; only the final newline was missing.\nNo other changes needed.".into()),
-            ..preview_tool("spawn-2", "Review line endings", "other", ToolCallStatus::Completed)
+            display_output: Some("CRLF survives the join; only the final newline was missing.\nNo other changes needed.".into()),
+            ..preview_tool("spawn-2", "Review line endings", ToolPayload::Other { summary: None }, ToolCallStatus::Completed)
         }),
         preview_tool_entry(ToolCall {
             viz: Some(VizLink {
@@ -254,7 +255,7 @@ pub(super) fn seed_subagents(m: &mut Model) {
                 child: Some(ThreadId(20)),
                 environment: None,
             }),
-            ..preview_tool("message-1", "Compare exports", "other", ToolCallStatus::Completed)
+            ..preview_tool("message-1", "Compare exports", ToolPayload::Other { summary: None }, ToolCallStatus::Completed)
         }),
     ], None);
     if let Some(state) = &mut open.state {
@@ -326,11 +327,10 @@ pub(super) fn seed_subagent(m: &mut Model) {
                 "1:2",
                 Body::Tool(Box::new(ToolCall {
                     started_at: Some(now_ms() - 11_000),
-                    raw_input: Some(r#"{"command":"diff -u old.md new.md","timeout":30}"#.into()),
                     ..preview_tool(
                         "compare",
                         "Compare sample exports",
-                        "execute",
+                        preview_command("diff -u old.md new.md", Some(30_000)),
                         ToolCallStatus::InProgress,
                     )
                 })),

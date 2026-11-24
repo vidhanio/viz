@@ -1,8 +1,10 @@
 //! Converts runner content and terminal reports at the ACP boundary.
 
+mod normalize;
 mod patch;
 mod review;
 
+pub use normalize::{normalize_output, normalize_stored_tool};
 pub use patch::{ToolFields, ToolPatch, ToolReport};
 use viz_protocol::{ContentBlock, ContentKind, Exit, Terminal};
 

@@ -1,5 +1,5 @@
 {
-  "protocol": 3,
+  "protocol": 4,
   "methods": {
     "hello": {
       "scopes": [
@@ -2202,6 +2202,10 @@
             "description": "One tool call, as last reported by the harness. Nothing the harness sent is\nshortened except the output of a terminal it streams.",
             "type": "object",
             "properties": {
+              "payload": {
+                "description": "Tool-specific fields for clients.",
+                "$ref": "#/$defs/ToolPayload"
+              },
               "id": {
                 "description": "ACP tool call id, or the child session's id for a subagent.",
                 "type": "string"
@@ -2231,8 +2235,29 @@
                 "description": "Files the call touches, with the line when reported.",
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/Location"
+                  "$ref": "#/$defs/FileTarget"
                 }
+              },
+              "arguments": {
+                "description": "Formatted structured arguments for inspection.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "displayOutput": {
+                "description": "Display text derived from raw output or a harness envelope.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "taskId": {
+                "description": "Task id confirmed by a delegation receipt.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "rawInput": true,
               "rawOutput": true,
@@ -2316,12 +2341,255 @@
               }
             },
             "required": [
+              "payload",
               "id",
               "title",
               "status",
               "locations",
               "content",
               "terminals"
+            ]
+          },
+          "ToolPayload": {
+            "description": "Semantic tool input and structured search output as reported by the harness.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "execute"
+                  },
+                  "command": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "timeoutMs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "uint64",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "read"
+                  },
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/FileTarget"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "targets"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "edit"
+                  },
+                  "operation": {
+                    "$ref": "#/$defs/FileOperation"
+                  },
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/FileTarget"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "operation",
+                  "targets"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "search"
+                  },
+                  "query": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "matches": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/SearchMatch"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "matches"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "fetch"
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "matches": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/SearchMatch"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "matches"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "mcp"
+                  },
+                  "summary": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "other"
+                  },
+                  "summary": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          },
+          "FileTarget": {
+            "description": "A file and its optional one-based inclusive line range.",
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "endLine": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "path"
+            ]
+          },
+          "FileOperation": {
+            "description": "Which filesystem operation an edit performs.",
+            "type": "string",
+            "enum": [
+              "write",
+              "edit",
+              "delete",
+              "move"
+            ]
+          },
+          "SearchMatch": {
+            "description": "One reported match in a local file or on the web.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/FileTarget"
+                  },
+                  "snippet": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "target",
+                  "snippet"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "web"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "snippet": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "url",
+                  "snippet"
+                ]
+              }
             ]
           },
           "ToolCallStatus": {
@@ -2347,26 +2615,6 @@
                 "type": "string",
                 "const": "failed"
               }
-            ]
-          },
-          "Location": {
-            "description": "A place in a file.",
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string"
-              },
-              "line": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint32",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "path"
             ]
           },
           "ToolContent": {
@@ -2463,11 +2711,25 @@
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
+              },
+              "added": {
+                "description": "Added lines in the full edit.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "removed": {
+                "description": "Removed lines in the full edit.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               }
             },
             "required": [
               "path",
-              "newText"
+              "newText",
+              "added",
+              "removed"
             ]
           },
           "Terminal": {
@@ -12235,6 +12497,10 @@
             "description": "One tool call, as last reported by the harness. Nothing the harness sent is\nshortened except the output of a terminal it streams.",
             "type": "object",
             "properties": {
+              "payload": {
+                "description": "Tool-specific fields for clients.",
+                "$ref": "#/$defs/ToolPayload"
+              },
               "id": {
                 "description": "ACP tool call id, or the child session's id for a subagent.",
                 "type": "string"
@@ -12264,8 +12530,29 @@
                 "description": "Files the call touches, with the line when reported.",
                 "type": "array",
                 "items": {
-                  "$ref": "#/$defs/Location"
+                  "$ref": "#/$defs/FileTarget"
                 }
+              },
+              "arguments": {
+                "description": "Formatted structured arguments for inspection.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "displayOutput": {
+                "description": "Display text derived from raw output or a harness envelope.",
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "taskId": {
+                "description": "Task id confirmed by a delegation receipt.",
+                "type": [
+                  "string",
+                  "null"
+                ]
               },
               "rawInput": true,
               "rawOutput": true,
@@ -12349,12 +12636,255 @@
               }
             },
             "required": [
+              "payload",
               "id",
               "title",
               "status",
               "locations",
               "content",
               "terminals"
+            ]
+          },
+          "ToolPayload": {
+            "description": "Semantic tool input and structured search output as reported by the harness.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "execute"
+                  },
+                  "command": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "timeoutMs": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "format": "uint64",
+                    "minimum": 0
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "read"
+                  },
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/FileTarget"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "targets"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "edit"
+                  },
+                  "operation": {
+                    "$ref": "#/$defs/FileOperation"
+                  },
+                  "targets": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/FileTarget"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "operation",
+                  "targets"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "search"
+                  },
+                  "query": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "matches": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/SearchMatch"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "matches"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "fetch"
+                  },
+                  "url": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "matches": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/$defs/SearchMatch"
+                    }
+                  }
+                },
+                "required": [
+                  "type",
+                  "matches"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "mcp"
+                  },
+                  "summary": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "other"
+                  },
+                  "summary": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            ]
+          },
+          "FileTarget": {
+            "description": "A file and its optional one-based inclusive line range.",
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "line": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              },
+              "endLine": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint32",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "path"
+            ]
+          },
+          "FileOperation": {
+            "description": "Which filesystem operation an edit performs.",
+            "type": "string",
+            "enum": [
+              "write",
+              "edit",
+              "delete",
+              "move"
+            ]
+          },
+          "SearchMatch": {
+            "description": "One reported match in a local file or on the web.",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "file"
+                  },
+                  "target": {
+                    "$ref": "#/$defs/FileTarget"
+                  },
+                  "snippet": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "target",
+                  "snippet"
+                ]
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "web"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "snippet": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type",
+                  "url",
+                  "snippet"
+                ]
+              }
             ]
           },
           "ToolCallStatus": {
@@ -12380,26 +12910,6 @@
                 "type": "string",
                 "const": "failed"
               }
-            ]
-          },
-          "Location": {
-            "description": "A place in a file.",
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string"
-              },
-              "line": {
-                "type": [
-                  "integer",
-                  "null"
-                ],
-                "format": "uint32",
-                "minimum": 0
-              }
-            },
-            "required": [
-              "path"
             ]
           },
           "ToolContent": {
@@ -12496,11 +13006,25 @@
                 "type": "integer",
                 "format": "uint32",
                 "minimum": 0
+              },
+              "added": {
+                "description": "Added lines in the full edit.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
+              },
+              "removed": {
+                "description": "Removed lines in the full edit.",
+                "type": "integer",
+                "format": "uint32",
+                "minimum": 0
               }
             },
             "required": [
               "path",
-              "newText"
+              "newText",
+              "added",
+              "removed"
             ]
           },
           "Terminal": {
@@ -15323,6 +15847,10 @@
         "description": "One tool call, as last reported by the harness. Nothing the harness sent is\nshortened except the output of a terminal it streams.",
         "type": "object",
         "properties": {
+          "payload": {
+            "description": "Tool-specific fields for clients.",
+            "$ref": "#/$defs/ToolPayload"
+          },
           "id": {
             "description": "ACP tool call id, or the child session's id for a subagent.",
             "type": "string"
@@ -15352,8 +15880,29 @@
             "description": "Files the call touches, with the line when reported.",
             "type": "array",
             "items": {
-              "$ref": "#/$defs/Location"
+              "$ref": "#/$defs/FileTarget"
             }
+          },
+          "arguments": {
+            "description": "Formatted structured arguments for inspection.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "displayOutput": {
+            "description": "Display text derived from raw output or a harness envelope.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "taskId": {
+            "description": "Task id confirmed by a delegation receipt.",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "rawInput": true,
           "rawOutput": true,
@@ -15437,12 +15986,255 @@
           }
         },
         "required": [
+          "payload",
           "id",
           "title",
           "status",
           "locations",
           "content",
           "terminals"
+        ]
+      },
+      "ToolPayload": {
+        "description": "Semantic tool input and structured search output as reported by the harness.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "execute"
+              },
+              "command": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "timeoutMs": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "format": "uint64",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "read"
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/FileTarget"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "targets"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "edit"
+              },
+              "operation": {
+                "$ref": "#/$defs/FileOperation"
+              },
+              "targets": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/FileTarget"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "operation",
+              "targets"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "search"
+              },
+              "query": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "matches": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/SearchMatch"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "matches"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "fetch"
+              },
+              "url": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "matches": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/SearchMatch"
+                }
+              }
+            },
+            "required": [
+              "type",
+              "matches"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "mcp"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "other"
+              },
+              "summary": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        ]
+      },
+      "FileTarget": {
+        "description": "A file and its optional one-based inclusive line range.",
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "line": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          },
+          "endLine": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "uint32",
+            "minimum": 0
+          }
+        },
+        "required": [
+          "path"
+        ]
+      },
+      "FileOperation": {
+        "description": "Which filesystem operation an edit performs.",
+        "type": "string",
+        "enum": [
+          "write",
+          "edit",
+          "delete",
+          "move"
+        ]
+      },
+      "SearchMatch": {
+        "description": "One reported match in a local file or on the web.",
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "file"
+              },
+              "target": {
+                "$ref": "#/$defs/FileTarget"
+              },
+              "snippet": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "target",
+              "snippet"
+            ]
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "web"
+              },
+              "url": {
+                "type": "string"
+              },
+              "snippet": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type",
+              "url",
+              "snippet"
+            ]
+          }
         ]
       },
       "ToolCallStatus": {
@@ -15468,26 +16260,6 @@
             "type": "string",
             "const": "failed"
           }
-        ]
-      },
-      "Location": {
-        "description": "A place in a file.",
-        "type": "object",
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "line": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "uint32",
-            "minimum": 0
-          }
-        },
-        "required": [
-          "path"
         ]
       },
       "ToolContent": {
@@ -15584,11 +16356,25 @@
             "type": "integer",
             "format": "uint32",
             "minimum": 0
+          },
+          "added": {
+            "description": "Added lines in the full edit.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "removed": {
+            "description": "Removed lines in the full edit.",
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
           }
         },
         "required": [
           "path",
-          "newText"
+          "newText",
+          "added",
+          "removed"
         ]
       },
       "Terminal": {

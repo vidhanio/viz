@@ -2,10 +2,10 @@
 
 use viz_client::protocol::{
     AttachmentCapabilities, Attention, Body, ConfigOption, DependentChoice, DependentOption, Entry,
-    EntryData, EntryId, Lifecycle, OptionChoice, OptionKind, OptionValue, Plan, PlanContent,
-    PlanEntry, PlanPriority, PlanStatus, PromptAttachment, RunEnd, Segment, Shelf, SlashCommand,
-    ThreadId, ThreadState, ThreadStatus, ThreadSummary, ThreadWorktree, ToolCall, ToolCallStatus,
-    ToolContent, ToolDiff, TranscriptEntry,
+    EntryData, EntryId, FileOperation, FileTarget, Lifecycle, Location, OptionChoice, OptionKind,
+    OptionValue, Plan, PlanContent, PlanEntry, PlanPriority, PlanStatus, PromptAttachment, RunEnd,
+    Segment, Shelf, SlashCommand, ThreadId, ThreadState, ThreadStatus, ThreadSummary,
+    ThreadWorktree, ToolCall, ToolCallStatus, ToolContent, ToolDiff, ToolPayload, TranscriptEntry,
 };
 
 use crate::model::Transcript;
@@ -175,18 +175,13 @@ pub(super) fn transcript(attachments: &[&str]) -> Transcript {
                 .collect(),
             ),
             preview_tool_entry(ToolCall {
-                raw_output: Some("Updated 1 file.".into()),
-                content: vec![ToolContent::Diff(ToolDiff {
-                    path: "src/export.rs".into(),
-                    old_text: Some("let body = blocks.join(\"\n\n\");\nOk(body)\n".into()),
-                    new_text: "let body = blocks.join(\"\n\n\");\nOk(format!(\"{body}\n\"))\n"
-                        .into(),
-                    skip: 0,
-                })],
+                display_output: Some("Updated 1 file.".into()),
+                content: vec![ToolContent::Diff(ToolDiff::new("src/export.rs".into(), Some("let body = blocks.join(\"\n\n\");\nOk(body)\n".into()), "let body = blocks.join(\"\n\n\");\nOk(format!(\"{body}\n\"))\n"
+                        .into(),))],
                 ..preview_tool(
                     "write-1",
                     "Update markdown export",
-                    "edit",
+                    preview_edit("src/export.rs"),
                     ToolCallStatus::Completed,
                 )
             }),
@@ -379,10 +374,45 @@ pub(super) fn preview_plan(entries: Vec<PlanEntry>) -> EntryData {
     ))
 }
 
-pub(super) fn preview_tool(id: &str, title: &str, kind: &str, status: ToolCallStatus) -> ToolCall {
+pub(super) fn preview_tool(
+    id: &str,
+    title: &str,
+    payload: ToolPayload,
+    status: ToolCallStatus,
+) -> ToolCall {
     let mut tool = ToolCall::new(id.into());
     tool.title = title.into();
-    tool.kind = Some(kind.into());
+    tool.payload = payload;
     tool.status = status;
     tool
+}
+
+pub(super) fn preview_target(path: &str, lines: Option<(u32, u32)>) -> FileTarget {
+    FileTarget {
+        path: path.into(),
+        location: Location {
+            line: lines.map(|(start, _)| start),
+            end_line: lines.map(|(_, end)| end),
+        },
+    }
+}
+
+pub(super) fn preview_read(path: &str, lines: Option<(u32, u32)>) -> ToolPayload {
+    ToolPayload::Read {
+        targets: vec![preview_target(path, lines)],
+    }
+}
+
+pub(super) fn preview_edit(path: &str) -> ToolPayload {
+    ToolPayload::Edit {
+        operation: FileOperation::Edit,
+        targets: vec![preview_target(path, None)],
+    }
+}
+
+pub(super) fn preview_command(command: &str, timeout_ms: Option<u64>) -> ToolPayload {
+    ToolPayload::Execute {
+        command: Some(command.into()),
+        timeout_ms,
+    }
 }

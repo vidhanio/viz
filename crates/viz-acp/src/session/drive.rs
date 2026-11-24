@@ -241,16 +241,21 @@ impl Session {
             return;
         }
         let session = crate::schema::SessionId::new(self.id.clone());
+        let mut updated = false;
         for terminal in &mut tool.terminals {
             if let Some(output) = self.agent.terminal_output(
                 &session,
                 &crate::schema::TerminalId::new(terminal.id.clone()),
             ) {
+                updated = true;
                 crate::tool::host_output(terminal, output);
                 if terminal.exit.is_some() {
                     tool.exit.clone_from(&terminal.exit);
                 }
             }
+        }
+        if updated {
+            crate::tool::normalize_output(tool);
         }
     }
 

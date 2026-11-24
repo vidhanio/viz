@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 
 use viz_client::protocol::{EntryId, FileRoot, ThreadId};
 
-use super::{Model, Tool, is_command, state::SessionId};
+use super::{Model, Tool, state::SessionId};
 
 /// Active file or attachment preview overlay state.
 #[derive(Debug, Clone)]
@@ -232,29 +232,10 @@ pub enum ToolAction {
 }
 
 impl ToolAction {
-    /// Classifies `tool` by its normalized name.
+    /// Returns the action from the tool payload.
     #[must_use]
-    pub fn of(tool: &Tool) -> Self {
-        match tool.name.as_str() {
-            name if is_command(name) => Self::Command,
-            "read" | "read_file" => Self::Read,
-            "write" | "create" | "write_file" => Self::Write,
-            "edit" | "apply_patch" | "edit_file" => Self::Edit,
-            "delete" => Self::Delete,
-            "move" => Self::Move,
-            "search" | "grep" | "glob" | "web_search" => Self::Search,
-            "fetch" | "web_fetch" => Self::Fetch,
-            _ => Self::Other,
-        }
-    }
-
-    /// Whether the tool's summary names a filesystem path.
-    #[must_use]
-    pub const fn on_file(self) -> bool {
-        matches!(
-            self,
-            Self::Read | Self::Write | Self::Edit | Self::Delete | Self::Move
-        )
+    pub const fn of(tool: &Tool) -> Self {
+        tool.action
     }
 }
 

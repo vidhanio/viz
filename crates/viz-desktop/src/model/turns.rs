@@ -5,9 +5,7 @@ use std::collections::BTreeMap;
 
 use viz_client::protocol::CompactionStatus;
 
-use super::{
-    ErrorKind, Item, Model, ToolStatus, Transcript, TurnEnd, diff_line_stats, relative_path,
-};
+use super::{ErrorKind, Item, Model, ToolStatus, Transcript, TurnEnd, relative_path};
 
 /// One projected conversation turn ready for the timeline renderer.
 #[derive(Debug)]
@@ -188,10 +186,9 @@ fn changed_files(model: &Model, work: &[(&Item, bool)]) -> Vec<ChangedFile> {
         if let Item::Tool(tool) = item {
             for diff in &tool.diffs {
                 let rel = relative_path(model, &diff.path).to_owned();
-                let (add, del) = diff_line_stats(diff);
                 let entry = files.entry(rel).or_insert((0, 0));
-                entry.0 = entry.0.saturating_add(add);
-                entry.1 = entry.1.saturating_add(del);
+                entry.0 = entry.0.saturating_add(diff.added);
+                entry.1 = entry.1.saturating_add(diff.removed);
             }
         }
     }

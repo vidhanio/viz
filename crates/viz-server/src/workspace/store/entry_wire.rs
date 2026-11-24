@@ -12,7 +12,10 @@ use viz_protocol::{
     ToolContent, ToolDiff, TranscriptEntry, limits,
 };
 
-use super::super::{Workspace, sql::row};
+use super::{
+    super::{Workspace, sql::row},
+    tool_storage,
+};
 use crate::error::Error;
 
 const ENTRY_BUDGET: usize = limits::ENTRY_WIRE_BUDGET;
@@ -132,27 +135,18 @@ fn segment_preview(entry: &mut TranscriptEntry) -> bool {
 fn tool_preview(tool: &mut ToolCall) -> bool {
     tool.meta = None;
     let settled = tool.status.is_settled();
-    let mut trimmed = false;
-    let mut has_structured_output = !tool.terminals.is_empty();
-
+    let mut trimmed = tool
+        .display_output
+        .as_mut()
+        .is_some_and(|text| trim_for_status(text, TEXT_CAP, settled));
     for content in &mut tool.content {
         match content {
-            ToolContent::Diff(diff) => {
-                has_structured_output = true;
-                if trim_diff(diff) {
-                    trimmed = true;
-                }
-            }
+            ToolContent::Diff(diff) => trimmed |= trim_diff(diff),
             ToolContent::Block(block) => {
                 if block.kind == ContentKind::Text
                     && let Some(Value::String(text)) = block.payload.get_mut("text")
                 {
-                    if !text.is_empty() {
-                        has_structured_output = true;
-                    }
-                    if trim_for_status(text, TEXT_CAP, settled) {
-                        trimmed = true;
-                    }
+                    trimmed |= trim_for_status(text, TEXT_CAP, settled);
                 }
             }
             ToolContent::Terminal(_) | ToolContent::Session(_) => {}
@@ -160,27 +154,10 @@ fn tool_preview(tool: &mut ToolCall) -> bool {
     }
 
     for terminal in &mut tool.terminals {
-        if trim_for_status(&mut terminal.output, TEXT_CAP, settled) {
-            trimmed = true;
-        }
+        trimmed |= trim_for_status(&mut terminal.output, TEXT_CAP, settled);
     }
 
-    if has_structured_output {
-        tool.raw_output = None;
-    } else if tool
-        .raw_output
-        .as_ref()
-        .is_some_and(|raw| !fits(raw, TEXT_CAP))
-    {
-        let mut preview = tool.output_text().unwrap_or_else(|| {
-            tool.raw_output
-                .as_ref()
-                .map_or_default(|raw| serde_json::to_string_pretty(raw).unwrap_or_default())
-        });
-        trim_for_status(&mut preview, TEXT_CAP, settled);
-        tool.raw_output = Some(Value::String(preview));
-        trimmed = true;
-    }
+    tool.raw_output = None;
 
     if tool
         .raw_input
@@ -298,6 +275,27 @@ pub(in crate::workspace) async fn read_entry_chunk(
                     "entry changed between reads; restart at offset zero",
                 ));
             }
+            let rowid =
+                i64::try_from(entry.0).map_err(|_| Error::invalid("entry id exceeds rowid"))?;
+            let blob = tx.blob_open(MAIN_DB, "entries", "data", rowid, true)?;
+            let mut prefix = [0; 512];
+            let read = blob.read_at(&mut prefix, 0)?;
+            if tool_storage::may_need_normalization(&prefix[..read]) {
+                let stored = row(tx, "SELECT data FROM entries WHERE id = ?1", [entry.into()])?
+                    .ok_or_else(|| {
+                        Error::not_found(format!("no entry {entry} in thread {thread}"))
+                    })?
+                    .str(0)?;
+                let data = tool_storage::decode(&stored)?;
+                let projected = serde_json::to_vec(&data)?;
+                let total_size = u64::try_from(projected.len()).unwrap_or(u64::MAX);
+                let start = usize::try_from(offset)
+                    .ok()
+                    .filter(|start| *start <= projected.len())
+                    .ok_or_else(|| Error::invalid("entry offset is past end of row"))?;
+                let end = start.saturating_add(len).min(projected.len());
+                return Ok((projected[start..end].to_vec(), total_size, rev));
+            }
             if offset > total_size {
                 return Err(Error::invalid("entry offset is past end of row"));
             }
@@ -309,9 +307,6 @@ pub(in crate::workspace) async fn read_entry_chunk(
             let remaining = usize::try_from(total_size - offset)
                 .unwrap_or(usize::MAX)
                 .min(len);
-            let rowid =
-                i64::try_from(entry.0).map_err(|_| Error::invalid("entry id exceeds rowid"))?;
-            let blob = tx.blob_open(MAIN_DB, "entries", "data", rowid, true)?;
             let mut buf = vec![0u8; remaining];
             let read = blob.read_at(&mut buf, start)?;
             buf.truncate(read);

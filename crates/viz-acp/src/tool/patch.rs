@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use serde_json::Value;
-use viz_protocol::{Exit, Location, Terminal, ToolCall, ToolCallStatus, ToolContent, ToolDiff};
+use viz_protocol::{Exit, FileTarget, Terminal, ToolCall, ToolCallStatus, ToolContent, ToolDiff};
 
-use super::{block, review};
+use super::{block, normalize, review};
 use crate::{
     receipts::{ReceiptBook, Receipts},
     schema::{
@@ -109,6 +109,25 @@ pub trait ToolReport {
 impl ToolReport for ToolCall {
     /// Applies one report.
     fn report(&mut self, fields: ToolFields, receipts: &mut ReceiptBook, observed_at: i64) {
+        let input_changed = fields.title.is_some()
+            || fields.name.is_some()
+            || fields.kind.is_some()
+            || fields.raw_input.is_some()
+            || fields.locations.is_some()
+            || fields.content.as_ref().is_some_and(|content| {
+                self.diffs().next().is_some()
+                    || content
+                        .iter()
+                        .any(|item| matches!(item, ToolCallContent::Diff(_)))
+            });
+        let output_changed = input_changed
+            || fields.content.is_some()
+            || fields.raw_output.is_some()
+            || fields
+                .meta
+                .as_ref()
+                .is_some_and(|meta| TERMINAL_META.iter().any(|key| meta.contains_key(*key)))
+            || (fields.status.is_some() && self.display_output.is_some());
         if let Some(title) = fields.title {
             self.title = title;
         }
@@ -156,13 +175,19 @@ impl ToolReport for ToolCall {
         if let Some(locations) = fields.locations {
             self.locations = locations
                 .into_iter()
-                .map(|location| Location {
+                .map(|location| FileTarget {
                     path: location.path,
-                    line: location.line,
+                    location: normalize::location(location.line, None),
                 })
                 .collect();
         }
         review::read(self);
+        if input_changed {
+            normalize::normalize_input(self);
+        }
+        if output_changed {
+            normalize::normalize_output(self);
+        }
     }
 
     fn set_status(&mut self, status: ToolCallStatus, observed_at: i64) {
@@ -181,12 +206,11 @@ impl ToolReport for ToolCall {
         self.content.clear();
         for item in content {
             let item = match item {
-                ToolCallContent::Diff(diff) => ToolContent::Diff(ToolDiff {
-                    path: diff.path.to_string_lossy().into_owned(),
-                    old_text: diff.old_text,
-                    new_text: diff.new_text,
-                    skip: 0,
-                }),
+                ToolCallContent::Diff(diff) => ToolContent::Diff(ToolDiff::new(
+                    diff.path.to_string_lossy().into_owned(),
+                    diff.old_text,
+                    diff.new_text,
+                )),
                 ToolCallContent::Content(content) => match content.content {
                     ContentBlock::Text(mut text) => {
                         let (stripped, link) = receipts.strip(&text.text, &self.id);

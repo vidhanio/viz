@@ -110,7 +110,7 @@ pub use receipts::Receipts;
 pub use session::{Outcome, Prompt, Session, SessionSnapshot, stop_reason_name};
 pub use settings::{Command, Skill};
 pub use steering::{SteerOutcome, Steering};
-pub use tool::ToolPatch;
+pub use tool::{ToolPatch, normalize_stored_tool};
 pub use transcript::{Output, Transcript};
 pub use viz_protocol::{
     Body, Compaction, CompactionStatus, LiveTurn, Media, Plan, PlanContent, PlanEntry,

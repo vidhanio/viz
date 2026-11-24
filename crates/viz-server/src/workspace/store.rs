@@ -6,6 +6,7 @@ mod lifecycle;
 mod projects;
 mod requests;
 mod threads;
+mod tool_storage;
 mod transcript;
 
 use std::time::{SystemTime, UNIX_EPOCH};

@@ -6,7 +6,7 @@ use viz_protocol::{Body, EntryAnchor, ToolCall, TranscriptEntry, limits};
 use super::{
     super::sql::{Conn, Row, exec, row, rows},
     entry_wire::preview,
-    from_json, json, require,
+    json, require, tool_storage,
 };
 use crate::{
     acp::Output,
@@ -479,13 +479,13 @@ fn decode_raw_entry(mut row: Row) -> Result<Entry, Error> {
     Ok(Entry {
         id: row.id(0)?,
         full: None,
-        data: from_json(&row.str(1)?)?,
+        data: tool_storage::decode(&row.str(1)?)?,
     })
 }
 
 fn decode_sized_entry(mut row: Row) -> Result<(Entry, u64), Error> {
     let id = row.id(0)?;
-    let data = from_json(&row.str(1)?)?;
+    let data = tool_storage::decode(&row.str(1)?)?;
     let stored_bytes = row.u64(2)?;
     Ok((
         Entry {

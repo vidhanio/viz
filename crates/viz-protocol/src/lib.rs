@@ -94,7 +94,8 @@ pub use threads::{
     ThreadStatus, ThreadSummary,
 };
 pub use tool::{
-    Exit, Location, Review, Terminal, ToolCall, ToolCallStatus, ToolContent, ToolDiff, VizLink,
+    Exit, FileOperation, FileTarget, Location, Review, SearchMatch, Terminal, ToolCall,
+    ToolCallStatus, ToolContent, ToolDiff, ToolPayload, VizLink,
 };
 pub use transcript::{
     Body, Compaction, CompactionStatus, ContentBlock, ContentKind, LiveDelta, LiveTurn, Media,
@@ -102,7 +103,7 @@ pub use transcript::{
 };
 
 /// The protocol version this crate speaks.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Capability bitmask declaring which authenticated caller classes may invoke
 /// a protocol method.

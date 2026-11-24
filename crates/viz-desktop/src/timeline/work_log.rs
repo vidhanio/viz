@@ -11,9 +11,8 @@ use super::{file_preview, inspector, lane, subagents};
 use crate::{
     app::Desktop,
     model::{
-        Item, SubagentCall, Tool, ToolAction, ToolStatus, TurnView, diff_line_stats,
-        first_non_empty_line, format_clock_hm, humanize_tool, is_command, relative_path,
-        subagent_call, work_group_summary,
+        Item, SubagentCall, Tool, ToolAction, ToolStatus, TurnView, first_non_empty_line,
+        format_clock_hm, humanize_tool, relative_path, subagent_call, work_group_summary,
     },
     motion,
     theme::{self, HAIRLINE, ICON, ICON_SMALL, RADIUS_SM, S2, S4, S6, S24, Theme},
@@ -274,8 +273,7 @@ fn tool_header(
     let (label, tooltip) = tool_display_label(s, tool, action);
     let diff_totals = (!tool.diffs.is_empty()).then(|| {
         tool.diffs.iter().fold((0_u32, 0_u32), |(a, d), diff| {
-            let (add, del) = diff_line_stats(diff);
-            (a.saturating_add(add), d.saturating_add(del))
+            (a.saturating_add(diff.added), d.saturating_add(diff.removed))
         })
     });
     let icon_color = if tool.status == ToolStatus::Failed {
@@ -287,7 +285,7 @@ fn tool_header(
     };
     let header_key = format!("{}-row", tool.key);
     let mut label_el = text(label.clone())
-        .font(if is_command(&tool.name) {
+        .font(if action == ToolAction::Command {
             t.mono_small
         } else {
             t.ui
@@ -351,9 +349,9 @@ fn tool_header(
     }
     if expandable {
         head = make_foldable(head, tool.key.clone(), header_key, label, open, t);
-    } else if action.on_file() && !tool.summary.trim().is_empty() {
-        let preview_path = tool.summary.trim().to_owned();
-        let preview_lines = file_preview::extract_tool_line_range(tool.raw_input_pretty.as_deref());
+    } else if let Some(target) = &tool.target {
+        let preview_path = target.path.to_string_lossy().into_owned();
+        let preview_lines = file_preview::line_range(target.location);
         head = head
             .role("button")
             .label(format!("Preview {label}"))
@@ -432,7 +430,7 @@ pub fn tool_icon(tool: &Tool, action: ToolAction) -> &'static Icon {
 
 fn tool_display_label(s: &Desktop, tool: &Tool, action: ToolAction) -> (String, Option<String>) {
     let detail = tool.summary.trim();
-    if is_command(&tool.name) {
+    if action == ToolAction::Command {
         let cmd = detail.strip_prefix("$ ").unwrap_or(detail);
         let tip = tool
             .input
@@ -446,14 +444,15 @@ fn tool_display_label(s: &Desktop, tool: &Tool, action: ToolAction) -> (String, 
         };
         return (label, tip);
     }
-    if action.on_file() && !detail.is_empty() {
-        let rel = relative_path(&s.model, detail);
+    if let Some(target) = &tool.target {
+        let path = target.path.to_string_lossy();
+        let rel = relative_path(&s.model, &path);
         let label = match action {
             ToolAction::Read => format!("Read {rel}"),
             ToolAction::Delete => format!("Deleted {rel}"),
             _ => rel.to_owned(),
         };
-        return (label, Some(detail.to_owned()));
+        return (label, Some(path.into_owned()));
     }
     if action == ToolAction::Search && !detail.is_empty() {
         return (format!("Searched for {detail}"), None);

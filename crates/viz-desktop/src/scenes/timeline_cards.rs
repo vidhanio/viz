@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use viz_client::protocol::{
     Body, Compaction, CompactionStatus, EntryData, ForkSource, Plan, PlanContent, PlanEntry,
-    PlanPriority, PlanStatus, Task, TaskStatus, ThreadId, ToolCall, ToolCallStatus, VizLink,
+    PlanPriority, PlanStatus, Task, TaskStatus, ThreadId, ToolCall, ToolCallStatus, ToolPayload,
+    VizLink,
 };
 
 use super::{
@@ -109,7 +110,7 @@ fn cards_entries() -> Vec<EntryData> {
                 child: Some(ThreadId(child)),
                 environment: env.map(str::to_owned),
             }),
-            ..preview_tool(id, title, "other", status)
+            ..preview_tool(id, title, ToolPayload::Other { summary: None }, status)
         })
     };
 

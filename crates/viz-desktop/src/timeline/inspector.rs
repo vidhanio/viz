@@ -7,7 +7,7 @@ use rune_kit::{IconButtonVariant, Markdown, ScrollBar, ScrollBarStyle};
 use super::{ansi::parse_ansi, diff_card::file_diffs_inspector, search_card::search_inspector};
 use crate::{
     app::Desktop,
-    model::{Tool, ToolAction, ToolStatus, is_command, relative_path},
+    model::{Tool, ToolAction, ToolStatus, relative_path},
     theme::{HAIRLINE, RADIUS_CONTROL, S2, S4, S6, S10, S12, S28, Size, Theme},
     ui,
     update::{Msg, TimelineMsg},
@@ -36,9 +36,9 @@ pub fn tool_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
     let action = ToolAction::of(tool);
     let content = if !tool.diffs.is_empty() {
         file_diffs_inspector(s, tool, t)
-    } else if is_command(&tool.name) {
+    } else if action == ToolAction::Command {
         command_inspector(s, tool, t)
-    } else if action == ToolAction::Search && !tool.search_matches.is_empty() {
+    } else if !tool.search_matches.is_empty() {
         search_inspector(s, tool, t)
     } else if action == ToolAction::Other && tool.raw_input_pretty.is_some() {
         dynamic_tool_inspector(tool, t)
@@ -285,11 +285,10 @@ fn inspector_frame(key: &str, t: &Theme) -> El {
 
 fn plain_output_inspector(s: &Desktop, tool: &Tool, mono: bool, t: &Theme) -> El {
     let copied = tool.output.clone();
-    let header_title = if mono && !tool.summary.is_empty() {
-        relative_path(&s.model, &tool.summary).to_owned()
-    } else {
-        "Output".to_owned()
-    };
+    let header_title = tool.target.as_ref().filter(|_| mono).map_or_else(
+        || "Output".to_owned(),
+        |target| relative_path(&s.model, &target.path.to_string_lossy()).to_owned(),
+    );
     let head = row()
         .w_full()
         .px(S10)

@@ -3,16 +3,16 @@
 
 use std::fmt::Write as _;
 
-use serde_json::Value;
 use viz_client::protocol::{
-    Attention, Body, EntryData, Exit, LiveTurn, Prompt, PromptRef, RunEnd, Segment, SettledBy,
-    Shelf, Standing, ThreadId, ThreadStatus, ToolCallStatus, ToolContent, ToolDiff,
-    TranscriptEntry, TurnTokens, TurnUsage, UsageCost,
+    Attention, Body, EntryData, Exit, LiveTurn, Prompt, PromptRef, RunEnd, SearchMatch, Segment,
+    SettledBy, Shelf, Standing, ThreadId, ThreadStatus, ToolCallStatus, ToolContent, ToolDiff,
+    ToolPayload, TranscriptEntry, TurnTokens, TurnUsage, UsageCost,
 };
 
 use super::{
     data::{
-        THREAD, now_ms, preview_text, preview_thread, preview_tool, preview_tool_entry, prompt,
+        THREAD, now_ms, preview_command, preview_edit, preview_read, preview_target, preview_text,
+        preview_thread, preview_tool, preview_tool_entry, prompt,
     },
     fixtures::seed_workspace,
 };
@@ -248,8 +248,7 @@ fn populated_turn_one() -> Vec<EntryData> {
         timed_tool(
             "cmd-check",
             "Run verification",
-            "execute",
-            Some(r#"{"command":"cargo clippy --workspace -- -D warnings"}"#),
+            preview_command("cargo clippy --workspace -- -D warnings", None),
             Some("Finished dev profile in 3.2s"),
             Vec::new(),
             BASE_TS,
@@ -297,8 +296,7 @@ fn populated_turn_two() -> Vec<EntryData> {
         timed_tool(
             "read-1",
             "Read",
-            "read",
-            Some(r#"{"path":"/work/workbench/crates/export/src/markdown.rs"}"#),
+            preview_read("/work/workbench/crates/export/src/markdown.rs", None),
             None,
             Vec::new(),
             BASE_TS + 10_000,
@@ -307,45 +305,27 @@ fn populated_turn_two() -> Vec<EntryData> {
         timed_tool(
             "edit-1",
             "Edit",
-            "edit",
-            Some(r#"{"path":"/work/workbench/crates/export/src/markdown.rs"}"#),
+            preview_edit("/work/workbench/crates/export/src/markdown.rs"),
             Some("Updated 1 file."),
-            vec![ToolContent::Diff(ToolDiff {
-                path: "/work/workbench/crates/export/src/markdown.rs".into(),
-                old_text: Some("let body = blocks.join(\"\\n\\n\");\nbody\n".into()),
-                new_text: "let sep = ending.repeat(2);\nlet body = blocks.join(&sep);\nformat!(\"{body}{}\", ending.as_str())\n".into(),
-                skip: 0,
-            })],
+            vec![ToolContent::Diff(ToolDiff::new("/work/workbench/crates/export/src/markdown.rs".into(), Some("let body = blocks.join(\"\\n\\n\");\nbody\n".into()), "let sep = ending.repeat(2);\nlet body = blocks.join(&sep);\nformat!(\"{body}{}\", ending.as_str())\n".into(),))],
             BASE_TS + 11_500,
             BASE_TS + 14_100,
         ),
         timed_tool(
             "edit-2",
             "Edit",
-            "edit",
-            Some(r#"{"path":"/work/workbench/crates/export/src/line_ending.rs"}"#),
+            preview_edit("/work/workbench/crates/export/src/line_ending.rs"),
             Some("Created helper."),
-            vec![ToolContent::Diff(ToolDiff {
-                path: "/work/workbench/crates/export/src/line_ending.rs".into(),
-                old_text: None,
-                new_text: "pub enum LineEnding { Lf, Crlf }\nimpl LineEnding {\n    pub fn as_str(&self) -> &'static str { match self { Self::Lf => \"\\n\", Self::Crlf => \"\\r\\n\" } }\n}\n".into(),
-                skip: 0,
-            })],
+            vec![ToolContent::Diff(ToolDiff::new("/work/workbench/crates/export/src/line_ending.rs".into(), None, "pub enum LineEnding { Lf, Crlf }\nimpl LineEnding {\n    pub fn as_str(&self) -> &'static str { match self { Self::Lf => \"\\n\", Self::Crlf => \"\\r\\n\" } }\n}\n".into(),))],
             BASE_TS + 14_200,
             BASE_TS + 16_300,
         ),
         timed_tool(
             "edit-3",
             "Edit",
-            "edit",
-            Some(r#"{"path":"/work/workbench/Cargo.toml"}"#),
+            preview_edit("/work/workbench/Cargo.toml"),
             Some("Updated metadata."),
-            vec![ToolContent::Diff(ToolDiff {
-                path: "/work/workbench/Cargo.toml".into(),
-                old_text: Some("version = \"0.1.0\"\n".into()),
-                new_text: "version = \"0.2.0\"\n".into(),
-                skip: 0,
-            })],
+            vec![ToolContent::Diff(ToolDiff::new("/work/workbench/Cargo.toml".into(), Some("version = \"0.1.0\"\n".into()), "version = \"0.2.0\"\n".into(),))],
             BASE_TS + 16_400,
             BASE_TS + 18_100,
         ),
@@ -379,13 +359,10 @@ fn seed_expanded(m: &mut Model) {
     let mut cmd_tool = preview_tool(
         "cmd-1",
         "Run export checks",
-        "execute",
+        preview_command("cargo check -p workbench --all-targets", None),
         ToolCallStatus::Completed,
     );
-    cmd_tool.raw_input = Some(json_value(
-        r#"{"command":"cargo check -p workbench --all-targets"}"#,
-    ));
-    cmd_tool.raw_output = Some(Value::String(ansi_out.into()));
+    cmd_tool.display_output = Some(ansi_out.into());
     cmd_tool.exit = Some(Exit {
         code: Some(101),
         signal: None,
@@ -393,49 +370,63 @@ fn seed_expanded(m: &mut Model) {
     cmd_tool.started_at = Some(BASE_TS + 3_000);
     cmd_tool.ended_at = Some(BASE_TS + 8_400);
 
-    let mut search_tool = preview_tool("search-1", "Search", "search", ToolCallStatus::Completed);
-    search_tool.raw_input = Some(json_value(r#"{"query":"blocks.join"}"#));
-    search_tool.raw_output = Some(Value::String(
-        "/work/workbench/src/export/markdown.rs:42: let body = blocks.join(\"\\n\\n\");\n\
-         /work/workbench/src/export/html.rs:19: let out = blocks.join(\"\\n\");"
-            .into(),
-    ));
+    let mut search_tool = preview_tool(
+        "search-1",
+        "Search",
+        ToolPayload::Search {
+            query: Some("blocks.join".into()),
+            matches: vec![
+                SearchMatch::File {
+                    target: preview_target(
+                        "/work/workbench/src/export/markdown.rs",
+                        Some((42, 42)),
+                    ),
+                    snippet: r#"let body = blocks.join("\n\n");"#.into(),
+                },
+                SearchMatch::File {
+                    target: preview_target("/work/workbench/src/export/html.rs", Some((19, 19))),
+                    snippet: r#"let out = blocks.join("\n");"#.into(),
+                },
+            ],
+        },
+        ToolCallStatus::Completed,
+    );
     search_tool.started_at = Some(BASE_TS + 1_000);
     search_tool.ended_at = Some(BASE_TS + 1_400);
 
-    let mut edit_tool = preview_tool("edit-1", "Edit", "edit", ToolCallStatus::Completed);
-    edit_tool.raw_input = Some(json_value(
-        r#"{"path":"/work/workbench/src/export/markdown.rs"}"#,
-    ));
-    edit_tool.content = vec![ToolContent::Diff(ToolDiff {
-        path: "/work/workbench/src/export/markdown.rs".into(),
-        old_text: Some("fn render(blocks: &[Block]) -> String {\n    blocks.join(\"\\n\\n\")\n}\n".into()),
-        new_text: "fn render(blocks: &[Block], eol: &str) -> String {\n    let sep = format!(\"{eol}{eol}\");\n    format!(\"{}{eol}\", blocks.join(&sep))\n}\n".into(),
-        skip: 0,
-    })];
+    let mut edit_tool = preview_tool(
+        "edit-1",
+        "Edit",
+        preview_edit("/work/workbench/src/export/markdown.rs"),
+        ToolCallStatus::Completed,
+    );
+    edit_tool.content = vec![ToolContent::Diff(ToolDiff::new("/work/workbench/src/export/markdown.rs".into(), Some("fn render(blocks: &[Block]) -> String {\n    blocks.join(\"\\n\\n\")\n}\n".into()), "fn render(blocks: &[Block], eol: &str) -> String {\n    let sep = format!(\"{eol}{eol}\");\n    format!(\"{}{eol}\", blocks.join(&sep))\n}\n".into(),))];
     edit_tool.started_at = Some(BASE_TS + 1_800);
     edit_tool.ended_at = Some(BASE_TS + 2_900);
 
     let mut mcp_tool = preview_tool(
         "mcp-1",
         "mcp__docs__lookup",
-        "other",
+        ToolPayload::Mcp { summary: None },
         ToolCallStatus::Completed,
     );
     mcp_tool.name = Some("mcp__docs__lookup".into());
-    mcp_tool.raw_input = Some(json_value(
-        r#"{"spec":"CommonMark 0.31","section":"line-endings"}"#,
-    ));
-    mcp_tool.raw_output = Some(json_value(
-        r#"{"matched":true,"rule":"Preserve source EOL sequences"}"#,
-    ));
+    mcp_tool.arguments =
+        Some("{\n  \"section\": \"line-endings\",\n  \"spec\": \"CommonMark 0.31\"\n}".into());
+    mcp_tool.display_output =
+        Some("{\n  \"matched\": true,\n  \"rule\": \"Preserve source EOL sequences\"\n}".into());
     mcp_tool.started_at = Some(BASE_TS + 8_500);
     mcp_tool.ended_at = Some(BASE_TS + 9_200);
 
-    let mut read_tool = preview_tool("read-1", "Read File", "read", ToolCallStatus::Completed);
-    read_tool.raw_input = Some(json_value(
-        r#"{"path":"/work/workbench/crates/viz-acp/src/prompt.rs","StartLine":6,"EndLine":13}"#,
-    ));
+    let mut read_tool = preview_tool(
+        "read-1",
+        "Read File",
+        preview_read(
+            "/work/workbench/crates/viz-acp/src/prompt.rs",
+            Some((6, 13)),
+        ),
+        ToolCallStatus::Completed,
+    );
     read_tool.started_at = Some(BASE_TS + 950);
     read_tool.ended_at = Some(BASE_TS + 1_000);
 
@@ -500,18 +491,15 @@ fn working_live_turn(start: i64, now: i64) -> LiveTurn {
     let mut running_cmd = preview_tool(
         "run-live",
         "Run build",
-        "execute",
+        preview_command("cargo clippy --workspace --all-targets", Some(60_000)),
         ToolCallStatus::InProgress,
     );
-    running_cmd.raw_input = Some(json_value(
-        r#"{"command":"cargo clippy --workspace --all-targets","timeout":60}"#,
-    ));
-    running_cmd.raw_output = Some(Value::String(
+    running_cmd.display_output = Some(
         "\x1b[32m   Compiling\x1b[0m viz-protocol v0.1.0\n\
          \x1b[32m   Compiling\x1b[0m viz-client v0.1.0\n\
          \x1b[36m    Checking\x1b[0m viz-desktop v0.1.0"
             .into(),
-    ));
+    );
     running_cmd.started_at = Some(start + 2_000);
 
     LiveTurn {
@@ -552,8 +540,7 @@ fn working_committed_entries(start: i64) -> Vec<EntryData> {
         timed_tool(
             "r1",
             "Read",
-            "read",
-            Some(r#"{"path":"/work/workbench/src/main.rs"}"#),
+            preview_read("/work/workbench/src/main.rs", None),
             None,
             Vec::new(),
             start,
@@ -562,8 +549,7 @@ fn working_committed_entries(start: i64) -> Vec<EntryData> {
         timed_tool(
             "r2",
             "Read",
-            "read",
-            Some(r#"{"path":"/work/workbench/src/shell.rs"}"#),
+            preview_read("/work/workbench/src/shell.rs", None),
             None,
             Vec::new(),
             start + 300,
@@ -572,8 +558,7 @@ fn working_committed_entries(start: i64) -> Vec<EntryData> {
         timed_tool(
             "r3",
             "Read",
-            "read",
-            Some(r#"{"path":"/work/workbench/src/model/mod.rs"}"#),
+            preview_read("/work/workbench/src/model/mod.rs", None),
             None,
             Vec::new(),
             start + 600,
@@ -582,8 +567,7 @@ fn working_committed_entries(start: i64) -> Vec<EntryData> {
         timed_tool(
             "r4",
             "Read",
-            "read",
-            Some(r#"{"path":"/work/workbench/src/ui/mod.rs"}"#),
+            preview_read("/work/workbench/src/ui/mod.rs", None),
             None,
             Vec::new(),
             start + 900,
@@ -592,23 +576,17 @@ fn working_committed_entries(start: i64) -> Vec<EntryData> {
     ]
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "compact deterministic fixture constructor for preview tool calls"
-)]
 fn timed_tool(
     id: &str,
     title: &str,
-    kind: &str,
-    input: Option<&str>,
+    payload: ToolPayload,
     output: Option<&str>,
     content: Vec<ToolContent>,
     started_at: i64,
     ended_at: i64,
 ) -> EntryData {
-    let mut tool = preview_tool(id, title, kind, ToolCallStatus::Completed);
-    tool.raw_input = input.map(json_value);
-    tool.raw_output = output.map(json_value);
+    let mut tool = preview_tool(id, title, payload, ToolCallStatus::Completed);
+    tool.display_output = output.map(str::to_owned);
     tool.content = content;
     tool.started_at = Some(started_at);
     tool.ended_at = Some(ended_at);
@@ -662,8 +640,4 @@ pub(super) fn run_end(
         error: error.map(str::to_owned),
         answer: None,
     })
-}
-
-fn json_value(text: &str) -> Value {
-    serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_owned()))
 }

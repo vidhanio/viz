@@ -24,7 +24,7 @@ pub mod sidebar_outline;
 pub mod state;
 pub mod subagents;
 pub mod timeline;
-pub mod tool_parse;
+mod tool_row;
 pub mod transcript;
 mod transcript_fold;
 pub mod turn_format;
@@ -88,14 +88,11 @@ pub use self::{
         EntryAction, FilePreview, FilePreviewBody, PreviewFile, PreviewLines, TimelineState,
         ToolAction, first_non_empty_line, humanize_tool, plural, relative_path, split_path,
     },
-    tool_parse::is_command,
     transcript::{
-        CompactionNotice, ErrorKind, Item, MediaItem, PlanBody, PlanCard, PlanStep, SearchMatch,
-        TaskResult, Tool, ToolStatus, Transcript, TurnEnd, User,
+        CompactionNotice, ErrorKind, Item, MediaItem, PlanBody, PlanCard, PlanStep, TaskResult,
+        Tool, ToolStatus, Transcript, TurnEnd, User,
     },
-    turn_format::{
-        diff_line_stats, format_clock_hm, format_cost, format_turn_duration, work_group_summary,
-    },
+    turn_format::{format_clock_hm, format_cost, format_turn_duration, work_group_summary},
     turns::{ChangedFile, TurnSpec, TurnView, project_turn, turn_items, turn_specs},
 };
 pub use crate::composer::codec::DraftPill;

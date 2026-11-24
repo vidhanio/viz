@@ -9,7 +9,7 @@ use viz_client::protocol::{
 };
 
 use super::{
-    tool_parse::parse_tool,
+    tool_row::project_tool,
     transcript::{
         CompactionNotice, ErrorKind, Item, LiveEntryMeta, MediaItem, PlanCard, TaskResult,
         ToolStatus, Transcript, TurnEnd, User,
@@ -23,8 +23,8 @@ impl Transcript {
     }
 
     /// Applies an incremental [`LiveDelta`] directly to [`Self::acp_partial`],
-    /// updating only the changed entries in place without re-parsing untouched
-    /// tools or reallocating committed prose prefixes.
+    /// updating only the changed entries in place without re-projecting
+    /// untouched tools or reallocating committed prose prefixes.
     pub fn apply_live_delta(&mut self, delta: LiveDelta) {
         let Some(turn) = delta.turn.filter(|turn| {
             !self.ended_run && self.acp_turn.as_ref().is_none_or(|active| active == turn)
@@ -254,7 +254,7 @@ impl Transcript {
                     }
                     return;
                 }
-                let parsed = Item::Tool(Box::new(parse_tool(Some(turn), record, false)));
+                let parsed = Item::Tool(Box::new(project_tool(Some(turn), record, false)));
                 if let Some(idx) = existing_idx {
                     self.acp_partial[idx] = parsed;
                     self.live_meta[idx].order = entry.order;
@@ -470,7 +470,7 @@ impl Transcript {
                             .iter_mut()
                             .find(|item| matches!(item, Item::Tool(t) if t.entry == Some(id)))
                         {
-                            let mut parsed = parse_tool(None, &record, true);
+                            let mut parsed = project_tool(None, &record, true);
                             parsed.key.clone_from(&tool.key);
                             parsed.entry = Some(id);
                             parsed.full = None;
@@ -602,7 +602,7 @@ impl Transcript {
                 }
             }
             Body::Tool(record) => {
-                let mut tool = parse_tool(self.acp_turn.as_deref(), record, full.is_none());
+                let mut tool = project_tool(self.acp_turn.as_deref(), record, full.is_none());
                 tool.entry = Some(id);
                 tool.full = full;
                 self.message_rows.insert(id, tool.key.clone());
@@ -741,7 +741,7 @@ impl Transcript {
             Item::Tool(tool) if tool.entry == Some(entry) => Some(tool),
             _ => None,
         }) {
-            let mut updated = parse_tool(None, record, full.is_none());
+            let mut updated = project_tool(None, record, full.is_none());
             updated.key.clone_from(&tool.key);
             updated.entry = Some(entry);
             updated.full = full;

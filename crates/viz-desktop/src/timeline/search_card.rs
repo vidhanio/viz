@@ -3,10 +3,12 @@
 
 use rune::{El, ScrollSpec, Tx, col, icon, row, text};
 use rune_kit::{ScrollBar, ScrollBarStyle};
+use viz_client::protocol::SearchMatch;
 
+use super::file_preview::line_range;
 use crate::{
     app::Desktop,
-    model::{SearchMatch, Tool, plural, relative_path},
+    model::{Tool, plural, relative_path},
     theme::{HAIRLINE, ICON_SMALL, RADIUS_CONTROL, RADIUS_SM, S2, S4, S6, S8, S10, Theme},
     ui::{self},
     update::{Msg, TimelineMsg},
@@ -72,12 +74,17 @@ pub fn search_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
 }
 
 fn search_hit_row(s: &Desktop, index: usize, hit: &SearchMatch, t: &Theme) -> El {
-    let display = if hit.is_url {
-        hit.target.clone()
-    } else {
-        let rel = relative_path(&s.model, &hit.target);
-        hit.line
-            .map_or_else(|| rel.to_owned(), |line| format!("{rel}:{line}"))
+    let (display, snippet, glyph, link) = match hit {
+        SearchMatch::Web { url, snippet } => (url.clone(), snippet, &ui::EXTERNAL_LINK, true),
+        SearchMatch::File { target, snippet } => {
+            let path = target.path.to_string_lossy();
+            let rel = relative_path(&s.model, &path);
+            let display = target
+                .location
+                .line
+                .map_or_else(|| rel.to_owned(), |line| format!("{rel}:{line}"));
+            (display, snippet, rune_kit::file_icon(&path), false)
+        }
     };
     let mut r = row()
         .key(format!("hit-{index}"))
@@ -87,28 +94,17 @@ fn search_hit_row(s: &Desktop, index: usize, hit: &SearchMatch, t: &Theme) -> El
         .gap(S8)
         .center_y()
         .radius(RADIUS_SM)
-        .child(
-            icon(
-                if hit.is_url {
-                    &ui::EXTERNAL_LINK
-                } else {
-                    rune_kit::file_icon(&hit.target)
-                },
-                ICON_SMALL,
-            )
-            .color(t.muted)
-            .a11y_hidden(),
-        )
+        .child(icon(glyph, ICON_SMALL).color(t.muted).a11y_hidden())
         .child(
             text(display)
                 .font(t.mono_small)
-                .color(if hit.is_url { t.accent_text } else { t.text })
+                .color(if link { t.accent_text } else { t.text })
                 .truncate()
                 .shrink(),
         );
-    if !hit.snippet.is_empty() {
+    if !snippet.is_empty() {
         r = r.child(
-            text(&hit.snippet)
+            text(snippet)
                 .font(t.mono_small)
                 .color(t.muted)
                 .grow(1.0)
@@ -117,26 +113,23 @@ fn search_hit_row(s: &Desktop, index: usize, hit: &SearchMatch, t: &Theme) -> El
                 .truncate(),
         );
     }
-    if hit.is_url {
-        let url = hit.target.clone();
+    if let SearchMatch::Web { url, .. } = hit {
+        let url = url.clone();
         r = r
             .role("link")
-            .label(&hit.target)
+            .label(&url)
             .hover(t.hover_wash)
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)
             .on_press_tx(move |s: &mut Desktop, tx: &mut Tx| {
                 s.dispatch(Msg::Timeline(TimelineMsg::OpenUrl(url.clone())), tx);
             });
-    } else if !hit.target.trim().is_empty() {
-        let path = hit.target.clone();
-        let lines = hit
-            .line
-            .and_then(|n| usize::try_from(n).ok())
-            .map(|n| (n, n));
+    } else if let SearchMatch::File { target, .. } = hit {
+        let path = target.path.to_string_lossy().into_owned();
+        let lines = line_range(target.location);
         r = r
             .role("button")
-            .label(format!("Preview {}", hit.target))
+            .label(format!("Preview {path}"))
             .hover(t.hover_wash)
             .focusable(true)
             .focus_ring(HAIRLINE, -HAIRLINE, t.accent)

@@ -387,19 +387,6 @@ pub enum ToolStatus {
     Abandoned,
 }
 
-/// One parsed search hit surfaced in the search tool inspector.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SearchMatch {
-    /// File path or external URL.
-    pub target: String,
-    /// Optional line number for file search matches.
-    pub line: Option<u32>,
-    /// Snippet or page title.
-    pub snippet: String,
-    /// True when `target` is an external web URL.
-    pub is_url: bool,
-}
-
 /// A rich tool call row projected from wire [`viz_client::protocol::ToolCall`].
 #[derive(Debug, Clone)]
 pub struct Tool {
@@ -412,6 +399,10 @@ pub struct Tool {
     pub entry: Option<EntryId>,
     /// Normalized category/tool name.
     pub name: String,
+    /// Semantic action derived from the wire payload.
+    pub action: super::ToolAction,
+    /// Primary file target for titles and previews.
+    pub target: Option<viz_client::protocol::FileTarget>,
     /// Original programmatic tool name, when reported.
     pub raw_name: Option<String>,
     /// Display title from the harness.
@@ -457,7 +448,7 @@ pub struct Tool {
     /// File diffs reported by the tool call.
     pub diffs: Vec<ToolDiff>,
     /// Structured file-search or web-search matches parsed from output.
-    pub search_matches: Vec<SearchMatch>,
+    pub search_matches: Vec<viz_client::protocol::SearchMatch>,
 }
 
 /// One checklist step in an ACP plan entry.

@@ -30,7 +30,7 @@ pub fn file_diffs_inspector(s: &Desktop, tool: &Tool, t: &Theme) -> El {
         .gap(S8)
         .children(tool.diffs.iter().enumerate().map(|(index, diff)| {
             let file = projected_diff(diff);
-            let header = diff_header(s, &file, &tool.key, index, t);
+            let header = diff_header(s, diff, &tool.key, index, t);
             diff_card(&file, header, diff.skip != 0, t).key(format!("diff-{index}"))
         }))
 }
@@ -103,15 +103,13 @@ fn diff_card(file: &FileDiff, header: El, offset: bool, t: &Theme) -> El {
         )
 }
 
-fn diff_header(s: &Desktop, file: &FileDiff, tool_key: &str, index: usize, t: &Theme) -> El {
-    let path = file.path();
+fn diff_header(s: &Desktop, diff: &ToolDiff, tool_key: &str, index: usize, t: &Theme) -> El {
+    let path = &diff.path;
     let rel = relative_path(&s.model, path).to_owned();
     let (dir, name) = split_path(&rel);
-    let add = u32::try_from(file.additions()).unwrap_or(u32::MAX);
-    let del = u32::try_from(file.deletions()).unwrap_or(u32::MAX);
     let open_path = rel.clone();
     let tool_key = tool_key.to_owned();
-    let diff_path = path.to_owned();
+    let diff_path = path.clone();
 
     row()
         .key("diff-head")
@@ -150,7 +148,7 @@ fn diff_header(s: &Desktop, file: &FileDiff, tool_key: &str, index: usize, t: &T
                         .min_w(0.0)
                 })),
         )
-        .child(ui::diff_stat(add, del, t))
+        .child(ui::diff_stat(diff.added, diff.removed, t))
         .child(
             rune_kit::Button::new("Open diff")
                 .variant(rune_kit::ButtonVariant::GhostMuted)
