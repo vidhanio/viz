@@ -52,7 +52,7 @@ pub(super) fn primary_actions(s: &Desktop, t: &Theme) -> El {
     }
 
     if m.composer.editing_queued.is_some() {
-        let enabled = m.can_send();
+        let enabled = m.can_send(&s.widgets.draft.text);
         let (fill, ink) = if enabled {
             (t.accent, t.on_accent)
         } else {
@@ -80,7 +80,7 @@ pub(super) fn primary_actions(s: &Desktop, t: &Theme) -> El {
         return busy_actions(actions, s, t);
     }
 
-    let enabled = m.can_send();
+    let enabled = m.can_send(&s.widgets.draft.text);
     let (fill, ink) = if enabled {
         (t.accent, t.on_accent)
     } else {
@@ -106,7 +106,7 @@ pub(super) fn primary_actions(s: &Desktop, t: &Theme) -> El {
 
 fn busy_actions(actions: El, s: &Desktop, t: &Theme) -> El {
     let m = &s.model;
-    if !m.can_send() {
+    if !m.can_send(&s.widgets.draft.text) {
         let stop = row()
             .key("send")
             .role("button")

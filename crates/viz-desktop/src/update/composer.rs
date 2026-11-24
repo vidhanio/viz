@@ -34,7 +34,7 @@ const STOP_GUARD_SECS: f64 = 0.5;
 #[derive(Debug)]
 pub enum ComposerMsg {
     /// Prompt text edited by the user.
-    DraftChanged(String),
+    DraftChanged,
     /// Submit the prompt (launch draft, update queued edit, or send/steer
     /// thread).
     SendInput,
@@ -133,8 +133,7 @@ pub enum ComposerMsg {
 pub(super) fn update(model: &mut Model, msg: ComposerMsg) -> Vec<Effect> {
     let mut effects = Vec::new();
     match msg {
-        ComposerMsg::DraftChanged(text) => {
-            model.composer.draft.text = text;
+        ComposerMsg::DraftChanged => {
             model.composer.history_cursor = None;
             model.composer.history_stash = None;
             if model.selection.selected.is_none()

@@ -9,6 +9,8 @@ mod completion;
 pub mod context_strip;
 mod draft;
 mod editor;
+
+pub use editor::CaretReveal;
 pub mod markdown;
 mod menus;
 mod queued;

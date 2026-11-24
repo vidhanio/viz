@@ -28,7 +28,7 @@ pub(super) fn send_input(
     explicit_mode: Option<SendMode>,
     effects: &mut Vec<Effect>,
 ) {
-    if !model.can_send() {
+    if !model.can_send(&model.composer.draft.text) {
         return;
     }
     if let Some(run) = model.composer.editing_queued.take() {
@@ -278,7 +278,7 @@ pub(super) fn choose_completion(
     model.composer.completion.reset();
     match choice {
         CompletionChoice::Builtin(BuiltinCommand::Model) => {
-            clear_token_range(model, start, end, effects);
+            clear_token_range(start, end, effects);
             effects.extend(super::model_picker::update(
                 model,
                 super::ModelPickerMsg::Toggle,
@@ -291,7 +291,7 @@ pub(super) fn choose_completion(
         }
         CompletionChoice::Builtin(BuiltinCommand::Compact) => {
             if let Some(thread) = model.selection.selected.filter(|_| !model.busy()) {
-                clear_token_range(model, start, end, effects);
+                clear_token_range(start, end, effects);
                 effects.push(Effect::Server(ServerEffect::SendInput {
                     recovery: None,
                     input: SendInput {
@@ -304,11 +304,11 @@ pub(super) fn choose_completion(
                 }));
                 effects.push(focus_draft());
             } else {
-                replace_plain(model, start, end, "/compact", needs_space, effects);
+                replace_plain(start, end, "/compact", needs_space, effects);
             }
         }
         CompletionChoice::SlashText(cmd) => {
-            replace_plain(model, start, end, &cmd, needs_space, effects);
+            replace_plain(start, end, &cmd, needs_space, effects);
         }
         CompletionChoice::Pill { target, label } => {
             effects.push(Effect::SyncEdit(EditSync::InsertDraftPill {
@@ -323,10 +323,7 @@ pub(super) fn choose_completion(
     }
 }
 
-fn clear_token_range(model: &mut Model, start: usize, end: usize, effects: &mut Vec<Effect>) {
-    if start <= end && end <= model.composer.draft.text.len() {
-        model.composer.draft.text.replace_range(start..end, "");
-    }
+fn clear_token_range(start: usize, end: usize, effects: &mut Vec<Effect>) {
     effects.push(Effect::SyncEdit(EditSync::ReplaceDraftRange {
         start,
         end,
@@ -335,7 +332,6 @@ fn clear_token_range(model: &mut Model, start: usize, end: usize, effects: &mut 
 }
 
 fn replace_plain(
-    model: &mut Model,
     start: usize,
     end: usize,
     text: &str,
@@ -345,13 +341,6 @@ fn replace_plain(
     let mut insertion = text.to_owned();
     if needs_space {
         insertion.push(' ');
-    }
-    if start <= end && end <= model.composer.draft.text.len() {
-        model
-            .composer
-            .draft
-            .text
-            .replace_range(start..end, &insertion);
     }
     effects.push(Effect::SyncEdit(EditSync::ReplaceDraftRange {
         start,

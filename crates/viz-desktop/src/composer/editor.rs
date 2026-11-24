@@ -2,7 +2,9 @@
 //! drag-and-drop accent frame, prompt history recall, length warning, and
 //! footer controls (no voice input).
 
-use rune::{Color, El, Key, KeyEvent, ScrollSpec, Tx, col, icon, row, text, text_input};
+use std::{cell::Cell, time::Duration};
+
+use rune::{Color, Cx, El, Key, KeyEvent, ScrollSpec, Tx, col, icon, row, text, text_input};
 
 use super::{
     actions::{PillPalette, primary_actions},
@@ -113,6 +115,64 @@ pub fn card(s: &Desktop, is_home: bool, t: &Theme, layer: &mut Vec<El>) -> El {
     }
 }
 
+/// Geometry supplied by Rune after a composer-handled edit.
+pub struct CaretReveal {
+    caret: Cell<Option<[f32; 4]>>,
+    viewport: Cell<Option<[f32; 4]>>,
+    scroll: rune::Live<[f32; 2]>,
+    pending: bool,
+}
+
+impl Default for CaretReveal {
+    fn default() -> Self {
+        Self {
+            caret: Cell::new(None),
+            viewport: Cell::new(None),
+            scroll: rune::Live::new([0.0; 2]),
+            pending: false,
+        }
+    }
+}
+
+impl CaretReveal {
+    pub fn measure(&self, cx: &Cx<Desktop>) {
+        if self.pending {
+            self.caret.set(cx.caret("draft"));
+            self.viewport.set(cx.window_layout(DRAFT_SCROLL_KEY));
+        }
+    }
+
+    fn request(&mut self, tx: &mut Tx) {
+        self.caret.set(None);
+        self.pending = true;
+        tx.wake_after(Duration::ZERO);
+    }
+
+    pub fn reveal(&mut self, tx: &mut Tx) -> bool {
+        if !std::mem::take(&mut self.pending) {
+            return false;
+        }
+        let Some([_, y, _, h]) = self.caret.take() else {
+            return false;
+        };
+        let Some([_, top, _, height]) = self.viewport.take() else {
+            return false;
+        };
+        let delta = if y < top {
+            y - top
+        } else {
+            (y + h - top - height).max(0.0)
+        };
+        let [offset, max] = self.scroll.get();
+        let next = (offset + delta).clamp(0.0, max);
+        if (next - offset).abs() < 0.5 {
+            return false;
+        }
+        tx.scroll_to_instant(DRAFT_SCROLL_KEY, 0.0, next);
+        true
+    }
+}
+
 fn draft_scroll(s: &Desktop, field: El, t: &Theme) -> El {
     let line = t.body.line_px();
     #[expect(
@@ -120,7 +180,7 @@ fn draft_scroll(s: &Desktop, field: El, t: &Theme) -> El {
         reason = "MAX_LINES is a small single-digit constant"
     )]
     let max_h = MAX_LINES as f32 * line;
-    let scroll_pos = s.widgets.composer_scroll.clone();
+    let scroll = s.widgets.composer_caret.scroll.clone();
     col()
         .key(DRAFT_SCROLL_KEY)
         .w_full()
@@ -131,41 +191,27 @@ fn draft_scroll(s: &Desktop, field: El, t: &Theme) -> El {
             stick_bottom: false,
         })
         .on_scroll_offset(move |pos| {
-            scroll_pos.set([pos.offset[1], pos.max[1]]);
+            scroll.set([pos.offset[1], pos.max[1]]);
         })
         .child(field.animate_edit_layout())
 }
 
-fn keep_composer_caret_visible(s: &Desktop, tx: &mut Tx) {
-    let edit = &s.widgets.draft;
-    let caret = edit.focus.min(edit.text.len());
-    if !edit.text[caret..].contains('\n') {
-        tx.scroll_to_bottom(DRAFT_SCROLL_KEY);
-        return;
-    }
-    let line_px = crate::theme::Theme::get(true).body.line_px();
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "composer line indices stay well within exact f32 range"
-    )]
-    let caret_line = edit.text[..caret].bytes().filter(|&b| b == b'\n').count() as f32;
-    let caret_bottom = (caret_line + 1.0) * line_px;
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "MAX_LINES is a small single-digit constant"
-    )]
-    let viewport = MAX_LINES as f32 * line_px;
-    let [offset, _] = s.widgets.composer_scroll.get();
-    if caret_bottom > offset + viewport {
-        tx.scroll_to_y(DRAFT_SCROLL_KEY, (caret_bottom - viewport).max(0.0));
-    } else if caret_line * line_px < offset {
-        tx.scroll_to_y(DRAFT_SCROLL_KEY, caret_line * line_px);
-    }
+fn draft_changed(s: &mut Desktop, tx: &mut Tx) {
+    s.update_draft_outline();
+    s.dispatch(Msg::Composer(ComposerMsg::DraftChanged), tx);
+    let cursor = s.draft_cursor();
+    s.dispatch(
+        Msg::Composer(ComposerMsg::PollCompletion {
+            clock: tx.clock(),
+            cursor,
+        }),
+        tx,
+    );
 }
 
 fn draft_field(s: &Desktop, placeholder: &'static str, t: &Theme) -> El {
     let pill_theme = PillPalette::from_theme(t);
-    let md = markdown::decorate(&s.widgets.draft, t);
+    let md = s.widgets.draft_outline.decorations(t);
     text_input(&s.widgets.draft, t.body)
         .key("draft")
         .label("Message")
@@ -173,24 +219,12 @@ fn draft_field(s: &Desktop, placeholder: &'static str, t: &Theme) -> El {
         .color(t.text)
         .caret(t.accent, t.k.selection())
         .placeholder(placeholder, t.faint)
-        .decorations(md.spans)
-        .strikes(md.strikes)
+        .decorations(md.spans.clone())
+        .strikes(md.strikes.iter().copied())
         .pill_style(move |id| pill_theme.style(id))
         .spellcheck(true)
         .on_edit(|s: &mut Desktop| &mut s.widgets.draft)
-        .on_input_change(|s: &mut Desktop, tx| {
-            s.sync_draft_text();
-            let text = s.widgets.draft.text.clone();
-            s.dispatch(Msg::Composer(ComposerMsg::DraftChanged(text)), tx);
-            let cursor = s.draft_cursor();
-            s.dispatch(
-                Msg::Composer(ComposerMsg::PollCompletion {
-                    clock: tx.clock(),
-                    cursor,
-                }),
-                tx,
-            );
-        })
+        .on_input_change(draft_changed)
         .on_input_paste(attachment_io::paste)
         .on_input_key(on_draft_key)
         .on_submit(|s: &mut Desktop, tx| {
@@ -199,7 +233,7 @@ fn draft_field(s: &Desktop, placeholder: &'static str, t: &Theme) -> El {
 }
 
 fn length_warning(s: &Desktop, t: &Theme) -> Option<El> {
-    let char_count = s.model.composer.draft.text.chars().count();
+    let char_count = s.widgets.draft_outline.char_count;
     (char_count > PROMPT_WARN_LIMIT).then(|| {
         let over = char_count > PROMPT_CHAR_LIMIT;
         let color = if over { t.danger } else { t.warning };
@@ -251,14 +285,19 @@ fn editing_queued_banner(s: &Desktop, t: &Theme) -> Option<El> {
 }
 
 fn on_draft_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
-    if crate::requests::on_draft_key(s, ev, tx) || completion::on_key(s, ev, tx) {
+    s.refresh_draft_marks();
+    let fence_key = matches!(ev.key, Key::Enter | Key::Tab)
+        && s.widgets.draft_outline.in_fence(s.widgets.draft.focus);
+    if crate::requests::on_draft_key(s, ev, tx) || (!fence_key && completion::on_key(s, ev, tx)) {
         return true;
     }
-    if markdown::handle_key(&mut s.widgets.draft, ev) {
-        s.sync_draft_text();
-        let text = s.widgets.draft.text.clone();
-        s.dispatch(Msg::Composer(ComposerMsg::DraftChanged(text)), tx);
-        keep_composer_caret_visible(s, tx);
+    let edit = &mut s.widgets.draft;
+    let before = (edit.text.len(), edit.anchor, edit.focus);
+    if markdown::handle_key(edit, &s.widgets.draft_outline, ev) {
+        if before != (edit.text.len(), edit.anchor, edit.focus) {
+            draft_changed(s, tx);
+            s.widgets.composer_caret.request(tx);
+        }
         return true;
     }
     if ev.key == Key::Escape {

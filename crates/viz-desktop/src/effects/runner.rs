@@ -4,7 +4,7 @@
 use rune::{TextEdit, Tx};
 
 use super::{EditSync, EditTarget, Effect, ServerEffect, prefs};
-use crate::{app::Desktop, update};
+use crate::app::Desktop;
 
 impl Desktop {
     /// Executes every effect returned by [`crate::update::update`].
@@ -191,7 +191,7 @@ impl Desktop {
             let env = self.model.active_env_key().to_owned();
             match super::offline::derive(failed, &env) {
                 super::offline::Offline::Dispatch(msg) => {
-                    let follow_up = update::update(&mut self.model, msg);
+                    let follow_up = self.reduce(msg);
                     self.apply_effects(follow_up, tx);
                 }
                 super::offline::Offline::Toast => {
@@ -222,12 +222,18 @@ impl Desktop {
                 if select_all {
                     edit.set_selection(0, text.len());
                 }
+                if matches!(target, EditTarget::Draft) {
+                    self.update_draft_outline();
+                }
             }
             EditSync::ReplaceDraftWithPills { text, pills } => {
                 self.replace_draft_with_pills(&text, &pills);
             }
             EditSync::Clear(target) => {
                 self.edit_mut(target).clear();
+                if matches!(target, EditTarget::Draft) {
+                    self.update_draft_outline();
+                }
             }
             EditSync::ReplaceDraftRange {
                 start,
@@ -242,7 +248,7 @@ impl Desktop {
                 {
                     draft.set_caret(draft.focus + separator.len_utf8());
                 }
-                self.sync_draft_text();
+                self.update_draft_outline();
             }
             EditSync::InsertDraftRefs(refs) => {
                 let draft = &mut self.widgets.draft;
@@ -268,7 +274,7 @@ impl Desktop {
                         }
                     }
                 });
-                self.sync_draft_text();
+                self.update_draft_outline();
             }
             EditSync::InsertDraftPill {
                 start,
@@ -286,7 +292,7 @@ impl Desktop {
                         edit.set_caret(edit.focus + separator.len_utf8());
                     }
                 });
-                self.sync_draft_text();
+                self.update_draft_outline();
             }
         }
     }

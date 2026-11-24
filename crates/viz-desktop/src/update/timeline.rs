@@ -9,7 +9,7 @@ use viz_client::protocol::{
 
 use super::selection::{focus_draft, open_in_environment, open_thread, select_thread};
 use crate::{
-    effects::{EditSync, EditTarget, Effect, ServerEffect},
+    effects::{EditSync, Effect, ServerEffect},
     model::{EntryAction, FilePreview, FilePreviewBody, Item, Model, PreviewFile, PreviewLines},
 };
 
@@ -294,16 +294,21 @@ pub(super) fn update(model: &mut Model, msg: TimelineMsg) -> Vec<Effect> {
         TimelineMsg::ReplyTo(source) => {
             let quoted = quote_excerpt(&source);
             if !quoted.is_empty() {
-                let next = if model.composer.draft.text.trim().is_empty() {
-                    format!("{quoted}\n\n")
+                let draft = &mut model.composer.draft;
+                let prefix = format!("{quoted}\n\n");
+                if draft.text.trim().is_empty() {
+                    draft.text = prefix;
+                    draft.pills.clear();
                 } else {
-                    format!("{quoted}\n\n{}", model.composer.draft.text)
-                };
-                model.composer.draft.text.clone_from(&next);
-                effects.push(Effect::SyncEdit(EditSync::Replace {
-                    target: EditTarget::Draft,
-                    text: next,
-                    select_all: false,
+                    for pill in &mut draft.pills {
+                        pill.range.start += prefix.len();
+                        pill.range.end += prefix.len();
+                    }
+                    draft.text.insert_str(0, &prefix);
+                }
+                effects.push(Effect::SyncEdit(EditSync::ReplaceDraftWithPills {
+                    text: draft.text.clone(),
+                    pills: draft.pills.clone(),
                 }));
                 effects.push(focus_draft());
             }

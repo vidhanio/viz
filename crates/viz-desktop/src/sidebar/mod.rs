@@ -33,7 +33,7 @@ use crate::{
 /// `layer`.
 pub fn sidebar(s: &Desktop, titlebar_inset: f32, t: &Theme, layer: &mut Vec<El>) -> El {
     let now = theme::now_ms();
-    let outline = SidebarOutline::derive(&s.model, now);
+    let outline = SidebarOutline::with_draft(&s.model, now, &s.widgets.draft.text);
 
     let titlebar = titlebar_wordmark(titlebar_inset, t);
     let action_bar = utility_bar(s, now, t, layer);

@@ -378,13 +378,13 @@ impl Model {
 
     /// Whether the composer can submit the current draft.
     #[must_use]
-    pub fn can_send(&self) -> bool {
-        if self.composer.draft.text.chars().count() > PROMPT_CHAR_LIMIT
+    pub fn can_send(&self, text: &str) -> bool {
+        if text.chars().count() > PROMPT_CHAR_LIMIT
             || self.composer.draft.has_pending_or_failed_attachments()
         {
             return false;
         }
-        if self.composer.draft.text.trim().is_empty() {
+        if text.trim().is_empty() {
             return false;
         }
         if self.composer.editing_queued.is_some() {

@@ -1,129 +1,223 @@
-//! Live Markdown editor helpers over a plain [`rune::TextEdit`], parsed with
-//! `pulldown-cmark` (`into_offset_iter`): WYSIWYG-style per-frame [`Span`] and
-//! strikethrough decorations for headings, bold, italic, strikethrough, inline
-//! code, links, embedded attachment images/references, blockquotes, lists, task
-//! items, and language-highlighted fenced code blocks, plus invisible keyboard
-//! ergonomics (fence-aware Enter, list/quote continuation, indentation, and
-//! Markdown delimiter shortcuts).
+//! Markdown structure and keyboard behavior for the live composer draft.
 
-use std::{borrow::Cow, ops::Range};
+use std::ops::Range;
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use rune::{Color, Key, KeyEvent, Span, TextEdit};
 use rune_kit::syntax::highlight;
 
 use crate::theme::Theme;
 
-/// Per-frame visual decorations computed directly from plain Markdown text.
+#[derive(Default)]
 pub struct Decorations {
     pub spans: Vec<Span>,
     pub strikes: Vec<(usize, usize, Option<Color>)>,
 }
 
-/// Computes live WYSIWYG-style Markdown decorations for `edit` using
-/// `pulldown-cmark`, masking atomic `Mark::Pill` byte ranges so mention chips
-/// never interact with Markdown delimiters.
-#[must_use]
-pub fn decorate(edit: &TextEdit, t: &Theme) -> Decorations {
-    let text = edit.text.as_str();
-    let mut out = Decorations {
-        spans: Vec::new(),
-        strikes: Vec::new(),
-    };
-    if text.is_empty() {
-        return out;
-    }
-
-    let mut pills: Vec<Range<usize>> = edit.pills().map(|(r, _)| r).collect();
-    pills.sort_by_key(|r| r.start);
-    let masked = mask_pills(text, &pills);
-    let src: &str = &masked;
-
-    let mut opts = Options::empty();
-    opts.insert(Options::ENABLE_STRIKETHROUGH);
-    opts.insert(Options::ENABLE_TASKLISTS);
-
-    let mut code_ranges: Vec<Range<usize>> = Vec::new();
-    let caret = edit.focus;
-    let parser = Parser::new_ext(src, opts);
-
-    for (event, range) in parser.into_offset_iter() {
-        if range.start >= range.end || range.end > text.len() {
-            continue;
-        }
-        if overlaps_pill(range.start, range.end, &pills) && is_inline_event(&event) {
-            continue;
-        }
-        match event {
-            Event::Start(Tag::Heading { level, .. }) => {
-                style_heading(text, range, level, t, &mut out);
-            }
-            Event::Start(Tag::BlockQuote(_)) => {
-                style_blockquote(text, range, t, &mut out);
-            }
-            Event::Start(Tag::Item) => {
-                style_list_item(text, range, t, &mut out);
-            }
-            Event::TaskListMarker(checked) => {
-                style_task_marker(text, range, checked, t, &mut out);
-            }
-            Event::Rule => {
-                out.spans
-                    .push(Span::new(range.start, range.end).color(t.faint));
-            }
-            Event::Start(Tag::Emphasis) => {
-                style_delimited_inline(text, range, 1, t, &mut out, |s, e| {
-                    Span::new(s, e).italic()
-                });
-            }
-            Event::Start(Tag::Strong) => {
-                style_delimited_inline(text, range, 2, t, &mut out, |s, e| {
-                    Span::new(s, e).weight(680.0)
-                });
-            }
-            Event::Start(Tag::Strikethrough) => {
-                style_strikethrough(text, range, t, &mut out);
-            }
-            Event::Code(_) => {
-                style_inline_code(text, range, t, &mut out);
-            }
-            Event::Start(Tag::Link { dest_url, .. }) => {
-                style_link(text, range, &dest_url, caret, t, &mut out);
-            }
-            Event::Start(Tag::Image { .. }) => {
-                style_image(text, range, caret, t, &mut out);
-            }
-            Event::Start(Tag::CodeBlock(kind)) => {
-                code_ranges.push(range.clone());
-                style_code_block(text, range, kind, t, &mut out);
-            }
-            _ => {}
-        }
-    }
-
-    style_reference_definitions(text, &code_ranges, t, &mut out);
-    out
+/// Structure derived from the editor text and atomic reference marks.
+#[derive(Default)]
+pub struct DraftOutline {
+    pub pills: Vec<super::codec::DraftPill>,
+    pub char_count: usize,
+    marks: Vec<(Range<usize>, String)>,
+    decorations: [Decorations; 2],
+    fences: Vec<Fence>,
+    continuations: std::collections::BTreeMap<usize, LineContinuation>,
 }
 
-/// Replaces bytes covered by atomic `Mark::Pill` ranges with ASCII spaces of
-/// equal byte length so `pulldown-cmark` preserves exact UTF-8 byte offsets
-/// without treating underscores or punctuation inside `@file` pills as
-/// Markdown delimiters.
-fn mask_pills<'a>(text: &'a str, pills: &[Range<usize>]) -> Cow<'a, str> {
-    if pills.is_empty() {
-        return Cow::Borrowed(text);
-    }
-    let mut bytes = text.as_bytes().to_vec();
-    for pill in pills {
-        let start = pill.start.min(bytes.len());
-        let end = pill.end.min(bytes.len());
-        for byte in &mut bytes[start..end] {
-            if *byte != b'\n' && *byte != b'\r' {
-                *byte = b' ';
+impl DraftOutline {
+    pub fn parse(edit: &mut TextEdit) -> Self {
+        let mut out = Self {
+            char_count: edit.text.chars().count(),
+            marks: edit
+                .pills()
+                .map(|(range, mark)| (range, mark.to_owned()))
+                .collect(),
+            ..Self::default()
+        };
+        out.pills = out
+            .marks
+            .iter()
+            .filter_map(|(range, mark)| {
+                Some(super::codec::DraftPill {
+                    range: range.clone(),
+                    reference: super::codec::PillRef::from_mark(mark)?,
+                })
+            })
+            .collect();
+        out.pills.sort_by_key(|pill| pill.range.start);
+
+        let mut masks: Vec<_> = out.marks.iter().map(|(range, _)| range.clone()).collect();
+        masks.sort_by_key(|range| range.start);
+        let masked = PillMask::new(&mut edit.text, &masks);
+        let text = masked.text.as_str();
+        let parser = Parser::new_ext(
+            text,
+            Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS,
+        );
+        let themes = [Theme::get(false), Theme::get(true)];
+        for (_, def) in parser.reference_definitions().iter() {
+            if let Some(close) = text[def.span.clone()].find("]:") {
+                let start = def.span.start;
+                let end = start + close + 2;
+                for (style, theme) in out.decorations.iter_mut().zip(themes) {
+                    style.spans.push(
+                        Span::new(start, end)
+                            .mono()
+                            .color(theme.accent_text.alpha(0.75)),
+                    );
+                    if end < def.span.end {
+                        style
+                            .spans
+                            .push(Span::new(end, def.span.end).mono().color(theme.faint));
+                    }
+                }
             }
         }
+        let mut fence = None;
+        let mut body_end = 0;
+        for (event, range) in parser.into_offset_iter() {
+            if range.is_empty() || text.get(range.clone()).is_none() {
+                continue;
+            }
+            match &event {
+                Event::Start(Tag::CodeBlock(CodeBlockKind::Fenced(info))) => {
+                    fence = Some((range.start, info.clone()));
+                    continue;
+                }
+                Event::Text(_) if fence.is_some() => {
+                    body_end = range.end;
+                }
+                Event::End(TagEnd::CodeBlock) => {
+                    if let Some((start, info)) = fence.take() {
+                        let parsed = Fence::new(text, start..range.end, body_end);
+                        parsed.decorate(text, &info, &mut out.decorations, themes);
+                        out.fences.push(parsed);
+                        body_end = 0;
+                    }
+                }
+                Event::Start(Tag::BlockQuote(_)) => {
+                    let (mut offset, _) = line_bounds(text, range.start);
+                    for line in text[offset..range.end].split('\n') {
+                        if let Some(cont) = continuation_for_line(line) {
+                            out.continuations.insert(offset, cont);
+                        }
+                        offset += line.len() + 1;
+                    }
+                }
+                Event::Start(Tag::Item) => {
+                    let (start, end) = line_bounds(text, range.start);
+                    if let Some(cont) = continuation_for_line(&text[start..end]) {
+                        out.continuations.insert(start, cont);
+                    }
+                }
+                _ => {}
+            }
+            if overlaps_pill(range.start, range.end, &masks) && is_inline_event(&event) {
+                continue;
+            }
+            for (style, theme) in out.decorations.iter_mut().zip(themes) {
+                decorate_event(text, &event, range.clone(), theme, style);
+            }
+        }
+        out
     }
-    Cow::Owned(String::from_utf8(bytes).unwrap_or_else(|_| text.to_owned()))
+
+    pub fn marks_match(&self, edit: &TextEdit) -> bool {
+        edit.pills().eq(self
+            .marks
+            .iter()
+            .map(|(range, mark)| (range.clone(), mark.as_str())))
+    }
+
+    pub fn decorations(&self, theme: &Theme) -> &Decorations {
+        &self.decorations[usize::from(theme.k.dark)]
+    }
+
+    pub fn in_fence(&self, caret: usize) -> bool {
+        self.fence_at(caret).is_some()
+    }
+
+    fn fence_at(&self, caret: usize) -> Option<&Fence> {
+        let next = self
+            .fences
+            .partition_point(|fence| fence.editable.end <= caret);
+        self.fences
+            .get(next)
+            .filter(|fence| fence.editable.contains(&caret))
+    }
+}
+
+fn decorate_event(
+    text: &str,
+    event: &Event<'_>,
+    range: Range<usize>,
+    t: &Theme,
+    out: &mut Decorations,
+) {
+    match event {
+        Event::Start(Tag::Heading { level, .. }) => style_heading(text, range, *level, t, out),
+        Event::Start(Tag::BlockQuote(_)) => style_blockquote(text, range, t, out),
+        Event::Start(Tag::Item) => style_list_item(text, range, t, out),
+        Event::TaskListMarker(checked) => style_task_marker(text, range, *checked, t, out),
+        Event::Rule => out
+            .spans
+            .push(Span::new(range.start, range.end).color(t.faint)),
+        Event::Start(Tag::Emphasis) => {
+            style_delimited_inline(text, range, 1, t, out, |s, e| Span::new(s, e).italic());
+        }
+        Event::Start(Tag::Strong) => {
+            style_delimited_inline(text, range, 2, t, out, |s, e| Span::new(s, e).weight(680.0));
+        }
+        Event::Start(Tag::Strikethrough) => style_strikethrough(text, range, t, out),
+        Event::Code(_) => style_inline_code(text, range, t, out),
+        Event::Start(Tag::Link { dest_url, .. }) => style_link(text, range, dest_url, t, out),
+        Event::Start(Tag::Image { .. }) => style_image(text, range, t, out),
+        Event::Start(Tag::CodeBlock(CodeBlockKind::Indented)) => out.spans.push(
+            Span::new(range.start, range.end)
+                .mono()
+                .color(t.text_secondary),
+        ),
+        _ => {}
+    }
+}
+
+/// Masks pill labels in place while preserving their source offsets. Only
+/// the labels are copied, and the guard restores them before returning.
+struct PillMask<'a> {
+    text: &'a mut String,
+    labels: Vec<(Range<usize>, String)>,
+}
+
+impl<'a> PillMask<'a> {
+    fn new(text: &'a mut String, ranges: &[Range<usize>]) -> Self {
+        let mut masked = Self {
+            text,
+            labels: Vec::with_capacity(ranges.len()),
+        };
+        let mut placeholder = String::new();
+        for range in ranges {
+            let Some(label) = masked.text.get(range.clone()) else {
+                continue;
+            };
+            placeholder.clear();
+            placeholder.extend(label.bytes().map(|byte| match byte {
+                b'\n' | b'\r' => char::from(byte),
+                _ => 'x',
+            }));
+            masked.labels.push((range.clone(), label.to_owned()));
+            masked.text.replace_range(range.clone(), &placeholder);
+        }
+        masked
+    }
+}
+
+impl Drop for PillMask<'_> {
+    fn drop(&mut self) {
+        for (range, label) in self.labels.drain(..).rev() {
+            self.text.replace_range(range, &label);
+        }
+    }
 }
 
 const fn is_inline_event(event: &Event<'_>) -> bool {
@@ -136,7 +230,8 @@ const fn is_inline_event(event: &Event<'_>) -> bool {
 }
 
 fn overlaps_pill(start: usize, end: usize, pills: &[Range<usize>]) -> bool {
-    pills.iter().any(|r| r.start < end && start < r.end)
+    let next = pills.partition_point(|pill| pill.end <= start);
+    pills.get(next).is_some_and(|pill| pill.start < end)
 }
 
 fn style_heading(
@@ -331,25 +426,17 @@ fn style_inline_code(text: &str, range: Range<usize>, t: &Theme, out: &mut Decor
     }
 }
 
-fn style_link(
-    text: &str,
-    range: Range<usize>,
-    dest_url: &str,
-    caret: usize,
-    t: &Theme,
-    out: &mut Decorations,
-) {
+fn style_link(text: &str, range: Range<usize>, dest_url: &str, t: &Theme, out: &mut Decorations) {
     let slice = &text[range.clone()];
     let is_file = dest_url.starts_with("file://");
-    let editing = caret >= range.start && caret <= range.end;
-    let syntax_ink = if editing { t.muted } else { t.faint };
+    let syntax_ink = t.faint;
     if slice.starts_with('[')
         && let Some(close_bracket) = find_closing_bracket(slice)
     {
         let label_start = range.start + 1;
         let label_end = range.start + close_bracket;
         if is_file {
-            let pill_bg = flat_pill_bg(editing, t);
+            let pill_bg = flat_pill_bg(t);
             out.spans
                 .push(Span::new(range.start, range.end).bg(pill_bg, 2.0));
         }
@@ -386,11 +473,10 @@ fn style_link(
     );
 }
 
-fn style_image(text: &str, range: Range<usize>, caret: usize, t: &Theme, out: &mut Decorations) {
+fn style_image(text: &str, range: Range<usize>, t: &Theme, out: &mut Decorations) {
     let slice = &text[range.clone()];
-    let editing = caret >= range.start && caret <= range.end;
-    let syntax_ink = if editing { t.muted } else { t.faint };
-    let chip_bg = flat_pill_bg(editing, t);
+    let syntax_ink = t.faint;
+    let chip_bg = flat_pill_bg(t);
     out.spans
         .push(Span::new(range.start, range.end).bg(chip_bg, 2.0));
     if slice.starts_with("![")
@@ -416,146 +502,94 @@ fn style_image(text: &str, range: Range<usize>, caret: usize, t: &Theme, out: &m
     }
 }
 
-fn flat_pill_bg(editing: bool, t: &Theme) -> rune::Color {
-    let alpha = match (editing, t.k.dark) {
-        (true, true) => 0.14,
-        (true, false) => 0.11,
-        (false, true) => 0.08,
-        (false, false) => 0.06,
-    };
-    t.text.alpha(alpha)
+fn flat_pill_bg(t: &Theme) -> Color {
+    t.text.alpha(if t.k.dark { 0.08 } else { 0.06 })
 }
 
-fn style_code_block(
-    text: &str,
-    range: Range<usize>,
-    kind: CodeBlockKind<'_>,
-    t: &Theme,
-    out: &mut Decorations,
-) {
-    let CodeBlockKind::Fenced(info) = kind else {
-        out.spans.push(
-            Span::new(range.start, range.end)
-                .mono()
-                .color(t.text_secondary),
-        );
-        return;
-    };
-    let slice = &text[range.clone()];
-    let first_nl = slice.find('\n');
-    let first_line_end = first_nl.map_or(range.end, |off| range.start + off);
-    let first_line = text[range.start..first_line_end].trim_end_matches('\r');
-    let open = parse_opening_fence(first_line);
+struct Fence {
+    editable: Range<usize>,
+    opening: Range<usize>,
+    body: Range<usize>,
+    closing: Range<usize>,
+    prefix: String,
+}
 
-    if let Some(fence) = &open {
-        let ticks_end = range.start + fence.ticks_end;
-        out.spans
-            .push(Span::new(range.start, ticks_end).mono().color(t.faint));
-        let content_end = range.start + first_line.len();
-        if let Some((ls, le)) = fence.lang_range {
-            out.spans.push(
-                Span::new(range.start + ls, range.start + le)
-                    .mono()
-                    .color(t.accent_text.alpha(0.85)),
-            );
-            if range.start + le < content_end {
-                out.spans.push(
-                    Span::new(range.start + le, content_end)
+impl Fence {
+    fn new(text: &str, block: Range<usize>, body_end: usize) -> Self {
+        let (line_start, opening_end) = line_bounds(text, block.start);
+        let body_start = (opening_end + 1).min(block.end);
+        let marker = text.as_bytes()[block.start];
+        let marker_end = text[..block.end].trim_end_matches(' ').len();
+        let marker_len = text[..marker_end]
+            .bytes()
+            .rev()
+            .take_while(|&b| b == marker)
+            .count();
+        let marker_start = marker_end - marker_len;
+        let closed = opening_end < marker_start && marker_len >= 3 && body_end <= marker_start;
+        let (closing_line, _) = line_bounds(text, marker_start);
+        let end = if closed {
+            closing_line
+        } else {
+            block.end + usize::from(block.end == text.len())
+        };
+        let prefix = text[line_start..block.start]
+            .chars()
+            .map(|ch| if ch == '>' || ch == '\t' { ch } else { ' ' })
+            .collect();
+        Self {
+            editable: line_start..end,
+            opening: block.start..opening_end.min(block.end),
+            body: body_start..if closed { closing_line } else { block.end },
+            closing: if closed {
+                marker_start..block.end
+            } else {
+                block.end..block.end
+            },
+            prefix,
+        }
+    }
+
+    fn decorate(&self, text: &str, info: &str, styles: &mut [Decorations; 2], themes: [&Theme; 2]) {
+        let opening = &text[self.opening.clone()];
+        let ticks = opening
+            .bytes()
+            .take_while(|&byte| byte == opening.as_bytes()[0])
+            .count();
+        let label = opening[ticks..].trim_start();
+        let label_start = self.opening.end - label.len();
+        let label_end = label_start + label.split_whitespace().next().map_or(0, str::len);
+        let syntax = highlight(info.split_whitespace().next(), &text[self.body.clone()]);
+        for (style, theme) in styles.iter_mut().zip(themes) {
+            for range in [
+                self.opening.start..label_start,
+                label_end..self.opening.end,
+                self.closing.clone(),
+            ] {
+                if !range.is_empty() {
+                    style
+                        .spans
+                        .push(Span::new(range.start, range.end).mono().color(theme.faint));
+                }
+            }
+            if label_start < label_end {
+                style.spans.push(
+                    Span::new(label_start, label_end)
                         .mono()
-                        .color(t.faint),
+                        .color(theme.accent_text.alpha(0.85)),
                 );
             }
-        } else if ticks_end < content_end {
-            out.spans
-                .push(Span::new(ticks_end, content_end).mono().color(t.faint));
-        }
-    }
-
-    let Some(nl_off) = first_nl else {
-        return;
-    };
-    let body_start = range.start + nl_off + 1;
-    if body_start >= range.end {
-        return;
-    }
-
-    let trimmed_end = text[body_start..range.end]
-        .trim_end_matches(['\r', '\n'])
-        .len()
-        + body_start;
-    let last_line_start = text[body_start..trimmed_end]
-        .rfind('\n')
-        .map_or(body_start, |off| body_start + off + 1);
-    let last_line = text[last_line_start..trimmed_end].trim_end_matches('\r');
-
-    let body_end = if let Some(fence) = &open
-        && is_closing_fence(last_line, fence.ch, fence.len)
-    {
-        out.spans.push(
-            Span::new(last_line_start, last_line_start + last_line.len())
-                .mono()
-                .color(t.faint),
-        );
-        last_line_start.saturating_sub(1).max(body_start)
-    } else {
-        range.end
-    };
-
-    if body_start < body_end {
-        out.spans.push(Span::new(body_start, body_end).mono());
-        let lang = info
-            .split_whitespace()
-            .next()
-            .filter(|word| !word.is_empty());
-        if let Some(code) = text.get(body_start..body_end) {
-            let ranges = highlight(lang, code);
-            for span in t.syntax.spans(&ranges, body_start) {
-                out.spans.push(span.mono());
-            }
-        }
-    }
-}
-
-fn style_reference_definitions(
-    text: &str,
-    code_ranges: &[Range<usize>],
-    t: &Theme,
-    out: &mut Decorations,
-) {
-    let mut pos = 0usize;
-    for raw_line in text.split('\n') {
-        let line_start = pos;
-        let line_end = pos + raw_line.len();
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-        pos = (line_end + 1).min(text.len());
-        if code_ranges
-            .iter()
-            .any(|r| r.start <= line_start && line_start < r.end)
-        {
-            continue;
-        }
-        let indent = line
-            .as_bytes()
-            .iter()
-            .take(3)
-            .take_while(|&&b| b == b' ')
-            .count();
-        let trimmed = &line[indent..];
-        if trimmed.starts_with('[')
-            && let Some(close) = trimmed.find("]:")
-            && close > 1
-        {
-            let label_start = line_start + indent;
-            let colon_end = label_start + close + 2;
-            out.spans.push(
-                Span::new(label_start, colon_end)
-                    .mono()
-                    .color(t.accent_text.alpha(0.75)),
-            );
-            let content_end = line_start + line.len();
-            if colon_end < content_end {
-                out.spans
-                    .push(Span::new(colon_end, content_end).mono().color(t.faint));
+            if !self.body.is_empty() {
+                style
+                    .spans
+                    .push(Span::new(self.body.start, self.body.end).mono());
+                style.spans.extend(
+                    theme
+                        .syntax
+                        .spans(&syntax, self.body.start)
+                        .into_iter()
+                        .map(Span::mono),
+                );
             }
         }
     }
@@ -591,18 +625,18 @@ const fn find_closing_bracket(slice: &str) -> Option<usize> {
 /// Tab/Shift+Tab indentation in lists and code fences, selection wrapping with
 /// `*`/`~`/`` ` ``, and Markdown delimiter shortcuts (`Cmd/Ctrl+I`,
 /// `Shift+Cmd/Ctrl+B`, `Shift+Cmd/Ctrl+X`, `Cmd/Ctrl+E`).
-pub fn handle_key(edit: &mut TextEdit, ev: &KeyEvent) -> bool {
+pub fn handle_key(edit: &mut TextEdit, outline: &DraftOutline, ev: &KeyEvent) -> bool {
     if edit.preedit().is_some() {
         return false;
     }
     let primary = ev.mods.cmd || ev.mods.ctrl;
 
     if ev.key == Key::Tab && !primary && !ev.mods.alt {
-        return handle_tab(edit, ev.mods.shift);
+        return handle_tab(edit, outline, ev.mods.shift);
     }
 
     if ev.key == Key::Enter && !primary {
-        return handle_enter(edit, ev.mods.shift || ev.mods.alt);
+        return handle_enter(edit, outline, ev.mods.shift || ev.mods.alt);
     }
 
     if let Key::Text(ch) = &ev.key {
@@ -649,27 +683,35 @@ fn handle_shortcut(edit: &mut TextEdit, ch: &str, shift: bool) -> bool {
     true
 }
 
-fn handle_enter(edit: &mut TextEdit, newline_mod: bool) -> bool {
+fn handle_enter(edit: &mut TextEdit, outline: &DraftOutline, newline_mod: bool) -> bool {
     let caret = edit.focus;
-    if !newline_mod {
-        if edit.anchor == edit.focus && is_in_code_fence(&edit.text, caret) {
-            let indent = current_line_indent(&edit.text, caret);
-            let mut insertion = String::with_capacity(1 + indent.len());
-            insertion.push('\n');
-            insertion.push_str(indent);
-            edit.insert(&insertion);
-            return true;
-        }
-        return false;
+    if let Some(fence) = outline.fence_at(caret) {
+        let (start, end) = line_bounds(&edit.text, caret);
+        let line = &edit.text[start..end];
+        let marker_prefix = parse_quote_prefix(line).unwrap_or(0);
+        let whitespace = line[marker_prefix..]
+            .bytes()
+            .take_while(|&b| b == b' ' || b == b'\t')
+            .count();
+        let prefix = &line[..marker_prefix + whitespace];
+        let indent = if prefix.len() >= fence.prefix.len() {
+            prefix
+        } else {
+            &fence.prefix
+        };
+        let mut insertion = String::with_capacity(1 + indent.len());
+        insertion.push('\n');
+        insertion.push_str(indent);
+        edit.insert(&insertion);
+        return true;
     }
-
-    if edit.anchor != edit.focus || is_in_code_fence(&edit.text, caret) {
+    if !newline_mod || edit.anchor != edit.focus {
         return false;
     }
     let (line_start, line_end) = line_bounds(&edit.text, caret);
     let line = &edit.text[line_start..line_end];
 
-    if let Some(cont) = continuation_for_line(line) {
+    if let Some(cont) = outline.continuations.get(&line_start) {
         let rest_trimmed = line[cont.prefix_len..].trim();
         if rest_trimmed.is_empty() && caret >= line_start + cont.prefix_len {
             edit.undo_group(|e| {
@@ -689,12 +731,15 @@ fn handle_enter(edit: &mut TextEdit, newline_mod: bool) -> bool {
     false
 }
 
-fn handle_tab(edit: &mut TextEdit, outdent: bool) -> bool {
+fn handle_tab(edit: &mut TextEdit, outline: &DraftOutline, outdent: bool) -> bool {
     let caret = edit.focus;
-    let in_fence = is_in_code_fence(&edit.text, caret);
+    let in_fence = outline.in_fence(caret);
     let (line_start, line_end) = line_bounds(&edit.text, caret);
     let line = &edit.text[line_start..line_end];
-    let is_list = parse_list_prefix(line).is_some();
+    let is_list = outline
+        .continuations
+        .get(&line_start)
+        .is_some_and(|cont| cont.list);
 
     if !in_fence && !is_list {
         return false;
@@ -790,6 +835,7 @@ fn toggle_wrap(edit: &mut TextEdit, delim: &str) {
 }
 
 struct LineContinuation {
+    list: bool,
     prefix_len: usize,
     next_prefix: String,
 }
@@ -802,11 +848,13 @@ fn continuation_for_line(line: &str) -> Option<LineContinuation> {
             let (extra_len, list_next) = list_continuation(after, &list);
             next.push_str(&list_next);
             return Some(LineContinuation {
+                list: true,
                 prefix_len: quote_len + extra_len,
                 next_prefix: next,
             });
         }
         return Some(LineContinuation {
+            list: false,
             prefix_len: quote_len,
             next_prefix: line[..quote_len].to_owned(),
         });
@@ -814,6 +862,7 @@ fn continuation_for_line(line: &str) -> Option<LineContinuation> {
     let list = parse_list_prefix(line)?;
     let (prefix_len, next_prefix) = list_continuation(line, &list);
     Some(LineContinuation {
+        list: true,
         prefix_len,
         next_prefix,
     })
@@ -846,95 +895,6 @@ fn line_bounds(text: &str, caret: usize) -> (usize, usize) {
         .find('\n')
         .map_or(text.len(), |off| caret + off);
     (start, end)
-}
-
-fn current_line_indent(text: &str, caret: usize) -> &str {
-    let (start, end) = line_bounds(text, caret);
-    let line = &text[start..end];
-    let spaces = line
-        .bytes()
-        .take_while(|&b| b == b' ' || b == b'\t')
-        .count();
-    &line[..spaces]
-}
-
-fn is_in_code_fence(text: &str, caret: usize) -> bool {
-    let mut fence: Option<(u8, usize)> = None;
-    let mut pos = 0usize;
-    for raw_line in text.split('\n') {
-        let line_start = pos;
-        let line_end = pos + raw_line.len();
-        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line);
-        let on_line = caret >= line_start && caret <= line_end;
-        pos = (line_end + 1).min(text.len());
-
-        if let Some((ch, len)) = fence {
-            if is_closing_fence(line, ch, len) {
-                if on_line {
-                    return false;
-                }
-                fence = None;
-            } else if on_line {
-                return true;
-            }
-            continue;
-        }
-
-        if let Some(parsed) = parse_opening_fence(line) {
-            if on_line {
-                return true;
-            }
-            fence = Some((parsed.ch, parsed.len));
-        } else if on_line {
-            return false;
-        }
-    }
-    fence.is_some()
-}
-
-struct FenceOpen {
-    ch: u8,
-    len: usize,
-    ticks_end: usize,
-    lang_range: Option<(usize, usize)>,
-}
-
-fn parse_opening_fence(line: &str) -> Option<FenceOpen> {
-    let bytes = line.as_bytes();
-    let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
-    let ch = *bytes.get(indent)?;
-    if ch != b'`' && ch != b'~' {
-        return None;
-    }
-    let len = bytes[indent..].iter().take_while(|&&b| b == ch).count();
-    if len < 3 {
-        return None;
-    }
-    let ticks_end = indent + len;
-    let info = &line[ticks_end..];
-    if ch == b'`' && info.contains('`') {
-        return None;
-    }
-    let ws = info.bytes().take_while(u8::is_ascii_whitespace).count();
-    let lang_start = ticks_end + ws;
-    let lang_len = line[lang_start..]
-        .bytes()
-        .take_while(|b| !b.is_ascii_whitespace())
-        .count();
-    let lang_range = (lang_len > 0).then_some((lang_start, lang_start + lang_len));
-    Some(FenceOpen {
-        ch,
-        len,
-        ticks_end,
-        lang_range,
-    })
-}
-
-fn is_closing_fence(line: &str, ch: u8, open_len: usize) -> bool {
-    let bytes = line.as_bytes();
-    let indent = bytes.iter().take(3).take_while(|&&b| b == b' ').count();
-    let count = bytes[indent..].iter().take_while(|&&b| b == ch).count();
-    count >= open_len && bytes[indent + count..].iter().all(u8::is_ascii_whitespace)
 }
 
 fn parse_quote_prefix(line: &str) -> Option<usize> {

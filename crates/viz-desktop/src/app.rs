@@ -12,6 +12,7 @@ use rune_kit::{ImageZoom, ToastStack, shell::PaneState};
 use tokio::sync::mpsc;
 
 use crate::{
+    composer::{CaretReveal, markdown::DraftOutline},
     effects::{self, ServerEffect},
     model::{
         DIFF_DEFAULT_WIDTH, DIFF_MAX_WIDTH, DIFF_MIN_WIDTH, DraftCursor, DraftPill, Model,
@@ -104,8 +105,8 @@ pub struct ShellWidgets {
     pub attachment_images: crate::attachments::DraftImages,
     /// Derived index for the active timeline viewport.
     pub timeline_rows: crate::timeline::TimelineRows,
-    /// Latest `[offset_y, max_y]` of the composer draft scroll viewport.
-    pub composer_scroll: rune::Live<[f32; 2]>,
+    pub draft_outline: DraftOutline,
+    pub composer_caret: CaretReveal,
 }
 
 impl std::fmt::Debug for ShellWidgets {
@@ -157,7 +158,8 @@ impl Default for ShellWidgets {
             open_thread_media: OpenThreadMedia::default(),
             attachment_images: crate::attachments::DraftImages::default(),
             timeline_rows: crate::timeline::TimelineRows::default(),
-            composer_scroll: rune::Live::new([0.0, 0.0]),
+            draft_outline: DraftOutline::default(),
+            composer_caret: CaretReveal::default(),
         }
     }
 }
@@ -212,10 +214,9 @@ impl Desktop {
     /// Dispatches a message through the pure reducer and executes every
     /// returned [`crate::effects::Effect`] with access to Rune's [`Tx`].
     pub fn dispatch(&mut self, msg: Msg, tx: &mut Tx) {
-        self.sync_draft_text();
         self.model.palette.pages.clock = tx.clock();
         let before_selected = self.model.selection.selected;
-        let effects = update::update(&mut self.model, msg);
+        let effects = self.reduce(msg);
         if self.model.selection.selected != before_selected
             && let Some(id) = self.model.selection.selected
         {
@@ -231,9 +232,8 @@ impl Desktop {
     /// Dispatches a synchronous UI message from handlers that do not receive
     /// [`Tx`].
     pub fn dispatch_local(&mut self, msg: Msg) {
-        self.sync_draft_text();
         let before_selected = self.model.selection.selected;
-        let effects = update::update(&mut self.model, msg);
+        let effects = self.reduce(msg);
         if self.model.selection.selected != before_selected
             && let Some(id) = self.model.selection.selected
         {
@@ -270,9 +270,10 @@ impl Desktop {
         crate::git::diff_panel::sync(self);
         crate::requests::sync(self);
         self.widgets.git_query = TextEdit::new(&self.model.git.query);
-        let draft_text = self.model.composer.draft.text.clone();
-        let draft_pills = self.model.composer.draft.pills.clone();
-        self.widgets.draft = crate::attachments::build_draft_edit(&draft_text, &draft_pills);
+        let draft = &mut self.model.composer.draft;
+        let text = std::mem::take(&mut draft.text);
+        let pills = std::mem::take(&mut draft.pills);
+        self.replace_draft_with_pills(&text, &pills);
         self.widgets.draft.focused = self.model.composer.draft_focused;
 
         self.widgets.home_project_query = TextEdit::new(&self.model.composer.home_project.query);
@@ -440,11 +441,36 @@ impl Desktop {
 
     pub(crate) fn replace_draft_with_pills(&mut self, text: &str, pills: &[DraftPill]) {
         self.widgets.draft = crate::attachments::build_draft_edit(text, pills);
-        self.sync_draft_text();
+        self.update_draft_outline();
     }
 
-    pub(crate) fn sync_draft_text(&mut self) {
-        crate::attachments::sync_draft_text(self);
+    pub(crate) fn update_draft_outline(&mut self) {
+        self.widgets.draft_outline = DraftOutline::parse(&mut self.widgets.draft);
+    }
+
+    /// Rune's input-change callback observes text. An undo can also change a
+    /// pill mark while leaving its visible label identical.
+    pub(crate) fn refresh_draft_marks(&mut self) -> bool {
+        if self.widgets.draft_outline.marks_match(&self.widgets.draft) {
+            return false;
+        }
+        self.update_draft_outline();
+        true
+    }
+
+    /// Lends the editor buffer and derived marks to the reducer for draft
+    /// transitions. The reducer can move them into a saved draft, while edit
+    /// effects apply replacements to the widget and rebuild the outline.
+    pub(crate) fn reduce(&mut self, msg: Msg) -> Vec<effects::Effect> {
+        self.refresh_draft_marks();
+        let draft = &mut self.model.composer.draft;
+        draft.text = std::mem::take(&mut self.widgets.draft.text);
+        draft.pills = std::mem::take(&mut self.widgets.draft_outline.pills);
+        let effects = update::update(&mut self.model, msg);
+        let draft = &mut self.model.composer.draft;
+        self.widgets.draft.text = std::mem::take(&mut draft.text);
+        self.widgets.draft_outline.pills = std::mem::take(&mut draft.pills);
+        effects
     }
 }
 

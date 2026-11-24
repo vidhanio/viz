@@ -71,7 +71,7 @@ pub struct DraftData {
     pub retry_submission: Option<(String, [u8; 32])>,
     /// Markdown prompt text (including pill label spans).
     pub text: String,
-    /// Atomic inline chips synced with `ShellWidgets::draft`.
+    /// Atomic inline chips and their stable reference identities.
     pub pills: Vec<DraftPill>,
     /// Prepared attachments queued for the next send.
     pub attachments: std::sync::Arc<Vec<DraftAttachment>>,
@@ -287,7 +287,8 @@ pub struct DraftBranchPickerState {
     reason = "four independent composer UI state flags"
 )]
 pub struct ComposerState {
-    /// Text, inline pills, and attachments currently in the composer.
+    /// Active attachment state. Desktop lends the widget's live text and
+    /// outline marks to the reducer for transitions that consume a draft.
     pub draft: DraftData,
     /// Whether the composer text field currently has keyboard focus.
     pub draft_focused: bool,

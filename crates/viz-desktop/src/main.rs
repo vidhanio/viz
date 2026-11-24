@@ -68,6 +68,7 @@ fn view(s: &Desktop, cx: &mut Cx<Desktop>) -> El {
         cx.reduced_motion(reduced);
     }
     let reduced = cx.is_reduced_motion();
+    s.widgets.composer_caret.measure(cx);
     let t = Theme::get(cx.system_dark());
     cx.help_look(t.help_look());
     if let Some(demo) = &s.motion_demo {
@@ -213,6 +214,7 @@ fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
 }
 
 fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
+    let caret_scrolled = s.widgets.composer_caret.reveal(tx);
     let pane_changed = sync_sidebar_pane(s, tx);
     let diff_width = s.widgets.diff_pane.width();
     let diff_resized =
@@ -222,6 +224,7 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
     }
     let zoom = s.widgets.image_zoom.poll(clock, tx);
     let math = s.widgets.math.changed();
+    let draft_marks_changed = s.refresh_draft_marks();
     let completion = poll_completion(s, clock, tx);
     let palette = poll_palette(s, clock, tx);
     let has_tool_timeout = s.model.transcript().acp_partial.iter().any(|item| {
@@ -250,10 +253,12 @@ fn poll(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
         false
     };
     s.expire_toasts(clock, tx)
+        || caret_scrolled
         || pane_changed
         || diff_resized
         || zoom
         || math
+        || draft_marks_changed
         || completion
         || palette
         || tool_timer
@@ -283,7 +288,7 @@ fn poll_completion(s: &mut Desktop, clock: f64, tx: &mut Tx) -> bool {
             model::completion_token_at(
                 &s.widgets.draft.text,
                 &cursor,
-                &s.model.composer.draft.pills,
+                &s.widgets.draft_outline.pills,
             )
         })
         .flatten();

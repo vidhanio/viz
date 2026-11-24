@@ -104,13 +104,17 @@ impl<'a> SidebarOutline<'a> {
     /// Derives the filtered triage shelves from `model` at timestamp `now`.
     #[must_use]
     pub fn derive(model: &'a Model, now: i64) -> Self {
+        Self::with_draft(model, now, &model.composer.draft.text)
+    }
+
+    pub fn with_draft(model: &'a Model, now: i64, text: &str) -> Self {
         let cache = model.cache();
         let known_projects: HashSet<_> = cache.projects().map(|p| p.path.as_str()).collect();
         let filter = &model.sidebar.project_filter;
 
         let mut outline = Self {
             open: model.selection.selected,
-            draft: derive_draft(model, filter, &known_projects),
+            draft: derive_draft(model, text, filter, &known_projects),
             pinned: Vec::new(),
             working: Vec::new(),
             active: Vec::new(),
@@ -161,6 +165,7 @@ impl<'a> SidebarOutline<'a> {
 
 fn derive_draft<'a>(
     model: &'a Model,
+    text: &str,
     filter: &ProjectFilter,
     known_projects: &HashSet<&str>,
 ) -> Option<DraftPreview<'a>> {
@@ -173,7 +178,7 @@ fn derive_draft<'a>(
         .project
         .as_deref()
         .and_then(|path| cache.project(path));
-    let title = first_non_empty_line(&model.composer.draft.text).map_or_else(
+    let title = first_non_empty_line(text).map_or_else(
         || match model.composer.draft.attachments.len() {
             0 => "New thread".to_owned(),
             1 => "1 attachment".to_owned(),

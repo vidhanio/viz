@@ -184,30 +184,3 @@ pub fn build_draft_edit(text: &str, pills: &[DraftPill]) -> TextEdit {
     }
     edit
 }
-
-/// Synchronizes the composer [`TextEdit`] text, atomic `Mark::Pill` ranges,
-/// and focus flag into `s.model.composer`.
-pub fn sync_draft_text(s: &mut Desktop) {
-    if s.widgets.draft.text != s.model.composer.draft.text {
-        s.model
-            .composer
-            .draft
-            .text
-            .clone_from(&s.widgets.draft.text);
-    }
-    let pills: Vec<DraftPill> = s
-        .widgets
-        .draft
-        .pills()
-        .filter_map(|(range, mark)| {
-            Some(DraftPill {
-                range,
-                reference: crate::composer::codec::PillRef::from_mark(mark)?,
-            })
-        })
-        .collect();
-    if pills != s.model.composer.draft.pills {
-        s.model.composer.draft.pills = pills;
-    }
-    s.model.composer.draft_focused = s.widgets.draft.focused;
-}

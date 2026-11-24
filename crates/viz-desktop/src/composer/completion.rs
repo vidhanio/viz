@@ -19,7 +19,7 @@ pub(super) fn on_key(s: &mut Desktop, ev: &KeyEvent, tx: &mut Tx) -> bool {
     let Some(token) = completion_token_at(
         &s.widgets.draft.text,
         &cursor,
-        &s.model.composer.draft.pills,
+        &s.widgets.draft_outline.pills,
     )
     .filter(|token| s.model.composer.completion.matches(token)) else {
         return false;
