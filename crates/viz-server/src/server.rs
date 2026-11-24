@@ -1,4 +1,5 @@
-//! Authenticated HTTP peer calls and incremental WebSocket sessions.
+//! Authenticated HTTP peer calls and incremental WebSocket sessions over
+//! local Unix domain sockets and optional authenticated TCP listeners.
 
 mod peer_rpc;
 mod socket;
@@ -7,20 +8,22 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, State, WebSocketUpgrade},
-    http::{HeaderMap, StatusCode, header::AUTHORIZATION},
+    extract::{DefaultBodyLimit, Request as HttpRequest, State, WebSocketUpgrade},
+    http::{
+        HeaderMap, Method as HttpMethod, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE, ORIGIN},
+    },
+    middleware::{self, Next},
     response::{IntoResponse, Response as HttpResponse},
     routing::get,
 };
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio_util::sync::CancellationToken;
-use viz_protocol::{
-    EnvironmentList, ListEnvironments, Method, Unwatch, UnwatchGit, Watch, WatchGit,
-};
+use viz_protocol::{EnvironmentList, ListEnvironments, Method};
 
 use crate::{
     config::Config,
@@ -38,6 +41,18 @@ use crate::{
 const MAX_FRAME: usize = viz_protocol::limits::MAX_WS_FRAME;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Authenticated caller identity injected by [`guard`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Principal {
+    /// Local user connected over the `0600` Unix domain socket.
+    Local,
+    /// Remote operator authenticated with `server.token` over TCP.
+    Client,
+    /// Configured peer environment authenticated with its per-peer `accept`
+    /// credential over TCP.
+    Peer(Arc<str>),
+}
+
 pub(crate) struct Server {
     workspace: Arc<Workspace>,
     peers: Arc<Peers>,
@@ -47,29 +62,113 @@ pub(crate) struct Server {
 }
 
 #[derive(Clone)]
+struct TcpAuth {
+    client_token: Option<Arc<str>>,
+    peer_tokens: Arc<[(Arc<str>, Arc<str>)]>,
+}
+
+impl TcpAuth {
+    fn from_config(config: &Config) -> Self {
+        let peer_tokens = config
+            .environments
+            .iter()
+            .filter_map(|(id, peer)| {
+                peer.accept
+                    .as_ref()
+                    .map(|token| (Arc::<str>::from(id.as_str()), Arc::clone(token)))
+            })
+            .collect();
+        Self {
+            client_token: config.token.clone(),
+            peer_tokens,
+        }
+    }
+
+    /// Evaluates every configured credential in constant time without
+    /// short-circuiting so token comparisons do not leak slot order.
+    fn authenticate(&self, headers: &HeaderMap) -> Option<Principal> {
+        let given = headers
+            .get(AUTHORIZATION)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.strip_prefix("Bearer "))?
+            .as_bytes();
+        let mut matched = self
+            .client_token
+            .as_ref()
+            .filter(|token| bool::from(given.ct_eq(token.as_bytes())))
+            .map(|_| Principal::Client);
+        for (env_id, token) in self.peer_tokens.iter() {
+            if bool::from(given.ct_eq(token.as_bytes())) {
+                matched = Some(Principal::Peer(Arc::clone(env_id)));
+            }
+        }
+        matched
+    }
+}
+
+#[derive(Clone)]
+enum Transport {
+    Unix,
+    Tcp(TcpAuth),
+}
+
+#[derive(Clone)]
 struct Listener {
     server: Arc<Server>,
-    token: Option<Arc<str>>,
+    transport: Transport,
 }
 
 impl Listener {
-    fn authorized(&self, headers: &HeaderMap) -> bool {
-        self.token.as_ref().is_none_or(|token| {
-            headers
-                .get(AUTHORIZATION)
-                .and_then(|value| value.to_str().ok())
-                .and_then(|value| value.strip_prefix("Bearer "))
-                .is_some_and(|given| bool::from(given.as_bytes().ct_eq(token.as_bytes())))
-        })
-    }
-
     fn router(self) -> Router {
+        let guard_state = self.clone();
         Router::new()
             .route(HEALTH_PATH, get(health))
             .route(RPC_PATH, get(upgrade).post(peer_rpc))
+            .layer(middleware::from_fn_with_state(guard_state, guard))
             .layer(DefaultBodyLimit::max(MAX_FRAME))
             .with_state(self)
     }
+}
+
+async fn guard(
+    State(listener): State<Listener>,
+    mut request: HttpRequest,
+    next: Next,
+) -> HttpResponse {
+    let headers = request.headers();
+    if headers.contains_key(ORIGIN) {
+        return (StatusCode::FORBIDDEN, "browser origin rejected").into_response();
+    }
+    if request.method() == HttpMethod::POST && !is_json_content_type(headers) {
+        return (
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "expected Content-Type: application/json",
+        )
+            .into_response();
+    }
+    if headers
+        .get("x-viz-environment")
+        .is_some_and(|value| value.as_bytes() != listener.server.environment.as_bytes())
+    {
+        return (StatusCode::BAD_REQUEST, "environment identity mismatch").into_response();
+    }
+    let principal = match &listener.transport {
+        Transport::Unix => Principal::Local,
+        Transport::Tcp(auth) => match auth.authenticate(headers) {
+            Some(principal) => principal,
+            None => return StatusCode::UNAUTHORIZED.into_response(),
+        },
+    };
+    request.extensions_mut().insert(principal);
+    next.run(request).await
+}
+
+fn is_json_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .is_some_and(|media| media.trim().eq_ignore_ascii_case("application/json"))
 }
 
 impl Server {
@@ -92,24 +191,53 @@ impl Server {
     pub(crate) async fn run(
         self: &Arc<Self>,
         config: &Config,
-        listener: TcpListener,
+        unix: UnixListener,
+        tcp: Option<TcpListener>,
     ) -> Result<()> {
-        let token = config
-            .token
-            .as_ref()
-            .map(viz_config::Secret::resolve)
-            .transpose()?
-            .map(Arc::from);
-        let state = Listener {
+        let unix_state = Listener {
             server: Arc::clone(self),
-            token,
+            transport: Transport::Unix,
         };
-        tracing::info!(environment = %self.environment, address = %listener.local_addr()?, "viz listening");
-        crate::daemon::ready(listener.local_addr()?)?;
-        axum::serve(listener, state.router())
-            .with_graceful_shutdown(self.stop.clone().cancelled_owned())
-            .await
-            .context("serving viz RPC")
+        let status = if let Some(tcp_listener) = &tcp {
+            let addr = tcp_listener.local_addr()?;
+            tracing::info!(
+                environment = %self.environment,
+                socket = %config.socket.display(),
+                address = %addr,
+                "viz listening"
+            );
+            format!("Listening on unix://{} and {addr}", config.socket.display())
+        } else {
+            tracing::info!(
+                environment = %self.environment,
+                socket = %config.socket.display(),
+                "viz listening"
+            );
+            format!("Listening on unix://{}", config.socket.display())
+        };
+        crate::daemon::ready(&status)?;
+        let serve_unix = async {
+            axum::serve(unix, unix_state.router())
+                .with_graceful_shutdown(self.stop.clone().cancelled_owned())
+                .await
+                .context("serving viz Unix RPC")
+        };
+        if let Some(tcp_listener) = tcp {
+            let tcp_state = Listener {
+                server: Arc::clone(self),
+                transport: Transport::Tcp(TcpAuth::from_config(config)),
+            };
+            let serve_tcp = async {
+                axum::serve(tcp_listener, tcp_state.router())
+                    .with_graceful_shutdown(self.stop.clone().cancelled_owned())
+                    .await
+                    .context("serving viz TCP RPC")
+            };
+            tokio::try_join!(serve_unix, serve_tcp)?;
+            Ok(())
+        } else {
+            serve_unix.await
+        }
     }
 
     async fn call(&self, method: &str, raw: &str) -> Result<Value, Error> {
@@ -146,31 +274,28 @@ handlers! {
     }
 }
 
-async fn health(State(listener): State<Listener>, headers: HeaderMap) -> HttpResponse {
-    if !listener.authorized(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    Json(json!({ "ok": true, "version": VERSION, "protocol": PROTOCOL_VERSION, "environment": listener.server.environment })).into_response()
+async fn health(
+    State(listener): State<Listener>,
+    Extension(_principal): Extension<Principal>,
+) -> HttpResponse {
+    Json(json!({
+        "ok": true,
+        "version": VERSION,
+        "protocol": PROTOCOL_VERSION,
+        "environment": listener.server.environment,
+    }))
+    .into_response()
 }
 
 async fn upgrade(
     State(listener): State<Listener>,
-    headers: HeaderMap,
+    Extension(principal): Extension<Principal>,
     ws: WebSocketUpgrade,
 ) -> HttpResponse {
-    if !listener.authorized(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if headers
-        .get("x-viz-environment")
-        .is_some_and(|value| value.as_bytes() != listener.server.environment.as_bytes())
-    {
-        return (StatusCode::BAD_REQUEST, "environment identity mismatch").into_response();
-    }
     ws.max_message_size(MAX_FRAME)
         .max_frame_size(MAX_FRAME)
         .on_upgrade(move |socket| async move {
-            if let Err(error) = socket::connect(socket, listener.server).await {
+            if let Err(error) = socket::connect(socket, listener.server, principal).await {
                 tracing::debug!(%error, "client disconnected");
             }
         })
@@ -178,18 +303,16 @@ async fn upgrade(
 
 async fn peer_rpc(
     State(listener): State<Listener>,
-    headers: HeaderMap,
+    Extension(principal): Extension<Principal>,
     body: Bytes,
 ) -> HttpResponse {
-    if !listener.authorized(&headers) {
-        return StatusCode::UNAUTHORIZED.into_response();
-    }
-    if headers
-        .get("x-viz-environment")
-        .is_some_and(|value| value.as_bytes() != listener.server.environment.as_bytes())
-    {
-        return (StatusCode::BAD_REQUEST, "environment identity mismatch").into_response();
-    }
+    let Principal::Peer(source) = principal else {
+        return (
+            StatusCode::FORBIDDEN,
+            "HTTP RPC is restricted to authenticated peers",
+        )
+            .into_response();
+    };
     let request = match parse_request(&body) {
         Ok(request) => request,
         Err(error) => {
@@ -210,19 +333,9 @@ async fn peer_rpc(
             encode(listener.server.hello(&params)?)
         })
     } else if let Some(dispatch) = peer_rpc::find(&request.method) {
-        if listener.token.is_none() {
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-        let Some(source) = headers
-            .get("x-viz-source")
-            .and_then(|value| value.to_str().ok())
-            .filter(|id| listener.server.peers.get(id).is_some())
-        else {
-            return (StatusCode::FORBIDDEN, "unconfigured source environment").into_response();
-        };
         let result = tokio::select! {
             () = listener.server.stop.cancelled() => Err(Error::unavailable("server is stopping").into()),
-            result = dispatch(&listener.server, raw_params(&request), source) => result,
+            result = dispatch(&listener.server, raw_params(&request), &source) => result,
         };
         match result {
             Ok(value) => Ok(value),
@@ -231,16 +344,12 @@ async fn peer_rpc(
                 return (StatusCode::FORBIDDEN, "source environment mismatch").into_response();
             }
         }
-    } else if matches!(
-        request.method_name(),
-        Watch::NAME | Unwatch::NAME | WatchGit::NAME | UnwatchGit::NAME
-    ) {
-        Err(RequestError::UnknownMethod("watch requires a WebSocket".into()).into())
     } else {
-        tokio::select! {
-            () = listener.server.stop.cancelled() => Err(Error::unavailable("server is stopping")),
-            result = listener.server.call(request.method_name(), raw_params(&request)) => result,
-        }
+        return (
+            StatusCode::FORBIDDEN,
+            "method not permitted on peer HTTP RPC",
+        )
+            .into_response();
     };
     Json(Response::new(request.id, response)).into_response()
 }

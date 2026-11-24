@@ -170,10 +170,24 @@ in
       )
     );
 
+    systemd.user.sockets.viz-server = mkIf cfg.server.enable {
+      Unit.Description = "viz server local Unix socket";
+      Socket = {
+        ListenStream = "%t/viz/rpc.sock";
+        SocketMode = "0600";
+        DirectoryMode = "0700";
+      };
+      Install.WantedBy = [ "sockets.target" ];
+    };
+
     systemd.user.services.viz-server = mkIf cfg.server.enable {
       Unit = {
         Description = "viz server environment";
-        After = [ "network.target" ];
+        Requires = [ "viz-server.socket" ];
+        After = [
+          "network.target"
+          "viz-server.socket"
+        ];
         X-Restart-Triggers = [ settingsSource ];
       };
       Service = {

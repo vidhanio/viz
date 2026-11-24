@@ -9,14 +9,22 @@
 
 [client.server]
 # Shared by every client (desktop, CLI): the server to connect to.
-# Defaults to http://127.0.0.1:7420. Non-loopback URLs use HTTPS and need a token.
+# Defaults to the local 0600 Unix domain socket ($XDG_RUNTIME_DIR/viz/rpc.sock,
+# falling back to $TMPDIR/viz/rpc.sock on macOS or <state_dir>/rpc.sock).
+# socket = "/run/user/1000/viz/rpc.sock"
+# For TCP servers, set url (mutually exclusive with socket) and a bearer token.
+# Non-loopback URLs must use HTTPS.
 # url = "https://viz.example.com"
 # token = { file = "/run/secrets/viz-token" }
 
 [server]
-# Defaults to 127.0.0.1:7420. Clients use a URL; there is no Unix socket.
-# For other hosts, put an HTTPS reverse proxy in front of this listener.
-# A token is required for non-loopback binds and when linking an environment.
+# Local clients connect over a private 0600 Unix socket by default
+# ($XDG_RUNTIME_DIR/viz/rpc.sock, falling back to $TMPDIR/viz/rpc.sock on macOS
+# or <state_dir>/rpc.sock).
+# socket = "/run/user/1000/viz/rpc.sock"
+# Optional TCP listener for remote clients or peer environments. Put an HTTPS
+# reverse proxy in front of this listener for remote hosts. Always requires
+# server.token and/or per-peer accept credentials.
 # listen = "127.0.0.1:7420"
 # token = { file = "/run/secrets/viz-token" }
 # State storage: $STATE_DIRECTORY under systemd, otherwise $XDG_STATE_HOME/viz
@@ -31,11 +39,13 @@
 # A sole harness is the implicit default. With several, set this or select per thread.
 # default_harness = "claude"
 
-# Configure peers in both directions for remote delegation. A peer's token
-# is the bearer token configured on that peer. Use a base URL, not the RPC route.
+# Configure peers in both directions for remote delegation.
+# - `token` is the outbound bearer token sent to the peer (matching that peer's `accept`).
+# - `accept` is the unique inbound bearer token accepted from this peer (requires `listen`).
 # [server.environments.lab]
 # url = "https://lab.example.com"
-# token = { file = "/run/secrets/viz-lab-token" }
+# token = { file = "/run/secrets/viz-lab-outbound" }
+# accept = { file = "/run/secrets/viz-lab-inbound" }
 
 # Trusted ACP runners run under the server account and own their model credentials.
 # viz does not add a sandbox or interactive permission policy.

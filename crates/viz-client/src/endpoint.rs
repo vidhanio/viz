@@ -1,90 +1,125 @@
-//! Validated server addresses and their optional credentials.
+//! Validated server endpoints: private local Unix sockets or authenticated
+//! HTTP(S) origins.
 
-use std::{fmt, net::IpAddr};
+use std::{fmt, net::IpAddr, path::PathBuf};
 
 use tokio_tungstenite::tungstenite::http::Uri;
-use viz_config::{Connection, DEFAULT_URL, ResolveSecretError};
+use viz_config::{Connection, ResolveSecretError, default_socket, validate_socket_path};
 
-/// An HTTP(S) origin and, when configured, a bearer token.
+/// A validated server endpoint: either a local Unix domain socket or an
+/// authenticated HTTP(S) origin.
 ///
-/// `Debug` never shows the token.
+/// `Debug` never shows the bearer token.
 #[derive(Clone, PartialEq, Eq)]
-pub struct Endpoint {
-    pub(crate) url: String,
-    pub(crate) token: Option<String>,
+pub enum Endpoint {
+    /// Local Unix domain socket authenticated by filesystem permissions.
+    Unix { path: PathBuf },
+    /// Authenticated HTTP(S) TCP origin.
+    Http { url: String, token: String },
 }
 
 impl Endpoint {
-    /// Resolves connection settings, using the loopback origin by default.
+    /// Resolves connection settings, defaulting to
+    /// [`viz_config::default_socket`] when neither `socket` nor `url` is set.
     ///
     /// # Errors
     ///
-    /// Returns an error if the origin is invalid, uses HTTP off loopback, or
-    /// a bearer token is required but cannot be resolved.
+    /// Returns an error if both `socket` and `url` are set, the socket path or
+    /// HTTP(S) origin is invalid, a non-loopback origin uses plaintext HTTP, or
+    /// a TCP `url` has no resolvable bearer token.
     pub fn from_connection(connection: &Connection) -> Result<Self, ResolveEndpointError> {
-        let url = connection.url.as_deref().unwrap_or(DEFAULT_URL);
-        let uri: Uri = url.parse().map_err(|_| ResolveEndpointError::InvalidUrl)?;
-        let scheme = uri.scheme_str().ok_or(ResolveEndpointError::InvalidUrl)?;
-        let authority = uri.authority().ok_or(ResolveEndpointError::InvalidUrl)?;
-        if !matches!(scheme, "http" | "https")
-            || authority.as_str().contains('@')
-            || url.contains('#')
-            || !matches!(uri.path(), "" | "/")
-            || uri.query().is_some()
-        {
-            return Err(ResolveEndpointError::InvalidUrl);
+        if connection.socket.is_some() && connection.url.is_some() {
+            return Err(ResolveEndpointError::BothSocketAndUrl);
         }
-        let host = authority.host();
-        let loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .trim_matches(['[', ']'])
-                .parse::<IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback());
-        if !loopback && scheme == "http" {
-            return Err(ResolveEndpointError::RemoteHttp);
+        if let Some(url) = connection.url.as_deref() {
+            let uri: Uri = url.parse().map_err(|_| ResolveEndpointError::InvalidUrl)?;
+            let scheme = uri.scheme_str().ok_or(ResolveEndpointError::InvalidUrl)?;
+            let authority = uri.authority().ok_or(ResolveEndpointError::InvalidUrl)?;
+            if !matches!(scheme, "http" | "https")
+                || authority.as_str().contains('@')
+                || url.contains('#')
+                || !matches!(uri.path(), "" | "/")
+                || uri.query().is_some()
+            {
+                return Err(ResolveEndpointError::InvalidUrl);
+            }
+            let host = authority.host();
+            let loopback = host.eq_ignore_ascii_case("localhost")
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback());
+            if !loopback && scheme == "http" {
+                return Err(ResolveEndpointError::RemoteHttp);
+            }
+            let token = connection
+                .token
+                .as_ref()
+                .map(viz_config::Secret::resolve)
+                .transpose()?
+                .filter(|token| !token.trim().is_empty())
+                .ok_or(ResolveEndpointError::MissingToken)?;
+            return Ok(Self::Http {
+                url: format!("{scheme}://{authority}"),
+                token,
+            });
         }
-        let token = connection
-            .token
-            .as_ref()
-            .map(viz_config::Secret::resolve)
-            .transpose()?;
-        if !loopback && token.is_none() {
-            return Err(ResolveEndpointError::MissingToken);
-        }
-        Ok(Self {
-            url: format!("{scheme}://{authority}"),
-            token,
-        })
+        let path = match &connection.socket {
+            Some(path) => {
+                validate_socket_path(path)?;
+                path.clone()
+            }
+            None => default_socket()?,
+        };
+        Ok(Self::Unix { path })
     }
 }
 
 impl fmt::Debug for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Endpoint")
-            .field("url", &self.url)
-            .finish_non_exhaustive()
+        match self {
+            Self::Unix { path } => f
+                .debug_struct("Endpoint::Unix")
+                .field("path", path)
+                .finish(),
+            Self::Http { url, .. } => f
+                .debug_struct("Endpoint::Http")
+                .field("url", url)
+                .finish_non_exhaustive(),
+        }
     }
 }
 
 impl fmt::Display for Endpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.url)
+        match self {
+            Self::Unix { path } => write!(f, "unix://{}", path.display()),
+            Self::Http { url, .. } => f.write_str(url),
+        }
     }
 }
 
 /// Why [`Endpoint::from_connection`] failed.
 #[derive(Debug, thiserror::Error)]
 pub enum ResolveEndpointError {
+    /// Both `socket` and `url` were configured simultaneously.
+    #[error("[client.server] cannot set both socket and url")]
+    BothSocketAndUrl,
     /// The address is not a valid HTTP(S) origin.
-    #[error("[server].url must be an HTTP or HTTPS origin without a path, query, or credentials")]
+    #[error(
+        "[client.server].url must be an HTTP or HTTPS origin without a path, query, or credentials"
+    )]
     InvalidUrl,
     /// Only loopback origins may use plaintext HTTP.
-    #[error("[server].url must use HTTPS outside loopback")]
+    #[error("[client.server].url must use HTTPS outside loopback")]
     RemoteHttp,
-    /// The remote origin needs a bearer token.
-    #[error("a non-loopback [server].url requires [server].token")]
+    /// Every TCP origin requires a bearer token.
+    #[error("[client.server].url requires a non-empty [client.server].token")]
     MissingToken,
     /// The configured token could not be resolved.
     #[error(transparent)]
     Token(#[from] ResolveSecretError),
+    /// The default or configured Unix socket path is invalid.
+    #[error(transparent)]
+    Socket(#[from] viz_config::Error),
 }

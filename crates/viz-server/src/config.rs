@@ -6,20 +6,23 @@ use std::{
     env, fmt,
     net::SocketAddr,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use anyhow::{Context, Result, ensure};
+use axum::http::HeaderValue;
 use serde::Deserialize;
 use url::Url;
-use viz_config::{Component, Paths, Secret};
+use viz_config::{Component, Paths, Secret, default_socket, validate_socket_path};
 
 #[derive(Debug)]
 pub(crate) struct Config {
     pub(crate) environment: String,
     pub(crate) cwd: PathBuf,
     pub(crate) state_dir: PathBuf,
-    pub(crate) listen: SocketAddr,
-    pub(crate) token: Option<Secret>,
+    pub(crate) socket: PathBuf,
+    pub(crate) listen: Option<SocketAddr>,
+    pub(crate) token: Option<Arc<str>>,
     pub(crate) default_harness: Option<String>,
     pub(crate) harnesses: BTreeMap<String, HarnessConfig>,
     pub(crate) environments: BTreeMap<String, PeerConfig>,
@@ -30,12 +33,14 @@ pub(crate) use viz_acp::HarnessConfig;
 pub(crate) struct PeerConfig {
     pub(crate) url: Url,
     pub(crate) token: String,
+    pub(crate) accept: Option<Arc<str>>,
 }
 
 impl fmt::Debug for PeerConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PeerConfig")
             .field("url", &self.url)
+            .field("accept", &self.accept.is_some())
             .finish_non_exhaustive()
     }
 }
@@ -46,6 +51,7 @@ struct Server {
     environment: Option<String>,
     cwd: Option<PathBuf>,
     state_dir: Option<PathBuf>,
+    socket: Option<PathBuf>,
     listen: Option<SocketAddr>,
     token: Option<Secret>,
     default_harness: Option<String>,
@@ -58,6 +64,7 @@ struct Server {
 struct PeerFile {
     url: String,
     token: Secret,
+    accept: Option<Secret>,
 }
 
 impl Config {
@@ -71,17 +78,19 @@ impl Config {
             valid_name(&environment),
             "invalid environment ID {environment:?}"
         );
-        let listen = server
-            .listen
-            .unwrap_or_else(|| SocketAddr::from(([127, 0, 0, 1], 7420)));
-        ensure!(
-            listen.ip().is_loopback() || server.token.is_some(),
-            "non-loopback listeners require server.token"
-        );
-        ensure!(
-            server.environments.is_empty() || server.token.is_some(),
-            "linked environments require server.token"
-        );
+        let socket = match server.socket {
+            Some(path) => {
+                validate_socket_path(&path)?;
+                path
+            }
+            None => default_socket()?,
+        };
+        let token = server
+            .token
+            .as_ref()
+            .map(resolve_bearer)
+            .transpose()
+            .context("invalid server.token")?;
         for (id, harness) in &server.harnesses {
             ensure!(valid_name(id), "invalid harness ID {id:?}");
             ensure!(
@@ -107,28 +116,16 @@ impl Config {
             None if server.harnesses.len() == 1 => server.harnesses.keys().next().cloned(),
             None => None,
         };
-        let mut environments = BTreeMap::new();
-        for (name, peer) in server.environments {
+        let (environments, has_peer_accept) = load_peers(
+            server.environments,
+            &environment,
+            server.listen.is_some(),
+            token.as_ref(),
+        )?;
+        if server.listen.is_some() {
             ensure!(
-                valid_name(&name) && name != environment,
-                "invalid peer environment ID {name:?}"
-            );
-            let url =
-                Url::parse(&peer.url).with_context(|| format!("invalid peer URL for {name}"))?;
-            ensure!(
-                url.host().is_some()
-                    && url.username().is_empty()
-                    && url.password().is_none()
-                    && url.query().is_none()
-                    && url.fragment().is_none(),
-                "peer {name} must be a base URL without credentials or query parameters"
-            );
-            environments.insert(
-                name,
-                PeerConfig {
-                    url,
-                    token: peer.token.resolve()?,
-                },
+                token.is_some() || has_peer_accept,
+                "server.listen requires server.token or at least one peer accept credential"
             );
         }
         let cwd = working_directory(server.cwd)?;
@@ -136,13 +133,73 @@ impl Config {
             environment,
             cwd,
             state_dir: server.state_dir.unwrap_or(paths.state_dir),
-            listen,
-            token: server.token,
+            socket,
+            listen: server.listen,
+            token,
             default_harness,
             harnesses: server.harnesses,
             environments,
         })
     }
+}
+
+fn load_peers(
+    raw: BTreeMap<String, PeerFile>,
+    local_env: &str,
+    has_tcp: bool,
+    client_token: Option<&Arc<str>>,
+) -> Result<(BTreeMap<String, PeerConfig>, bool)> {
+    let mut environments = BTreeMap::new();
+    let mut inbound: Vec<Arc<str>> = client_token.cloned().into_iter().collect();
+    let mut has_peer_accept = false;
+    for (name, peer) in raw {
+        ensure!(
+            valid_name(&name) && name != local_env,
+            "invalid peer environment ID {name:?}"
+        );
+        let url = Url::parse(&peer.url).with_context(|| format!("invalid peer URL for {name}"))?;
+        ensure!(
+            url.host().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none(),
+            "peer {name} must be a base URL without credentials or query parameters"
+        );
+        let outbound = peer.token.resolve()?;
+        let accept = peer
+            .accept
+            .as_ref()
+            .map(resolve_bearer)
+            .transpose()
+            .with_context(|| format!("invalid accept token for peer {name}"))?;
+        if let Some(accept_token) = &accept {
+            ensure!(has_tcp, "peer {name}.accept requires server.listen");
+            ensure!(
+                !inbound.iter().any(|existing| existing == accept_token),
+                "peer {name}.accept must be distinct from server.token and other peers"
+            );
+            inbound.push(Arc::clone(accept_token));
+            has_peer_accept = true;
+        }
+        environments.insert(
+            name,
+            PeerConfig {
+                url,
+                token: outbound,
+                accept,
+            },
+        );
+    }
+    Ok((environments, has_peer_accept))
+}
+
+fn resolve_bearer(secret: &Secret) -> Result<Arc<str>> {
+    let value = secret.resolve()?;
+    ensure!(!value.trim().is_empty(), "bearer token must not be empty");
+    HeaderValue::from_str(&format!("Bearer {value}"))
+        .context("bearer token contains invalid HTTP header characters")?;
+    Ok(Arc::from(value))
 }
 
 fn valid_name(name: &str) -> bool {

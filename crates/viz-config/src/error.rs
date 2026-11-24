@@ -11,6 +11,14 @@ pub enum Error {
         /// The XDG variable that was needed, e.g. `XDG_STATE_HOME`.
         var: &'static str,
     },
+    /// A Unix socket path is relative, missing a parent, or exceeds OS limits.
+    #[error("invalid Unix socket path {path}: {reason}")]
+    InvalidSocket {
+        /// The rejected socket path.
+        path: PathBuf,
+        /// Why the path cannot be bound or connected to.
+        reason: &'static str,
+    },
     /// A config file could not be read.
     #[error("reading {path}: {source}")]
     Read {

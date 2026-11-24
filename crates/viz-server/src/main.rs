@@ -89,7 +89,7 @@ fn main() -> Result<()> {
                 .with_writer(std::io::stderr)
                 .init();
             let config = Config::load(cli.config.as_deref())?;
-            let activation = daemon::activated_listener(config.listen)?;
+            let activation = daemon::activated_listeners(config.listen)?;
             runtime()?.block_on(run(config, activation))
         }
     }
@@ -102,8 +102,12 @@ fn runtime() -> Result<tokio::runtime::Runtime> {
         .context("starting Tokio")
 }
 
-async fn run(config: Config, activation: Option<std::net::TcpListener>) -> Result<()> {
-    let listener = daemon::listener(config.listen, activation).await?;
+async fn run(config: Config, activation: daemon::Activated) -> Result<()> {
+    let (unix, _socket_guard) = daemon::unix_listener(&config.socket, activation.unix)?;
+    let tcp = match config.listen {
+        Some(addr) => Some(daemon::tcp_listener(addr, activation.tcp).await?),
+        None => None,
+    };
     let stop = CancellationToken::new();
     let signals = daemon::shutdown_signals(stop.clone())?;
     let peers = Arc::new(Peers::new(&config)?);
@@ -126,7 +130,7 @@ async fn run(config: Config, activation: Option<std::net::TcpListener>) -> Resul
     let result = async {
         workspace.resume().await?;
         tasks.resume();
-        server.run(&config, listener).await
+        server.run(&config, unix, tcp).await
     }
     .await;
     stop.cancel();

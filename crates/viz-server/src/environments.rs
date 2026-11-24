@@ -51,14 +51,11 @@ pub(crate) struct Peers {
     pub(crate) local: String,
     entries: BTreeMap<String, Peer>,
     client: Client,
-    source: HeaderValue,
     sequence: AtomicU64,
 }
 
 impl Peers {
     pub(crate) fn new(config: &Config) -> anyhow::Result<Self> {
-        let source = HeaderValue::from_str(&config.environment)
-            .context("invalid local environment identity")?;
         let mut entries = BTreeMap::new();
         for (id, spec) in &config.environments {
             let url = &spec.url;
@@ -116,7 +113,6 @@ impl Peers {
             local: config.environment.clone(),
             entries,
             client,
-            source,
             sequence: AtomicU64::default(),
         })
     }
@@ -243,7 +239,6 @@ impl Peers {
             .post(peer.url.clone())
             .bearer_auth(&peer.token)
             .header("x-viz-environment", &peer.destination)
-            .header("x-viz-source", &self.source)
             .json(&Request {
                 jsonrpc: TwoPointZero,
                 id,

@@ -24,7 +24,7 @@ use viz_protocol::{
     Empty, ListEnvironments, Method, SendInput, Unwatch, UnwatchGit, Watch, WatchGit, Watching,
 };
 
-use super::{Server, parse_request, peer_rpc};
+use super::{Principal, Server, parse_request, peer_rpc};
 use crate::{
     error::{Error, RequestError},
     rpc,
@@ -39,7 +39,11 @@ const PAGE: usize = 500;
 const HANDSHAKE: Duration = Duration::from_secs(10);
 const MAX_IN_FLIGHT: usize = 32;
 
-pub(super) async fn connect(mut socket: WebSocket, server: Arc<Server>) -> Result<()> {
+pub(super) async fn connect(
+    mut socket: WebSocket,
+    server: Arc<Server>,
+    principal: Principal,
+) -> Result<()> {
     let message = timeout(HANDSHAKE, socket.next())
         .await?
         .context("closed before hello")??
@@ -85,6 +89,17 @@ pub(super) async fn connect(mut socket: WebSocket, server: Arc<Server>) -> Resul
         .take()
         .filter(|id| *id != server.environment)
     {
+        if matches!(principal, Principal::Peer(_)) {
+            socket
+                .send(json_message(&Response::<Value>::new(
+                    request.id,
+                    Err(Error::invalid(
+                        "peer connections cannot proxy to another environment",
+                    )),
+                ))?)
+                .await?;
+            return Ok(());
+        }
         return proxy(socket, &server, &environment, request.id, params).await;
     }
     socket

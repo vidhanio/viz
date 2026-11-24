@@ -11,7 +11,7 @@ use viz_client::{
     Client, Endpoint,
     protocol::{ClientInfo, ClientKind, RunStatus, SendInput, ThreadId, WaitThread},
 };
-use viz_config::{Component, Connection, DEFAULT_URL};
+use viz_config::{Component, Connection, default_socket};
 
 /// The CLI's client name.
 const NAME: &str = "cli";
@@ -74,15 +74,27 @@ fn print_config(explicit: Option<&Path>, server: &Connection) -> anyhow::Result<
     print_path("desktop", &Component::Desktop.path(None)?)?;
     print_path("cli", &Component::Cli.path(explicit)?)?;
     println!("\n[client.server]");
-    let url = server.url.as_deref().unwrap_or(DEFAULT_URL);
-    println!(
-        "url: {}",
-        if url.contains(['@', '?', '#']) {
-            "<invalid origin>"
-        } else {
-            url
-        }
-    );
+    if let Some(url) = server.url.as_deref() {
+        println!(
+            "url: {}",
+            if url.contains(['@', '?', '#']) {
+                "<invalid origin>"
+            } else {
+                url
+            }
+        );
+    } else {
+        let socket = server.socket.as_ref().map_or_else(
+            || {
+                default_socket().map_or_else(
+                    |e| format!("<unavailable: {e}>"),
+                    |path| path.display().to_string(),
+                )
+            },
+            |path| path.display().to_string(),
+        );
+        println!("socket: {socket}");
+    }
     println!(
         "token: {}",
         if server.token.is_some() {

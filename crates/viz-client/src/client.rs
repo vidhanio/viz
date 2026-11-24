@@ -91,22 +91,38 @@ impl Client {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let (notify_tx, notifications) = mpsc::channel(NOTIFICATION_CAPACITY);
         let pending = Arc::<PendingCalls>::default();
-        let ws_url = format!("ws{}{RPC_PATH}", &endpoint.url[4..]);
-        let mut request = ws_url
-            .into_client_request()
-            .map_err(|e| connect_err(e.into()))?;
-        if let Some(token) = &endpoint.token {
-            let auth = HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|e| connect_err(e.into()))?;
-            request.headers_mut().insert("authorization", auth);
-        }
         let ws_config = WebSocketConfig::default()
             .max_message_size(Some(limits::MAX_WS_FRAME))
             .max_frame_size(Some(limits::MAX_WS_FRAME));
-        let (ws, _) = tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false)
-            .await
-            .map_err(|e| connect_err(e.into()))?;
-        let outgoing = spawn_io(ws, Arc::clone(&pending), notify_tx);
+        let outgoing = match endpoint {
+            Endpoint::Unix { path } => {
+                let stream = tokio::net::UnixStream::connect(path)
+                    .await
+                    .map_err(|e| connect_err(e.into()))?;
+                let request = format!("ws://localhost{RPC_PATH}")
+                    .into_client_request()
+                    .map_err(|e| connect_err(e.into()))?;
+                let (ws, _) =
+                    tokio_tungstenite::client_async_with_config(request, stream, Some(ws_config))
+                        .await
+                        .map_err(|e| connect_err(e.into()))?;
+                spawn_io(ws, Arc::clone(&pending), notify_tx)
+            }
+            Endpoint::Http { url, token } => {
+                let ws_url = format!("ws{}{RPC_PATH}", &url[4..]);
+                let mut request = ws_url
+                    .into_client_request()
+                    .map_err(|e| connect_err(e.into()))?;
+                let auth = HeaderValue::from_str(&format!("Bearer {token}"))
+                    .map_err(|e| connect_err(e.into()))?;
+                request.headers_mut().insert("authorization", auth);
+                let (ws, _) =
+                    tokio_tungstenite::connect_async_with_config(request, Some(ws_config), false)
+                        .await
+                        .map_err(|e| connect_err(e.into()))?;
+                spawn_io(ws, Arc::clone(&pending), notify_tx)
+            }
+        };
         let client = Self {
             outgoing,
             pending,

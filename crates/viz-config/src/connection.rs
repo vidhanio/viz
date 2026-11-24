@@ -1,19 +1,22 @@
 //! Connection settings common to all viz clients.
 
+use std::path::PathBuf;
+
 use serde::Deserialize;
 
 use crate::Secret;
-
-/// The default local server origin.
-pub const DEFAULT_URL: &str = "http://127.0.0.1:7420";
 
 /// The `[client.server]` connection table.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Connection {
-    /// Base HTTP(S) origin, defaulting to [`DEFAULT_URL`].
+    /// Local Unix domain socket path. Defaults to [`crate::default_socket`]
+    /// when neither `socket` nor `url` is set.
+    pub socket: Option<PathBuf>,
+    /// Base HTTP(S) origin for a TCP server (mutually exclusive with `socket`;
+    /// always requires `token`).
     pub url: Option<String>,
-    /// Bearer token required for a non-loopback address.
+    /// Bearer token required whenever `url` is set.
     pub token: Option<Secret>,
 }
 
