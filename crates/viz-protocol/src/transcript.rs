@@ -55,6 +55,12 @@ pub struct Compaction {
     /// What the harness kept, for the user to read.
     pub summary: String,
     pub error: Option<String>,
+    /// Context tokens used before compaction, when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_before: Option<u64>,
+    /// Context tokens used after compaction, when reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tokens_after: Option<u64>,
     /// Unix milliseconds of the first and last report.
     pub started_at: i64,
     pub ended_at: i64,

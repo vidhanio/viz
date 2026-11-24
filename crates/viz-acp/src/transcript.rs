@@ -42,6 +42,9 @@ pub struct Transcript {
     compactions: Vec<Entry>,
     /// Compactions committed this turn; harnesses repeat terminal reports.
     finished_compactions: HashSet<String>,
+    /// Latest reported context window usage (`used` tokens) observed in this
+    /// turn, used to populate compaction before/after token counts.
+    latest_usage: Option<u64>,
     patched_tools: HashSet<String>,
     answer: String,
     prior_prose: String,
@@ -59,6 +62,7 @@ impl Transcript {
             tools: Vec::new(),
             compactions: Vec::new(),
             finished_compactions: HashSet::new(),
+            latest_usage: None,
             patched_tools: HashSet::new(),
             answer: String::new(),
             prior_prose: String::new(),
@@ -168,6 +172,9 @@ impl Transcript {
                         &mut output,
                     );
                 }
+                SessionUpdate::UsageUpdate(usage) => {
+                    self.latest_usage = Some(usage.used);
+                }
                 SessionUpdate::CompactionUpdate(update) => {
                     self.compaction_update(update, observed_at, &mut output);
                 }
@@ -203,8 +210,37 @@ impl Transcript {
         if self.finished_compactions.contains(&id) {
             return;
         }
+        let meta = match update.meta {
+            MaybeUndefined::Value(meta) => Some(meta),
+            MaybeUndefined::Null | MaybeUndefined::Undefined => None,
+        };
+        let meta_before = meta.as_ref().and_then(|m| {
+            meta_u64(
+                m,
+                &["tokensBefore", "tokens_before", "preTokens", "pre_tokens"],
+            )
+        });
+        let meta_after = meta.as_ref().and_then(|m| {
+            meta_u64(
+                m,
+                &["tokensAfter", "tokens_after", "postTokens", "post_tokens"],
+            )
+        });
+        let latest_usage = self.latest_usage;
         let compaction = self.compaction(id.clone(), observed_at);
         compaction.status = status;
+        if let Some(before) = meta_before {
+            compaction.tokens_before = Some(before);
+        }
+        if let Some(after) = meta_after {
+            compaction.tokens_after = Some(after);
+        } else if status == CompactionStatus::Completed
+            && compaction.tokens_after.is_none()
+            && let (Some(before), Some(now)) = (compaction.tokens_before, latest_usage)
+            && now < before
+        {
+            compaction.tokens_after = Some(now);
+        }
         match update.summary {
             MaybeUndefined::Value(blocks) => compaction.summary = text_of(blocks),
             MaybeUndefined::Null => compaction.summary.clear(),
@@ -229,6 +265,7 @@ impl Transcript {
 
     /// The compaction under way with this id, started when first seen.
     fn compaction(&mut self, id: String, observed_at: i64) -> &mut Compaction {
+        let latest_usage = self.latest_usage;
         let index = self
             .compactions
             .iter()
@@ -239,6 +276,8 @@ impl Transcript {
                     status: CompactionStatus::InProgress,
                     summary: String::new(),
                     error: None,
+                    tokens_before: latest_usage,
+                    tokens_after: None,
                     started_at: observed_at,
                     ended_at: observed_at,
                 }));
@@ -441,4 +480,9 @@ fn plan_items(entries: Vec<crate::schema::PlanEntry>) -> PlanContent {
         })
         .collect();
     PlanContent::Items { entries }
+}
+
+fn meta_u64(meta: &crate::schema::Meta, keys: &[&str]) -> Option<u64> {
+    keys.iter()
+        .find_map(|key| meta.get(*key).and_then(serde_json::Value::as_u64))
 }

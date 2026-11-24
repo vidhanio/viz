@@ -29,6 +29,8 @@ lucide! {
     ARROW_DOWN = ArrowDown;
     /// Navigate back.
     ARROW_LEFT = ArrowLeft;
+    /// Right arrow (token delta / forward flow).
+    ARROW_RIGHT = ArrowRight;
     /// Navigate forward.
     /// Steer or send immediately into an active turn.
     CORNER_UP_RIGHT = CornerUpRight;

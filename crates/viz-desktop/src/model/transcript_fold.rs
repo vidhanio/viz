@@ -307,6 +307,8 @@ impl Transcript {
                     existing.status = projected.status;
                     existing.summary = projected.summary;
                     existing.error = projected.error;
+                    existing.tokens_before = projected.tokens_before.or(existing.tokens_before);
+                    existing.tokens_after = projected.tokens_after.or(existing.tokens_after);
                     existing.ended_at = projected.ended_at;
                 } else {
                     self.items.push(Item::Compaction(projected));

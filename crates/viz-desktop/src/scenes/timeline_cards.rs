@@ -139,6 +139,8 @@ fn cards_entries() -> Vec<EntryData> {
                 status: CompactionStatus::Completed,
                 summary: "Retained export architecture, diff stats, and subagent contracts while trimming earlier verbose logs.".into(),
                 error: None,
+                tokens_before: Some(142_400),
+                tokens_after: Some(28_600),
                 started_at: BASE_TS,
                 ended_at: BASE_TS + 2_100,
             }),

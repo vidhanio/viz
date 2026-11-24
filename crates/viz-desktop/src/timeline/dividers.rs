@@ -20,8 +20,10 @@ use crate::{
     update::{Msg, TimelineMsg},
 };
 
-/// Horizontal-rule centered divider for a context compaction event, with an
-/// expandable summary panel once compacted.
+/// Horizontal-rule centered divider for a context compaction event, matching
+/// T3 Code's separator bar (shimmer while active, `before → after tokens` when
+/// known, destructive-tinted rules and inline error on failure) plus an
+/// expandable summary panel when the harness supplies one.
 pub fn compaction_divider(s: &Desktop, notice: &CompactionNotice, t: &Theme) -> El {
     let fold_key = format!("{}-summary", notice.key);
     let has_summary = !notice.summary.trim().is_empty();
@@ -33,29 +35,39 @@ pub fn compaction_divider(s: &Desktop, notice: &CompactionNotice, t: &Theme) -> 
             None,
             false,
         );
+    let failed = notice.status == CompactionStatus::Failed;
+    let rule_color = if failed {
+        t.danger.alpha(0.30)
+    } else {
+        t.hairline
+    };
     let pill = compaction_pill(notice, fold_key, has_summary, open, t);
     let line = row()
         .key(format!("{}-line", notice.key))
+        .role("separator")
         .w_full()
         .py(S6)
-        .gap(S8)
+        .gap(S12)
         .center_y()
-        .child(ui::rule(t).grow(1.0).w(0.0))
+        .child(
+            rune::el()
+                .h(HAIRLINE)
+                .grow(1.0)
+                .w(0.0)
+                .fill(rule_color)
+                .a11y_hidden(),
+        )
         .child(pill)
-        .child(ui::rule(t).grow(1.0).w(0.0));
+        .child(
+            rune::el()
+                .h(HAIRLINE)
+                .grow(1.0)
+                .w(0.0)
+                .fill(rule_color)
+                .a11y_hidden(),
+        );
 
     let mut block = motion::fold_container(col().key(notice.key.clone()).w_full()).child(line);
-    if let Some(error) = &notice.error {
-        block = block.child(
-            text(error)
-                .key("error")
-                .font(t.small)
-                .color(t.danger)
-                .wrap()
-                .px(CARD_INSET)
-                .pb(S4),
-        );
-    }
     if open {
         block = block.child(motion::fold_row(
             col()
@@ -79,6 +91,68 @@ pub fn compaction_divider(s: &Desktop, notice: &CompactionNotice, t: &Theme) -> 
     block
 }
 
+fn compaction_content(notice: &CompactionNotice, t: &Theme) -> (El, &'static str) {
+    let active = notice.status == CompactionStatus::InProgress;
+    let failed = notice.status == CompactionStatus::Failed;
+    let (glyph, label, color) = match notice.status {
+        CompactionStatus::InProgress => (&ui::MINIMIZE2, "Compacting context…", t.muted),
+        CompactionStatus::Completed => (&ui::MINIMIZE2, "Context compacted", t.muted),
+        CompactionStatus::Failed => (&ui::CIRCLE_ALERT, "Context compaction failed", t.danger),
+        CompactionStatus::Cancelled => (&ui::CIRCLE_STOP, "Context compaction stopped", t.muted),
+    };
+    let mut inner = row()
+        .gap(S6)
+        .center_y()
+        .shrink()
+        .min_w(0.0)
+        .child(icon(glyph, ICON_SMALL).color(color).a11y_hidden())
+        .child(text(label).font(t.small).color(color));
+    if notice.status == CompactionStatus::Completed
+        && let (Some(before), Some(after)) = (notice.tokens_before, notice.tokens_after)
+    {
+        inner = inner
+            .child(
+                text(format_compact_tokens(before))
+                    .font(t.small)
+                    .color(t.muted),
+            )
+            .child(
+                icon(&ui::ARROW_RIGHT, ICON_SMALL)
+                    .color(t.faint)
+                    .a11y_hidden(),
+            )
+            .child(
+                text(format!("{} tokens", format_compact_tokens(after)))
+                    .font(t.small)
+                    .color(t.muted),
+            );
+    }
+    if failed
+        && let Some(err) = notice
+            .error
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+    {
+        inner = inner.child(
+            text(format!("· {err}"))
+                .font(t.small)
+                .color(t.danger.alpha(0.82))
+                .truncate()
+                .shrink()
+                .min_w(0.0),
+        );
+    }
+    let content = motion::text_shimmer(
+        format!("{}-shimmer", notice.key),
+        active,
+        inner,
+        rune::Color::WHITE,
+        if t.k.dark { 0.9 } else { 0.62 },
+    );
+    (content, label)
+}
+
 fn compaction_pill(
     notice: &CompactionNotice,
     fold_key: String,
@@ -86,33 +160,26 @@ fn compaction_pill(
     open: bool,
     t: &Theme,
 ) -> El {
-    let (lead, label, color) = match notice.status {
-        CompactionStatus::InProgress => (Some(ui::spinner(t)), "Compacting context…", t.muted),
-        CompactionStatus::Completed => (
-            Some(icon(&ui::MINIMIZE2, ICON_SMALL).color(t.faint)),
-            "Context compacted",
-            t.muted,
-        ),
-        CompactionStatus::Failed => (
-            Some(icon(&ui::CIRCLE_ALERT, ICON_SMALL).color(t.danger)),
-            "Context compaction failed",
-            t.danger,
-        ),
-        CompactionStatus::Cancelled => (
-            Some(icon(&ui::CIRCLE_STOP, ICON_SMALL).color(t.faint)),
-            "Context compaction stopped",
-            t.muted,
-        ),
-    };
+    let (content, label) = compaction_content(notice, t);
     let mut pill = row()
         .key(format!("{}-pill", notice.key))
         .px(S8)
         .py(S4)
         .gap(S6)
         .center_y()
+        .shrink()
+        .min_w(0.0)
         .radius(RADIUS_SM)
-        .children(lead.map(El::a11y_hidden))
-        .child(text(label).font(t.micro_medium).color(color));
+        .child(content);
+    if notice.status == CompactionStatus::Failed
+        && let Some(err) = notice
+            .error
+            .as_deref()
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+    {
+        pill = pill.help(err.to_owned());
+    }
     if has_summary {
         pill = pill
             .role("button")
@@ -142,6 +209,28 @@ fn compaction_pill(
             );
     }
     pill
+}
+
+fn format_compact_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        let tenths = (tokens + 50_000) / 100_000;
+        if tenths.is_multiple_of(10) {
+            format!("{}m", tenths / 10)
+        } else {
+            format!("{}.{}m", tenths / 10, tenths % 10)
+        }
+    } else if tokens >= 10_000 {
+        format!("{}k", (tokens + 500) / 1_000)
+    } else if tokens >= 1_000 {
+        let tenths = (tokens + 50) / 100;
+        if tenths.is_multiple_of(10) {
+            format!("{}k", tenths / 10)
+        } else {
+            format!("{}.{}k", tenths / 10, tenths % 10)
+        }
+    } else {
+        tokens.to_string()
+    }
 }
 
 /// Hairline-flanked system divider indicating the agent continued on its own.

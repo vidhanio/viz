@@ -240,6 +240,10 @@ pub struct CompactionNotice {
     pub summary: String,
     /// Optional compaction failure detail.
     pub error: Option<String>,
+    /// Context tokens used before compaction, when reported.
+    pub tokens_before: Option<u64>,
+    /// Context tokens used after compaction, when reported.
+    pub tokens_after: Option<u64>,
     /// Start timestamp in Unix ms.
     pub started_at: i64,
     /// End timestamp in Unix ms.
@@ -446,6 +450,8 @@ impl CompactionNotice {
             status: c.status,
             summary: c.summary.clone(),
             error: c.error.clone(),
+            tokens_before: c.tokens_before,
+            tokens_after: c.tokens_after,
             started_at: c.started_at,
             ended_at: c.ended_at,
         }

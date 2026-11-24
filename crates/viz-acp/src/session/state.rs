@@ -182,6 +182,7 @@ pub(super) fn update_sink(
                 | SessionUpdate::PlanUpdate(_)
                 | SessionUpdate::CompactionUpdate(_)
                 | SessionUpdate::CompactionSummaryChunk(_)
+                | SessionUpdate::UsageUpdate(_)
         );
         if report {
             state.dirty |= state.apply_report(notification.update.clone());
